@@ -89,12 +89,34 @@ En iOS y Android el access token se guarda con `expo-secure-store`. En Web/noteb
 
 ```bash
 npm install
+npm run dev
 npm run typecheck
 npm run lint
 npm test
 npm run diagnostics
+npm run build:web
+npm run start:web
 npm start
 ```
+
+## Despliegue Web En Railway
+
+Expo Web se exporta como SPA con `web.output = "single"` en `app.json`. Esto genera `dist/index.html` y permite que rutas de Expo Router como `/login`, `/entity/:entityTypeId` o `/entity/:entityTypeId/record/:recordId` funcionen al recargar si el servidor devuelve `index.html` como fallback.
+
+Railway debe configurarse con:
+
+```text
+Build Command: npm run build:web
+Start Command: npm run start:web
+```
+
+`npm run build:web` ejecuta `expo export --platform web`. Las variables `EXPO_PUBLIC_OPCO_API_URL` y `EXPO_PUBLIC_OPCO_CLIENT_ID` se incorporan al bundle durante ese build, por lo que deben existir en el servicio de Railway antes de compilar.
+
+`npm run start:web` ejecuta `node scripts/start-web.mjs`. Railway inyecta `PORT` automaticamente y el proceso escucha en `0.0.0.0` para ser accesible desde el proxy externo. El server sirve archivos desde `dist` y usa `dist/index.html` como fallback SPA. No hay puerto fijo en codigo.
+
+Al generar el dominio en Railway, usa el servicio web de `opco-client` y deja que Railway detecte el puerto expuesto por la variable `PORT`. Si Railway solicita un target port explicitamente, selecciona el puerto en el que el proceso esta escuchando en runtime: el valor de `PORT` mostrado en los logs del deploy, no `8080` ni otro valor fijo local.
+
+Despues de generar el dominio Railway de `opco-client`, agrega ese origin exacto a `API_ALLOWED_ORIGINS` en Operational Core. No uses comodines: debe ser el origin completo, por ejemplo `https://<dominio-railway>`.
 
 ## Limitaciones actuales
 
