@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope } from "./opco-api";
-import { entityRecordFixture } from "../test/fixtures";
+import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -156,6 +156,53 @@ describe("createOpcoApi", () => {
     expect(result.pagination.total).toBe(1);
   });
 
+  it("parses assigned app views for a contract", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              views: appViewsFixture,
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const result = await api.getAppViews("token_123", "contract_1");
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/views");
+    expect(result.views[0].type).toBe("RECORDS");
+    expect(result.views[0].config.entityTypeId).toBe("entity_1");
+    expect(result.views.map((view) => view.type)).toEqual(["RECORDS", "WORKFLOW", "BOARD", "DASHBOARD"]);
+  });
+
+  it("parses users without assigned app views", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              views: [],
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(api.getAppViews("token_123", "contract_1")).resolves.toEqual({ views: [] });
+  });
+
   it("parses one entity record detail", async () => {
     const urls: string[] = [];
     const api = createOpcoApi({
@@ -180,5 +227,81 @@ describe("createOpcoApi", () => {
 
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records/record_1");
     expect(result.record).toEqual(entityRecordFixture);
+  });
+
+  it("creates entity records with a client request id", async () => {
+    const requests: RequestInit[] = [];
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        urls.push(String(url));
+        requests.push(init ?? {});
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              record: entityRecordFixture,
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await api.createEntityRecord("token_123", "contract_1", "entity_1", {
+      clientRequestId: "request_1",
+      values: {
+        codigo: "EQ-002",
+      },
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records");
+    expect(requests[0].method).toBe("POST");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      clientRequestId: "request_1",
+      values: {
+        codigo: "EQ-002",
+      },
+    });
+  });
+
+  it("updates entity records partially", async () => {
+    const requests: RequestInit[] = [];
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        urls.push(String(url));
+        requests.push(init ?? {});
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              record: entityRecordFixture,
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await api.updateEntityRecord("token_123", "contract_1", "entity_1", "record_1", {
+      values: {
+        estado: "operativo",
+      },
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records/record_1");
+    expect(requests[0].method).toBe("PATCH");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      values: {
+        estado: "operativo",
+      },
+    });
   });
 });

@@ -28,6 +28,10 @@ export default function AppLayout() {
       <Stack.Screen name="index" options={{ title: "Opco" }} />
       <Stack.Screen name="entity/[entityTypeId]" options={{ title: "Registros" }} />
       <Stack.Screen name="entity/[entityTypeId]/record/[recordId]" options={{ title: "Detalle" }} />
+      <Stack.Screen name="view/[appViewId]" options={{ title: "Experiencia" }} />
+      <Stack.Screen name="view/[appViewId]/record/new" options={{ title: "Crear registro" }} />
+      <Stack.Screen name="view/[appViewId]/record/[recordId]" options={{ title: "Detalle" }} />
+      <Stack.Screen name="view/[appViewId]/record/[recordId]/edit" options={{ title: "Editar registro" }} />
     </Stack>
   );
 }

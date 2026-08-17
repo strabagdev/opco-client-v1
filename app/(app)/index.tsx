@@ -9,8 +9,9 @@ import {
   View,
 } from "react-native";
 
+import { buildAppViewHref, getAppViewTypeLabel, sortAppViews } from "@/lib/app-views";
 import { selectContractId } from "@/lib/contract-selection";
-import { EntitySummary } from "@/lib/opco-api";
+import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
 export default function HomeScreen() {
@@ -24,8 +25,8 @@ export default function HomeScreen() {
     status,
     token,
   } = useSession();
-  const [entities, setEntities] = useState<EntitySummary[]>([]);
-  const [isLoadingEntities, setIsLoadingEntities] = useState(false);
+  const [views, setViews] = useState<AppView[]>([]);
+  const [isLoadingViews, setIsLoadingViews] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedContract = useMemo(
@@ -48,33 +49,33 @@ export default function HomeScreen() {
   useEffect(() => {
     let isMounted = true;
 
-    async function loadEntities() {
+    async function loadViews() {
       if (!token || !selectedContractId) {
-        setEntities([]);
+        setViews([]);
         return;
       }
 
-      setIsLoadingEntities(true);
+      setIsLoadingViews(true);
       setError(null);
 
       try {
-        const data = await api.getEntities(token, selectedContractId);
+        const data = await api.getAppViews(token, selectedContractId);
 
         if (isMounted) {
-          setEntities(data.entities);
+          setViews(sortAppViews(data.views));
         }
       } catch (nextError) {
         if (isMounted) {
-          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar entidades.");
+          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
         }
       } finally {
         if (isMounted) {
-          setIsLoadingEntities(false);
+          setIsLoadingViews(false);
         }
       }
     }
 
-    void loadEntities();
+    void loadViews();
 
     return () => {
       isMounted = false;
@@ -145,20 +146,23 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Entidades</Text>
-        {isLoadingEntities ? <ActivityIndicator /> : null}
+        <Text style={styles.sectionTitle}>Experiencias</Text>
+        {isLoadingViews ? <ActivityIndicator /> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        {!isLoadingEntities && selectedContractId && entities.length === 0 && !error ? (
-          <Text style={styles.empty}>No hay entidades activas para este contrato.</Text>
+        {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
+          <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
         ) : null}
-        <View style={styles.entityList}>
-          {entities.map((entity) => (
-            <Link href={`/entity/${entity.id}`} key={entity.id} asChild>
-              <Pressable style={styles.entityButton}>
-                <Text style={styles.entityIcon}>{entity.icon ?? "[]"}</Text>
-                <View style={styles.entityText}>
-                  <Text style={styles.entityName}>{entity.name}</Text>
-                  <Text style={styles.meta}>{entity.slug}</Text>
+        <View style={styles.viewList}>
+          {views.map((appView) => (
+            <Link href={buildAppViewHref(appView.id)} key={appView.id} asChild>
+              <Pressable style={styles.viewButton}>
+                <Text style={styles.viewIcon}>{appView.icon ?? "[]"}</Text>
+                <View style={styles.viewText}>
+                  <Text style={styles.viewName}>{appView.name}</Text>
+                  <Text style={styles.meta}>
+                    {getAppViewTypeLabel(appView.type)}
+                    {appView.type === "RECORDS" ? ` · ${appView.config.entityTypeId}` : ""}
+                  </Text>
                 </View>
               </Pressable>
             </Link>
@@ -209,7 +213,7 @@ const styles = StyleSheet.create({
     color: "#587078",
     lineHeight: 21,
   },
-  entityButton: {
+  viewButton: {
     alignItems: "center",
     backgroundColor: "#ffffff",
     borderColor: "#d4dddf",
@@ -220,22 +224,22 @@ const styles = StyleSheet.create({
     minHeight: 64,
     padding: 12,
   },
-  entityIcon: {
+  viewIcon: {
     color: "#135d66",
     fontSize: 18,
     fontWeight: "800",
     minWidth: 36,
     textAlign: "center",
   },
-  entityList: {
+  viewList: {
     gap: 10,
   },
-  entityName: {
+  viewName: {
     color: "#17363c",
     fontSize: 16,
     fontWeight: "700",
   },
-  entityText: {
+  viewText: {
     flex: 1,
   },
   error: {

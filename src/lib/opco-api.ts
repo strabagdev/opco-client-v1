@@ -9,6 +9,7 @@ export type ApiEnvelope<T> =
       ok: false;
       error: {
         code: string;
+        details?: unknown;
         message: string;
       };
     };
@@ -54,6 +55,58 @@ export type EntitySummary = {
   icon: string | null;
   active: boolean;
 };
+
+export type AppViewType = "RECORDS" | "WORKFLOW" | "BOARD" | "DASHBOARD";
+
+export type RecordsAppViewConfig = {
+  entityTypeId: string;
+};
+
+export type WorkflowAppViewConfig = Record<string, unknown>;
+export type BoardAppViewConfig = Record<string, unknown>;
+export type DashboardAppViewConfig = Record<string, unknown>;
+
+export type RecordsAppView = {
+  config: RecordsAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "RECORDS";
+};
+
+export type WorkflowAppView = {
+  config: WorkflowAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "WORKFLOW";
+};
+
+export type BoardAppView = {
+  config: BoardAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "BOARD";
+};
+
+export type DashboardAppView = {
+  config: DashboardAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "DASHBOARD";
+};
+
+export type AppView = RecordsAppView | WorkflowAppView | BoardAppView | DashboardAppView;
 
 export type EntityField = {
   id: string;
@@ -113,6 +166,10 @@ export type EntitiesResponse = {
   entities: EntitySummary[];
 };
 
+export type AppViewsResponse = {
+  views: AppView[];
+};
+
 export type EntityDefinitionResponse = {
   entity: EntityDefinition;
 };
@@ -134,11 +191,21 @@ export type EntityRecordResponse = {
   record: EntityRecord;
 };
 
+export type CreateEntityRecordInput = {
+  clientRequestId: string;
+  values: Record<string, EntityRecordValue>;
+};
+
+export type UpdateEntityRecordInput = {
+  values: Record<string, EntityRecordValue>;
+};
+
 export class OpcoApiError extends Error {
   constructor(
     message: string,
     public readonly code: string,
     public readonly status: number,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "OpcoApiError";
@@ -169,7 +236,7 @@ export function parseApiEnvelope<T>(body: unknown, status = 200): T {
   }
 
   if (!body.ok) {
-    throw new OpcoApiError(body.error.message, body.error.code, status);
+    throw new OpcoApiError(body.error.message, body.error.code, status, body.error.details);
   }
 
   return body.data;
@@ -243,6 +310,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         headers: authHeaders(token),
       });
     },
+    getAppViews(token: string, contractId: string) {
+      return request<AppViewsResponse>(`/api/v1/contracts/${encodeURIComponent(contractId)}/views`, {
+        headers: authHeaders(token),
+      });
+    },
     getEntityDefinition(token: string, contractId: string, entityTypeId: string) {
       return request<EntityDefinitionResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}`,
@@ -297,6 +369,34 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         )}/records/${encodeURIComponent(recordId)}`,
         {
           headers: authHeaders(token),
+        },
+      );
+    },
+    createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {
+      return request<EntityRecordResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}/records`,
+        {
+          body: JSON.stringify(input),
+          headers: authHeaders(token),
+          method: "POST",
+        },
+      );
+    },
+    updateEntityRecord(
+      token: string,
+      contractId: string,
+      entityTypeId: string,
+      recordId: string,
+      input: UpdateEntityRecordInput,
+    ) {
+      return request<EntityRecordResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(
+          entityTypeId,
+        )}/records/${encodeURIComponent(recordId)}`,
+        {
+          body: JSON.stringify(input),
+          headers: authHeaders(token),
+          method: "PATCH",
         },
       );
     },

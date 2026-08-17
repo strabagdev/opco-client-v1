@@ -79,6 +79,16 @@ describe("entity record display", () => {
         label: "Observaciones",
         value: "Equipo en terreno",
       },
+      {
+        key: "tags",
+        label: "Tags",
+        value: "Norte",
+      },
+      {
+        key: "responsable",
+        label: "Responsable",
+        value: "Ana",
+      },
     ]);
   });
 });
