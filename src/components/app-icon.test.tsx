@@ -50,10 +50,17 @@ vi.mock("lucide-react-native", () => {
 
 describe("AppIcon", () => {
   it("renders a valid icon key as an icon element", () => {
-    const element = AppIcon({ icon: "file-text", testID: "icon" });
+    const element = AppIcon({ icon: "users", testID: "icon" });
 
     expect(isValidElement(element)).toBe(true);
-    expect(String(isValidElement(element) ? element.type : "")).not.toContain("file-text");
+    expect(String(isValidElement(element) ? element.type : "")).not.toContain("users");
+  });
+
+  it("renders warehouse as an icon element", () => {
+    const element = AppIcon({ icon: "warehouse", testID: "icon" });
+
+    expect(isValidElement(element)).toBe(true);
+    expect(String(isValidElement(element) ? element.type : "")).not.toContain("warehouse");
   });
 
   it("can render nothing for null when the context asks for no fallback", () => {

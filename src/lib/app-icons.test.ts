@@ -55,9 +55,23 @@ vi.mock("lucide-react-native", () => {
 
 describe("app icons", () => {
   it("maps stable keys to real icon components", () => {
+    expect(getAppIconComponent("users")).toBeTruthy();
     expect(getAppIconComponent("warehouse")).toBeTruthy();
     expect(getAppIconComponent("truck")).toBeTruthy();
     expect(getAppIconComponent("file-text")).toBeTruthy();
+    expect(getAppIconComponent("clipboard-check")).toBeTruthy();
+    expect(getAppIconComponent("package")).toBeTruthy();
+    expect(getAppIconComponent("circle-dollar-sign")).toBeTruthy();
+  });
+
+  it("maps known Opco keys to the intended Lucide components", () => {
+    expect(getAppIconComponent("users")?.displayName).toBe("Users");
+    expect(getAppIconComponent("warehouse")?.displayName).toBe("Warehouse");
+    expect(getAppIconComponent("truck")?.displayName).toBe("Truck");
+    expect(getAppIconComponent("file-text")?.displayName).toBe("FileText");
+    expect(getAppIconComponent("clipboard-check")?.displayName).toBe("ClipboardCheck");
+    expect(getAppIconComponent("package")?.displayName).toBe("Package");
+    expect(getAppIconComponent("circle-dollar-sign")?.displayName).toBe("CircleDollarSign");
   });
 
   it("normalizes null and unknown keys without exposing them as valid icons", () => {

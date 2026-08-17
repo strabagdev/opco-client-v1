@@ -10,7 +10,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { buildAppViewHref, getAppViewTypeLabel, sortAppViews } from "@/lib/app-views";
+import { buildAppViewHref, getAppViewCardMetadata, sortAppViews } from "@/lib/app-views";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
@@ -163,7 +163,7 @@ export default function HomeScreen() {
                 <View style={styles.viewText}>
                   <Text style={styles.viewName}>{appView.name}</Text>
                   <View style={styles.typeBadge}>
-                    <Text style={styles.typeBadgeText}>{getAppViewTypeLabel(appView.type)}</Text>
+                    <Text style={styles.typeBadgeText}>{getAppViewCardMetadata(appView)}</Text>
                   </View>
                 </View>
               </Pressable>

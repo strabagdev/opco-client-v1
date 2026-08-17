@@ -15,6 +15,10 @@ export function getAppViewTypeLabel(type: AppViewType) {
   return APP_VIEW_TYPE_LABELS[type];
 }
 
+export function getAppViewCardMetadata(appView: AppView) {
+  return getAppViewTypeLabel(appView.type);
+}
+
 export function buildAppViewHref(appViewId: string) {
   return `/view/${encodeURIComponent(appViewId)}`;
 }

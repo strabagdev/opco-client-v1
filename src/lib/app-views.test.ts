@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAppViewHref,
   buildAppViewRecordHref,
+  getAppViewCardMetadata,
   getAppViewTypeLabel,
   sortAppViews,
 } from "./app-views";
@@ -30,5 +31,13 @@ describe("app views", () => {
       "Tablero",
       "Dashboard",
     ]);
+  });
+
+  it("builds human AppView card metadata without leaking technical ids", () => {
+    const recordsView = appViewsFixture.find((view) => view.type === "RECORDS");
+
+    expect(recordsView).toBeTruthy();
+    expect(getAppViewCardMetadata(recordsView!)).toBe("Registros");
+    expect(getAppViewCardMetadata(recordsView!)).not.toContain(recordsView!.config.entityTypeId);
   });
 });
