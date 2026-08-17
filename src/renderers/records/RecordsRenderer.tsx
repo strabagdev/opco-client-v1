@@ -10,10 +10,16 @@ import {
   View,
 } from "react-native";
 
+import { AppIcon } from "@/components/app-icon";
 import { buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
+import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
 import { EntityDefinition, EntityRecord, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
+import {
+  stableTextInputStyle,
+  STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
+} from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 
@@ -135,7 +141,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.icon}>{appView.icon ?? definition?.icon ?? "[]"}</Text>
+        <View style={styles.icon}>
+          <AppIcon icon={resolvePreferredAppIcon(appView.icon, definition?.icon)} size={26} />
+        </View>
         <View style={styles.headerText}>
           <Text style={styles.title}>{appView.name}</Text>
           <Text style={styles.meta}>
@@ -262,11 +270,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   icon: {
-    color: "#135d66",
-    fontSize: 24,
-    fontWeight: "800",
-    minWidth: 42,
-    textAlign: "center",
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 8,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
   },
   loadMoreButton: {
     alignItems: "center",
@@ -275,7 +284,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 46,
-    minWidth: 140,
+    minWidth: STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
     paddingHorizontal: 18,
   },
   loadMoreText: {
@@ -348,7 +357,8 @@ const styles = StyleSheet.create({
     color: "#17363c",
     flex: 1,
     minHeight: 46,
-    minWidth: 180,
+    ...stableTextInputStyle,
+    minWidth: 0,
     paddingHorizontal: 14,
   },
   title: {

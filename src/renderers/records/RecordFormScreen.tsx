@@ -14,6 +14,7 @@ import { buildAppViewRecordHref } from "@/lib/app-views";
 import { createClientRequestId } from "@/lib/client-request-id";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { EntityDefinition, EntityField, EntityRecord, RecordsAppView } from "@/lib/opco-api";
+import { stableSubmitButtonStyle, stableTextInputStyle } from "@/lib/visual-stability";
 import {
   buildChangedSubmitValues,
   buildInitialFormValues,
@@ -205,7 +206,14 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
             <Text style={styles.secondaryText}>Volver</Text>
           </Pressable>
           <Pressable disabled={isSubmitting} onPress={handleSubmit} style={styles.primaryButton}>
-            {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>Guardar</Text>}
+            {isSubmitting ? (
+              <View style={styles.buttonContent}>
+                <ActivityIndicator color="#ffffff" />
+                <Text style={styles.primaryText}>Guardando</Text>
+              </View>
+            ) : (
+              <Text style={styles.primaryText}>Guardar</Text>
+            )}
           </Pressable>
         </View>
       ) : null}
@@ -354,6 +362,11 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 10,
   },
+  buttonContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
   content: {
     gap: 16,
     padding: 20,
@@ -365,7 +378,9 @@ const styles = StyleSheet.create({
   },
   fieldError: {
     color: "#b42318",
+    fontSize: 14,
     lineHeight: 20,
+    minHeight: 20,
   },
   fieldGroup: {
     backgroundColor: "#ffffff",
@@ -390,6 +405,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     color: "#17363c",
+    ...stableTextInputStyle,
     minHeight: 46,
     paddingHorizontal: 12,
   },
@@ -425,6 +441,7 @@ const styles = StyleSheet.create({
   },
   optionText: {
     color: "#17363c",
+    fontSize: 16,
     fontWeight: "700",
   },
   optionTextSelected: {
@@ -435,12 +452,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#135d66",
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 44,
-    minWidth: 110,
+    ...stableSubmitButtonStyle,
     paddingHorizontal: 16,
   },
   primaryText: {
     color: "#ffffff",
+    fontSize: 16,
     fontWeight: "800",
   },
   screen: {
@@ -458,6 +475,7 @@ const styles = StyleSheet.create({
   },
   secondaryText: {
     color: "#17363c",
+    fontSize: 16,
     fontWeight: "800",
   },
   textarea: {

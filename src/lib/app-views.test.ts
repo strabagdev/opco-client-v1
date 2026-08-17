@@ -26,7 +26,7 @@ describe("app views", () => {
   it("recognizes all current AppView types", () => {
     expect(appViewsFixture.map((view) => getAppViewTypeLabel(view.type))).toEqual([
       "Registros",
-      "Workflow",
+      "Flujo",
       "Tablero",
       "Dashboard",
     ]);

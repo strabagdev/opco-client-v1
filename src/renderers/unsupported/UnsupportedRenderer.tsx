@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 
+import { AppIcon } from "@/components/app-icon";
 import { getAppViewTypeLabel } from "@/lib/app-views";
 import { AppViewRendererProps } from "@/renderers/types";
 
@@ -7,7 +8,9 @@ export function UnsupportedRenderer({ appView }: AppViewRendererProps) {
   return (
     <View style={styles.content}>
       <View style={styles.header}>
-        <Text style={styles.icon}>{appView.icon ?? "[]"}</Text>
+        <View style={styles.icon}>
+          <AppIcon icon={appView.icon} size={26} />
+        </View>
         <View style={styles.headerText}>
           <Text style={styles.title}>{appView.name}</Text>
           <Text style={styles.meta}>{getAppViewTypeLabel(appView.type)}</Text>
@@ -32,11 +35,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   icon: {
-    color: "#135d66",
-    fontSize: 24,
-    fontWeight: "800",
-    minWidth: 42,
-    textAlign: "center",
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 8,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
   },
   message: {
     color: "#587078",

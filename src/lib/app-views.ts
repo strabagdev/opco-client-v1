@@ -4,7 +4,7 @@ export const APP_VIEW_TYPE_LABELS: Record<AppViewType, string> = {
   BOARD: "Tablero",
   DASHBOARD: "Dashboard",
   RECORDS: "Registros",
-  WORKFLOW: "Workflow",
+  WORKFLOW: "Flujo",
 };
 
 export function sortAppViews(views: AppView[]) {

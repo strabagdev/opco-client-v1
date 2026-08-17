@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 
+import { AppIcon } from "@/components/app-icon";
 import { buildAppViewHref, getAppViewTypeLabel, sortAppViews } from "@/lib/app-views";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
@@ -156,13 +157,14 @@ export default function HomeScreen() {
           {views.map((appView) => (
             <Link href={buildAppViewHref(appView.id)} key={appView.id} asChild>
               <Pressable style={styles.viewButton}>
-                <Text style={styles.viewIcon}>{appView.icon ?? "[]"}</Text>
+                <View style={styles.viewIcon}>
+                  <AppIcon icon={appView.icon} size={22} />
+                </View>
                 <View style={styles.viewText}>
                   <Text style={styles.viewName}>{appView.name}</Text>
-                  <Text style={styles.meta}>
-                    {getAppViewTypeLabel(appView.type)}
-                    {appView.type === "RECORDS" ? ` · ${appView.config.entityTypeId}` : ""}
-                  </Text>
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeBadgeText}>{getAppViewTypeLabel(appView.type)}</Text>
+                  </View>
                 </View>
               </Pressable>
             </Link>
@@ -225,11 +227,12 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   viewIcon: {
-    color: "#135d66",
-    fontSize: 18,
-    fontWeight: "800",
-    minWidth: 36,
-    textAlign: "center",
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 8,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
   },
   viewList: {
     gap: 10,
@@ -241,6 +244,8 @@ const styles = StyleSheet.create({
   },
   viewText: {
     flex: 1,
+    gap: 6,
+    minWidth: 0,
   },
   error: {
     color: "#b42318",
@@ -295,6 +300,20 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: "800",
     marginTop: 4,
+  },
+  typeBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "#edf6f6",
+    borderColor: "#cfe1e3",
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  typeBadgeText: {
+    color: "#2f5e66",
+    fontSize: 12,
+    fontWeight: "800",
   },
   value: {
     color: "#17363c",

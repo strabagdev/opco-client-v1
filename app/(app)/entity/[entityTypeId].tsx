@@ -10,9 +10,11 @@ import {
   View,
 } from "react-native";
 
+import { AppIcon } from "@/components/app-icon";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
 import { EntityDefinition, EntityRecord, EntityRecordPagination } from "@/lib/opco-api";
+import { stableTextInputStyle, STABLE_LOAD_MORE_BUTTON_MIN_WIDTH } from "@/lib/visual-stability";
 import { useSession } from "@/state/session";
 
 const PAGE_SIZE = 25;
@@ -134,7 +136,9 @@ export default function EntityRecordsScreen() {
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       {definition ? (
         <View style={styles.header}>
-          <Text style={styles.icon}>{definition.icon ?? "[]"}</Text>
+          <View style={styles.icon}>
+            <AppIcon icon={definition.icon} size={26} />
+          </View>
           <View style={styles.headerText}>
             <Text style={styles.title}>{definition.name}</Text>
             <Text style={styles.meta}>{pagination ? `${pagination.total} registros` : "Registros"}</Text>
@@ -241,11 +245,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   icon: {
-    color: "#135d66",
-    fontSize: 24,
-    fontWeight: "800",
-    minWidth: 42,
-    textAlign: "center",
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 8,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
   },
   loadMoreButton: {
     alignItems: "center",
@@ -254,7 +259,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 46,
-    minWidth: 140,
+    minWidth: STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
     paddingHorizontal: 18,
   },
   loadMoreText: {
@@ -325,6 +330,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     color: "#17363c",
+    ...stableTextInputStyle,
     minHeight: 46,
     paddingHorizontal: 14,
   },
