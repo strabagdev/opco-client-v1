@@ -16,7 +16,65 @@ describe("entity record display", () => {
     expect(fields.map((field) => field.key)).toEqual(["estado"]);
   });
 
-  it("falls back to a small active field selection without display config", () => {
+  it("includes every configured showInList field even after the first four", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        field({
+          config: { display: { primary: true, showInList: true }, validation: {} },
+          key: "numero",
+          name: "Numero",
+          order: 1,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "fecha_de_inicio",
+          name: "Fecha de inicio",
+          order: 2,
+          type: "DATE",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "fecha_de_termino",
+          name: "Fecha de termino",
+          order: 3,
+          type: "DATE",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "monto_neto",
+          name: "Monto neto",
+          order: 4,
+          type: "MONEY",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "estado",
+          name: "Estado",
+          order: 5,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "hes",
+          name: "HES",
+          order: 6,
+          type: "TEXT",
+        }),
+      ],
+    };
+
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual([
+      "fecha_de_inicio",
+      "fecha_de_termino",
+      "monto_neto",
+      "estado",
+      "hes",
+    ]);
+  });
+
+  it("falls back to four useful active fields without display config", () => {
     const definition: EntityDefinition = {
       ...entityDefinitionFixture,
       fields: [
@@ -29,7 +87,50 @@ describe("entity record display", () => {
       ],
     };
 
-    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["nombre", "rut", "activo"]);
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["nombre", "rut", "activo", "fecha"]);
+  });
+
+  it("omits empty configured values from a card without dropping populated records", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        field({
+          config: { display: { primary: true, showInList: true }, validation: {} },
+          key: "numero",
+          name: "Numero",
+          order: 1,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "hes",
+          name: "HES",
+          order: 2,
+          type: "TEXT",
+        }),
+      ],
+    };
+
+    expect(
+      buildRecordListItem({
+        definition,
+        record: {
+          displayName: "EDP-001",
+          id: "record_1",
+          values: { hes: null, numero: "EDP-001" },
+        },
+      }).fields,
+    ).toEqual([]);
+    expect(
+      buildRecordListItem({
+        definition,
+        record: {
+          displayName: "EDP-002",
+          id: "record_2",
+          values: { hes: "HES-123", numero: "EDP-002" },
+        },
+      }).fields,
+    ).toEqual([{ key: "hes", label: "HES", value: "HES-123" }]);
   });
 
   it("builds dynamic list items with displayName, labels, formatted values, and detail href", () => {
@@ -94,11 +195,16 @@ describe("entity record display", () => {
 });
 
 function field({
+  config = {
+    display: {},
+    validation: {},
+  },
   key,
   name,
   order,
   type,
 }: {
+  config?: Record<string, unknown>;
   key: string;
   name: string;
   order: number;
@@ -106,10 +212,7 @@ function field({
 }) {
   return {
     active: true,
-    config: {
-      display: {},
-      validation: {},
-    },
+    config,
     id: `field_${key}`,
     key,
     name,

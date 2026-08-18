@@ -1,7 +1,6 @@
 import { EntityDefinition, EntityField, EntityRecord, EntityRecordValue } from "./opco-api";
 
-const MAX_LIST_FIELDS = 4;
-const FALLBACK_LIST_FIELDS = 3;
+const FALLBACK_LIST_FIELDS = 4;
 
 export type RecordListItem = {
   href: string;
@@ -34,7 +33,7 @@ export function getRecordListFields(definition: EntityDefinition) {
   });
 
   if (configuredFields.length > 0) {
-    return configuredFields.slice(0, MAX_LIST_FIELDS);
+    return configuredFields;
   }
 
   return activeFields

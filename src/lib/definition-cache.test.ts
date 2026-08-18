@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { getEntityDefinitionWithCache, EntityDefinitionCache } from "./definition-cache";
+import { EntityDefinition } from "./opco-api";
 import { entityDefinitionFixture } from "../test/fixtures";
 
 function createMemoryCache(): EntityDefinitionCache {
-  const rows = new Map<string, { definition: typeof entityDefinitionFixture; syncedAt: string }>();
+  const rows = new Map<string, { definition: EntityDefinition; syncedAt: string }>();
 
   return {
     async getEntityDefinition(contractId, entityTypeId) {
@@ -39,6 +40,54 @@ describe("getEntityDefinitionWithCache", () => {
     });
     expect(await cache.getEntityDefinition("contract_1", "entity_1")).toEqual({
       definition: entityDefinitionFixture,
+      syncedAt: syncedAt.toISOString(),
+    });
+  });
+
+  it("returns a fresh API definition over an older cached definition", async () => {
+    const cache = createMemoryCache();
+    const staleDefinition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: entityDefinitionFixture.fields.filter((field) => field.key !== "estado"),
+    };
+    const freshDefinition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        ...entityDefinitionFixture.fields,
+        {
+          active: true,
+          config: { display: { showInList: true }, validation: {} },
+          id: "field_hes",
+          key: "hes",
+          name: "HES",
+          order: 99,
+          required: false,
+          type: "TEXT",
+        },
+      ],
+    };
+    const syncedAt = new Date("2026-08-14T11:00:00.000Z");
+
+    await cache.upsertEntityDefinition("contract_1", "entity_1", staleDefinition, "2026-08-14T10:00:00.000Z");
+
+    const result = await getEntityDefinitionWithCache({
+      api: {
+        getEntityDefinition: vi.fn(async () => ({ entity: freshDefinition })),
+      },
+      cache,
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      now: () => syncedAt,
+      token: "token_123",
+    });
+
+    expect(result).toEqual({
+      definition: freshDefinition,
+      source: "network",
+      syncedAt: syncedAt.toISOString(),
+    });
+    expect(await cache.getEntityDefinition("contract_1", "entity_1")).toEqual({
+      definition: freshDefinition,
       syncedAt: syncedAt.toISOString(),
     });
   });
