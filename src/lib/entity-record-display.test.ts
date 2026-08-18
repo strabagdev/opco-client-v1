@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildEntityRecordHref,
   buildRecordListItem,
+  formatRecordValue,
   getRecordDetailFields,
   getRecordListFields,
 } from "./entity-record-display";
-import { EntityDefinition, EntityRecord } from "./opco-api";
+import { EntityDefinition, EntityField, EntityRecord } from "./opco-api";
 import { entityDefinitionFixture, entityRecordFixture } from "../test/fixtures";
 
 describe("entity record display", () => {
@@ -153,6 +154,64 @@ describe("entity record display", () => {
     });
   });
 
+  it("shows TIME values in lists when showInList is configured", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        field({
+          config: { display: { primary: true, showInList: true }, validation: {} },
+          key: "codigo",
+          name: "Codigo",
+          order: 1,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "hora",
+          name: "Hora",
+          order: 2,
+          type: "TIME",
+        }),
+      ],
+    };
+
+    expect(
+      buildRecordListItem({
+        definition,
+        record: {
+          displayName: "EQ-001",
+          id: "record_1",
+          values: { codigo: "EQ-001", hora: "08:30" },
+        },
+      }).fields,
+    ).toEqual([{ key: "hora", label: "Hora", value: "08:30" }]);
+  });
+
+  it("shows TIME values in detail without date or timezone formatting", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [field({ key: "hora", name: "Hora", order: 1, type: "TIME" })],
+    };
+
+    expect(formatRecordValue("08:30", definition.fields[0])).toBe("08:30");
+    expect(
+      getRecordDetailFields(definition, {
+        displayName: "Turno",
+        id: "record_1",
+        values: { hora: "23:59" },
+      }),
+    ).toEqual([{ key: "hora", label: "Hora", value: "23:59" }]);
+  });
+
+  it("formats DATE and DATETIME values for Chilean users outside forms", () => {
+    expect(formatRecordValue("2026-08-18", field({ key: "fecha", name: "Fecha", order: 1, type: "DATE" }))).toBe(
+      "18/08/2026",
+    );
+    expect(
+      formatRecordValue("2026-08-18T14:30:00.000Z", field({ key: "inicio", name: "Inicio", order: 1, type: "DATETIME" })),
+    ).toContain("2026");
+  });
+
   it("supports entity pages without records", () => {
     const records: EntityRecord[] = [];
 
@@ -208,7 +267,7 @@ function field({
   key: string;
   name: string;
   order: number;
-  type: string;
+  type: EntityField["type"];
 }) {
   return {
     active: true,

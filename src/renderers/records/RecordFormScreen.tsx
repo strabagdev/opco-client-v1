@@ -24,9 +24,10 @@ import {
   isFieldUnsupported,
   RecordFormErrors,
   RecordFormValues,
-  validateRequiredFields,
+  validateFormFields,
 } from "@/lib/record-form";
 import { useSession } from "@/state/session";
+import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./TemporalFieldInputs";
 
 type Props = {
   appView: RecordsAppView;
@@ -126,7 +127,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       return;
     }
 
-    const requiredErrors = validateRequiredFields(fields, values);
+    const requiredErrors = validateFormFields(fields, values);
 
     if (Object.keys(requiredErrors).length > 0) {
       setFieldErrors(requiredErrors);
@@ -296,6 +297,25 @@ function RecordFieldInput({ error, field, onChange, value }: FieldInputProps) {
   }
 
   const textValue = Array.isArray(value) ? value.join(", ") : typeof value === "boolean" ? "" : value ?? "";
+
+  if (field.type === "DATE" || field.type === "TIME" || field.type === "DATETIME") {
+    return (
+      <View style={styles.fieldGroup}>
+        <Text style={styles.label}>{field.name}</Text>
+        {field.type === "DATE" ? (
+          <DateFieldInput onChange={onChange} required={field.required} value={textValue} />
+        ) : null}
+        {field.type === "TIME" ? (
+          <TimeFieldInput onChange={onChange} required={field.required} value={textValue} />
+        ) : null}
+        {field.type === "DATETIME" ? (
+          <DateTimeFieldInput onChange={onChange} required={field.required} value={textValue} />
+        ) : null}
+        <FieldError error={error} />
+      </View>
+    );
+  }
+
   const multiline = field.type === "TEXTAREA";
 
   return (
@@ -332,7 +352,7 @@ function FieldError({ error }: { error?: string }) {
   return error ? <Text style={styles.fieldError}>{error}</Text> : null;
 }
 
-function getKeyboardType(fieldType: string) {
+function getKeyboardType(fieldType: EntityField["type"]) {
   if (fieldType === "INTEGER" || fieldType === "DECIMAL" || fieldType === "MONEY") {
     return "numeric";
   }
@@ -341,14 +361,6 @@ function getKeyboardType(fieldType: string) {
 }
 
 function getPlaceholder(field: EntityField) {
-  if (field.type === "DATE") {
-    return "YYYY-MM-DD";
-  }
-
-  if (field.type === "DATETIME") {
-    return "YYYY-MM-DDTHH:mm:ss";
-  }
-
   if (field.type === "RELATION" && field.multiple) {
     return "ids separados por coma";
   }

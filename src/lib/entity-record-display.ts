@@ -163,7 +163,7 @@ function formatDateOnly(value: string) {
     return value;
   }
 
-  return `${match[3]}-${match[2]}-${match[1]}`;
+  return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
 function formatDateTime(value: string) {
@@ -173,5 +173,11 @@ function formatDateTime(value: string) {
     return value;
   }
 
-  return date.toLocaleString();
+  return date.toLocaleString("es-CL", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }

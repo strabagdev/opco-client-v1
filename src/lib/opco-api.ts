@@ -108,11 +108,30 @@ export type DashboardAppView = {
 
 export type AppView = RecordsAppView | WorkflowAppView | BoardAppView | DashboardAppView;
 
+export type EntityFieldType =
+  | "BOOLEAN"
+  | "DATE"
+  | "DATETIME"
+  | "DECIMAL"
+  | "EMAIL"
+  | "FILE"
+  | "IMAGE"
+  | "INTEGER"
+  | "MONEY"
+  | "MULTISELECT"
+  | "PHONE"
+  | "RELATION"
+  | "SELECT"
+  | "TEXT"
+  | "TEXTAREA"
+  | "TIME"
+  | "URL";
+
 export type EntityField = {
   id: string;
   key: string;
   name: string;
-  type: string;
+  type: EntityFieldType;
   required: boolean;
   unique?: boolean;
   searchable?: boolean;

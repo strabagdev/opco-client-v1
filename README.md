@@ -10,6 +10,7 @@ Cliente generico multiplataforma para la API externa de Opco. Esta etapa valida 
 - Expo Router
 - expo-secure-store
 - expo-sqlite
+- @react-native-community/datetimepicker
 - Vitest para logica pura
 
 ## Configuracion
@@ -103,13 +104,22 @@ DASHBOARD -> UnsupportedRenderer
 - `BOOLEAN`
 - `DATE`
 - `DATETIME`
+- `TIME`
 - `SELECT`
 - `MULTISELECT`
 - `RELATION`
 
 `FILE` e `IMAGE` se muestran como no soportados todavia y no se envian en el payload.
 
-La UI valida `required` basico para evitar submits obviamente vacios, convierte tipos JSON razonables y muestra errores por campo cuando la API devuelve detalles estructurados. La API de Opco sigue siendo la autoridad final de permisos y validacion.
+Los campos temporales usan controles amigables por plataforma:
+
+- `DATE`: web usa un input nativo equivalente a `type="date"`; Android/iOS usan `@react-native-community/datetimepicker`. El payload siempre es `YYYY-MM-DD`, sin timezone.
+- `TIME`: web usa un input nativo equivalente a `type="time"`; Android/iOS usan picker nativo de hora. El payload siempre es `HH:mm`, sin fecha, timezone ni segundos.
+- `DATETIME`: se muestra como dos controles visuales, `Fecha` y `Hora`. Ambos componen un unico valor ISO 8601 para la API, manteniendo la semantica actual de Operational Core. Al editar, el ISO existente se separa en fecha y hora.
+
+Los campos temporales opcionales muestran una accion discreta `Limpiar`, que envia `null`. Los required no pueden guardarse vacios.
+
+La UI valida `required` basico para evitar submits obviamente vacios, valida `DATE`, `TIME` con horas `00`-`23` y minutos `00`-`59`, y `DATETIME`, convierte tipos JSON razonables y muestra errores por campo cuando la API devuelve detalles estructurados. La API de Opco sigue siendo la autoridad final de permisos y validacion.
 
 ## SQLite
 
