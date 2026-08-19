@@ -127,7 +127,7 @@ La UI valida `required` basico para evitar submits obviamente vacios, valida `DA
 
 ## Offline-First RECORDS
 
-Las AppViews `RECORDS` son offline-first para listado, detalle, creacion y edicion. La cache esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
+Las AppViews `RECORDS` son offline-first para navegacion, listado, detalle, creacion y edicion. La app conserva un snapshot local minimo de `/me`, `/context`, contrato seleccionado y AppViews por contrato, sin persistir credenciales adicionales. Con ese snapshot puede reabrir sin red, reconstruir `owner_key` y llegar hasta las pantallas cacheadas. La cache de records esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
 
 Cada record local tiene:
 
@@ -185,6 +185,19 @@ entity_definitions (
   PRIMARY KEY (entity_type_id, contract_id)
 )
 
+context_snapshot (
+  id TEXT PRIMARY KEY NOT NULL,
+  me_json TEXT NOT NULL,
+  context_json TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+
+app_views (
+  contract_id TEXT PRIMARY KEY NOT NULL,
+  views_json TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+
 entity_records (
   local_id TEXT PRIMARY KEY NOT NULL,
   server_id TEXT,
@@ -218,9 +231,13 @@ pending_operations (
 )
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
 
 ## Cache
+
+Cuando login, `/me` y `/context` responden correctamente, la app guarda el snapshot minimo de navegacion. Si al reabrir `/me` o `/context` fallan por red y existe snapshot, el estado queda offline con `me`, `context`, contrato seleccionado y `owner_key` disponibles.
+
+Cuando `GET /api/v1/contracts/:contractId/views` responde correctamente, las AppViews se upsertean en SQLite. Si una lectura posterior falla por red y existe cache local para ese contrato, Home y las rutas `/view/:appViewId` usan las AppViews cacheadas. Errores auth definitivos no usan esta cache como bypass.
 
 Cuando `GET /api/v1/contracts/:contractId/entities/:entityTypeId` responde correctamente, la definicion se upsertea en SQLite. Si una lectura posterior falla por red u otro error y existe cache local, la pantalla muestra esa definicion e indica claramente que viene de cache.
 

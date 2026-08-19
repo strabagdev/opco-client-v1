@@ -66,19 +66,27 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const loadContext = useCallback(
-    async (accessToken: string) => {
+    async (accessToken: string, currentMe: MeResponse) => {
       try {
         const nextContext = await api.getContext(accessToken);
+        await definitionCache.upsertContextSnapshot(currentMe, nextContext, new Date().toISOString());
         setContext(nextContext);
       } catch (error) {
         if (!(error instanceof OpcoNetworkError)) {
           return;
         }
 
+        const cached = await definitionCache.getContextSnapshot();
+
+        if (cached && cached.me.user.id === currentMe.user.id) {
+          setMe(cached.me);
+          setContext(cached.context);
+        }
+
         setStatus("offline");
       }
     },
-    [api],
+    [api, definitionCache],
   );
 
   const refreshPendingRecordsCount = useCallback(async () => {
@@ -116,7 +124,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
     async function bootstrap() {
       try {
-        const restored = await restoreSession(tokenStorage, api);
+        const restored = await restoreSession(tokenStorage, api, definitionCache);
 
         if (!isMounted) {
           return;
@@ -126,12 +134,16 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setToken(restored.token);
           setMe(restored.me);
           setStatus("authenticated");
-          void loadContext(restored.token);
+          void loadContext(restored.token, restored.me);
           return;
         }
 
         if (restored.status === "offline") {
           setToken(restored.token);
+          if (restored.snapshot) {
+            setMe(restored.snapshot.me);
+            setContext(restored.snapshot.context);
+          }
           setStatus("offline");
           return;
         }
@@ -149,7 +161,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [api, loadContext]);
+  }, [api, definitionCache, loadContext]);
 
   useEffect(() => {
     async function refreshCount() {
@@ -197,6 +209,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
     const nextMe = await api.getMe(loginResponse.accessToken);
     const nextContext = await api.getContext(loginResponse.accessToken);
+    await definitionCache.upsertContextSnapshot(nextMe, nextContext, new Date().toISOString());
 
     setToken(loginResponse.accessToken);
     setMe(nextMe);
@@ -221,6 +234,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
     await tokenStorage.clearSession();
     void persistSelectedContractId(definitionCache, null);
+    void definitionCache.clearNavigationCache();
     setToken(null);
     setMe(null);
     setContext(null);

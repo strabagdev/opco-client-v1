@@ -1,5 +1,6 @@
 import * as SQLite from "expo-sqlite";
 
+import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
 import { CachedEntityDefinition, EntityDefinitionCache } from "./definition-cache";
 import {
   buildLocalDisplayName,
@@ -9,17 +10,18 @@ import {
   PendingOperation,
   RecordSyncStatus,
 } from "./offline-records";
-import { EntityDefinition, EntityRecord, EntityRecordValue } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse } from "./opco-api";
 import { RecordsSyncStore } from "../sync/records-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = "3";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export type LocalDatabase = EntityDefinitionCache &
+export type LocalDatabase = AppNavigationCache &
+  EntityDefinitionCache &
   OfflineRecordStore &
   RecordsSyncStore & {
   getSelectedContractId(): Promise<string | null>;
@@ -28,10 +30,13 @@ export type LocalDatabase = EntityDefinitionCache &
 
 export function getLocalDatabase(): LocalDatabase {
   return {
+    clearNavigationCache,
     completePendingOperation,
     countPendingOperations,
     createLocalRecord,
     failPendingOperation,
+    getAppViews,
+    getContextSnapshot,
     getCachedRecord,
     getEntityDefinition,
     getSelectedContractId,
@@ -41,6 +46,8 @@ export function getLocalDatabase(): LocalDatabase {
     retryPendingOperation,
     setSelectedContractId,
     updateLocalRecord,
+    upsertAppViews,
+    upsertContextSnapshot,
     upsertRemoteRecords,
     upsertEntityDefinition,
   };
@@ -69,6 +76,17 @@ async function openAndMigrate() {
       definition_json TEXT NOT NULL,
       synced_at TEXT NOT NULL,
       PRIMARY KEY (entity_type_id, contract_id)
+    );
+    CREATE TABLE IF NOT EXISTS context_snapshot (
+      id TEXT PRIMARY KEY NOT NULL,
+      me_json TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_views (
+      contract_id TEXT PRIMARY KEY NOT NULL,
+      views_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS entity_records (
       local_id TEXT PRIMARY KEY NOT NULL,
@@ -123,6 +141,95 @@ async function openAndMigrate() {
   );
 
   return db;
+}
+
+async function upsertContextSnapshot(
+  me: MeResponse,
+  context: ContextResponse,
+  syncedAt: string,
+) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      INSERT OR REPLACE INTO context_snapshot (id, me_json, context_json, synced_at)
+      VALUES ('current', ?, ?, ?)
+    `,
+    JSON.stringify(me),
+    JSON.stringify(context),
+    syncedAt,
+  );
+}
+
+async function getContextSnapshot(): Promise<CachedContextSnapshot | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{
+    context_json: string;
+    me_json: string;
+    synced_at: string;
+  }>(
+    `
+      SELECT me_json, context_json, synced_at
+      FROM context_snapshot
+      WHERE id = 'current'
+      LIMIT 1
+    `,
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    context: JSON.parse(row.context_json) as ContextResponse,
+    me: JSON.parse(row.me_json) as MeResponse,
+    syncedAt: row.synced_at,
+  };
+}
+
+async function upsertAppViews(contractId: string, views: AppView[], syncedAt: string) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      INSERT INTO app_views (contract_id, views_json, synced_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(contract_id)
+      DO UPDATE SET views_json = excluded.views_json, synced_at = excluded.synced_at
+    `,
+    contractId,
+    JSON.stringify(views),
+    syncedAt,
+  );
+}
+
+async function getAppViews(contractId: string): Promise<CachedAppViewsSnapshot | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ synced_at: string; views_json: string }>(
+    `
+      SELECT views_json, synced_at
+      FROM app_views
+      WHERE contract_id = ?
+      LIMIT 1
+    `,
+    contractId,
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    syncedAt: row.synced_at,
+    views: JSON.parse(row.views_json) as AppView[],
+  };
+}
+
+async function clearNavigationCache() {
+  const db = await getDatabase();
+
+  await db.runAsync(`DELETE FROM context_snapshot`);
+  await db.runAsync(`DELETE FROM app_views`);
 }
 
 async function upsertRemoteRecords({

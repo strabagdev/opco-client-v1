@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { sortAppViews } from "@/lib/app-views";
+import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
 export function useAppView(appViewId: string | undefined) {
-  const { api, selectedContractId, token } = useSession();
+  const { api, definitionCache, selectedContractId, token } = useSession();
   const [views, setViews] = useState<AppView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -30,10 +30,15 @@ export function useAppView(appViewId: string | undefined) {
       setError(null);
 
       try {
-        const data = await api.getAppViews(token, selectedContractId);
+        const data = await loadAppViewsWithCache({
+          api,
+          cache: definitionCache,
+          contractId: selectedContractId,
+          token,
+        });
 
         if (isMounted) {
-          setViews(sortAppViews(data.views));
+          setViews(data.views);
         }
       } catch (nextError) {
         if (isMounted) {
@@ -51,7 +56,7 @@ export function useAppView(appViewId: string | undefined) {
     return () => {
       isMounted = false;
     };
-  }, [api, appViewId, retryCount, selectedContractId, token]);
+  }, [api, appViewId, definitionCache, retryCount, selectedContractId, token]);
 
   return {
     appView,

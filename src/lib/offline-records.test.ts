@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { OfflineRecordStore, PendingOperation, loadRecordsWithOfflineCache } from "./offline-records";
-import { EntityRecord, EntityRecordValue, OpcoNetworkError } from "./opco-api";
+import {
+  OfflineRecordStore,
+  PendingOperation,
+  loadRecordWithOfflineCache,
+  loadRecordsWithOfflineCache,
+} from "./offline-records";
+import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "./opco-api";
 
 const scope = {
   contractId: "contract_1",
@@ -51,6 +56,50 @@ describe("offline records cache", () => {
 
     expect(result.offline).toBe(true);
     expect(result.records[0].id).toBe("record_1");
+  });
+
+  it("falls back to cached detail when remote detail fails by network", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+    });
+
+    const result = await loadRecordWithOfflineCache({
+      ...scope,
+      api: {
+        getEntityRecord: async () => {
+          throw new OpcoNetworkError();
+        },
+      },
+      recordId: "record_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(result.offline).toBe(true);
+    expect(result.fromCache).toBe(true);
+    expect(result.record?.id).toBe("record_1");
+  });
+
+  it("does not use synced cached detail when the API returns an auth error", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+    });
+
+    await expect(
+      loadRecordWithOfflineCache({
+        ...scope,
+        api: {
+          getEntityRecord: async () => {
+            throw new OpcoApiError("Token invalido.", "TOKEN_INVALID", 401);
+          },
+        },
+        recordId: "record_1",
+        store,
+        token: "token_1",
+      }),
+    ).rejects.toMatchObject({ code: "TOKEN_INVALID", status: 401 });
   });
 
   it("does not lose pending local records when remote records refresh", async () => {

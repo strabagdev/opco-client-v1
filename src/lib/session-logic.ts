@@ -1,3 +1,4 @@
+import { AppNavigationCache, CachedContextSnapshot, isNetworkLikeError } from "./app-navigation-cache";
 import { OpcoApiError, MeResponse } from "./opco-api";
 
 export type TokenStore = {
@@ -17,11 +18,13 @@ export type RestoreSessionResult =
   | {
       status: "offline";
       token: string;
+      snapshot?: CachedContextSnapshot;
     };
 
 export async function restoreSession(
   tokenStore: TokenStore,
   api: { getMe(token: string): Promise<MeResponse> },
+  cache?: Pick<AppNavigationCache, "getContextSnapshot">,
 ): Promise<RestoreSessionResult> {
   const token = await tokenStore.getAccessToken();
 
@@ -44,9 +47,20 @@ export async function restoreSession(
       return { status: "anonymous" };
     }
 
+    const snapshot = isNetworkLikeError(error) ? await readContextSnapshot(cache) : null;
+
     return {
+      ...(snapshot ? { snapshot } : {}),
       status: "offline",
       token,
     };
+  }
+}
+
+async function readContextSnapshot(cache?: Pick<AppNavigationCache, "getContextSnapshot">) {
+  try {
+    return (await cache?.getContextSnapshot()) ?? null;
+  } catch {
+    return null;
   }
 }

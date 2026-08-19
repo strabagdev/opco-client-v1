@@ -10,7 +10,8 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { buildAppViewHref, getAppViewCardMetadata, sortAppViews } from "@/lib/app-views";
+import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
+import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
@@ -19,6 +20,7 @@ export default function HomeScreen() {
   const {
     api,
     context,
+    definitionCache,
     me,
     selectedContractId,
     setSelectedContractId,
@@ -28,6 +30,8 @@ export default function HomeScreen() {
   } = useSession();
   const [views, setViews] = useState<AppView[]>([]);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
+  const [viewsFromCache, setViewsFromCache] = useState(false);
+  const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedContract = useMemo(
@@ -53,6 +57,8 @@ export default function HomeScreen() {
     async function loadViews() {
       if (!token || !selectedContractId) {
         setViews([]);
+        setViewsFromCache(false);
+        setViewsSyncedAt(null);
         return;
       }
 
@@ -60,14 +66,23 @@ export default function HomeScreen() {
       setError(null);
 
       try {
-        const data = await api.getAppViews(token, selectedContractId);
+        const data = await loadAppViewsWithCache({
+          api,
+          cache: definitionCache,
+          contractId: selectedContractId,
+          token,
+        });
 
         if (isMounted) {
-          setViews(sortAppViews(data.views));
+          setViews(data.views);
+          setViewsFromCache(data.fromCache);
+          setViewsSyncedAt(data.syncedAt);
         }
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
+          setViewsFromCache(false);
+          setViewsSyncedAt(null);
         }
       } finally {
         if (isMounted) {
@@ -81,7 +96,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, selectedContractId, token]);
+  }, [api, definitionCache, selectedContractId, token]);
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -149,6 +164,12 @@ export default function HomeScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Experiencias</Text>
         {isLoadingViews ? <ActivityIndicator /> : null}
+        {viewsFromCache ? (
+          <View style={styles.cacheBanner}>
+            <Text style={styles.cacheText}>Sin conexion. Experiencias guardadas localmente.</Text>
+            {viewsSyncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {viewsSyncedAt}</Text> : null}
+          </View>
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
           <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
@@ -195,6 +216,22 @@ const styles = StyleSheet.create({
   },
   contractList: {
     gap: 10,
+  },
+  cacheBanner: {
+    backgroundColor: "#fff7e0",
+    borderColor: "#f0c36d",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+    padding: 12,
+  },
+  cacheMeta: {
+    color: "#6f4f08",
+    fontSize: 12,
+  },
+  cacheText: {
+    color: "#6f4f08",
+    fontWeight: "700",
   },
   contractName: {
     color: "#17363c",
