@@ -27,7 +27,7 @@ import {
   validateFormFields,
 } from "@/lib/record-form";
 import { useSession } from "@/state/session";
-import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./TemporalFieldInputs";
+import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./temporal-input";
 
 type Props = {
   appView: RecordsAppView;

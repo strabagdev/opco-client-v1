@@ -1,6 +1,6 @@
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
   composeDateTimeValue,
@@ -10,7 +10,6 @@ import {
   formatTimeInputValue,
   splitDateTimeValue,
 } from "@/lib/record-form";
-import { stableTextInputStyle } from "@/lib/visual-stability";
 
 type TemporalFieldInputProps = {
   onChange(value: string): void;
@@ -19,17 +18,6 @@ type TemporalFieldInputProps = {
 };
 
 export function DateFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  if (Platform.OS === "web") {
-    return (
-      <TemporalWebInput
-        onChange={onChange}
-        required={required}
-        type="date"
-        value={value}
-      />
-    );
-  }
-
   return (
     <NativePickerInput
       clearLabel="Limpiar fecha"
@@ -44,18 +32,6 @@ export function DateFieldInput({ onChange, required, value }: TemporalFieldInput
 }
 
 export function TimeFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  if (Platform.OS === "web") {
-    return (
-      <TemporalWebInput
-        onChange={onChange}
-        required={required}
-        step={60}
-        type="time"
-        value={value}
-      />
-    );
-  }
-
   return (
     <NativePickerInput
       clearLabel="Limpiar hora"
@@ -100,37 +76,6 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
       </View>
       {!required && (date || time || value) ? (
         <Pressable onPress={clear} style={styles.clearButton}>
-          <Text style={styles.clearText}>Limpiar</Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
-export function getTemporalWebInputProps(type: "date" | "time") {
-  return type === "time" ? { step: 60, type } : { type };
-}
-
-type TemporalWebInputProps = {
-  onChange(value: string): void;
-  required: boolean;
-  step?: number;
-  type: "date" | "time";
-  value: string;
-};
-
-function TemporalWebInput({ onChange, required, step, type, value }: TemporalWebInputProps) {
-  return (
-    <View style={styles.webInputRow}>
-      <TextInput
-        onChangeText={onChange}
-        style={styles.input}
-        value={value}
-        {...getTemporalWebInputProps(type)}
-        {...(step ? { step } : {})}
-      />
-      {!required && value ? (
-        <Pressable onPress={() => onChange("")} style={styles.clearButton}>
           <Text style={styles.clearText}>Limpiar</Text>
         </Pressable>
       ) : null}
@@ -244,18 +189,9 @@ const styles = StyleSheet.create({
   dateTimePart: {
     gap: 6,
   },
-  input: {
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#17363c",
-    ...stableTextInputStyle,
-    minHeight: 46,
-    paddingHorizontal: 12,
-  },
   iosPicker: {
-    minHeight: 44,
     justifyContent: "center",
+    minHeight: 44,
   },
   nativeButton: {
     borderColor: "#c8d2d5",
@@ -283,12 +219,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "800",
     textTransform: "uppercase",
-  },
-  webInputRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    minHeight: 46,
   },
 });

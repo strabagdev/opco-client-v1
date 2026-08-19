@@ -33,8 +33,7 @@
         }
       ],
       "expo-secure-store",
-      "expo-sqlite",
-      "@react-native-community/datetimepicker"
+      "expo-sqlite"
     ]
   }
 }
