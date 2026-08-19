@@ -11,9 +11,9 @@ import {
 } from "react-native";
 
 import { buildAppViewRecordHref } from "@/lib/app-views";
-import { createClientRequestId } from "@/lib/client-request-id";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
-import { EntityDefinition, EntityField, EntityRecord, RecordsAppView } from "@/lib/opco-api";
+import { CachedEntityRecord, loadRecordWithOfflineCache, saveRecordLocally } from "@/lib/offline-records";
+import { EntityDefinition, EntityField, RecordsAppView } from "@/lib/opco-api";
 import { stableSubmitButtonStyle, stableTextInputStyle } from "@/lib/visual-stability";
 import {
   buildChangedSubmitValues,
@@ -37,9 +37,9 @@ type Props = {
 
 export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, selectedContractId, syncPendingRecords, token } = useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
-  const [record, setRecord] = useState<EntityRecord | null>(null);
+  const [record, setRecord] = useState<CachedEntityRecord | null>(null);
   const [initialValues, setInitialValues] = useState<RecordFormValues>({});
   const [values, setValues] = useState<RecordFormValues>({});
   const [fieldErrors, setFieldErrors] = useState<RecordFormErrors>({});
@@ -55,7 +55,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     let isMounted = true;
 
     async function loadForm() {
-      if (!token || !selectedContractId || !entityTypeId) {
+      if (!token || !selectedContractId || !entityTypeId || !ownerKey) {
         setError("Selecciona un contrato antes de abrir el formulario.");
         setIsLoading(false);
         return;
@@ -81,9 +81,17 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         });
         const recordResult =
           mode === "edit" && recordId
-            ? await api.getEntityRecord(token, selectedContractId, entityTypeId, recordId)
+            ? await loadRecordWithOfflineCache({
+                api,
+                contractId: selectedContractId,
+                entityTypeId,
+                ownerKey,
+                recordId,
+                store: definitionCache,
+                token,
+              })
             : null;
-        const nextValues = buildInitialFormValues(definitionResult.definition, recordResult?.record.values);
+        const nextValues = buildInitialFormValues(definitionResult.definition, recordResult?.record?.values);
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
@@ -107,7 +115,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, entityTypeId, mode, recordId, retryCount, selectedContractId, token]);
+  }, [api, definitionCache, entityTypeId, mode, ownerKey, recordId, retryCount, selectedContractId, token]);
 
   function setFieldValue(key: string, value: string | boolean | string[]) {
     setValues((current) => ({
@@ -123,7 +131,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   }
 
   async function handleSubmit() {
-    if (!definition || !token || !selectedContractId) {
+    if (!definition || !token || !selectedContractId || !ownerKey) {
       return;
     }
 
@@ -147,17 +155,18 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     setFieldErrors({});
 
     try {
-      const result =
-        mode === "create"
-          ? await api.createEntityRecord(token, selectedContractId, entityTypeId, {
-              clientRequestId: createClientRequestId(),
-              values: submitValues,
-            })
-          : await api.updateEntityRecord(token, selectedContractId, entityTypeId, recordId ?? "", {
-              values: submitValues,
-            });
+      const localRecord = await saveRecordLocally({
+        contractId: selectedContractId,
+        entityTypeId,
+        mode,
+        ownerKey,
+        recordId,
+        store: definitionCache,
+        values: submitValues,
+      });
 
-      router.replace(buildAppViewRecordHref(appView.id, result.record.id));
+      void syncPendingRecords();
+      router.replace(buildAppViewRecordHref(appView.id, localRecord.id));
     } catch (nextError) {
       const nextFieldErrors = extractApiFieldErrors(nextError);
 

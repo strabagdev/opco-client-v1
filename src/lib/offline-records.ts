@@ -1,0 +1,271 @@
+import { createClientRequestId } from "./client-request-id";
+import {
+  EntityRecord,
+  EntityRecordPagination,
+  EntityRecordValue,
+  OpcoApi,
+  OpcoNetworkError,
+} from "./opco-api";
+
+export type RecordSyncStatus = "synced" | "pending_create" | "pending_update" | "syncing" | "failed";
+
+export type CachedEntityRecord = EntityRecord & {
+  localId: string;
+  serverId: string | null;
+  syncErrorCode?: string | null;
+  syncErrorMessage?: string | null;
+  syncStatus: RecordSyncStatus;
+};
+
+export type PendingOperationType = "CREATE" | "UPDATE";
+
+export type PendingOperation = {
+  attempts: number;
+  clientRequestId: string;
+  contractId: string;
+  createdAt: string;
+  entityTypeId: string;
+  id: string;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  localRecordId: string;
+  operation: PendingOperationType;
+  ownerKey: string;
+  payload: OfflineRecordPayload;
+  serverRecordId: string | null;
+  updatedAt: string;
+};
+
+export type OfflineRecordPayload = {
+  clientRequestId?: string;
+  values: Record<string, EntityRecordValue>;
+};
+
+export type CachedRecordsResult = {
+  fromCache: boolean;
+  offline: boolean;
+  pagination: EntityRecordPagination;
+  records: CachedEntityRecord[];
+};
+
+export type OfflineRecordStore = {
+  countPendingOperations(ownerKey: string): Promise<number>;
+  createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
+  getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;
+  listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
+  updateLocalRecord(input: UpdateLocalRecordInput): Promise<CachedEntityRecord>;
+  upsertRemoteRecords(input: UpsertRemoteRecordsInput): Promise<void>;
+};
+
+type BaseScopedInput = {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+};
+
+export type ListCachedRecordsInput = BaseScopedInput & {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+};
+
+export type RecordIdentityInput = BaseScopedInput & {
+  recordId: string;
+};
+
+export type CreateLocalRecordInput = BaseScopedInput & {
+  clientRequestId?: string;
+  localId?: string;
+  values: Record<string, EntityRecordValue>;
+};
+
+export type UpdateLocalRecordInput = BaseScopedInput & {
+  recordId: string;
+  values: Record<string, EntityRecordValue>;
+};
+
+export type UpsertRemoteRecordsInput = BaseScopedInput & {
+  cachedAt?: string;
+  records: EntityRecord[];
+};
+
+export type LoadRecordsParams = BaseScopedInput & {
+  api: Pick<OpcoApi, "getEntityRecords">;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  store: OfflineRecordStore;
+  token: string;
+};
+
+export async function loadRecordsWithOfflineCache({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  page = 1,
+  pageSize = 25,
+  search,
+  store,
+  token,
+}: LoadRecordsParams): Promise<CachedRecordsResult> {
+  try {
+    const remote = await api.getEntityRecords(token, contractId, entityTypeId, {
+      page,
+      pageSize,
+      search,
+    });
+
+    await store.upsertRemoteRecords({
+      contractId,
+      entityTypeId,
+      ownerKey,
+      records: remote.records,
+    });
+
+    return store.listCachedRecords({
+      contractId,
+      entityTypeId,
+      ownerKey,
+      page,
+      pageSize,
+      search,
+    });
+  } catch (error) {
+    if (isNetworkLikeError(error)) {
+      const cached = await store.listCachedRecords({
+        contractId,
+        entityTypeId,
+        ownerKey,
+        page,
+        pageSize,
+        search,
+      });
+
+      return {
+        ...cached,
+        fromCache: true,
+        offline: true,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export type LoadRecordParams = BaseScopedInput & {
+  api: Pick<OpcoApi, "getEntityRecord">;
+  recordId: string;
+  store: Pick<OfflineRecordStore, "getCachedRecord" | "upsertRemoteRecords">;
+  token: string;
+};
+
+export async function loadRecordWithOfflineCache({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+  store,
+  token,
+}: LoadRecordParams): Promise<{ fromCache: boolean; offline: boolean; record: CachedEntityRecord | null }> {
+  try {
+    const remote = await api.getEntityRecord(token, contractId, entityTypeId, recordId);
+
+    await store.upsertRemoteRecords({
+      contractId,
+      entityTypeId,
+      ownerKey,
+      records: [remote.record],
+    });
+
+    return {
+      fromCache: false,
+      offline: false,
+      record: await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId }),
+    };
+  } catch (error) {
+    if (isNetworkLikeError(error)) {
+      return {
+        fromCache: true,
+        offline: true,
+        record: await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId }),
+      };
+    }
+
+    const cached = await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+    if (cached && cached.syncStatus !== "synced") {
+      return {
+        fromCache: true,
+        offline: false,
+        record: cached,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export type SaveRecordParams = BaseScopedInput & {
+  mode: "create" | "edit";
+  recordId?: string;
+  store: Pick<OfflineRecordStore, "createLocalRecord" | "updateLocalRecord">;
+  values: Record<string, EntityRecordValue>;
+};
+
+export async function saveRecordLocally({
+  contractId,
+  entityTypeId,
+  mode,
+  ownerKey,
+  recordId,
+  store,
+  values,
+}: SaveRecordParams) {
+  if (mode === "create") {
+    return store.createLocalRecord({
+      clientRequestId: createClientRequestId(),
+      contractId,
+      entityTypeId,
+      ownerKey,
+      values,
+    });
+  }
+
+  if (!recordId) {
+    throw new Error("No se encontro el registro a editar.");
+  }
+
+  return store.updateLocalRecord({
+    contractId,
+    entityTypeId,
+    ownerKey,
+    recordId,
+    values,
+  });
+}
+
+export function createLocalRecordId() {
+  return `local_${createClientRequestId()}`;
+}
+
+export function buildLocalDisplayName(values: Record<string, EntityRecordValue>) {
+  const firstValue = Object.values(values).find((value) => {
+    if (value === null || value === undefined) {
+      return false;
+    }
+
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+
+    return typeof value === "number" || typeof value === "boolean";
+  });
+
+  return firstValue === undefined || firstValue === null ? "Registro sin nombre" : String(firstValue);
+}
+
+function isNetworkLikeError(error: unknown) {
+  return error instanceof OpcoNetworkError || !(error instanceof Error && "code" in error);
+}

@@ -5,7 +5,9 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { buildEditAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { getRecordDetailFields } from "@/lib/entity-record-display";
-import { EntityDefinition, EntityRecord, RecordsAppView } from "@/lib/opco-api";
+import { CachedEntityRecord, loadRecordWithOfflineCache } from "@/lib/offline-records";
+import { EntityDefinition, RecordsAppView } from "@/lib/opco-api";
+import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
 
 type Props = {
@@ -15,9 +17,10 @@ type Props = {
 
 export function RecordDetailScreen({ appView, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
-  const [record, setRecord] = useState<EntityRecord | null>(null);
+  const [record, setRecord] = useState<CachedEntityRecord | null>(null);
+  const [fromCache, setFromCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
@@ -31,7 +34,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
     let isMounted = true;
 
     async function loadRecord() {
-      if (!token || !selectedContractId || !entityTypeId || !recordId) {
+      if (!token || !selectedContractId || !entityTypeId || !recordId || !ownerKey) {
         setError("Selecciona un contrato antes de abrir un registro.");
         setIsLoading(false);
         return;
@@ -41,6 +44,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
       setError(null);
       setDefinition(null);
       setRecord(null);
+      setFromCache(false);
 
       try {
         const [definitionResult, recordResult] = await Promise.all([
@@ -51,12 +55,24 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
             entityTypeId,
             token,
           }),
-          api.getEntityRecord(token, selectedContractId, entityTypeId, recordId),
+          loadRecordWithOfflineCache({
+            api,
+            contractId: selectedContractId,
+            entityTypeId,
+            ownerKey,
+            recordId,
+            store: definitionCache,
+            token,
+          }),
         ]);
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
           setRecord(recordResult.record);
+          setFromCache(recordResult.fromCache);
+          if (!recordResult.record) {
+            setError("No hay una copia local de este registro.");
+          }
         }
       } catch (nextError) {
         if (isMounted) {
@@ -74,7 +90,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, entityTypeId, recordId, retryCount, selectedContractId, token]);
+  }, [api, definitionCache, entityTypeId, ownerKey, recordId, retryCount, selectedContractId, token]);
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -92,8 +108,13 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
       {record ? (
         <View style={styles.header}>
           <Text style={styles.kicker}>{appView.name}</Text>
-          <Text style={styles.title}>{record.displayName || "Registro sin nombre"}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>{record.displayName || "Registro sin nombre"}</Text>
+            <SyncBadge record={record} />
+          </View>
           {definition ? <Text style={styles.meta}>{definition.name}</Text> : null}
+          {fromCache ? <Text style={styles.meta}>Datos guardados localmente.</Text> : null}
+          {record.syncErrorMessage ? <Text style={styles.error}>{record.syncErrorMessage}</Text> : null}
         </View>
       ) : null}
 
@@ -121,11 +142,43 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
   );
 }
 
+function SyncBadge({ record }: { record: CachedEntityRecord }) {
+  const label = getRecordSyncLabel(record);
+
+  if (!label) {
+    return null;
+  }
+
+  return (
+    <View style={[styles.badge, record.syncStatus === "failed" && styles.badgeFailed]}>
+      <Text style={[styles.badgeText, record.syncStatus === "failed" && styles.badgeFailedText]}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   actions: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
+  },
+  badge: {
+    alignSelf: "flex-start",
+    backgroundColor: "#eef4f4",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  badgeFailed: {
+    backgroundColor: "#fef3f2",
+  },
+  badgeFailedText: {
+    color: "#b42318",
+  },
+  badgeText: {
+    color: "#466068",
+    fontSize: 12,
+    fontWeight: "800",
   },
   content: {
     gap: 16,
@@ -205,7 +258,14 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#0f3036",
+    flexShrink: 1,
     fontSize: 26,
     fontWeight: "800",
+  },
+  titleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
 });

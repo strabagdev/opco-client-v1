@@ -39,8 +39,11 @@ EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 - `src/lib/opco-api.ts`: cliente central de API y parsing de envelopes `{ ok, data/error }`.
 - `src/lib/app-views.ts`: labels, orden y rutas basadas en AppView.
 - `src/lib/record-form.ts`: conversiones, validacion required basica y payload parcial de formularios.
-- `src/lib/local-db.ts`: esquema SQLite versionado minimo.
+- `src/lib/local-db.ts`: esquema SQLite versionado para definitions, records locales y cola pendiente.
 - `src/lib/definition-cache.ts`: lectura online con fallback cacheado.
+- `src/lib/offline-records.ts`: lectura/escritura offline-first para AppViews `RECORDS`.
+- `src/sync/records-sync.ts`: sync engine central de operaciones pendientes.
+- `src/lib/connectivity.ts`: estado de conectividad `online`/`offline`/`unknown` y eventos web.
 - `src/state/session.tsx`: token, restauracion de sesion, logout y estado compartido.
 
 ## Flujo
@@ -60,8 +63,9 @@ EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 13. Si `AppView.type` es `RECORDS`, `config.entityTypeId` define que EntityType se lee.
 14. El titulo principal viene de `AppView.name`; la EntityType se muestra como metadata secundaria.
 15. Al abrir un record se conserva el contexto de AppView en `/view/:appViewId/record/:recordId`.
-16. Crear usa `POST /api/v1/contracts/:contractId/entities/:entityTypeId/records` con `clientRequestId`.
-17. Editar usa `PATCH /api/v1/contracts/:contractId/entities/:entityTypeId/records/:recordId` con payload parcial.
+16. Crear en AppViews `RECORDS` escribe primero en SQLite con `local_id` y `clientRequestId`, y luego intenta sincronizar.
+17. Editar en AppViews `RECORDS` actualiza SQLite primero, consolida la cola y luego intenta `PATCH`.
+18. La cola se sincroniza al iniciar sesion, al recuperar conectividad web, despues de crear/editar y con el boton `Sincronizar`.
 
 ## AppViews y EntityTypes
 
@@ -121,6 +125,46 @@ Los campos temporales opcionales muestran una accion discreta `Limpiar`, que env
 
 La UI valida `required` basico para evitar submits obviamente vacios, valida `DATE`, `TIME` con horas `00`-`23` y minutos `00`-`59`, y `DATETIME`, convierte tipos JSON razonables y muestra errores por campo cuando la API devuelve detalles estructurados. La API de Opco sigue siendo la autoridad final de permisos y validacion.
 
+## Offline-First RECORDS
+
+Las AppViews `RECORDS` son offline-first para listado, detalle, creacion y edicion. La cache esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
+
+Cada record local tiene:
+
+- `local_id`: identidad estable generada por cliente. Un CREATE offline navega y renderiza usando este id.
+- `server_id`: nullable hasta que Operational Core confirma el record.
+- `sync_status`: `synced`, `pending_create`, `pending_update`, `syncing` o `failed`.
+
+Cuando un CREATE pendiente sincroniza con exito, el mismo row conserva su `local_id`, recibe `server_id` y pasa a `synced`; no se crea una segunda card. Cuando GET records responde, la cache remota se upsertea sin borrar records pendientes. Dos AppViews `RECORDS` sobre la misma EntityType comparten cache porque el scope real es `contractId + entityTypeId`.
+
+Crear offline:
+
+- valida required/tipos localmente;
+- genera `local_id` y `clientRequestId`;
+- guarda `entity_records`;
+- inserta pending operation `CREATE`;
+- muestra el record de inmediato con estado `Pendiente`;
+- intenta sync best-effort si hay sesion.
+
+Editar offline:
+
+- aplica cambios localmente de inmediato;
+- si existe CREATE pendiente, fusiona los cambios en el payload de ese CREATE;
+- si ya existe UPDATE pendiente, lo consolida al estado final actual;
+- nunca intenta UPDATE server-side si todavia no hay `server_id`.
+
+El sync engine procesa una sola corrida a la vez con single-flight. Marca operaciones como syncing, incrementa attempts, llama POST/PATCH, guarda la respuesta en cache y elimina la operacion exitosa. `clientRequestId` se conserva en todos los reintentos de CREATE para aprovechar la idempotencia de Operational Core si una respuesta se pierde.
+
+Errores:
+
+- `NETWORK` y 5xx quedan pendientes para retry posterior.
+- `TOKEN_EXPIRED` se recupera en la capa auth antes de perder operaciones.
+- Validacion, 4xx definitivos e `IDEMPOTENCY_CONFLICT` pasan a `failed` y se muestran como `Error`.
+
+La politica actual de conflictos UPDATE es simple: un pending UPDATE aplica PATCH sobre el estado server actual cuando sincroniza. No hay merge multiusuario ni control optimista completo todavia; la arquitectura guarda `updated_at_remote` para evolucionar hacia versionado/deteccion de conflictos.
+
+La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando` y `Error`. El listado tambien muestra un contador global como `3 pendientes` y el boton `Sincronizar`.
+
 ## SQLite
 
 Base local: `opco-client.db`.
@@ -140,17 +184,51 @@ entity_definitions (
   synced_at TEXT NOT NULL,
   PRIMARY KEY (entity_type_id, contract_id)
 )
+
+entity_records (
+  local_id TEXT PRIMARY KEY NOT NULL,
+  server_id TEXT,
+  owner_key TEXT NOT NULL,
+  contract_id TEXT NOT NULL,
+  entity_type_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  updated_at_remote TEXT,
+  cached_at TEXT NOT NULL,
+  sync_status TEXT NOT NULL,
+  sync_error_code TEXT,
+  sync_error_message TEXT
+)
+
+pending_operations (
+  id TEXT PRIMARY KEY NOT NULL,
+  client_request_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  owner_key TEXT NOT NULL,
+  contract_id TEXT NOT NULL,
+  entity_type_id TEXT NOT NULL,
+  local_record_id TEXT NOT NULL,
+  server_record_id TEXT,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error_code TEXT,
+  last_error_message TEXT
+)
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
 
 ## Cache
 
 Cuando `GET /api/v1/contracts/:contractId/entities/:entityTypeId` responde correctamente, la definicion se upsertea en SQLite. Si una lectura posterior falla por red u otro error y existe cache local, la pantalla muestra esa definicion e indica claramente que viene de cache.
 
-Los records se leen y escriben contra la API remota y no tienen cache offline de escrituras en esta etapa. La cache de records o cola offline deberia vivir en un modulo separado junto a `src/lib/definition-cache.ts`, sin bloquear la visualizacion de datos remotos cuando SQLite Web falle o tarde demasiado.
+Cuando `GET records` responde correctamente, los records remotos se upsertean en SQLite y se combinan con operaciones locales pendientes. Si falla por red, el listado y detalle intentan leer cache local y muestran `Sin conexion. Datos guardados localmente.`
 
 En Expo Web, `expo-sqlite` depende de WASM y de headers de aislamiento cross-origin para `SharedArrayBuffer`. El proyecto incluye `metro.config.js` para empaquetar `.wasm` y configura `Cross-Origin-Embedder-Policy`/`Cross-Origin-Opener-Policy` en `app.json`. Aun asi, SQLite Web tiene limitaciones propias de navegador y la UI no debe depender de que la cache termine para mostrar datos remotos.
+
+`@react-native-community/netinfo` entrega el estado `online`/`offline`/`unknown` y dispara sync al recuperar conectividad. Aun asi, la app no confia solo en ese estado: una request puede fallar aunque NetInfo diga online, y ese error real conserva la operacion pendiente para retry posterior.
 
 ## Token Storage
 
@@ -191,4 +269,4 @@ Despues de generar el dominio Railway de `opco-client`, agrega ese origin exacto
 
 ## Limitaciones actuales
 
-Esta etapa no implementa `WORKFLOW`, `BOARD` ni `DASHBOARD` reales, escrituras offline, cola de sync, background sync, resolucion de conflictos, camara/QR, archivos ni refresh tokens.
+Esta etapa no implementa offline para `WORKFLOW`, `BOARD` ni `DASHBOARD`, delete offline, FILE/IMAGE offline, background sync del SO, resolucion sofisticada de conflictos multiusuario, camara/QR ni adjuntos.

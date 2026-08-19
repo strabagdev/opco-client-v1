@@ -15,12 +15,14 @@ import { buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-vie
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
-import { EntityDefinition, EntityRecord, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
+import { CachedEntityRecord, loadRecordsWithOfflineCache } from "@/lib/offline-records";
+import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
 import {
   stableTextInputStyle,
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
 } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
+import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
 
 const PAGE_SIZE = 25;
@@ -28,12 +30,14 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, pendingRecordsCount, selectedContractId, syncPendingRecords, token } =
+    useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
-  const [records, setRecords] = useState<EntityRecord[]>([]);
+  const [records, setRecords] = useState<CachedEntityRecord[]>([]);
   const [pagination, setPagination] = useState<EntityRecordPagination | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
+  const [isOfflineData, setIsOfflineData] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -61,7 +65,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     let isMounted = true;
 
     async function loadEntityRecords() {
-      if (!token || !selectedContractId || !entityTypeId) {
+      if (!token || !selectedContractId || !entityTypeId || !ownerKey) {
         setError("Selecciona un contrato antes de abrir registros.");
         setIsLoading(false);
         return;
@@ -73,6 +77,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setRecords([]);
       setPagination(null);
       setFromCache(false);
+      setIsOfflineData(false);
       setSyncedAt(null);
 
       try {
@@ -83,15 +88,22 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           entityTypeId,
           token,
         });
-        const recordsResult = await api.getEntityRecords(token, selectedContractId, entityTypeId, {
+        const recordsResult = await loadRecordsWithOfflineCache({
+          api,
+          contractId: selectedContractId,
+          entityTypeId,
+          ownerKey,
           page: 1,
           pageSize: PAGE_SIZE,
           search: debouncedSearch,
+          store: definitionCache,
+          token,
         });
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
-          setFromCache(definitionResult.source === "cache");
+          setFromCache(definitionResult.source === "cache" || recordsResult.fromCache);
+          setIsOfflineData(recordsResult.offline);
           setSyncedAt(definitionResult.syncedAt);
           setRecords(recordsResult.records);
           setPagination(recordsResult.pagination);
@@ -112,10 +124,10 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     return () => {
       isMounted = false;
     };
-  }, [api, debouncedSearch, definitionCache, entityTypeId, retryCount, selectedContractId, token]);
+  }, [api, debouncedSearch, definitionCache, entityTypeId, ownerKey, retryCount, selectedContractId, token]);
 
   async function loadMoreRecords() {
-    if (!token || !selectedContractId || !entityTypeId || !pagination || isLoadingMore) {
+    if (!token || !selectedContractId || !entityTypeId || !ownerKey || !pagination || isLoadingMore) {
       return;
     }
 
@@ -123,14 +135,22 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     setError(null);
 
     try {
-      const result = await api.getEntityRecords(token, selectedContractId, entityTypeId, {
+      const result = await loadRecordsWithOfflineCache({
+        api,
+        contractId: selectedContractId,
+        entityTypeId,
+        ownerKey,
         page: pagination.page + 1,
         pageSize: PAGE_SIZE,
         search: debouncedSearch,
+        store: definitionCache,
+        token,
       });
 
       setRecords((current) => [...current, ...result.records]);
       setPagination(result.pagination);
+      setFromCache((current) => current || result.fromCache);
+      setIsOfflineData((current) => current || result.offline);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible cargar mas registros.");
     } finally {
@@ -154,8 +174,19 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
       {fromCache ? (
         <View style={styles.cacheBanner}>
-          <Text style={styles.cacheText}>Definicion cacheada.</Text>
+          <Text style={styles.cacheText}>
+            {isOfflineData ? "Sin conexion. Datos guardados localmente." : "Datos guardados localmente."}
+          </Text>
           {syncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {syncedAt}</Text> : null}
+        </View>
+      ) : null}
+
+      {pendingRecordsCount > 0 ? (
+        <View style={styles.syncBar}>
+          <Text style={styles.syncText}>{pendingRecordsCount} pendientes</Text>
+          <Pressable onPress={syncPendingRecords} style={styles.syncButton}>
+            <Text style={styles.syncButtonText}>Sincronizar</Text>
+          </Pressable>
         </View>
       ) : null}
 
@@ -193,7 +224,10 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         {listItems.map((item) => (
           <Link href={buildAppViewRecordHref(appView.id, item.id)} key={item.id} asChild>
             <Pressable style={styles.recordCard}>
-              <Text style={styles.recordTitle}>{item.title}</Text>
+              <View style={styles.recordTitleRow}>
+                <Text style={styles.recordTitle}>{item.title}</Text>
+                <SyncBadge record={records.find((record) => record.id === item.id)} />
+              </View>
               {item.fields.length > 0 ? (
                 <View style={styles.recordFields}>
                   {item.fields.map((field) => (
@@ -220,7 +254,38 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   );
 }
 
+function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {
+  const label = record ? getRecordSyncLabel(record) : null;
+
+  if (!record || !label) {
+    return null;
+  }
+
+  return (
+    <View style={[styles.badge, record.syncStatus === "failed" && styles.badgeFailed]}>
+      <Text style={[styles.badgeText, record.syncStatus === "failed" && styles.badgeFailedText]}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  badge: {
+    backgroundColor: "#eef4f4",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  badgeFailed: {
+    backgroundColor: "#fef3f2",
+  },
+  badgeFailedText: {
+    color: "#b42318",
+  },
+  badgeText: {
+    color: "#466068",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   cacheBanner: {
     backgroundColor: "#fff7ed",
     borderColor: "#fed7aa",
@@ -325,8 +390,16 @@ const styles = StyleSheet.create({
   },
   recordTitle: {
     color: "#17363c",
+    flexShrink: 1,
     fontSize: 17,
     fontWeight: "800",
+  },
+  recordTitleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
   },
   recordValue: {
     color: "#17363c",
@@ -360,6 +433,33 @@ const styles = StyleSheet.create({
     ...stableTextInputStyle,
     minWidth: 0,
     paddingHorizontal: 14,
+  },
+  syncBar: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#d4dddf",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
+    padding: 12,
+  },
+  syncButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 14,
+  },
+  syncButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  syncText: {
+    color: "#17363c",
+    fontWeight: "800",
   },
   title: {
     color: "#0f3036",

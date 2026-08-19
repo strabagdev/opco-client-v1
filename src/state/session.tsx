@@ -9,10 +9,12 @@ import {
 } from "react";
 import { Platform } from "react-native";
 
+import { useConnectivityStatus } from "@/lib/connectivity";
 import { getLocalDatabase, LocalDatabase } from "@/lib/local-db";
 import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
+import { syncPendingRecordsOnce } from "@/sync/records-sync";
 import * as tokenStorage from "@/lib/token-storage";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -22,11 +24,14 @@ type SessionContextValue = {
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
   me: MeResponse | null;
+  ownerKey: string | null;
+  pendingRecordsCount: number;
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   status: SessionStatus;
+  syncPendingRecords(): Promise<void>;
   token: string | null;
 };
 
@@ -38,7 +43,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
+  const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
+  const connectivityStatus = useConnectivityStatus();
+  const ownerKey = me && context ? `${context.organization.id}:${me.user.id}` : null;
   const api = useMemo(
     () =>
       createOpcoApi({
@@ -72,6 +80,36 @@ export function SessionProvider({ children }: PropsWithChildren) {
     },
     [api],
   );
+
+  const refreshPendingRecordsCount = useCallback(async () => {
+    if (!ownerKey) {
+      setPendingRecordsCount(0);
+      return;
+    }
+
+    try {
+      setPendingRecordsCount(await definitionCache.countPendingOperations(ownerKey));
+    } catch {
+      setPendingRecordsCount(0);
+    }
+  }, [definitionCache, ownerKey]);
+
+  const syncPendingRecords = useCallback(async () => {
+    if (!token || !ownerKey) {
+      return;
+    }
+
+    try {
+      await syncPendingRecordsOnce({
+        api,
+        ownerKey,
+        store: definitionCache,
+        token,
+      });
+    } finally {
+      await refreshPendingRecordsCount();
+    }
+  }, [api, definitionCache, ownerKey, refreshPendingRecordsCount, token]);
 
   useEffect(() => {
     let isMounted = true;
@@ -114,6 +152,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [api, loadContext]);
 
   useEffect(() => {
+    async function refreshCount() {
+      await refreshPendingRecordsCount();
+    }
+
+    void refreshCount();
+  }, [refreshPendingRecordsCount]);
+
+  useEffect(() => {
+    if ((status === "authenticated" || status === "offline") && connectivityStatus === "online") {
+      void syncPendingRecords();
+    }
+  }, [connectivityStatus, status, syncPendingRecords]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function loadPersistedContractId() {
@@ -150,6 +202,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setMe(nextMe);
     setContext(nextContext);
     setStatus("authenticated");
+    void syncPendingRecordsOnce({
+      api,
+      ownerKey: `${nextContext.organization.id}:${nextMe.user.id}`,
+      store: definitionCache,
+      token: loginResponse.accessToken,
+    }).finally(refreshPendingRecordsCount);
   }
 
   async function signOut() {
@@ -182,11 +240,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
         context,
         definitionCache,
         me,
+        ownerKey,
+        pendingRecordsCount,
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
         signIn,
         signOut,
         status,
+        syncPendingRecords,
         token,
       }}
     >
