@@ -3,6 +3,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope } from "./opco-api";
 import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
+const meFixture = {
+  app: {
+    clientId: "opco_app_123",
+    id: "app_1",
+    name: "Materiales App",
+    slug: "materiales-app",
+  },
+  user: {
+    email: "user@example.com",
+    id: "user_1",
+    name: null,
+  },
+};
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -27,6 +41,18 @@ describe("parseApiEnvelope", () => {
     ).toThrow(OpcoApiError);
   });
 });
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function createSessionTokenStore(refreshToken: string | null) {
+  return {
+    clearSession: vi.fn(async () => undefined),
+    getRefreshToken: vi.fn(async () => refreshToken),
+    setSession: vi.fn(async () => undefined),
+  };
+}
 
 describe("createOpcoApi", () => {
   it("sends clientId when logging in", async () => {
@@ -58,6 +84,341 @@ describe("createOpcoApi", () => {
       email: "user@example.com",
       password: "secret",
     });
+  });
+
+  it("includes credentials for web login without requiring a refresh token in JSON", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            accessToken: "access-token",
+            expiresIn: 3600,
+            tokenType: "Bearer",
+          },
+          ok: true,
+        });
+      },
+      platformOS: "web",
+    });
+
+    await expect(api.login("user@example.com", "secret")).resolves.toMatchObject({
+      accessToken: "access-token",
+    });
+    expect(requests[0].credentials).toBe("include");
+  });
+
+  it("sends native platform headers and stores rotated tokens on refresh", async () => {
+    const requests: RequestInit[] = [];
+    const store = createSessionTokenStore("refresh-token-1");
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            accessToken: "access-token-2",
+            expiresIn: 3600,
+            refreshToken: "refresh-token-2",
+            tokenType: "Bearer",
+          },
+          ok: true,
+        });
+      },
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await api.refreshSession();
+
+    expect(requests[0].headers).toMatchObject({ "X-Opco-Client-Platform": "native" });
+    expect(JSON.parse(String(requests[0].body))).toEqual({ refreshToken: "refresh-token-1" });
+    expect(store.setSession).toHaveBeenCalledWith({
+      accessToken: "access-token-2",
+      expiresIn: 3600,
+      refreshToken: "refresh-token-2",
+      tokenType: "Bearer",
+    });
+  });
+
+  it("logs out on web with credentials and no refresh token body", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: null,
+          ok: true,
+        });
+      },
+      platformOS: "web",
+    });
+
+    await api.logout("refresh-token-that-should-stay-out-of-js");
+
+    expect(requests[0].credentials).toBe("include");
+    expect(requests[0].body).toBeUndefined();
+  });
+
+  it("logs out on native with the refresh token body", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: null,
+          ok: true,
+        });
+      },
+      platformOS: "android",
+    });
+
+    await api.logout("refresh-token-1");
+
+    expect(requests[0].headers).toMatchObject({ "X-Opco-Client-Platform": "native" });
+    expect(JSON.parse(String(requests[0].body))).toEqual({ refreshToken: "refresh-token-1" });
+  });
+
+  it("refreshes once and retries an expired authenticated request with the new access token", async () => {
+    const requests: { authorization: string | null; path: string }[] = [];
+    const store = createSessionTokenStore("refresh-token-1");
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const headers = new Headers(init?.headers);
+        requests.push({ authorization: headers.get("authorization"), path });
+
+        if (path === "/api/v1/me" && requests.length === 1) {
+          return jsonResponse(
+            {
+              error: {
+                code: "TOKEN_EXPIRED",
+                message: "Token expirado.",
+              },
+              ok: false,
+            },
+            401,
+          );
+        }
+
+        if (path === "/api/v1/auth/refresh") {
+          return jsonResponse({
+            data: {
+              accessToken: "fresh-token",
+              expiresIn: 3600,
+              refreshToken: "refresh-token-2",
+              tokenType: "Bearer",
+            },
+            ok: true,
+          });
+        }
+
+        return jsonResponse({
+          data: meFixture,
+          ok: true,
+        });
+      },
+      platformOS: "android",
+      tokenStore: store,
+    });
+
+    await expect(api.getMe("expired-token")).resolves.toEqual(meFixture);
+
+    expect(requests.map((request) => request.path)).toEqual([
+      "/api/v1/me",
+      "/api/v1/auth/refresh",
+      "/api/v1/me",
+    ]);
+    expect(requests[0].authorization).toBe("Bearer expired-token");
+    expect(requests[2].authorization).toBe("Bearer fresh-token");
+  });
+
+  it("does not refresh forever when the retried request still returns 401", async () => {
+    const paths: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+
+        if (path === "/api/v1/auth/refresh") {
+          return jsonResponse({
+            data: {
+              accessToken: "fresh-token",
+              expiresIn: 3600,
+              refreshToken: "refresh-token-2",
+              tokenType: "Bearer",
+            },
+            ok: true,
+          });
+        }
+
+        return jsonResponse(
+          {
+            error: {
+              code: "TOKEN_EXPIRED",
+              message: "Token expirado.",
+            },
+            ok: false,
+          },
+          401,
+        );
+      },
+      platformOS: "ios",
+      tokenStore: createSessionTokenStore("refresh-token-1"),
+    });
+
+    await expect(api.getMe("expired-token")).rejects.toMatchObject({ code: "TOKEN_EXPIRED" });
+
+    expect(paths).toEqual(["/api/v1/me", "/api/v1/auth/refresh", "/api/v1/me"]);
+  });
+
+  it("shares one refresh across concurrent expired requests", async () => {
+    const paths: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+
+        if (path === "/api/v1/auth/refresh") {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+
+          return jsonResponse({
+            data: {
+              accessToken: "fresh-token",
+              expiresIn: 3600,
+              refreshToken: "refresh-token-2",
+              tokenType: "Bearer",
+            },
+            ok: true,
+          });
+        }
+
+        const meCalls = paths.filter((requestPath) => requestPath === "/api/v1/me").length;
+
+        if (meCalls <= 5) {
+          return jsonResponse(
+            {
+              error: {
+                code: "TOKEN_EXPIRED",
+                message: "Token expirado.",
+              },
+              ok: false,
+            },
+            401,
+          );
+        }
+
+        return jsonResponse({
+          data: meFixture,
+          ok: true,
+        });
+      },
+      platformOS: "ios",
+      tokenStore: createSessionTokenStore("refresh-token-1"),
+    });
+
+    await Promise.all([
+      api.getMe("expired-token"),
+      api.getMe("expired-token"),
+      api.getMe("expired-token"),
+      api.getMe("expired-token"),
+      api.getMe("expired-token"),
+    ]);
+
+    expect(paths.filter((path) => path === "/api/v1/auth/refresh")).toHaveLength(1);
+  });
+
+  it("clears the local session when refresh is revoked", async () => {
+    const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        const path = new URL(String(url)).pathname;
+
+        if (path === "/api/v1/auth/refresh") {
+          return jsonResponse(
+            {
+              error: {
+                code: "REFRESH_TOKEN_REVOKED",
+                message: "Sesion revocada.",
+              },
+              ok: false,
+            },
+            401,
+          );
+        }
+
+        return jsonResponse(
+          {
+            error: {
+              code: "TOKEN_EXPIRED",
+              message: "Token expirado.",
+            },
+            ok: false,
+          },
+          401,
+        );
+      },
+      onSessionInvalid,
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await expect(api.getMe("expired-token")).rejects.toMatchObject({ code: "REFRESH_TOKEN_REVOKED" });
+
+    expect(store.clearSession).toHaveBeenCalledOnce();
+    expect(onSessionInvalid).toHaveBeenCalledOnce();
+  });
+
+  it("does not clear the local session when refresh fails because of network", async () => {
+    const store = createSessionTokenStore("refresh-token-1");
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        const path = new URL(String(url)).pathname;
+
+        if (path === "/api/v1/auth/refresh") {
+          throw new Error("offline");
+        }
+
+        return jsonResponse(
+          {
+            error: {
+              code: "TOKEN_EXPIRED",
+              message: "Token expirado.",
+            },
+            ok: false,
+          },
+          401,
+        );
+      },
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await expect(api.getMe("expired-token")).rejects.toBeInstanceOf(OpcoNetworkError);
+    expect(store.clearSession).not.toHaveBeenCalled();
   });
 
   it("normalizes trailing slashes from the base URL", async () => {

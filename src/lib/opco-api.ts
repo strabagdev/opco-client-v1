@@ -18,6 +18,14 @@ export type LoginResponse = {
   accessToken: string;
   tokenType: "Bearer";
   expiresIn: number;
+  refreshToken?: string;
+};
+
+export type RefreshResponse = {
+  accessToken: string;
+  tokenType: "Bearer";
+  expiresIn: number;
+  refreshToken?: string;
 };
 
 export type MeResponse = {
@@ -244,10 +252,32 @@ type ApiClientOptions = {
   apiUrl?: string;
   clientId?: string;
   fetcher?: FetchLike;
+  onSessionInvalid?: () => void;
+  onSessionRefreshed?: (tokens: RefreshResponse) => void;
+  platformOS?: PlatformOS;
+  tokenStore?: SessionTokenStore;
   timeoutMs?: number;
 };
 
+type PlatformOS = "web" | "ios" | "android" | "macos" | "windows" | string;
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+const NATIVE_CLIENT_PLATFORM_HEADER = "native";
+const TOKEN_EXPIRED_CODE = "TOKEN_EXPIRED";
+const TOKEN_INVALID_CODE = "TOKEN_INVALID";
+const INVALID_REFRESH_CODES = new Set([
+  "REFRESH_TOKEN_EXPIRED",
+  "REFRESH_TOKEN_REVOKED",
+  "REFRESH_TOKEN_REUSED",
+  "REFRESH_USER_INACTIVE",
+  "REFRESH_APP_INACTIVE",
+]);
+
+type SessionTokenStore = {
+  clearSession(): Promise<void>;
+  getRefreshToken(): Promise<string | null>;
+  setSession(tokens: { accessToken: string; refreshToken?: string | null }): Promise<void>;
+};
 
 export function parseApiEnvelope<T>(body: unknown, status = 200): T {
   if (!isApiEnvelope<T>(body)) {
@@ -265,7 +295,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   const apiUrl = trimTrailingSlash(options.apiUrl ?? config.apiUrl);
   const clientId = options.clientId ?? config.clientId;
   const fetcher = options.fetcher ?? fetch;
+  const platformOS = options.platformOS ?? getDefaultPlatformOS();
+  const tokenStore = options.tokenStore;
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  let refreshPromise: Promise<RefreshResponse> | null = null;
 
   async function request<T>(path: string, init: RequestInit = {}) {
     let response: Response;
@@ -297,13 +330,106 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     return parseApiEnvelope<T>(body, response.status);
   }
 
+  async function authenticatedRequest<T>(path: string, token: string, init: RequestInit = {}) {
+    try {
+      return await request<T>(path, withAuthHeaders(init, token));
+    } catch (error) {
+      if (!shouldRefresh(error)) {
+        await clearInvalidSession(error);
+        throw error;
+      }
+    }
+
+    const refreshed = await refreshSession();
+
+    try {
+      return await request<T>(path, withAuthHeaders(init, refreshed.accessToken));
+    } catch (error) {
+      await clearInvalidSession(error);
+      throw error;
+    }
+  }
+
+  async function refreshSession() {
+    if (!refreshPromise) {
+      refreshPromise = performRefresh()
+        .then(async (tokens) => {
+          await tokenStore?.setSession(tokens);
+          options.onSessionRefreshed?.(tokens);
+          return tokens;
+        })
+        .catch(async (error) => {
+          if (isInvalidRefreshError(error)) {
+            await tokenStore?.clearSession();
+            options.onSessionInvalid?.();
+          }
+
+          throw error;
+        })
+        .finally(() => {
+          refreshPromise = null;
+        });
+    }
+
+    return refreshPromise;
+  }
+
+  async function performRefresh() {
+    if (platformOS === "web") {
+      return request<RefreshResponse>("/api/v1/auth/refresh", {
+        credentials: "include",
+        method: "POST",
+      });
+    }
+
+    const refreshToken = await tokenStore?.getRefreshToken();
+
+    if (!refreshToken) {
+      throw new OpcoApiError("La sesion local no tiene refresh token.", "REFRESH_TOKEN_MISSING", 401);
+    }
+
+    return request<RefreshResponse>("/api/v1/auth/refresh", {
+      body: JSON.stringify({ refreshToken }),
+      headers: nativePlatformHeaders(),
+      method: "POST",
+    });
+  }
+
   function authHeaders(token: string) {
     return {
       Authorization: `Bearer ${token}`,
     };
   }
 
+  function withAuthHeaders(init: RequestInit, token: string): RequestInit {
+    return {
+      ...init,
+      headers: {
+        ...authHeaders(token),
+        ...init.headers,
+      },
+    };
+  }
+
+  function nativePlatformHeaders(): Record<string, string> {
+    if (platformOS === "web") {
+      return {};
+    }
+
+    return {
+      "X-Opco-Client-Platform": NATIVE_CLIENT_PLATFORM_HEADER,
+    };
+  }
+
+  async function clearInvalidSession(error: unknown) {
+    if (error instanceof OpcoApiError && error.status === 401 && error.code === TOKEN_INVALID_CODE) {
+      await tokenStore?.clearSession();
+      options.onSessionInvalid?.();
+    }
+  }
+
   return {
+    refreshSession,
     login(email: string, password: string) {
       return request<LoginResponse>("/api/v1/auth/login", {
         body: JSON.stringify({
@@ -311,35 +437,41 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           password,
           clientId,
         }),
+        credentials: platformOS === "web" ? "include" : undefined,
+        headers: nativePlatformHeaders(),
+        method: "POST",
+      });
+    },
+    logout(refreshToken?: string | null) {
+      return request<void>("/api/v1/auth/logout", {
+        body: platformOS === "web" || !refreshToken ? undefined : JSON.stringify({ refreshToken }),
+        credentials: platformOS === "web" ? "include" : undefined,
+        headers: nativePlatformHeaders(),
         method: "POST",
       });
     },
     getMe(token: string) {
-      return request<MeResponse>("/api/v1/me", {
-        headers: authHeaders(token),
-      });
+      return authenticatedRequest<MeResponse>("/api/v1/me", token);
     },
     getContext(token: string) {
-      return request<ContextResponse>("/api/v1/context", {
-        headers: authHeaders(token),
-      });
+      return authenticatedRequest<ContextResponse>("/api/v1/context", token);
     },
     getEntities(token: string, contractId: string) {
-      return request<EntitiesResponse>(`/api/v1/contracts/${encodeURIComponent(contractId)}/entities`, {
-        headers: authHeaders(token),
-      });
+      return authenticatedRequest<EntitiesResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/entities`,
+        token,
+      );
     },
     getAppViews(token: string, contractId: string) {
-      return request<AppViewsResponse>(`/api/v1/contracts/${encodeURIComponent(contractId)}/views`, {
-        headers: authHeaders(token),
-      });
+      return authenticatedRequest<AppViewsResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views`,
+        token,
+      );
     },
     getEntityDefinition(token: string, contractId: string, entityTypeId: string) {
-      return request<EntityDefinitionResponse>(
+      return authenticatedRequest<EntityDefinitionResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}`,
-        {
-          headers: authHeaders(token),
-        },
+        token,
       );
     },
     getEntityRecords(
@@ -372,31 +504,27 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       const serializedQuery = searchParams.toString();
 
-      return request<EntityRecordsResponse>(
+      return authenticatedRequest<EntityRecordsResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}/records${
           serializedQuery ? `?${serializedQuery}` : ""
         }`,
-        {
-          headers: authHeaders(token),
-        },
+        token,
       );
     },
     getEntityRecord(token: string, contractId: string, entityTypeId: string, recordId: string) {
-      return request<EntityRecordResponse>(
+      return authenticatedRequest<EntityRecordResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(
           entityTypeId,
         )}/records/${encodeURIComponent(recordId)}`,
-        {
-          headers: authHeaders(token),
-        },
+        token,
       );
     },
     createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {
-      return request<EntityRecordResponse>(
+      return authenticatedRequest<EntityRecordResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}/records`,
+        token,
         {
           body: JSON.stringify(input),
-          headers: authHeaders(token),
           method: "POST",
         },
       );
@@ -408,13 +536,13 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       recordId: string,
       input: UpdateEntityRecordInput,
     ) {
-      return request<EntityRecordResponse>(
+      return authenticatedRequest<EntityRecordResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(
           entityTypeId,
         )}/records/${encodeURIComponent(recordId)}`,
+        token,
         {
           body: JSON.stringify(input),
-          headers: authHeaders(token),
           method: "PATCH",
         },
       );
@@ -427,6 +555,22 @@ function isAbortError(error: unknown) {
 }
 
 export type OpcoApi = ReturnType<typeof createOpcoApi>;
+
+function getDefaultPlatformOS(): PlatformOS {
+  return typeof window === "undefined" ? "ios" : "web";
+}
+
+function shouldRefresh(error: unknown) {
+  return error instanceof OpcoApiError && error.status === 401 && error.code === TOKEN_EXPIRED_CODE;
+}
+
+function isInvalidRefreshError(error: unknown) {
+  return (
+    error instanceof OpcoApiError &&
+    error.status === 401 &&
+    (INVALID_REFRESH_CODES.has(error.code) || error.code === TOKEN_INVALID_CODE || error.code === "REFRESH_TOKEN_MISSING")
+  );
+}
 
 function isApiEnvelope<T>(body: unknown): body is ApiEnvelope<T> {
   if (!body || typeof body !== "object" || !("ok" in body)) {

@@ -1,8 +1,8 @@
 import { OpcoApiError, MeResponse } from "./opco-api";
 
 export type TokenStore = {
-  deleteToken(): Promise<void>;
-  getToken(): Promise<string | null>;
+  clearSession(): Promise<void>;
+  getAccessToken(): Promise<string | null>;
 };
 
 export type RestoreSessionResult =
@@ -23,7 +23,7 @@ export async function restoreSession(
   tokenStore: TokenStore,
   api: { getMe(token: string): Promise<MeResponse> },
 ): Promise<RestoreSessionResult> {
-  const token = await tokenStore.getToken();
+  const token = await tokenStore.getAccessToken();
 
   if (!token) {
     return { status: "anonymous" };
@@ -31,15 +31,16 @@ export async function restoreSession(
 
   try {
     const me = await api.getMe(token);
+    const currentToken = (await tokenStore.getAccessToken()) ?? token;
 
     return {
       me,
       status: "authenticated",
-      token,
+      token: currentToken,
     };
   } catch (error) {
     if (error instanceof OpcoApiError && error.status === 401) {
-      await tokenStore.deleteToken();
+      await tokenStore.clearSession();
       return { status: "anonymous" };
     }
 
