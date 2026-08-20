@@ -1,5 +1,6 @@
 import { createClientRequestId } from "./client-request-id";
 import {
+  EntityField,
   EntityRecord,
   EntityRecordPagination,
   EntityRecordValue,
@@ -7,10 +8,14 @@ import {
   OpcoNetworkError,
 } from "./opco-api";
 
-export type RecordSyncStatus = "synced" | "pending_create" | "pending_update" | "syncing" | "failed";
+export type RecordSyncStatus = "synced" | "pending_create" | "pending_update" | "syncing" | "failed" | "conflict";
 
 export type CachedEntityRecord = EntityRecord & {
+  conflictRemoteDisplayName?: string | null;
+  conflictRemoteUpdatedAt?: string | null;
+  conflictRemoteValues?: Record<string, EntityRecordValue> | null;
   localId: string;
+  remoteUpdatedAt: string | null;
   serverId: string | null;
   syncErrorCode?: string | null;
   syncErrorMessage?: string | null;
@@ -48,11 +53,23 @@ export type CachedRecordsResult = {
   records: CachedEntityRecord[];
 };
 
+export type RecordsSyncSummary = {
+  conflictCount: number;
+  failedCount: number;
+  pendingCount: number;
+  syncingCount: number;
+};
+
 export type OfflineRecordStore = {
   countPendingOperations(ownerKey: string): Promise<number>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
   getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;
+  getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
+  listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
+  retryFailedRecord(input: RetryFailedRecordInput): Promise<CachedEntityRecord>;
+  resolveRecordConflictWithLocal(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
+  resolveRecordConflictWithRemote(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
   updateLocalRecord(input: UpdateLocalRecordInput): Promise<CachedEntityRecord>;
   upsertRemoteRecords(input: UpsertRemoteRecordsInput): Promise<void>;
 };
@@ -69,6 +86,13 @@ export type ListCachedRecordsInput = BaseScopedInput & {
   search?: string;
 };
 
+export type ListProblemRecordsInput = BaseScopedInput;
+
+export type RecordsSyncSummaryInput = {
+  contractId: string;
+  ownerKey: string;
+};
+
 export type RecordIdentityInput = BaseScopedInput & {
   recordId: string;
 };
@@ -83,6 +107,10 @@ export type UpdateLocalRecordInput = BaseScopedInput & {
   recordId: string;
   values: Record<string, EntityRecordValue>;
 };
+
+export type ResolveRecordConflictInput = RecordIdentityInput;
+
+export type RetryFailedRecordInput = RecordIdentityInput;
 
 export type UpsertRemoteRecordsInput = BaseScopedInput & {
   cachedAt?: string;
@@ -243,6 +271,46 @@ export async function saveRecordLocally({
     ownerKey,
     recordId,
     values,
+  });
+}
+
+export type ConflictDifference = {
+  fieldKey: string;
+  label: string;
+  localValue: EntityRecordValue | undefined;
+  remoteValue: EntityRecordValue | undefined;
+};
+
+export function getConflictDifferences(
+  fields: EntityField[],
+  record: Pick<CachedEntityRecord, "conflictRemoteValues" | "values">,
+) {
+  const remoteValues = record.conflictRemoteValues ?? {};
+  const keys = new Set([...Object.keys(record.values), ...Object.keys(remoteValues)]);
+  const fieldsByKey = new Map(fields.map((field) => [field.key, field]));
+  const differences: ConflictDifference[] = [];
+
+  for (const key of keys) {
+    const localValue = record.values[key];
+    const remoteValue = remoteValues[key];
+
+    if (JSON.stringify(localValue) === JSON.stringify(remoteValue)) {
+      continue;
+    }
+
+    differences.push({
+      fieldKey: key,
+      label: fieldsByKey.get(key)?.name ?? "Campo",
+      localValue,
+      remoteValue,
+    });
+  }
+
+  return differences.sort((a, b) => {
+    const aOrder = fields.find((field) => field.key === a.fieldKey)?.order ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = fields.find((field) => field.key === b.fieldKey)?.order ?? Number.MAX_SAFE_INTEGER;
+
+    return aOrder - bOrder || a.label.localeCompare(b.label);
   });
 }
 

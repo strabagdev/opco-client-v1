@@ -118,6 +118,7 @@ describe("entity record display", () => {
         record: {
           displayName: "EDP-001",
           id: "record_1",
+          updatedAt: "2026-08-20T12:00:00.000Z",
           values: { hes: null, numero: "EDP-001" },
         },
       }).fields,
@@ -128,6 +129,7 @@ describe("entity record display", () => {
         record: {
           displayName: "EDP-002",
           id: "record_2",
+          updatedAt: "2026-08-20T12:00:00.000Z",
           values: { hes: "HES-123", numero: "EDP-002" },
         },
       }).fields,
@@ -181,6 +183,7 @@ describe("entity record display", () => {
         record: {
           displayName: "EQ-001",
           id: "record_1",
+          updatedAt: "2026-08-20T12:00:00.000Z",
           values: { codigo: "EQ-001", hora: "08:30" },
         },
       }).fields,
@@ -198,6 +201,7 @@ describe("entity record display", () => {
       getRecordDetailFields(definition, {
         displayName: "Turno",
         id: "record_1",
+        updatedAt: "2026-08-20T12:00:00.000Z",
         values: { hora: "23:59" },
       }),
     ).toEqual([{ key: "hora", label: "Hora", value: "23:59" }]);

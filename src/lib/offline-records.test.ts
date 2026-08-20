@@ -177,6 +177,106 @@ describe("offline records cache", () => {
     expect(operations[0].payload.values).toMatchObject({ codigo: "EQ-1", estado: "mantencion" });
   });
 
+  it("stores remote updatedAt as base version and keeps it during local edits", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1", estado: "nuevo" })],
+    });
+
+    const base = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { estado: "local" } });
+
+    const edited = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    expect(base?.remoteUpdatedAt).toBe("2026-08-20T12:00:00.000Z");
+    expect(edited?.remoteUpdatedAt).toBe("2026-08-20T12:00:00.000Z");
+    expect(edited?.values).toMatchObject({ estado: "local" });
+  });
+
+  it("resolves conflict with local by refreshing base and returning to pending update", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1", estado: "opco" })],
+    });
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { estado: "local" } });
+
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      conflictRemoteUpdatedAt: "2026-08-20T13:00:00.000Z",
+      conflictRemoteValues: { codigo: "EQ-1", estado: "opco" },
+      syncStatus: "conflict",
+    });
+
+    const resolved = await store.resolveRecordConflictWithLocal({
+      ...scope,
+      api: {
+        getEntityRecord: async () => ({ record: { ...record("record_1", "Equipo 1", { estado: "opco-2" }), updatedAt: "2026-08-20T14:00:00.000Z" } }),
+      },
+      recordId: "record_1",
+      token: "token_1",
+    });
+
+    expect(resolved.syncStatus).toBe("pending_update");
+    expect(resolved.remoteUpdatedAt).toBe("2026-08-20T14:00:00.000Z");
+    expect(resolved.values).toMatchObject({ estado: "local" });
+  });
+
+  it("resolves conflict with remote by discarding local update and removing pending operation", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1", estado: "opco" })],
+    });
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { estado: "local" } });
+
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      conflictRemoteUpdatedAt: "2026-08-20T13:00:00.000Z",
+      conflictRemoteValues: { codigo: "EQ-1", estado: "opco" },
+      syncStatus: "conflict",
+    });
+
+    const resolved = await store.resolveRecordConflictWithRemote({
+      ...scope,
+      api: {
+        getEntityRecord: async () => ({ record: { ...record("record_1", "Equipo 1", { estado: "opco-2" }), updatedAt: "2026-08-20T14:00:00.000Z" } }),
+      },
+      recordId: "record_1",
+      token: "token_1",
+    });
+
+    expect(resolved.syncStatus).toBe("synced");
+    expect(resolved.values).toEqual({ estado: "opco-2" });
+    expect(await store.listPendingOperations(scope.ownerKey)).toEqual([]);
+  });
+
+  it("retries failed records manually and reports summary counts", async () => {
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "LOCAL" },
+    });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "local_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorMessage: "Fallo",
+      syncStatus: "failed",
+    });
+
+    expect((await store.getRecordsSyncSummary(scope)).failedCount).toBe(1);
+
+    const retried = await store.retryFailedRecord({ ...scope, recordId: "local_1" });
+
+    expect(retried.syncStatus).toBe("pending_create");
+    expect((await store.getRecordsSyncSummary(scope)).pendingCount).toBe(1);
+  });
+
   it("isolates records by owner key", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -193,6 +293,7 @@ function record(id: string, displayName: string, values: Record<string, EntityRe
   return {
     displayName,
     id,
+    updatedAt: "2026-08-20T12:00:00.000Z",
     values,
   };
 }
@@ -212,8 +313,10 @@ class MemoryRecordStore implements OfflineRecordStore {
       displayName: String(Object.values(input.values)[0] ?? "Registro sin nombre"),
       id: localId,
       localId,
+      remoteUpdatedAt: null,
       serverId: null,
       syncStatus: "pending_create" as const,
+      updatedAt: now,
       values: input.values,
     };
 
@@ -320,6 +423,7 @@ class MemoryRecordStore implements OfflineRecordStore {
       this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, remote.id), {
         ...remote,
         localId: remote.id,
+        remoteUpdatedAt: remote.updatedAt,
         serverId: remote.id,
         syncStatus: "synced",
       });
@@ -328,6 +432,98 @@ class MemoryRecordStore implements OfflineRecordStore {
 
   async listPendingOperations(ownerKey: string) {
     return [...this.operations.values()].filter((operation) => operation.ownerKey === ownerKey);
+  }
+
+  async getRecordsSyncSummary(input: Parameters<OfflineRecordStore["getRecordsSyncSummary"]>[0]) {
+    const records = [...this.records.entries()]
+      .filter(([recordKey]) => recordKey.startsWith(`${input.ownerKey}:${input.contractId}:`))
+      .map(([, recordItem]) => recordItem);
+    const count = (...statuses: string[]) => records.filter((item) => statuses.includes(item.syncStatus)).length;
+
+    return {
+      conflictCount: count("conflict"),
+      failedCount: count("failed"),
+      pendingCount: count("pending_create", "pending_update"),
+      syncingCount: count("syncing"),
+    };
+  }
+
+  async listProblemRecords(input: Parameters<OfflineRecordStore["listProblemRecords"]>[0]) {
+    return [...this.records.values()].filter((item) =>
+      this.recordMatches(item, input.ownerKey, input.contractId, input.entityTypeId) &&
+      (item.syncStatus === "failed" || item.syncStatus === "conflict")
+    );
+  }
+
+  async retryFailedRecord(input: Parameters<OfflineRecordStore["retryFailedRecord"]>[0]) {
+    const existing = await this.getCachedRecord(input);
+
+    if (!existing) {
+      throw new Error("missing");
+    }
+
+    const cached = {
+      ...existing,
+      syncStatus: this.operations.has(`CREATE:${existing.localId}`) ? ("pending_create" as const) : ("pending_update" as const),
+      syncErrorCode: null,
+      syncErrorMessage: null,
+    };
+
+    this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId), cached);
+
+    return cached;
+  }
+
+  async resolveRecordConflictWithLocal(input: Parameters<OfflineRecordStore["resolveRecordConflictWithLocal"]>[0]) {
+    const existing = await this.getCachedRecord(input);
+
+    if (!existing) {
+      throw new Error("missing");
+    }
+
+    const remote = await input.api.getEntityRecord(input.token, input.contractId, input.entityTypeId, existing.serverId ?? existing.id);
+    const cached = {
+      ...existing,
+      conflictRemoteDisplayName: null,
+      conflictRemoteUpdatedAt: null,
+      conflictRemoteValues: null,
+      remoteUpdatedAt: remote.record.updatedAt,
+      syncStatus: "pending_update" as const,
+      syncErrorCode: null,
+      syncErrorMessage: null,
+    };
+
+    this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId), cached);
+
+    return cached;
+  }
+
+  async resolveRecordConflictWithRemote(input: Parameters<OfflineRecordStore["resolveRecordConflictWithRemote"]>[0]) {
+    const existing = await this.getCachedRecord(input);
+
+    if (!existing) {
+      throw new Error("missing");
+    }
+
+    const remote = await input.api.getEntityRecord(input.token, input.contractId, input.entityTypeId, existing.serverId ?? existing.id);
+    const cached = {
+      ...existing,
+      conflictRemoteDisplayName: null,
+      conflictRemoteUpdatedAt: null,
+      conflictRemoteValues: null,
+      displayName: remote.record.displayName,
+      remoteUpdatedAt: remote.record.updatedAt,
+      syncStatus: "synced" as const,
+      syncErrorCode: null,
+      syncErrorMessage: null,
+      updatedAt: remote.record.updatedAt,
+      values: remote.record.values,
+    };
+
+    this.operations.delete(`UPDATE:${existing.localId}`);
+    this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId), cached);
+
+    return cached;
   }
 
   private recordMatches(

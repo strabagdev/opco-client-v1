@@ -24,6 +24,7 @@ describe("records sync engine", () => {
       createEntityRecord: vi.fn(async (_token: string, _contractId: string, _entityTypeId: string, input) => ({
         record: record("record_1", input.values),
       })),
+      getEntityRecord: vi.fn(),
       updateEntityRecord: vi.fn(),
     };
 
@@ -53,6 +54,9 @@ describe("records sync engine", () => {
     ];
     const api = {
       createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({
+        record: record("record_1", { estado: "remoto" }),
+      })),
       updateEntityRecord: vi.fn(async () => ({
         record: record("record_1", { estado: "operativo" }),
       })),
@@ -66,6 +70,58 @@ describe("records sync engine", () => {
     expect(store.completed).toHaveLength(1);
   });
 
+  it("detects UPDATE conflicts before PATCH and keeps local values out of remote overwrite", async () => {
+    store.remoteUpdatedAt = "2026-08-20T10:00:00.000Z";
+    store.operations = [
+      operation({
+        localRecordId: "record_1",
+        operation: "UPDATE",
+        payload: { values: { estado: "local" } },
+        serverRecordId: "record_1",
+      }),
+    ];
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({
+        record: {
+          ...record("record_1", { estado: "opco" }),
+          updatedAt: "2026-08-20T11:00:00.000Z",
+        },
+      })),
+      updateEntityRecord: vi.fn(),
+    };
+
+    const result = await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result.conflicts).toBe(1);
+    expect(api.updateEntityRecord).not.toHaveBeenCalled();
+    expect(store.conflicts[0].record.values).toEqual({ estado: "opco" });
+  });
+
+  it("treats old cache without remote_updated_at as a conflict instead of patching blindly", async () => {
+    store.remoteUpdatedAt = null;
+    store.operations = [
+      operation({
+        localRecordId: "record_1",
+        operation: "UPDATE",
+        payload: { values: { estado: "local" } },
+        serverRecordId: "record_1",
+      }),
+    ];
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({
+        record: record("record_1", { estado: "opco" }),
+      })),
+      updateEntityRecord: vi.fn(),
+    };
+
+    const result = await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result.conflicts).toBe(1);
+    expect(api.updateEntityRecord).not.toHaveBeenCalled();
+  });
+
   it("keeps pending operations for network errors and server 5xx", async () => {
     store.operations = [
       operation({ localRecordId: "local_1", operation: "CREATE" }),
@@ -76,6 +132,7 @@ describe("records sync engine", () => {
         .fn()
         .mockRejectedValueOnce(new OpcoNetworkError())
         .mockRejectedValueOnce(new OpcoApiError("Servidor caido.", "SERVER_ERROR", 500)),
+      getEntityRecord: vi.fn(),
       updateEntityRecord: vi.fn(),
     };
 
@@ -96,6 +153,7 @@ describe("records sync engine", () => {
         .fn()
         .mockRejectedValueOnce(new OpcoApiError("Validacion.", "VALIDATION_ERROR", 400))
         .mockRejectedValueOnce(new OpcoApiError("Conflicto.", "IDEMPOTENCY_CONFLICT", 409)),
+      getEntityRecord: vi.fn(),
       updateEntityRecord: vi.fn(),
     };
 
@@ -114,6 +172,7 @@ describe("records sync engine", () => {
 
         return { record: record("record_1", { codigo: "EQ-1" }) };
       }),
+      getEntityRecord: vi.fn(),
       updateEntityRecord: vi.fn(),
     };
 
@@ -131,6 +190,7 @@ function record(id: string, values: Record<string, EntityRecordValue>): EntityRe
   return {
     displayName: String(Object.values(values)[0] ?? "Registro"),
     id,
+    updatedAt: "2026-08-20T12:00:00.000Z",
     values,
   };
 }
@@ -155,8 +215,10 @@ function operation(partial: Partial<PendingOperation> & Pick<PendingOperation, "
 
 class MemorySyncStore implements RecordsSyncStore {
   completed: { operation: PendingOperation; record: EntityRecord }[] = [];
+  conflicts: { code: string; message: string; operation: PendingOperation; record: EntityRecord }[] = [];
   failed: { code: string; message: string; operation: PendingOperation }[] = [];
   operations: PendingOperation[] = [];
+  remoteUpdatedAt: string | null = "2026-08-20T12:00:00.000Z";
   retried: { code: string; message: string; operation: PendingOperation }[] = [];
   syncing: string[] = [];
 
@@ -174,6 +236,14 @@ class MemorySyncStore implements RecordsSyncStore {
 
   async markPendingOperationSyncing(operationId: string) {
     this.syncing.push(operationId);
+  }
+
+  async markPendingOperationConflict(operationItem: PendingOperation, remoteRecord: EntityRecord, code: string, message: string) {
+    this.conflicts.push({ code, message, operation: operationItem, record: remoteRecord });
+  }
+
+  async readRecordRemoteUpdatedAt() {
+    return this.remoteUpdatedAt;
   }
 
   async retryPendingOperation(operationItem: PendingOperation, code: string, message: string) {

@@ -9,12 +9,13 @@ import {
   OfflineRecordStore,
   PendingOperation,
   RecordSyncStatus,
+  RecordsSyncSummary,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi } from "./opco-api";
 import { RecordsSyncStore } from "../sync/records-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "3";
+const SCHEMA_VERSION = "4";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -38,11 +39,18 @@ export function getLocalDatabase(): LocalDatabase {
     getAppViews,
     getContextSnapshot,
     getCachedRecord,
+    getRecordsSyncSummary,
     getEntityDefinition,
     getSelectedContractId,
     listCachedRecords,
+    listProblemRecords,
     listPendingOperations,
     markPendingOperationSyncing,
+    markPendingOperationConflict,
+    readRecordRemoteUpdatedAt,
+    resolveRecordConflictWithLocal,
+    resolveRecordConflictWithRemote,
+    retryFailedRecord,
     retryPendingOperation,
     setSelectedContractId,
     updateLocalRecord,
@@ -96,11 +104,14 @@ async function openAndMigrate() {
       entity_type_id TEXT NOT NULL,
       display_name TEXT NOT NULL,
       values_json TEXT NOT NULL,
-      updated_at_remote TEXT,
+      remote_updated_at TEXT,
       cached_at TEXT NOT NULL,
       sync_status TEXT NOT NULL,
       sync_error_code TEXT,
-      sync_error_message TEXT
+      sync_error_message TEXT,
+      conflict_remote_values_json TEXT,
+      conflict_remote_display_name TEXT,
+      conflict_remote_updated_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS entity_records_server_identity
       ON entity_records(owner_key, contract_id, entity_type_id, server_id)
@@ -134,6 +145,8 @@ async function openAndMigrate() {
       ON pending_operations(owner_key, created_at);
   `);
 
+  await migrateEntityRecordsTable(db);
+
   await db.runAsync(
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
     SCHEMA_VERSION_KEY,
@@ -141,6 +154,35 @@ async function openAndMigrate() {
   );
 
   return db;
+}
+
+async function migrateEntityRecordsTable(db: SQLite.SQLiteDatabase) {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(entity_records)`);
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (!columnNames.has("remote_updated_at")) {
+    await db.execAsync(`ALTER TABLE entity_records ADD COLUMN remote_updated_at TEXT`);
+  }
+
+  if (!columnNames.has("conflict_remote_values_json")) {
+    await db.execAsync(`ALTER TABLE entity_records ADD COLUMN conflict_remote_values_json TEXT`);
+  }
+
+  if (!columnNames.has("conflict_remote_display_name")) {
+    await db.execAsync(`ALTER TABLE entity_records ADD COLUMN conflict_remote_display_name TEXT`);
+  }
+
+  if (!columnNames.has("conflict_remote_updated_at")) {
+    await db.execAsync(`ALTER TABLE entity_records ADD COLUMN conflict_remote_updated_at TEXT`);
+  }
+
+  if (columnNames.has("updated_at_remote")) {
+    await db.execAsync(`
+      UPDATE entity_records
+      SET remote_updated_at = COALESCE(remote_updated_at, updated_at_remote)
+      WHERE remote_updated_at IS NULL
+    `);
+  }
 }
 
 async function upsertContextSnapshot(
@@ -261,6 +303,16 @@ async function upsertRemoteRecords({
       record.id,
     );
 
+    if (existing?.sync_status === "pending_update" && hasRemoteVersionChanged(existing.remote_updated_at, record.updatedAt)) {
+      await markRecordConflict(db, {
+        localRecordId: existing.local_id,
+        remoteRecord: record,
+        syncErrorCode: "REMOTE_VERSION_CHANGED",
+        syncErrorMessage: "Este registro cambio en Opco mientras tenias modificaciones locales pendientes.",
+      });
+      continue;
+    }
+
     if (existing && existing.sync_status !== "synced") {
       continue;
     }
@@ -275,19 +327,22 @@ async function upsertRemoteRecords({
           entity_type_id,
           display_name,
           values_json,
-          updated_at_remote,
+          remote_updated_at,
           cached_at,
           sync_status,
           sync_error_code,
-          sync_error_message
+          sync_error_message,
+          conflict_remote_values_json,
+          conflict_remote_display_name,
+          conflict_remote_updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', NULL, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', NULL, NULL, NULL, NULL, NULL)
         ON CONFLICT(local_id)
         DO UPDATE SET
           server_id = excluded.server_id,
           display_name = excluded.display_name,
           values_json = excluded.values_json,
-          updated_at_remote = excluded.updated_at_remote,
+          remote_updated_at = excluded.remote_updated_at,
           cached_at = excluded.cached_at,
           sync_status = CASE
             WHEN entity_records.sync_status = 'synced' THEN 'synced'
@@ -300,6 +355,18 @@ async function upsertRemoteRecords({
           sync_error_message = CASE
             WHEN entity_records.sync_status = 'synced' THEN NULL
             ELSE entity_records.sync_error_message
+          END,
+          conflict_remote_values_json = CASE
+            WHEN entity_records.sync_status = 'synced' THEN NULL
+            ELSE entity_records.conflict_remote_values_json
+          END,
+          conflict_remote_display_name = CASE
+            WHEN entity_records.sync_status = 'synced' THEN NULL
+            ELSE entity_records.conflict_remote_display_name
+          END,
+          conflict_remote_updated_at = CASE
+            WHEN entity_records.sync_status = 'synced' THEN NULL
+            ELSE entity_records.conflict_remote_updated_at
           END
       `,
       existing?.local_id ?? record.id,
@@ -309,7 +376,7 @@ async function upsertRemoteRecords({
       entityTypeId,
       record.displayName,
       JSON.stringify(record.values),
-      readRemoteUpdatedAt(record),
+      record.updatedAt,
       cachedAt,
     );
   }
@@ -514,7 +581,10 @@ async function updateLocalRecord({
           cached_at = ?,
           sync_status = ?,
           sync_error_code = NULL,
-          sync_error_message = NULL
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
       WHERE local_id = ?
     `,
     buildLocalDisplayName(nextValues),
@@ -578,7 +648,7 @@ async function listPendingOperations(ownerKey: string) {
       FROM pending_operations
       INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
       WHERE pending_operations.owner_key = ?
-        AND entity_records.sync_status <> 'failed'
+        AND entity_records.sync_status IN ('pending_create', 'pending_update')
       ORDER BY
         pending_operations.local_record_id ASC,
         CASE pending_operations.operation WHEN 'CREATE' THEN 0 ELSE 1 END ASC,
@@ -593,11 +663,78 @@ async function listPendingOperations(ownerKey: string) {
 async function countPendingOperations(ownerKey: string) {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM pending_operations WHERE owner_key = ?`,
+    `
+      SELECT COUNT(*) AS total
+      FROM pending_operations
+      INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
+      WHERE pending_operations.owner_key = ?
+        AND entity_records.sync_status IN ('pending_create', 'pending_update')
+    `,
     ownerKey,
   );
 
   return row?.total ?? 0;
+}
+
+async function getRecordsSyncSummary({
+  contractId,
+  ownerKey,
+}: {
+  contractId: string;
+  ownerKey: string;
+}): Promise<RecordsSyncSummary> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ sync_status: RecordSyncStatus; total: number }>(
+    `
+      SELECT sync_status, COUNT(*) AS total
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND sync_status IN ('pending_create', 'pending_update', 'syncing', 'failed', 'conflict')
+      GROUP BY sync_status
+    `,
+    ownerKey,
+    contractId,
+  );
+  const count = (statuses: RecordSyncStatus[]) =>
+    rows
+      .filter((row) => statuses.includes(row.sync_status))
+      .reduce((total, row) => total + row.total, 0);
+
+  return {
+    conflictCount: count(["conflict"]),
+    failedCount: count(["failed"]),
+    pendingCount: count(["pending_create", "pending_update"]),
+    syncingCount: count(["syncing"]),
+  };
+}
+
+async function listProblemRecords({
+  contractId,
+  entityTypeId,
+  ownerKey,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+}) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<EntityRecordRow>(
+    `
+      SELECT *
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND sync_status IN ('failed', 'conflict')
+      ORDER BY sync_status ASC, cached_at DESC, display_name ASC
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+
+  return rows.map(mapRecordRow);
 }
 
 async function markPendingOperationSyncing(operationId: string) {
@@ -665,17 +802,20 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
       SET server_id = ?,
           display_name = ?,
           values_json = ?,
-          updated_at_remote = ?,
+          remote_updated_at = ?,
           cached_at = ?,
           sync_status = ?,
           sync_error_code = NULL,
-          sync_error_message = NULL
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
       WHERE local_id = ?
     `,
     record.id,
     record.displayName,
     JSON.stringify(record.values),
-    readRemoteUpdatedAt(record),
+    record.updatedAt,
     now,
     nextStatus,
     operation.localRecordId,
@@ -692,6 +832,252 @@ async function failPendingOperation(operation: PendingOperation, code: string, m
   const db = await getDatabase();
 
   await setOperationError(db, operation, code, message, "failed");
+}
+
+async function readRecordRemoteUpdatedAt(operation: PendingOperation) {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ remote_updated_at: string | null }>(
+    `
+      SELECT remote_updated_at
+      FROM entity_records
+      WHERE local_id = ?
+      LIMIT 1
+    `,
+    operation.localRecordId,
+  );
+
+  return row?.remote_updated_at ?? null;
+}
+
+async function markPendingOperationConflict(operation: PendingOperation, remoteRecord: EntityRecord, code: string, message: string) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET updated_at = ?,
+          last_error_code = ?,
+          last_error_message = ?
+      WHERE id = ?
+    `,
+    new Date().toISOString(),
+    code,
+    message,
+    operation.id,
+  );
+  await markRecordConflict(db, {
+    localRecordId: operation.localRecordId,
+    remoteRecord,
+    syncErrorCode: code,
+    syncErrorMessage: message,
+  });
+}
+
+async function retryFailedRecord({
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  recordId: string;
+}) {
+  const db = await getDatabase();
+  const existing = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (!existing || existing.syncStatus !== "failed") {
+    throw new Error("No se encontro un registro fallido para reintentar.");
+  }
+
+  const operation = await db.getFirstAsync<PendingOperationRow>(
+    `
+      SELECT *
+      FROM pending_operations
+      WHERE owner_key = ? AND local_record_id = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    existing.localId,
+  );
+
+  if (!operation) {
+    throw new Error("No se encontro una operacion pendiente para reintentar.");
+  }
+
+  const now = new Date().toISOString();
+  const nextStatus: RecordSyncStatus = operation.operation === "CREATE" ? "pending_create" : "pending_update";
+  const nextPayload = operation.operation === "CREATE"
+    ? { clientRequestId: operation.client_request_id, values: existing.values }
+    : { values: existing.values };
+
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET payload_json = ?,
+          updated_at = ?,
+          last_error_code = NULL,
+          last_error_message = NULL
+      WHERE id = ?
+    `,
+    JSON.stringify(nextPayload),
+    now,
+    operation.id,
+  );
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = ?,
+          sync_error_code = NULL,
+          sync_error_message = NULL
+      WHERE local_id = ?
+    `,
+    nextStatus,
+    existing.localId,
+  );
+
+  const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
+
+  if (!record) {
+    throw new Error("No fue posible leer el registro reintentado.");
+  }
+
+  return record;
+}
+
+async function resolveRecordConflictWithLocal({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+  token,
+}: {
+  api: Pick<OpcoApi, "getEntityRecord">;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  recordId: string;
+  token: string;
+}) {
+  const db = await getDatabase();
+  const existing = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (!existing || existing.syncStatus !== "conflict") {
+    throw new Error("No se encontro un conflicto para resolver.");
+  }
+
+  if (!existing.serverId) {
+    throw new Error("No se puede resolver con version local sin server_id.");
+  }
+
+  const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
+
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET remote_updated_at = ?,
+          sync_status = 'pending_update',
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      WHERE local_id = ?
+    `,
+    remote.record.updatedAt,
+    existing.localId,
+  );
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET payload_json = ?,
+          updated_at = ?,
+          last_error_code = NULL,
+          last_error_message = NULL
+      WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
+    `,
+    JSON.stringify({ values: existing.values }),
+    new Date().toISOString(),
+    ownerKey,
+    existing.localId,
+  );
+
+  const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
+
+  if (!record) {
+    throw new Error("No fue posible leer el registro resuelto.");
+  }
+
+  return record;
+}
+
+async function resolveRecordConflictWithRemote({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+  token,
+}: {
+  api: Pick<OpcoApi, "getEntityRecord">;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  recordId: string;
+  token: string;
+}) {
+  const db = await getDatabase();
+  const existing = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (!existing || existing.syncStatus !== "conflict") {
+    throw new Error("No se encontro un conflicto para resolver.");
+  }
+
+  if (!existing.serverId) {
+    throw new Error("No se puede resolver con Opco sin server_id.");
+  }
+
+  const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
+
+  await db.runAsync(
+    `
+      DELETE FROM pending_operations
+      WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
+    `,
+    ownerKey,
+    existing.localId,
+  );
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET display_name = ?,
+          values_json = ?,
+          remote_updated_at = ?,
+          cached_at = ?,
+          sync_status = 'synced',
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      WHERE local_id = ?
+    `,
+    remote.record.displayName,
+    JSON.stringify(remote.record.values),
+    remote.record.updatedAt,
+    new Date().toISOString(),
+    existing.localId,
+  );
+
+  const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
+
+  if (!record) {
+    throw new Error("No fue posible leer el registro resuelto.");
+  }
+
+  return record;
 }
 
 async function upsertPendingOperation({
@@ -798,16 +1184,19 @@ async function setOperationError(
 
 type EntityRecordRow = {
   cached_at: string;
+  conflict_remote_display_name: string | null;
+  conflict_remote_updated_at: string | null;
+  conflict_remote_values_json: string | null;
   contract_id: string;
   display_name: string;
   entity_type_id: string;
   local_id: string;
   owner_key: string;
+  remote_updated_at: string | null;
   server_id: string | null;
   sync_error_code: string | null;
   sync_error_message: string | null;
   sync_status: RecordSyncStatus;
-  updated_at_remote: string | null;
   values_json: string;
 };
 
@@ -830,13 +1219,20 @@ type PendingOperationRow = {
 
 function mapRecordRow(row: EntityRecordRow): CachedEntityRecord {
   return {
+    conflictRemoteDisplayName: row.conflict_remote_display_name,
+    conflictRemoteUpdatedAt: row.conflict_remote_updated_at,
+    conflictRemoteValues: row.conflict_remote_values_json
+      ? JSON.parse(row.conflict_remote_values_json) as Record<string, EntityRecordValue>
+      : null,
     displayName: row.display_name,
     id: row.server_id ?? row.local_id,
     localId: row.local_id,
+    remoteUpdatedAt: row.remote_updated_at,
     serverId: row.server_id,
     syncErrorCode: row.sync_error_code,
     syncErrorMessage: row.sync_error_message,
     syncStatus: row.sync_status,
+    updatedAt: row.remote_updated_at ?? row.cached_at,
     values: JSON.parse(row.values_json) as Record<string, EntityRecordValue>,
   };
 }
@@ -860,10 +1256,42 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
   };
 }
 
-function readRemoteUpdatedAt(record: EntityRecord) {
-  const value = (record as EntityRecord & { updatedAt?: unknown }).updatedAt;
+async function markRecordConflict(
+  db: SQLite.SQLiteDatabase,
+  {
+    localRecordId,
+    remoteRecord,
+    syncErrorCode,
+    syncErrorMessage,
+  }: {
+    localRecordId: string;
+    remoteRecord: EntityRecord;
+    syncErrorCode: string;
+    syncErrorMessage: string;
+  },
+) {
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = 'conflict',
+          sync_error_code = ?,
+          sync_error_message = ?,
+          conflict_remote_values_json = ?,
+          conflict_remote_display_name = ?,
+          conflict_remote_updated_at = ?
+      WHERE local_id = ?
+    `,
+    syncErrorCode,
+    syncErrorMessage,
+    JSON.stringify(remoteRecord.values),
+    remoteRecord.displayName,
+    remoteRecord.updatedAt,
+    localRecordId,
+  );
+}
 
-  return typeof value === "string" ? value : null;
+function hasRemoteVersionChanged(localRemoteUpdatedAt: string | null, nextRemoteUpdatedAt: string) {
+  return !localRemoteUpdatedAt || localRemoteUpdatedAt !== nextRemoteUpdatedAt;
 }
 
 async function upsertEntityDefinition(

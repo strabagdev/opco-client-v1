@@ -133,9 +133,11 @@ Cada record local tiene:
 
 - `local_id`: identidad estable generada por cliente. Un CREATE offline navega y renderiza usando este id.
 - `server_id`: nullable hasta que Operational Core confirma el record.
-- `sync_status`: `synced`, `pending_create`, `pending_update`, `syncing` o `failed`.
+- `remote_updated_at`: ultimo `updatedAt` remoto conocido. Es la version base observable que el cliente usa para detectar conflictos optimistas; no se genera en el cliente.
+- `sync_status`: `synced`, `pending_create`, `pending_update`, `syncing`, `failed` o `conflict`.
+- `conflict_remote_values_json`, `conflict_remote_display_name`, `conflict_remote_updated_at`: snapshot remoto guardado cuando un UPDATE local entra en conflicto.
 
-Cuando un CREATE pendiente sincroniza con exito, el mismo row conserva su `local_id`, recibe `server_id` y pasa a `synced`; no se crea una segunda card. Cuando GET records responde, la cache remota se upsertea sin borrar records pendientes. Dos AppViews `RECORDS` sobre la misma EntityType comparten cache porque el scope real es `contractId + entityTypeId`.
+Cuando un CREATE pendiente sincroniza con exito, el mismo row conserva su `local_id`, recibe `server_id`, guarda `remote_updated_at = response.record.updatedAt` y pasa a `synced`; no se crea una segunda card. Cuando GET records responde, la cache remota se upsertea sin borrar records pendientes. Dos AppViews `RECORDS` sobre la misma EntityType comparten cache porque el scope real es `contractId + entityTypeId`.
 
 Crear offline:
 
@@ -149,11 +151,20 @@ Crear offline:
 Editar offline:
 
 - aplica cambios localmente de inmediato;
+- conserva `remote_updated_at` sin modificar, porque esa es la version remota base que el usuario estaba editando;
 - si existe CREATE pendiente, fusiona los cambios en el payload de ese CREATE;
 - si ya existe UPDATE pendiente, lo consolida al estado final actual;
 - nunca intenta UPDATE server-side si todavia no hay `server_id`.
 
 El sync engine procesa una sola corrida a la vez con single-flight. Marca operaciones como syncing, incrementa attempts, llama POST/PATCH, guarda la respuesta en cache y elimina la operacion exitosa. `clientRequestId` se conserva en todos los reintentos de CREATE para aprovechar la idempotencia de Operational Core si una respuesta se pierde.
+
+Antes de sincronizar un UPDATE, el cliente hace preflight con `GET /api/v1/contracts/:contractId/entities/:entityTypeId/records/:recordId` y compara `remote.record.updatedAt` contra `entity_records.remote_updated_at`.
+
+- Si coinciden, ejecuta PATCH y guarda `remote_updated_at = response.record.updatedAt`.
+- Si difieren, no ejecuta PATCH, conserva los valores locales, marca `sync_status = conflict` y guarda el snapshot remoto.
+- Si el preflight falla por red o 5xx, la operacion queda pendiente para un intento futuro.
+- Si el preflight devuelve 404, la operacion queda `failed` con error claro.
+- Si un cache viejo tiene `remote_updated_at = null`, no se parchea a ciegas: el preflight obtiene el remoto y el registro queda en conflicto para resolucion explicita.
 
 Errores:
 
@@ -161,9 +172,15 @@ Errores:
 - `TOKEN_EXPIRED` se recupera en la capa auth antes de perder operaciones.
 - Validacion, 4xx definitivos e `IDEMPOTENCY_CONFLICT` pasan a `failed` y se muestran como `Error`.
 
-La politica actual de conflictos UPDATE es simple: un pending UPDATE aplica PATCH sobre el estado server actual cuando sincroniza. No hay merge multiusuario ni control optimista completo todavia; la arquitectura guarda `updated_at_remote` para evolucionar hacia versionado/deteccion de conflictos.
+Los conflictos se resuelven desde la pantalla de detalle:
 
-La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando` y `Error`. El listado tambien muestra un contador global como `3 pendientes` y el boton `Sincronizar`.
+- `Usar mi version`: refresca el record remoto actual, actualiza `remote_updated_at`, limpia el snapshot, vuelve a `pending_update` y reintenta sync. Si Opco vuelve a cambiar antes del PATCH, se detecta otro conflicto.
+- `Usar version de Opco`: pide confirmacion, refresca el record remoto actual, reemplaza los valores locales, elimina el pending UPDATE, limpia el snapshot y queda `synced`. No hace PATCH.
+- No hay merge campo por campo todavia; la pantalla muestra solo campos diferentes con labels de la definicion.
+
+Los records `failed` no se reintentan automaticamente. El usuario puede usar `Reintentar`, que limpia el error, restaura `pending_create` o `pending_update` segun la operacion, conserva el `clientRequestId` original de CREATE y dispara sync.
+
+La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando`, `Error` y `Conflicto`. El listado muestra summary global solo si hay algo relevante, por ejemplo `2 pendientes · 1 conflicto`, con acciones `Sincronizar` y `Ver problemas`.
 
 ## SQLite
 
@@ -206,11 +223,14 @@ entity_records (
   entity_type_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
   values_json TEXT NOT NULL,
-  updated_at_remote TEXT,
+  remote_updated_at TEXT,
   cached_at TEXT NOT NULL,
   sync_status TEXT NOT NULL,
   sync_error_code TEXT,
-  sync_error_message TEXT
+  sync_error_message TEXT,
+  conflict_remote_values_json TEXT,
+  conflict_remote_display_name TEXT,
+  conflict_remote_updated_at TEXT
 )
 
 pending_operations (
@@ -231,7 +251,9 @@ pending_operations (
 )
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
+
+La migracion a schema version 4 no resetea la DB local. Agrega `remote_updated_at` y columnas de snapshot; si una instalacion antigua tiene `updated_at_remote`, copia ese valor a `remote_updated_at` y conserva `local_id`, `server_id`, cache y pending operations existentes.
 
 ## Cache
 

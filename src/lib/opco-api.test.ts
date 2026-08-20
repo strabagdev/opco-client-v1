@@ -590,6 +590,30 @@ describe("createOpcoApi", () => {
     expect(result.record).toEqual(entityRecordFixture);
   });
 
+  it("rejects entity records without ISO updatedAt", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              record: {
+                ...entityRecordFixture,
+                updatedAt: "not-a-date",
+              },
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(api.getEntityRecord("token_123", "contract_1", "entity_1", "record_1")).rejects.toMatchObject({
+      code: "INVALID_RECORD_UPDATED_AT",
+    });
+  });
+
   it("creates entity records with a client request id", async () => {
     const requests: RequestInit[] = [];
     const urls: string[] = [];

@@ -34,3 +34,11 @@ export function buildNewAppViewRecordHref(appViewId: string) {
 export function buildEditAppViewRecordHref(appViewId: string, recordId: string) {
   return `/view/${encodeURIComponent(appViewId)}/record/${encodeURIComponent(recordId)}/edit`;
 }
+
+export function buildAppViewRecordConflictHref(appViewId: string, recordId: string) {
+  return `/view/${encodeURIComponent(appViewId)}/record/${encodeURIComponent(recordId)}/conflict`;
+}
+
+export function buildAppViewProblemsHref(appViewId: string) {
+  return `/view/${encodeURIComponent(appViewId)}/problems`;
+}

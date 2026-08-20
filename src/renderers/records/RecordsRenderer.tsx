@@ -11,7 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
+import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
@@ -30,7 +30,7 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, pendingRecordsCount, selectedContractId, syncPendingRecords, token } =
+  const { api, definitionCache, ownerKey, recordsSyncSummary, selectedContractId, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
@@ -50,6 +50,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     [definition, records],
   );
   const canLoadMore = pagination ? pagination.page < pagination.totalPages : false;
+  const hasSyncIssues = recordsSyncSummary.failedCount > 0 || recordsSyncSummary.conflictCount > 0;
+  const hasSyncActivity =
+    recordsSyncSummary.pendingCount > 0 ||
+    recordsSyncSummary.syncingCount > 0 ||
+    recordsSyncSummary.failedCount > 0 ||
+    recordsSyncSummary.conflictCount > 0;
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -181,12 +187,23 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         </View>
       ) : null}
 
-      {pendingRecordsCount > 0 ? (
+      {hasSyncActivity ? (
         <View style={styles.syncBar}>
-          <Text style={styles.syncText}>{pendingRecordsCount} pendientes</Text>
-          <Pressable onPress={syncPendingRecords} style={styles.syncButton}>
-            <Text style={styles.syncButtonText}>Sincronizar</Text>
-          </Pressable>
+          <Text style={styles.syncText}>{formatSyncSummary(recordsSyncSummary)}</Text>
+          <View style={styles.syncActions}>
+            {hasSyncIssues ? (
+              <Link href={buildAppViewProblemsHref(appView.id)} asChild>
+                <Pressable style={styles.secondarySyncButton}>
+                  <Text style={styles.secondarySyncButtonText}>Ver problemas</Text>
+                </Pressable>
+              </Link>
+            ) : null}
+            {recordsSyncSummary.pendingCount > 0 ? (
+              <Pressable onPress={syncPendingRecords} style={styles.syncButton}>
+                <Text style={styles.syncButtonText}>Sincronizar</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       ) : null}
 
@@ -262,10 +279,32 @@ function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {
   }
 
   return (
-    <View style={[styles.badge, record.syncStatus === "failed" && styles.badgeFailed]}>
-      <Text style={[styles.badgeText, record.syncStatus === "failed" && styles.badgeFailedText]}>{label}</Text>
+    <View style={[
+      styles.badge,
+      record.syncStatus === "failed" && styles.badgeFailed,
+      record.syncStatus === "conflict" && styles.badgeConflict,
+    ]}>
+      <Text style={[
+        styles.badgeText,
+        record.syncStatus === "failed" && styles.badgeFailedText,
+        record.syncStatus === "conflict" && styles.badgeConflictText,
+      ]}>{label}</Text>
     </View>
   );
+}
+
+function formatSyncSummary(summary: {
+  conflictCount: number;
+  failedCount: number;
+  pendingCount: number;
+  syncingCount: number;
+}) {
+  return [
+    summary.pendingCount ? `${summary.pendingCount} pendientes` : null,
+    summary.syncingCount ? `${summary.syncingCount} sincronizando` : null,
+    summary.failedCount ? `${summary.failedCount} errores` : null,
+    summary.conflictCount ? `${summary.conflictCount} conflictos` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 const styles = StyleSheet.create({
@@ -277,6 +316,12 @@ const styles = StyleSheet.create({
   },
   badgeFailed: {
     backgroundColor: "#fef3f2",
+  },
+  badgeConflict: {
+    backgroundColor: "#fff7ed",
+  },
+  badgeConflictText: {
+    color: "#9a3412",
   },
   badgeFailedText: {
     color: "#b42318",
@@ -444,6 +489,25 @@ const styles = StyleSheet.create({
     gap: 12,
     justifyContent: "space-between",
     padding: 12,
+  },
+  secondarySyncButton: {
+    alignItems: "center",
+    borderColor: "#b8c7ca",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 14,
+  },
+  secondarySyncButtonText: {
+    color: "#17363c",
+    fontWeight: "800",
+  },
+  syncActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "flex-end",
   },
   syncButton: {
     alignItems: "center",

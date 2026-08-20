@@ -2,7 +2,7 @@ import { Link, router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { buildEditAppViewRecordHref } from "@/lib/app-views";
+import { buildAppViewRecordConflictHref, buildEditAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { getRecordDetailFields } from "@/lib/entity-record-display";
 import { CachedEntityRecord, loadRecordWithOfflineCache } from "@/lib/offline-records";
@@ -17,7 +17,7 @@ type Props = {
 
 export function RecordDetailScreen({ appView, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
   const [fromCache, setFromCache] = useState(false);
@@ -92,6 +92,26 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
     };
   }, [api, definitionCache, entityTypeId, ownerKey, recordId, retryCount, selectedContractId, token]);
 
+  async function retryFailedRecord() {
+    if (!record || !selectedContractId || !ownerKey) {
+      return;
+    }
+
+    try {
+      await definitionCache.retryFailedRecord({
+        contractId: selectedContractId,
+        entityTypeId,
+        ownerKey,
+        recordId: record.id,
+      });
+      await refreshRecordsSyncSummary();
+      void syncPendingRecords();
+      setRetryCount((count) => count + 1);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No fue posible reintentar.");
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.actions}>
@@ -116,6 +136,23 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
           {fromCache ? <Text style={styles.meta}>Datos guardados localmente.</Text> : null}
           {record.syncErrorMessage ? <Text style={styles.error}>{record.syncErrorMessage}</Text> : null}
         </View>
+      ) : null}
+
+      {record?.syncStatus === "conflict" ? (
+        <View style={styles.conflictBanner}>
+          <Text style={styles.conflictTitle}>Este registro cambió en Opco mientras tenías modificaciones locales pendientes.</Text>
+          <Link href={buildAppViewRecordConflictHref(appView.id, record.id)} asChild>
+            <Pressable style={styles.secondaryButton}>
+              <Text style={styles.secondaryText}>Revisar conflicto</Text>
+            </Pressable>
+          </Link>
+        </View>
+      ) : null}
+
+      {record?.syncStatus === "failed" ? (
+        <Pressable onPress={retryFailedRecord} style={styles.primaryButton}>
+          <Text style={styles.primaryText}>Reintentar</Text>
+        </Pressable>
       ) : null}
 
       {isLoading ? <ActivityIndicator /> : null}
@@ -150,8 +187,16 @@ function SyncBadge({ record }: { record: CachedEntityRecord }) {
   }
 
   return (
-    <View style={[styles.badge, record.syncStatus === "failed" && styles.badgeFailed]}>
-      <Text style={[styles.badgeText, record.syncStatus === "failed" && styles.badgeFailedText]}>{label}</Text>
+    <View style={[
+      styles.badge,
+      record.syncStatus === "failed" && styles.badgeFailed,
+      record.syncStatus === "conflict" && styles.badgeConflict,
+    ]}>
+      <Text style={[
+        styles.badgeText,
+        record.syncStatus === "failed" && styles.badgeFailedText,
+        record.syncStatus === "conflict" && styles.badgeConflictText,
+      ]}>{label}</Text>
     </View>
   );
 }
@@ -172,6 +217,12 @@ const styles = StyleSheet.create({
   badgeFailed: {
     backgroundColor: "#fef3f2",
   },
+  badgeConflict: {
+    backgroundColor: "#fff7ed",
+  },
+  badgeConflictText: {
+    color: "#9a3412",
+  },
   badgeFailedText: {
     color: "#b42318",
   },
@@ -184,6 +235,19 @@ const styles = StyleSheet.create({
     gap: 16,
     padding: 20,
     paddingBottom: 36,
+  },
+  conflictBanner: {
+    backgroundColor: "#fff7ed",
+    borderColor: "#fed7aa",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+  },
+  conflictTitle: {
+    color: "#9a3412",
+    fontWeight: "800",
+    lineHeight: 20,
   },
   empty: {
     color: "#587078",

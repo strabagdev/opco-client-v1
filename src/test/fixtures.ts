@@ -149,6 +149,7 @@ export const entityDefinitionFixture: EntityDefinition = {
 export const entityRecordFixture = {
   displayName: "EQ-001",
   id: "record_1",
+  updatedAt: "2026-08-20T12:00:00.000Z",
   values: {
     codigo: "EQ-001",
     estado: "operativo",

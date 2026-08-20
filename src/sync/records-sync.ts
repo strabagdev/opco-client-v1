@@ -5,12 +5,15 @@ export type RecordsSyncStore = {
   completePendingOperation(operation: PendingOperation, record: EntityRecord): Promise<void>;
   failPendingOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   listPendingOperations(ownerKey: string): Promise<PendingOperation[]>;
+  markPendingOperationConflict(operation: PendingOperation, remoteRecord: EntityRecord, code: string, message: string): Promise<void>;
   markPendingOperationSyncing(operationId: string): Promise<void>;
+  readRecordRemoteUpdatedAt(operation: PendingOperation): Promise<string | null>;
   retryPendingOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
 };
 
 export type RecordsSyncResult = {
   completed: number;
+  conflicts: number;
   failed: number;
   retriable: number;
 };
@@ -18,7 +21,7 @@ export type RecordsSyncResult = {
 let syncPromise: Promise<RecordsSyncResult> | null = null;
 
 export function syncPendingRecordsOnce(params: {
-  api: Pick<OpcoApi, "createEntityRecord" | "updateEntityRecord">;
+  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord">;
   ownerKey: string;
   store: RecordsSyncStore;
   token: string;
@@ -38,7 +41,7 @@ async function runSync({
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "createEntityRecord" | "updateEntityRecord">;
+  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord">;
   ownerKey: string;
   store: RecordsSyncStore;
   token: string;
@@ -46,6 +49,7 @@ async function runSync({
   const operations = await store.listPendingOperations(ownerKey);
   const result = {
     completed: 0,
+    conflicts: 0,
     failed: 0,
     retriable: 0,
   };
@@ -60,11 +64,17 @@ async function runSync({
               clientRequestId: operation.clientRequestId,
               values: operation.payload.values,
             })
-          : await syncUpdate({ api, operation, token });
+          : await syncUpdate({ api, operation, store, token });
 
       await store.completePendingOperation(operation, response.record);
       result.completed += 1;
     } catch (error) {
+      if (error instanceof RecordConflictDetected) {
+        await store.markPendingOperationConflict(operation, error.remoteRecord, error.code, error.message);
+        result.conflicts += 1;
+        continue;
+      }
+
       const classification = classifySyncError(error);
 
       if (classification.action === "retry") {
@@ -84,14 +94,25 @@ async function runSync({
 async function syncUpdate({
   api,
   operation,
+  store,
   token,
 }: {
-  api: Pick<OpcoApi, "updateEntityRecord">;
+  api: Pick<OpcoApi, "getEntityRecord" | "updateEntityRecord">;
   operation: PendingOperation;
+  store: Pick<RecordsSyncStore, "readRecordRemoteUpdatedAt">;
   token: string;
 }): Promise<{ record: EntityRecord }> {
   if (!operation.serverRecordId) {
     throw new OpcoApiError("No se puede sincronizar UPDATE sin server_id.", "MISSING_SERVER_RECORD_ID", 400);
+  }
+
+  const [baseRemoteUpdatedAt, remote] = await Promise.all([
+    store.readRecordRemoteUpdatedAt(operation),
+    api.getEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId),
+  ]);
+
+  if (!baseRemoteUpdatedAt || remote.record.updatedAt !== baseRemoteUpdatedAt) {
+    throw new RecordConflictDetected(remote.record);
   }
 
   return api.updateEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId, {
@@ -112,7 +133,20 @@ export function getRecordSyncLabel(record: Pick<CachedEntityRecord, "syncStatus"
     return "Error";
   }
 
+  if (record.syncStatus === "conflict") {
+    return "Conflicto";
+  }
+
   return null;
+}
+
+export class RecordConflictDetected extends Error {
+  code = "REMOTE_VERSION_CHANGED";
+
+  constructor(public readonly remoteRecord: EntityRecord) {
+    super("Este registro cambio en Opco mientras tenias modificaciones locales pendientes.");
+    this.name = "RecordConflictDetected";
+  }
 }
 
 function classifySyncError(error: unknown): { action: "failed" | "retry"; code: string; message: string } {

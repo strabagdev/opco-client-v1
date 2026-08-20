@@ -179,6 +179,7 @@ export type EntityRecordValue =
 export type EntityRecord = {
   id: string;
   displayName: string;
+  updatedAt: string;
   values: Record<string, EntityRecordValue>;
 };
 
@@ -509,7 +510,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           serializedQuery ? `?${serializedQuery}` : ""
         }`,
         token,
-      );
+      ).then(normalizeEntityRecordsResponse);
     },
     getEntityRecord(token: string, contractId: string, entityTypeId: string, recordId: string) {
       return authenticatedRequest<EntityRecordResponse>(
@@ -517,7 +518,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           entityTypeId,
         )}/records/${encodeURIComponent(recordId)}`,
         token,
-      );
+      ).then(normalizeEntityRecordResponse);
     },
     createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {
       return authenticatedRequest<EntityRecordResponse>(
@@ -527,7 +528,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           body: JSON.stringify(input),
           method: "POST",
         },
-      );
+      ).then(normalizeEntityRecordResponse);
     },
     updateEntityRecord(
       token: string,
@@ -545,9 +546,31 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           body: JSON.stringify(input),
           method: "PATCH",
         },
-      );
+      ).then(normalizeEntityRecordResponse);
     },
   };
+}
+
+function normalizeEntityRecordsResponse(response: EntityRecordsResponse): EntityRecordsResponse {
+  return {
+    ...response,
+    records: response.records.map(normalizeEntityRecord),
+  };
+}
+
+function normalizeEntityRecordResponse(response: EntityRecordResponse): EntityRecordResponse {
+  return {
+    ...response,
+    record: normalizeEntityRecord(response.record),
+  };
+}
+
+function normalizeEntityRecord(record: EntityRecord): EntityRecord {
+  if (!isIsoDateTime(record.updatedAt)) {
+    throw new OpcoApiError("Opco devolvio un updatedAt invalido para el registro.", "INVALID_RECORD_UPDATED_AT", 200);
+  }
+
+  return record;
 }
 
 function isAbortError(error: unknown) {
@@ -570,6 +593,16 @@ function isInvalidRefreshError(error: unknown) {
     error.status === 401 &&
     (INVALID_REFRESH_CODES.has(error.code) || error.code === TOKEN_INVALID_CODE || error.code === "REFRESH_TOKEN_MISSING")
   );
+}
+
+function isIsoDateTime(value: unknown) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const timestamp = Date.parse(value);
+
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function isApiEnvelope<T>(body: unknown): body is ApiEnvelope<T> {

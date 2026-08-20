@@ -11,6 +11,7 @@ import { Platform } from "react-native";
 
 import { useConnectivityStatus } from "@/lib/connectivity";
 import { getLocalDatabase, LocalDatabase } from "@/lib/local-db";
+import { RecordsSyncSummary } from "@/lib/offline-records";
 import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
@@ -26,6 +27,8 @@ type SessionContextValue = {
   me: MeResponse | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
+  recordsSyncSummary: RecordsSyncSummary;
+  refreshRecordsSyncSummary(): Promise<void>;
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
@@ -37,6 +40,13 @@ type SessionContextValue = {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
+const emptyRecordsSyncSummary: RecordsSyncSummary = {
+  conflictCount: 0,
+  failedCount: 0,
+  pendingCount: 0,
+  syncingCount: 0,
+};
+
 export function SessionProvider({ children }: PropsWithChildren) {
   const definitionCache = useMemo(() => getLocalDatabase(), []);
   const [status, setStatus] = useState<SessionStatus>("loading");
@@ -44,6 +54,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
+  const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
   const connectivityStatus = useConnectivityStatus();
   const ownerKey = me && context ? `${context.organization.id}:${me.user.id}` : null;
@@ -90,17 +101,28 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const refreshPendingRecordsCount = useCallback(async () => {
-    if (!ownerKey) {
+    if (!ownerKey || !selectedContractIdState) {
       setPendingRecordsCount(0);
+      setRecordsSyncSummary(emptyRecordsSyncSummary);
       return;
     }
 
     try {
-      setPendingRecordsCount(await definitionCache.countPendingOperations(ownerKey));
+      const [count, summary] = await Promise.all([
+        definitionCache.countPendingOperations(ownerKey),
+        definitionCache.getRecordsSyncSummary({
+          contractId: selectedContractIdState,
+          ownerKey,
+        }),
+      ]);
+
+      setPendingRecordsCount(count);
+      setRecordsSyncSummary(summary);
     } catch {
       setPendingRecordsCount(0);
+      setRecordsSyncSummary(emptyRecordsSyncSummary);
     }
-  }, [definitionCache, ownerKey]);
+  }, [definitionCache, ownerKey, selectedContractIdState]);
 
   const syncPendingRecords = useCallback(async () => {
     if (!token || !ownerKey) {
@@ -256,6 +278,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
         me,
         ownerKey,
         pendingRecordsCount,
+        recordsSyncSummary,
+        refreshRecordsSyncSummary: refreshPendingRecordsCount,
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
         signIn,
