@@ -541,6 +541,9 @@ describe("createOpcoApi", () => {
 
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/views");
     expect(result.views[0].type).toBe("RECORDS");
+    if (result.views[0].type !== "RECORDS") {
+      throw new Error("Expected first fixture view to be RECORDS.");
+    }
     expect(result.views[0].config.entityTypeId).toBe("entity_1");
     expect(result.views.map((view) => view.type)).toEqual(["RECORDS", "WORKFLOW", "BOARD", "DASHBOARD"]);
   });
@@ -562,6 +565,125 @@ describe("createOpcoApi", () => {
     });
 
     await expect(api.getAppViews("token_123", "contract_1")).resolves.toEqual({ views: [] });
+  });
+
+  it("loads attendance workflow state for one local date", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
+            date: "2026-08-22",
+            items: [
+              {
+                attendance: {
+                  observation: null,
+                  recordId: "attendance_1",
+                  status: "PRESENTE",
+                  updatedAt: "2026-08-22T12:00:00.000Z",
+                },
+                person: { displayName: "Ana Perez", id: "person_1" },
+              },
+              {
+                attendance: null,
+                person: { displayName: "Juan Soto", id: "person_2" },
+              },
+            ],
+            sourceEntityType: { id: "entity_people", name: "Personas" },
+            targetEntityType: { id: "entity_attendance", name: "Asistencias" },
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.getAttendanceWorkflow("token_123", "contract_1", "view_attendance", "2026-08-22");
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/views/view_attendance/workflow/attendance?date=2026-08-22",
+    );
+    expect(result.items[0].attendance?.status).toBe("PRESENTE");
+    expect(result.items[1].attendance).toBeNull();
+  });
+
+  it("saves dirty attendance entries as a batch", async () => {
+    const requests: RequestInit[] = [];
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        urls.push(String(url));
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
+            date: "2026-08-22",
+            results: [{ personRecordId: "person_1", recordId: "attendance_1", result: "CREATED" }],
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.saveAttendanceWorkflow("token_123", "contract_1", "view_attendance", {
+      clientRequestId: "request_1",
+      date: "2026-08-22",
+      entries: [{ observation: "Turno AM", personRecordId: "person_1", status: "PRESENTE" }],
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/views/view_attendance/workflow/attendance");
+    expect(requests[0].method).toBe("POST");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      clientRequestId: "request_1",
+      date: "2026-08-22",
+      entries: [{ observation: "Turno AM", personRecordId: "person_1", status: "PRESENTE" }],
+    });
+    expect(result.results[0]).toMatchObject({ result: "CREATED" });
+  });
+
+  it("parses attendance conflicts with expected overwrite data", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
+            date: "2026-08-22",
+            results: [
+              {
+                existing: {
+                  recordId: "attendance_1",
+                  status: "PRESENTE",
+                  updatedAt: "2026-08-22T12:00:00.000Z",
+                },
+                personRecordId: "person_1",
+                requestedStatus: "AUSENTE",
+                result: "CONFLICT",
+              },
+            ],
+          },
+          ok: true,
+        }),
+    });
+
+    const result = await api.saveAttendanceWorkflow("token_123", "contract_1", "view_attendance", {
+      date: "2026-08-22",
+      entries: [{ personRecordId: "person_1", status: "AUSENTE" }],
+    });
+
+    expect(result.results[0]).toMatchObject({
+      existing: { status: "PRESENTE", updatedAt: "2026-08-22T12:00:00.000Z" },
+      requestedStatus: "AUSENTE",
+      result: "CONFLICT",
+    });
   });
 
   it("parses one entity record detail", async () => {

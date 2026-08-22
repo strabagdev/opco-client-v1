@@ -1,9 +1,11 @@
 import { ComponentType, createElement } from "react";
 
-import { AppView, AppViewType } from "@/lib/opco-api";
+import { AppView, AppViewType, WorkflowAppView } from "@/lib/opco-api";
 import { RecordsRenderer } from "@/renderers/records/RecordsRenderer";
 import { AppViewRendererProps } from "@/renderers/types";
 import { UnsupportedRenderer } from "@/renderers/unsupported/UnsupportedRenderer";
+import { AttendanceWorkflow } from "@/renderers/workflows/attendance/AttendanceWorkflow";
+import { UnsupportedWorkflow } from "@/renderers/workflows/unsupported/UnsupportedWorkflow";
 
 export const rendererRegistry: Record<AppViewType, ComponentType<AppViewRendererProps>> = {
   BOARD: UnsupportedRenderer,
@@ -16,6 +18,18 @@ export function resolveAppViewRenderer(type: AppViewType) {
   return rendererRegistry[type];
 }
 
+export function resolveWorkflowRenderer(appView: WorkflowAppView) {
+  if (appView.config.workflowKey === "attendance") {
+    return AttendanceWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
+  }
+
+  return UnsupportedWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
+}
+
 export function renderAppView(appView: AppView) {
+  if (appView.type === "WORKFLOW") {
+    return createElement(resolveWorkflowRenderer(appView), { appView });
+  }
+
   return createElement(resolveAppViewRenderer(appView.type), { appView });
 }

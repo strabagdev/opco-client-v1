@@ -70,7 +70,17 @@ export type RecordsAppViewConfig = {
   entityTypeId: string;
 };
 
-export type WorkflowAppViewConfig = Record<string, unknown>;
+export type AttendanceWorkflowConfig = {
+  dateFieldId: string;
+  observationFieldId?: string;
+  personFieldId: string;
+  sourceEntityTypeId: string;
+  statusFieldId: string;
+  targetEntityTypeId: string;
+  workflowKey: "attendance";
+};
+
+export type WorkflowAppViewConfig = AttendanceWorkflowConfig | (Record<string, unknown> & { workflowKey?: string });
 export type BoardAppViewConfig = Record<string, unknown>;
 export type DashboardAppViewConfig = Record<string, unknown>;
 
@@ -217,6 +227,87 @@ export type EntityRecordsResponse = {
 
 export type EntityRecordResponse = {
   record: EntityRecord;
+};
+
+export type AttendanceStatus = "PRESENTE" | "AUSENTE";
+
+export type AttendanceItem = {
+  attendance: {
+    observation: string | null;
+    recordId: string;
+    status: AttendanceStatus | null;
+    updatedAt: string;
+  } | null;
+  person: {
+    displayName: string;
+    id: string;
+  };
+};
+
+export type AttendanceResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  date: string;
+  items: AttendanceItem[];
+  sourceEntityType: {
+    id: string;
+    name: string;
+  };
+  targetEntityType: {
+    id: string;
+    name: string;
+  };
+};
+
+export type AttendanceBatchEntry = {
+  expectedStatus?: AttendanceStatus;
+  expectedUpdatedAt?: string;
+  observation?: string | null;
+  overwrite?: boolean;
+  personRecordId: string;
+  status: AttendanceStatus;
+};
+
+export type AttendanceBatchRequest = {
+  clientRequestId?: string;
+  date: string;
+  entries: AttendanceBatchEntry[];
+};
+
+export type AttendanceBatchResult =
+  | {
+      personRecordId: string;
+      recordId: string;
+      result: "CREATED" | "UNCHANGED" | "UPDATED";
+    }
+  | {
+      existing: {
+        recordId: string;
+        status: AttendanceStatus | null;
+        updatedAt: string;
+      };
+      personRecordId: string;
+      requestedStatus: AttendanceStatus;
+      result: "CONFLICT";
+    }
+  | {
+      code: string;
+      message: string;
+      personRecordId: string;
+      result: "ERROR";
+    };
+
+export type AttendanceBatchResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  date: string;
+  results: AttendanceBatchResult[];
 };
 
 export type CreateEntityRecordInput = {
@@ -548,6 +639,36 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         },
       ).then(normalizeEntityRecordResponse);
     },
+    getAttendanceWorkflow(
+      token: string,
+      contractId: string,
+      appViewId: string,
+      date: string,
+    ) {
+      const searchParams = new URLSearchParams({ date });
+
+      return authenticatedRequest<AttendanceResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(
+          appViewId,
+        )}/workflow/attendance?${searchParams.toString()}`,
+        token,
+      ).then(normalizeAttendanceResponse);
+    },
+    saveAttendanceWorkflow(
+      token: string,
+      contractId: string,
+      appViewId: string,
+      input: AttendanceBatchRequest,
+    ) {
+      return authenticatedRequest<AttendanceBatchResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/attendance`,
+        token,
+        {
+          body: JSON.stringify(input),
+          method: "POST",
+        },
+      ).then(normalizeAttendanceBatchResponse);
+    },
   };
 }
 
@@ -565,12 +686,39 @@ function normalizeEntityRecordResponse(response: EntityRecordResponse): EntityRe
   };
 }
 
+function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceResponse {
+  return {
+    ...response,
+    items: response.items.map((item) => {
+      if (item.attendance) {
+        assertIsoDateTime(item.attendance.updatedAt, "Opco devolvio un updatedAt invalido para la asistencia.");
+      }
+
+      return item;
+    }),
+  };
+}
+
+function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): AttendanceBatchResponse {
+  response.results.forEach((result) => {
+    if (result.result === "CONFLICT") {
+      assertIsoDateTime(result.existing.updatedAt, "Opco devolvio un updatedAt invalido para el conflicto de asistencia.");
+    }
+  });
+
+  return response;
+}
+
 function normalizeEntityRecord(record: EntityRecord): EntityRecord {
-  if (!isIsoDateTime(record.updatedAt)) {
-    throw new OpcoApiError("Opco devolvio un updatedAt invalido para el registro.", "INVALID_RECORD_UPDATED_AT", 200);
-  }
+  assertIsoDateTime(record.updatedAt, "Opco devolvio un updatedAt invalido para el registro.");
 
   return record;
+}
+
+function assertIsoDateTime(value: unknown, message: string) {
+  if (!isIsoDateTime(value)) {
+    throw new OpcoApiError(message, "INVALID_RECORD_UPDATED_AT", 200);
+  }
 }
 
 function isAbortError(error: unknown) {
