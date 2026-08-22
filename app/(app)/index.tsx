@@ -14,6 +14,7 @@ import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
+import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
 
 export default function HomeScreen() {
@@ -34,6 +35,11 @@ export default function HomeScreen() {
   const [viewsFromCache, setViewsFromCache] = useState(false);
   const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const offlineReadiness = useOfflineReadiness({
+    navigationCachePresent: Boolean(selectedContractId && views.length > 0),
+    sessionSnapshotPresent: Boolean(ownerKey && me && context),
+    sqliteReady: Boolean(definitionCache),
+  });
 
   const selectedContract = useMemo(
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
@@ -120,6 +126,9 @@ export default function HomeScreen() {
             ? "Sin conexion. Datos guardados localmente."
             : me?.user.email}
         </Text>
+        <Text style={offlineReadiness.offlineReadiness === "ready" ? styles.readyText : styles.meta}>
+          {getOfflineReadinessText(offlineReadiness.offlineReadiness)}
+        </Text>
       </View>
 
       <View style={styles.section}>
@@ -196,8 +205,64 @@ export default function HomeScreen() {
             </Link>
           ))}
         </View>
+        {shouldShowPwaDiagnostics() ? <PwaDiagnostics diagnostics={offlineReadiness} /> : null}
       </View>
     </ScrollView>
+  );
+}
+
+function getOfflineReadinessText(readiness: ReturnType<typeof useOfflineReadiness>["offlineReadiness"]) {
+  switch (readiness) {
+    case "ready":
+      return "Disponible sin conexion";
+    case "data-missing":
+      return "Abre al menos una experiencia con conexion para usarla offline.";
+    case "shell-missing":
+      return "Preparando uso sin conexion...";
+    case "unsupported":
+      return "Uso sin conexion no disponible en este navegador.";
+    case "preparing":
+    default:
+      return "Preparando uso sin conexion...";
+  }
+}
+
+function shouldShowPwaDiagnostics() {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
+    return true;
+  }
+
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).has("pwaDiagnostics");
+}
+
+function PwaDiagnostics({ diagnostics }: { diagnostics: ReturnType<typeof useOfflineReadiness> }) {
+  const rows = [
+    ["runningMode", diagnostics.runningMode],
+    ["serviceWorkerSupported", diagnostics.serviceWorkerSupported ? "yes" : "no"],
+    ["registrationScope", diagnostics.registrationScope ?? "none"],
+    ["controllerPresent", diagnostics.controllerPresent ? "yes" : "no"],
+    ["activeScriptURL", diagnostics.activeScriptURL ? new URL(diagnostics.activeScriptURL).pathname : "none"],
+    ["shellCacheVersion", diagnostics.shellCacheVersion ?? "none"],
+    ["shellReady", diagnostics.shellReady ? "yes" : "no"],
+    ["sessionSnapshotPresent", diagnostics.sessionSnapshotPresent ? "yes" : "no"],
+    ["navigationCachePresent", diagnostics.navigationCachePresent ? "yes" : "no"],
+    ["SQLiteReady", diagnostics.sqliteReady ? "yes" : "no"],
+  ];
+
+  return (
+    <View style={styles.diagnostics}>
+      <Text style={styles.diagnosticsTitle}>Diagnostico PWA</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.diagnosticsRow}>
+          <Text style={styles.diagnosticsLabel}>{label}</Text>
+          <Text style={styles.diagnosticsValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -293,6 +358,36 @@ const styles = StyleSheet.create({
     color: "#b42318",
     lineHeight: 20,
   },
+  diagnostics: {
+    backgroundColor: "#ffffff",
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+    marginTop: 8,
+    padding: 12,
+  },
+  diagnosticsLabel: {
+    color: "#587078",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  diagnosticsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  diagnosticsTitle: {
+    color: "#17363c",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  diagnosticsValue: {
+    color: "#17363c",
+    flex: 1,
+    fontSize: 12,
+    textAlign: "right",
+  },
   header: {
     alignItems: "center",
     flexDirection: "row",
@@ -323,6 +418,11 @@ const styles = StyleSheet.create({
   },
   meta: {
     color: "#587078",
+    marginTop: 3,
+  },
+  readyText: {
+    color: "#13795b",
+    fontWeight: "800",
     marginTop: 3,
   },
   screen: {

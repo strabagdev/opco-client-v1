@@ -76,16 +76,27 @@ function streamFile(response, filePath) {
     "Cross-Origin-Embedder-Policy": "credentialless",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Content-Type": getContentType(filePath),
+    ...getServiceWorkerHeaders(filePath),
   });
   createReadStream(filePath).pipe(response);
 }
 
 function getCacheControl(filePath) {
   if (filePath.endsWith(`${sep}sw.js`) || filePath.endsWith(`${sep}index.html`)) {
-    return "no-cache";
+    return filePath.endsWith(`${sep}sw.js`) ? "no-store, no-cache, must-revalidate" : "no-cache";
   }
 
   return "public, max-age=31536000, immutable";
+}
+
+function getServiceWorkerHeaders(filePath) {
+  if (!filePath.endsWith(`${sep}sw.js`)) {
+    return {};
+  }
+
+  return {
+    "Service-Worker-Allowed": "/",
+  };
 }
 
 function sendStatus(response, status) {

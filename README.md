@@ -142,7 +142,9 @@ Si el access token expira mientras no hay red, la app no expulsa al usuario por 
 
 Si no hay snapshot suficiente, se muestra: `No hay datos guardados en este dispositivo. Conectate al menos una vez.` No debe quedar spinner infinito ni login forzado por un error de red.
 
-`client.opco.cl` es instalable como PWA cuando el navegador lo permite. El cache del shell se versiona por hash de build y elimina caches viejos al activar una version nueva, sin borrar SQLite ni operaciones pendientes. La limitacion multi-tab de Expo SQLite Web/OPFS se mantiene: no se asume soporte multi-tab concurrente.
+`client.opco.cl` es instalable como PWA cuando el navegador lo permite. El cache del shell se versiona por hash de build y elimina caches viejos al activar una version nueva, sin borrar SQLite ni operaciones pendientes. La app solo muestra `Disponible sin conexion` cuando el documento esta controlado por el service worker, el shell responde el handshake de cache completo y ya existen snapshot de sesion, contrato seleccionado y AppViews cacheadas. Si el shell aun no controla la pagina, muestra `Preparando uso sin conexion...`; si faltan datos operacionales, muestra `Abre al menos una experiencia con conexion para usarla offline.` La limitacion multi-tab de Expo SQLite Web/OPFS se mantiene: no se asume soporte multi-tab concurrente.
+
+En iOS hay que distinguir Safari normal de una Web App agregada a la pantalla de inicio. Son contextos de almacenamiento separados: visitar `client.opco.cl` en Safari no prepara necesariamente el service worker, Cache Storage ni SQLite de la PWA instalada. La prueba principal soportada en iPhone es abrir la PWA desde su icono, online, esperar `Disponible sin conexion`, navegar una experiencia `RECORDS`, cerrar completamente y reabrir offline desde el mismo icono.
 
 ## Offline-First RECORDS
 
@@ -207,17 +209,31 @@ La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando`
 
 ## Prueba Manual Cold Start Offline
 
-1. Con conexion, abrir `client.opco.cl` o la app instalada, iniciar sesion y abrir una AppView `RECORDS`.
-2. Abrir listado y detalle; crear o editar un dato de prueba si es seguro.
-3. Esperar que el listado/detalle quede cacheado y cerrar completamente pestaña/app.
+Matriz A, Safari normal:
+
+1. Con conexion, abrir `client.opco.cl` en Safari, iniciar sesion y abrir una AppView `RECORDS`.
+2. Recargar online y confirmar `Disponible sin conexion`.
+3. Cerrar Safari completamente.
 4. Activar modo avion.
-5. Reabrir.
-6. Esperado: shell abre, no hay error del navegador, no fuerza login, muestra modo offline, contrato y AppViews visibles, listado/detalle cacheados y pending visibles.
-7. Crear/editar `RECORDS` offline.
-8. Rehabilitar red.
-9. Esperado: sesion revalidada, sync automatico single-flight, pending desaparece y datos se reconcilian.
-10. Abrir Attendance offline.
-11. Esperado: mensaje de conexion requerida, sin crash y sin pending falso.
+5. Reabrir la misma URL.
+6. Esperado: si Safari conserva el contexto, el shell abre; si iOS descarta ese contexto, no usar este resultado como aceptacion principal de PWA.
+
+Matriz B, Home Screen PWA:
+
+1. Con conexion, instalar `client.opco.cl` en pantalla de inicio.
+2. Abrir desde el icono, iniciar sesion y esperar `Disponible sin conexion`.
+3. Abrir una AppView `RECORDS`, listado y detalle; crear o editar un dato de prueba si es seguro.
+4. Cerrar completamente la PWA.
+5. Activar modo avion.
+6. Reabrir desde el mismo icono.
+7. Esperado: shell abre, no hay error del navegador, no fuerza login, muestra modo offline, contrato y AppViews visibles, listado/detalle cacheados y pending visibles.
+8. Crear/editar `RECORDS` offline.
+9. Rehabilitar red.
+10. Esperado: sesion revalidada, sync automatico single-flight, pending desaparece y datos se reconcilian.
+11. Abrir Attendance offline.
+12. Esperado: mensaje de conexion requerida, sin crash y sin pending falso.
+
+Para diagnostico en desarrollo, o agregando `?pwaDiagnostics=1`, la home muestra datos no sensibles: modo browser/standalone, soporte de service worker, scope, controller, script activo, version de cache, shellReady, snapshot de sesion, cache de navegacion y SQLiteReady. En un Mac se puede usar Safari Develop/Web Inspector para inspeccionar la Home Screen Web App, service worker, Cache Storage y consola.
 
 ## SQLite
 
