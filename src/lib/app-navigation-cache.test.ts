@@ -15,6 +15,7 @@ describe("app navigation cache", () => {
       cache,
       contractId: "contract_1",
       now: () => new Date("2026-08-19T12:00:00.000Z"),
+      ownerKey: "org_1:user_1",
       token: "token_1",
     });
 
@@ -29,14 +30,14 @@ describe("app navigation cache", () => {
       "view_board",
       "view_dashboard",
     ]);
-    await expect(cache.getAppViews("contract_1")).resolves.toMatchObject({
+    await expect(cache.getAppViews("org_1:user_1", "contract_1")).resolves.toMatchObject({
       syncedAt: "2026-08-19T12:00:00.000Z",
     });
   });
 
   it("uses cached AppViews when the remote request fails by network", async () => {
     const cache = new MemoryNavigationCache();
-    await cache.upsertAppViews("contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
+    await cache.upsertAppViews("org_1:user_1", "contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
 
     const result = await loadAppViewsWithCache({
       api: {
@@ -46,6 +47,7 @@ describe("app navigation cache", () => {
       },
       cache,
       contractId: "contract_1",
+      ownerKey: "org_1:user_1",
       token: "token_1",
     });
 
@@ -56,7 +58,7 @@ describe("app navigation cache", () => {
 
   it("does not use AppViews cache when the API returns an auth error", async () => {
     const cache = new MemoryNavigationCache();
-    await cache.upsertAppViews("contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
+    await cache.upsertAppViews("org_1:user_1", "contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
 
     await expect(
       loadAppViewsWithCache({
@@ -67,6 +69,7 @@ describe("app navigation cache", () => {
         },
         cache,
         contractId: "contract_1",
+        ownerKey: "org_1:user_1",
         token: "token_1",
       }),
     ).rejects.toMatchObject({ code: "TOKEN_INVALID", status: 401 });
@@ -82,7 +85,28 @@ describe("app navigation cache", () => {
         },
         cache: new MemoryNavigationCache(),
         contractId: "contract_1",
+        ownerKey: "org_1:user_1",
         token: "token_1",
+      }),
+    ).rejects.toBeInstanceOf(OpcoNetworkError);
+  });
+
+  it("does not expose cached AppViews across owners", async () => {
+    const cache = new MemoryNavigationCache();
+
+    await cache.upsertAppViews("org_1:user_a", "contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
+
+    await expect(
+      loadAppViewsWithCache({
+        api: {
+          getAppViews: async () => {
+            throw new OpcoNetworkError();
+          },
+        },
+        cache,
+        contractId: "contract_1",
+        ownerKey: "org_1:user_b",
+        token: "token_b",
       }),
     ).rejects.toBeInstanceOf(OpcoNetworkError);
   });
@@ -95,19 +119,19 @@ class MemoryNavigationCache implements AppNavigationCache {
     this.appViews.clear();
   }
 
-  async getAppViews(contractId: string) {
-    return this.appViews.get(contractId) ?? null;
+  async getAppViews(ownerKey: string, contractId: string) {
+    return this.appViews.get(`${ownerKey}:${contractId}`) ?? null;
   }
 
   async getContextSnapshot() {
     return null;
   }
 
-  async upsertAppViews(contractId: string, views: AppView[], syncedAt: string) {
-    this.appViews.set(contractId, { syncedAt, views });
+  async upsertAppViews(ownerKey: string, contractId: string, views: AppView[], syncedAt: string) {
+    this.appViews.set(`${ownerKey}:${contractId}`, { syncedAt, views });
   }
 
-  async upsertContextSnapshot(_me: MeResponse, _context: ContextResponse, _syncedAt: string) {
+  async upsertContextSnapshot(_ownerKey: string, _me: MeResponse, _context: ContextResponse, _syncedAt: string) {
     // Not needed by these tests.
   }
 }

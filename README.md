@@ -125,9 +125,28 @@ Los campos temporales opcionales muestran una accion discreta `Limpiar`, que env
 
 La UI valida `required` basico para evitar submits obviamente vacios, valida `DATE`, `TIME` con horas `00`-`23` y minutos `00`-`59`, y `DATETIME`, convierte tipos JSON razonables y muestra errores por campo cuando la API devuelve detalles estructurados. La API de Opco sigue siendo la autoridad final de permisos y validacion.
 
+## Cold Start Offline
+
+Hardening 1A soporta dos capas distintas:
+
+- App shell offline: en web/PWA, `npm run build:web` genera `manifest.json` y `sw.js`. El service worker precachea `index.html`, bundles JS, assets, iconos y `expo-sqlite` WASM, y usa fallback de navegacion a `index.html` para rutas de Expo Router como `/`, `/login`, `/view/:appViewId` y `/view/:appViewId/record/:recordId`.
+- Data offline: una vez cargado el shell, la app reconstruye sesion, contrato, AppViews, definiciones, listados y detalles desde SQLite/storage.
+
+El service worker no cachea respuestas de API. Las rutas `/api/*` y `https://web.opco.cl/api/v1/*` quedan network-only; la persistencia operacional vive en SQLite y storage para evitar una segunda cache HTTP de datos.
+
+En native Expo no hay service worker: el binario ya es el app shell. El cold start offline depende de SecureStore y SQLite.
+
+La sesion offline usa un snapshot minimo y seguro de `/me`, `/context`, contratos, contrato seleccionado, `ownerKey` y timestamps de sincronizacion. Passwords y secretos no se persisten. Los tokens siguen en SecureStore en native; en web el access token esta en storage y el refresh token vive en cookie HttpOnly del backend.
+
+Si el access token expira mientras no hay red, la app no expulsa al usuario por el vencimiento local. Si existe `ownerKey` y snapshot previamente verificado, entra como sesion offline no verificada y permite navegar datos ya autorizados. Al reconectar, el controlador de reconnect revalida/renueva sesion, refresca `/me` y `/context`, sincroniza pendientes una sola vez y dispara refresh de RECORDS. Si el servidor rechaza la identidad con un 401 real, la sesion se invalida y vuelve a login; ese 401 nunca usa cache como bypass.
+
+Si no hay snapshot suficiente, se muestra: `No hay datos guardados en este dispositivo. Conectate al menos una vez.` No debe quedar spinner infinito ni login forzado por un error de red.
+
+`client.opco.cl` es instalable como PWA cuando el navegador lo permite. El cache del shell se versiona por hash de build y elimina caches viejos al activar una version nueva, sin borrar SQLite ni operaciones pendientes. La limitacion multi-tab de Expo SQLite Web/OPFS se mantiene: no se asume soporte multi-tab concurrente.
+
 ## Offline-First RECORDS
 
-Las AppViews `RECORDS` son offline-first para navegacion, listado, detalle, creacion y edicion. La app conserva un snapshot local minimo de `/me`, `/context`, contrato seleccionado y AppViews por contrato, sin persistir credenciales adicionales. Con ese snapshot puede reabrir sin red, reconstruir `owner_key` y llegar hasta las pantallas cacheadas. La cache de records esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
+Las AppViews `RECORDS` son offline-first para navegacion, listado, detalle, creacion y edicion. La app conserva snapshots por `ownerKey` de `/me`, `/context`, contrato seleccionado y AppViews por contrato, sin persistir credenciales adicionales. Con ese snapshot puede reabrir sin red, reconstruir `owner_key` y llegar hasta las pantallas cacheadas. La cache de records esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
 
 Cada record local tiene:
 
@@ -182,6 +201,24 @@ Los records `failed` no se reintentan automaticamente. El usuario puede usar `Re
 
 La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando`, `Error` y `Conflicto`. El listado muestra summary global solo si hay algo relevante, por ejemplo `2 pendientes · 1 conflicto`, con acciones `Sincronizar` y `Ver problemas`.
 
+## Attendance
+
+`AttendanceWorkflow` v1 funciona online-only. Si la AppView `WORKFLOW` con `workflowKey = "attendance"` se abre sin conexion, la app puede mostrar el nombre de la experiencia cacheada, pero el registro de asistencia muestra un estado claro de conexion requerida y no crea pendientes falsos. El soporte offline especifico de Attendance queda para una fase posterior con persistencia SQLite propia del workflow.
+
+## Prueba Manual Cold Start Offline
+
+1. Con conexion, abrir `client.opco.cl` o la app instalada, iniciar sesion y abrir una AppView `RECORDS`.
+2. Abrir listado y detalle; crear o editar un dato de prueba si es seguro.
+3. Esperar que el listado/detalle quede cacheado y cerrar completamente pestaña/app.
+4. Activar modo avion.
+5. Reabrir.
+6. Esperado: shell abre, no hay error del navegador, no fuerza login, muestra modo offline, contrato y AppViews visibles, listado/detalle cacheados y pending visibles.
+7. Crear/editar `RECORDS` offline.
+8. Rehabilitar red.
+9. Esperado: sesion revalidada, sync automatico single-flight, pending desaparece y datos se reconcilian.
+10. Abrir Attendance offline.
+11. Esperado: mensaje de conexion requerida, sin crash y sin pending falso.
+
 ## SQLite
 
 Base local: `opco-client.db`.
@@ -204,15 +241,18 @@ entity_definitions (
 
 context_snapshot (
   id TEXT PRIMARY KEY NOT NULL,
+  owner_key TEXT,
   me_json TEXT NOT NULL,
   context_json TEXT NOT NULL,
   synced_at TEXT NOT NULL
 )
 
 app_views (
-  contract_id TEXT PRIMARY KEY NOT NULL,
+  owner_key TEXT NOT NULL,
+  contract_id TEXT NOT NULL,
   views_json TEXT NOT NULL,
-  synced_at TEXT NOT NULL
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (owner_key, contract_id)
 )
 
 entity_records (

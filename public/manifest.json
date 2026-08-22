@@ -1,0 +1,16 @@
+{
+  "name": "Opco Client",
+  "short_name": "Opco",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#eef4f4",
+  "theme_color": "#135d66",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

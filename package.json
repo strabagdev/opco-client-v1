@@ -35,7 +35,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build": "npm run build:web",
-    "build:web": "expo export --platform web",
+    "build:web": "expo export --platform web && node scripts/generate-service-worker.mjs",
     "start:web": "node scripts/start-web.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

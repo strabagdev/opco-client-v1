@@ -72,9 +72,20 @@ async function getExistingFile(filePath) {
 
 function streamFile(response, filePath) {
   response.writeHead(200, {
+    "Cache-Control": getCacheControl(filePath),
+    "Cross-Origin-Embedder-Policy": "credentialless",
+    "Cross-Origin-Opener-Policy": "same-origin",
     "Content-Type": getContentType(filePath),
   });
   createReadStream(filePath).pipe(response);
+}
+
+function getCacheControl(filePath) {
+  if (filePath.endsWith(`${sep}sw.js`) || filePath.endsWith(`${sep}index.html`)) {
+    return "no-cache";
+  }
+
+  return "public, max-age=31536000, immutable";
 }
 
 function sendStatus(response, status) {

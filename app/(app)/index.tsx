@@ -22,6 +22,7 @@ export default function HomeScreen() {
     context,
     definitionCache,
     me,
+    ownerKey,
     selectedContractId,
     setSelectedContractId,
     signOut,
@@ -55,7 +56,7 @@ export default function HomeScreen() {
     let isMounted = true;
 
     async function loadViews() {
-      if (!token || !selectedContractId) {
+      if (!token || !selectedContractId || !ownerKey) {
         setViews([]);
         setViewsFromCache(false);
         setViewsSyncedAt(null);
@@ -70,6 +71,7 @@ export default function HomeScreen() {
           api,
           cache: definitionCache,
           contractId: selectedContractId,
+          ownerKey,
           token,
         });
 
@@ -96,7 +98,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, selectedContractId, token]);
+  }, [api, definitionCache, ownerKey, selectedContractId, token]);
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -115,7 +117,7 @@ export default function HomeScreen() {
         <Text style={styles.value}>{me?.user.name ?? me?.user.email ?? "Sesion conservada"}</Text>
         <Text style={styles.meta}>
           {status === "offline"
-            ? "Sin conexion al iniciar. El token sigue guardado en SecureStore."
+            ? "Sin conexion. Datos guardados localmente."
             : me?.user.email}
         </Text>
       </View>
@@ -126,6 +128,9 @@ export default function HomeScreen() {
           {context?.organization.name ??
             (status === "offline" ? "Contexto no disponible sin red" : "Cargando contexto...")}
         </Text>
+        {status === "offline" && !context ? (
+          <Text style={styles.error}>No hay datos guardados en este dispositivo. Conectate al menos una vez.</Text>
+        ) : null}
       </View>
 
       <View style={styles.section}>

@@ -15,7 +15,7 @@ import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordV
 import { RecordsSyncStore } from "../sync/records-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "4";
+const SCHEMA_VERSION = "5";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -35,8 +35,8 @@ export type LocalDatabase = AppNavigationCache &
   EntityDefinitionCache &
   OfflineRecordStore &
   RecordsSyncStore & {
-  getSelectedContractId(): Promise<string | null>;
-  setSelectedContractId(contractId: string | null): Promise<void>;
+  getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
+  setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
 };
 
 export function getLocalDatabase(): LocalDatabase {
@@ -137,14 +137,17 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
     );
     CREATE TABLE IF NOT EXISTS context_snapshot (
       id TEXT PRIMARY KEY NOT NULL,
+      owner_key TEXT,
       me_json TEXT NOT NULL,
       context_json TEXT NOT NULL,
       synced_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS app_views (
-      contract_id TEXT PRIMARY KEY NOT NULL,
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
       views_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
+      synced_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id)
     );
     CREATE TABLE IF NOT EXISTS entity_records (
       local_id TEXT PRIMARY KEY NOT NULL,
@@ -196,6 +199,7 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
   `);
 
   await migrateEntityRecordsTable(db);
+  await migrateNavigationCacheTables(db);
 
   await db.runAsync(
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
@@ -265,7 +269,37 @@ async function migrateEntityRecordsTable(db: SQLite.SQLiteDatabase) {
   }
 }
 
+async function migrateNavigationCacheTables(db: SQLite.SQLiteDatabase) {
+  const contextColumns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(context_snapshot)`);
+  const contextColumnNames = new Set(contextColumns.map((column) => column.name));
+
+  if (!contextColumnNames.has("owner_key")) {
+    await db.execAsync(`ALTER TABLE context_snapshot ADD COLUMN owner_key TEXT`);
+  }
+
+  const appViewColumns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(app_views)`);
+  const appViewColumnNames = new Set(appViewColumns.map((column) => column.name));
+
+  if (!appViewColumnNames.has("owner_key")) {
+    await db.execAsync(`
+      ALTER TABLE app_views RENAME TO app_views_legacy;
+      CREATE TABLE app_views (
+        owner_key TEXT NOT NULL,
+        contract_id TEXT NOT NULL,
+        views_json TEXT NOT NULL,
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (owner_key, contract_id)
+      );
+      INSERT INTO app_views (owner_key, contract_id, views_json, synced_at)
+      SELECT 'legacy', contract_id, views_json, synced_at
+      FROM app_views_legacy;
+      DROP TABLE app_views_legacy;
+    `);
+  }
+}
+
 async function upsertContextSnapshot(
+  ownerKey: string,
   me: MeResponse,
   context: ContextResponse,
   syncedAt: string,
@@ -274,28 +308,32 @@ async function upsertContextSnapshot(
 
   await db.runAsync(
     `
-      INSERT OR REPLACE INTO context_snapshot (id, me_json, context_json, synced_at)
-      VALUES ('current', ?, ?, ?)
+      INSERT OR REPLACE INTO context_snapshot (id, owner_key, me_json, context_json, synced_at)
+      VALUES (?, ?, ?, ?, ?)
     `,
+    ownerKey,
+    ownerKey,
     JSON.stringify(me),
     JSON.stringify(context),
     syncedAt,
   );
 }
 
-async function getContextSnapshot(): Promise<CachedContextSnapshot | null> {
+async function getContextSnapshot(ownerKey: string): Promise<CachedContextSnapshot | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{
     context_json: string;
     me_json: string;
+    owner_key: string | null;
     synced_at: string;
   }>(
     `
-      SELECT me_json, context_json, synced_at
+      SELECT owner_key, me_json, context_json, synced_at
       FROM context_snapshot
-      WHERE id = 'current'
+      WHERE id = ?
       LIMIT 1
     `,
+    ownerKey,
   );
 
   if (!row) {
@@ -305,35 +343,38 @@ async function getContextSnapshot(): Promise<CachedContextSnapshot | null> {
   return {
     context: JSON.parse(row.context_json) as ContextResponse,
     me: JSON.parse(row.me_json) as MeResponse,
+    ownerKey: row.owner_key ?? ownerKey,
     syncedAt: row.synced_at,
   };
 }
 
-async function upsertAppViews(contractId: string, views: AppView[], syncedAt: string) {
+async function upsertAppViews(ownerKey: string, contractId: string, views: AppView[], syncedAt: string) {
   const db = await getDatabase();
 
   await db.runAsync(
     `
-      INSERT INTO app_views (contract_id, views_json, synced_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(contract_id)
+      INSERT INTO app_views (owner_key, contract_id, views_json, synced_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(owner_key, contract_id)
       DO UPDATE SET views_json = excluded.views_json, synced_at = excluded.synced_at
     `,
+    ownerKey,
     contractId,
     JSON.stringify(views),
     syncedAt,
   );
 }
 
-async function getAppViews(contractId: string): Promise<CachedAppViewsSnapshot | null> {
+async function getAppViews(ownerKey: string, contractId: string): Promise<CachedAppViewsSnapshot | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ synced_at: string; views_json: string }>(
     `
       SELECT views_json, synced_at
       FROM app_views
-      WHERE contract_id = ?
+      WHERE owner_key = ? AND contract_id = ?
       LIMIT 1
     `,
+    ownerKey,
     contractId,
   );
 
@@ -1475,27 +1516,43 @@ async function getEntityDefinition(
   };
 }
 
-async function getSelectedContractId() {
+async function getSelectedContractId(ownerKey?: string | null) {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ value: string }>(
-    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
-    SELECTED_CONTRACT_ID_KEY,
-  );
+  const keys = ownerKey
+    ? [`${SELECTED_CONTRACT_ID_KEY}:${ownerKey}`]
+    : [SELECTED_CONTRACT_ID_KEY];
 
-  return row?.value ?? null;
+  for (const key of keys) {
+    const row = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+      key,
+    );
+
+    if (row?.value) {
+      return row.value;
+    }
+  }
+
+  return null;
 }
 
-async function setSelectedContractId(contractId: string | null) {
+async function setSelectedContractId(contractId: string | null, ownerKey?: string | null) {
   const db = await getDatabase();
+  const key = ownerKey ? `${SELECTED_CONTRACT_ID_KEY}:${ownerKey}` : SELECTED_CONTRACT_ID_KEY;
 
   if (!contractId) {
-    await db.runAsync(`DELETE FROM app_metadata WHERE key = ?`, SELECTED_CONTRACT_ID_KEY);
+    await db.runAsync(`DELETE FROM app_metadata WHERE key = ?`, key);
+
+    if (!ownerKey) {
+      await db.runAsync(`DELETE FROM app_metadata WHERE key LIKE ?`, `${SELECTED_CONTRACT_ID_KEY}:%`);
+    }
+
     return;
   }
 
   await db.runAsync(
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
-    SELECTED_CONTRACT_ID_KEY,
+    key,
     contractId,
   );
 }

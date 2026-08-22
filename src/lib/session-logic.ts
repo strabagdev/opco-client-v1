@@ -4,6 +4,8 @@ import { OpcoApiError, MeResponse } from "./opco-api";
 export type TokenStore = {
   clearSession(): Promise<void>;
   getAccessToken(): Promise<string | null>;
+  getSessionOwnerKey?(): Promise<string | null>;
+  setSessionOwnerKey?(ownerKey: string): Promise<void>;
 };
 
 export type RestoreSessionResult =
@@ -14,6 +16,7 @@ export type RestoreSessionResult =
       status: "authenticated";
       token: string;
       me: MeResponse;
+      ownerKey?: string | null;
     }
   | {
       status: "offline";
@@ -27,6 +30,7 @@ export async function restoreSession(
   cache?: Pick<AppNavigationCache, "getContextSnapshot">,
 ): Promise<RestoreSessionResult> {
   const token = await tokenStore.getAccessToken();
+  const storedOwnerKey = await readStoredOwnerKey(tokenStore);
 
   if (!token) {
     return { status: "anonymous" };
@@ -38,6 +42,7 @@ export async function restoreSession(
 
     return {
       me,
+      ownerKey: storedOwnerKey,
       status: "authenticated",
       token: currentToken,
     };
@@ -47,7 +52,9 @@ export async function restoreSession(
       return { status: "anonymous" };
     }
 
-    const snapshot = isNetworkLikeError(error) ? await readContextSnapshot(cache) : null;
+    const snapshot = isNetworkLikeError(error) && storedOwnerKey
+      ? await readContextSnapshot(cache, storedOwnerKey)
+      : null;
 
     return {
       ...(snapshot ? { snapshot } : {}),
@@ -57,9 +64,17 @@ export async function restoreSession(
   }
 }
 
-async function readContextSnapshot(cache?: Pick<AppNavigationCache, "getContextSnapshot">) {
+async function readContextSnapshot(cache: Pick<AppNavigationCache, "getContextSnapshot"> | undefined, ownerKey: string) {
   try {
-    return (await cache?.getContextSnapshot()) ?? null;
+    return (await cache?.getContextSnapshot(ownerKey)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function readStoredOwnerKey(tokenStore: TokenStore) {
+  try {
+    return await tokenStore.getSessionOwnerKey?.() ?? null;
   } catch {
     return null;
   }

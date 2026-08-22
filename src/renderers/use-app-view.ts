@@ -5,7 +5,7 @@ import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
 export function useAppView(appViewId: string | undefined) {
-  const { api, definitionCache, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
   const [views, setViews] = useState<AppView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -20,7 +20,7 @@ export function useAppView(appViewId: string | undefined) {
     let isMounted = true;
 
     async function loadViews() {
-      if (!token || !selectedContractId || !appViewId) {
+      if (!token || !selectedContractId || !appViewId || !ownerKey) {
         setError("Selecciona un contrato antes de abrir una experiencia.");
         setIsLoading(false);
         return;
@@ -34,6 +34,7 @@ export function useAppView(appViewId: string | undefined) {
           api,
           cache: definitionCache,
           contractId: selectedContractId,
+          ownerKey,
           token,
         });
 
@@ -56,7 +57,7 @@ export function useAppView(appViewId: string | undefined) {
     return () => {
       isMounted = false;
     };
-  }, [api, appViewId, definitionCache, retryCount, selectedContractId, token]);
+  }, [api, appViewId, definitionCache, ownerKey, retryCount, selectedContractId, token]);
 
   return {
     appView,

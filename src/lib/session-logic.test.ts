@@ -30,6 +30,7 @@ describe("restoreSession", () => {
     const store = {
       clearSession: vi.fn(async () => undefined),
       getAccessToken: vi.fn(async () => "token_123"),
+      getSessionOwnerKey: vi.fn(async () => "org_1:user_1"),
     };
 
     const result = await restoreSession(store, {
@@ -60,6 +61,7 @@ describe("restoreSession", () => {
     const store = {
       clearSession: vi.fn(async () => undefined),
       getAccessToken: vi.fn(async () => "token_123"),
+      getSessionOwnerKey: vi.fn(async () => "org_1:user_1"),
     };
 
     const result = await restoreSession(store, {
@@ -76,6 +78,7 @@ describe("restoreSession", () => {
     const store = {
       clearSession: vi.fn(async () => undefined),
       getAccessToken: vi.fn(async () => "token_123"),
+      getSessionOwnerKey: vi.fn(async () => "org_1:user_1"),
     };
 
     const result = await restoreSession(
@@ -86,9 +89,10 @@ describe("restoreSession", () => {
         },
       },
       {
-        getContextSnapshot: async () => ({
+        getContextSnapshot: async (ownerKey: string) => ({
           context: contextFixture,
           me: meFixture,
+          ownerKey,
           syncedAt: "2026-08-19T12:00:00.000Z",
         }),
       },
@@ -98,6 +102,7 @@ describe("restoreSession", () => {
       snapshot: {
         context: contextFixture,
         me: meFixture,
+        ownerKey: "org_1:user_1",
         syncedAt: "2026-08-19T12:00:00.000Z",
       },
       status: "offline",

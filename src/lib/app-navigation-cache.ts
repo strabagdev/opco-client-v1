@@ -11,6 +11,7 @@ import {
 export type CachedContextSnapshot = {
   context: ContextResponse;
   me: MeResponse;
+  ownerKey: string;
   syncedAt: string;
 };
 
@@ -21,10 +22,10 @@ export type CachedAppViewsSnapshot = {
 
 export type AppNavigationCache = {
   clearNavigationCache(): Promise<void>;
-  getAppViews(contractId: string): Promise<CachedAppViewsSnapshot | null>;
-  getContextSnapshot(): Promise<CachedContextSnapshot | null>;
-  upsertAppViews(contractId: string, views: AppView[], syncedAt: string): Promise<void>;
-  upsertContextSnapshot(me: MeResponse, context: ContextResponse, syncedAt: string): Promise<void>;
+  getAppViews(ownerKey: string, contractId: string): Promise<CachedAppViewsSnapshot | null>;
+  getContextSnapshot(ownerKey: string): Promise<CachedContextSnapshot | null>;
+  upsertAppViews(ownerKey: string, contractId: string, views: AppView[], syncedAt: string): Promise<void>;
+  upsertContextSnapshot(ownerKey: string, me: MeResponse, context: ContextResponse, syncedAt: string): Promise<void>;
 };
 
 export type AppViewsResult = {
@@ -40,11 +41,13 @@ export async function loadAppViewsWithCache({
   contractId,
   now = () => new Date(),
   token,
+  ownerKey,
 }: {
   api: Pick<OpcoApi, "getAppViews">;
   cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">;
   contractId: string;
   now?: () => Date;
+  ownerKey: string;
   token: string;
 }): Promise<AppViewsResult> {
   try {
@@ -53,7 +56,7 @@ export async function loadAppViewsWithCache({
     const views = sortAppViews(remote.views);
 
     try {
-      await cache.upsertAppViews(contractId, views, syncedAt);
+      await cache.upsertAppViews(ownerKey, contractId, views, syncedAt);
     } catch {
       // Navigation cache writes must not block online rendering.
     }
@@ -69,7 +72,7 @@ export async function loadAppViewsWithCache({
       throw error;
     }
 
-    const cached = await readCachedAppViews(cache, contractId);
+    const cached = await readCachedAppViews(cache, ownerKey, contractId);
 
     if (!cached) {
       throw error;
@@ -90,11 +93,16 @@ export function isNetworkLikeError(error: unknown) {
 
 async function readCachedAppViews(
   cache: Pick<AppNavigationCache, "getAppViews">,
+  ownerKey: string,
   contractId: string,
 ) {
   try {
-    return await cache.getAppViews(contractId);
+    return await cache.getAppViews(ownerKey, contractId);
   } catch {
     return null;
   }
+}
+
+export function buildOwnerKey(me: MeResponse, context: ContextResponse) {
+  return `${context.organization.id}:${me.user.id}`;
 }

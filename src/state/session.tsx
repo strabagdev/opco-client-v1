@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Platform } from "react-native";
 
+import { buildOwnerKey } from "@/lib/app-navigation-cache";
 import { useConnectivityStatus } from "@/lib/connectivity";
 import { getLocalDatabase, LocalDatabase } from "@/lib/local-db";
 import { RecordsSyncSummary } from "@/lib/offline-records";
@@ -61,7 +62,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
   const connectivityStatus = useConnectivityStatus();
-  const ownerKey = me && context ? `${context.organization.id}:${me.user.id}` : null;
+  const ownerKey = me && context ? buildOwnerKey(me, context) : null;
   const api = useMemo(
     () =>
       createOpcoApi({
@@ -84,14 +85,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
     async (accessToken: string, currentMe: MeResponse) => {
       try {
         const nextContext = await api.getContext(accessToken);
-        await definitionCache.upsertContextSnapshot(currentMe, nextContext, new Date().toISOString());
+        const nextOwnerKey = buildOwnerKey(currentMe, nextContext);
+
+        await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+        await definitionCache.upsertContextSnapshot(nextOwnerKey, currentMe, nextContext, new Date().toISOString());
         setContext(nextContext);
       } catch (error) {
         if (!(error instanceof OpcoNetworkError)) {
           return;
         }
 
-        const cached = await definitionCache.getContextSnapshot();
+        const cachedOwnerKey = await tokenStorage.getSessionOwnerKey();
+        const cached = cachedOwnerKey ? await definitionCache.getContextSnapshot(cachedOwnerKey) : null;
 
         if (cached && cached.me.user.id === currentMe.user.id) {
           setMe(cached.me);
@@ -144,12 +149,49 @@ export function SessionProvider({ children }: PropsWithChildren) {
       await refreshPendingRecordsCount();
     }
   }, [api, definitionCache, ownerKey, refreshPendingRecordsCount, token]);
-  const syncPendingRecordsRef = useRef(syncPendingRecords);
+  const reconnectSessionAndRecordsRef = useRef(syncPendingRecords);
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
 
+  const reconnectSessionAndRecords = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+
+    let nextToken = token;
+
+    try {
+      const refreshed = await api.refreshSession();
+
+      nextToken = refreshed.accessToken;
+      setToken(nextToken);
+    } catch (error) {
+      if (!(error instanceof OpcoNetworkError)) {
+        throw error;
+      }
+    }
+
+    const nextMe = await api.getMe(nextToken);
+    const nextContext = await api.getContext(nextToken);
+    const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
+
+    await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+    await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
+    setMe(nextMe);
+    setContext(nextContext);
+    setStatus("authenticated");
+
+    await syncPendingRecordsOnce({
+      api,
+      ownerKey: nextOwnerKey,
+      store: definitionCache,
+      token: nextToken,
+    });
+    await refreshPendingRecordsCount();
+  }, [api, definitionCache, refreshPendingRecordsCount, token]);
+
   useEffect(() => {
-    syncPendingRecordsRef.current = syncPendingRecords;
-  }, [syncPendingRecords]);
+    reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
+  }, [reconnectSessionAndRecords]);
 
   useEffect(() => {
     const controller = createReconnectSyncController({
@@ -157,7 +199,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         setRecordsReconnectRefreshKey((key) => key + 1);
       },
       runSync() {
-        return syncPendingRecordsRef.current();
+        return reconnectSessionAndRecordsRef.current();
       },
     });
 
@@ -193,6 +235,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
           if (restored.snapshot) {
             setMe(restored.snapshot.me);
             setContext(restored.snapshot.context);
+            setSelectedContractIdState(await readPersistedContractId(definitionCache, restored.snapshot.ownerKey));
           }
           setStatus("offline");
           return;
@@ -233,7 +276,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
 
     async function loadPersistedContractId() {
-      const persistedContractId = await readPersistedContractId(definitionCache);
+      const persistedContractId = await readPersistedContractId(definitionCache, ownerKey);
 
       if (isMounted) {
         setSelectedContractIdState(persistedContractId);
@@ -245,7 +288,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [definitionCache]);
+  }, [definitionCache, ownerKey]);
 
   async function signIn(email: string, password: string) {
     const loginResponse = await api.login(email, password);
@@ -261,7 +304,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
     const nextMe = await api.getMe(loginResponse.accessToken);
     const nextContext = await api.getContext(loginResponse.accessToken);
-    await definitionCache.upsertContextSnapshot(nextMe, nextContext, new Date().toISOString());
+    const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
+
+    await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+    await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
 
     setToken(loginResponse.accessToken);
     setMe(nextMe);
@@ -269,7 +315,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setStatus("authenticated");
     void syncPendingRecordsOnce({
       api,
-      ownerKey: `${nextContext.organization.id}:${nextMe.user.id}`,
+      ownerKey: nextOwnerKey,
       store: definitionCache,
       token: loginResponse.accessToken,
     }).finally(refreshPendingRecordsCount);
@@ -296,7 +342,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   async function setSelectedContractId(contractId: string | null) {
     setSelectedContractIdState(contractId);
-    await persistSelectedContractId(definitionCache, contractId);
+    await persistSelectedContractId(definitionCache, contractId, ownerKey);
   }
 
   return (

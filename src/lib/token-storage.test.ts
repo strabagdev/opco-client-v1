@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createTokenStorage, REFRESH_TOKEN_STORAGE_KEY, TOKEN_STORAGE_KEY } from "./token-storage";
+import { createTokenStorage, REFRESH_TOKEN_STORAGE_KEY, SESSION_OWNER_KEY_STORAGE_KEY, TOKEN_STORAGE_KEY } from "./token-storage";
 
 vi.mock("react-native", () => ({
   Platform: {
@@ -48,10 +48,12 @@ describe("token storage", () => {
     await storage.setToken("native-token");
     await expect(storage.getToken()).resolves.toBe("secure-token");
     await storage.setRefreshToken("refresh-token");
+    await storage.setSessionOwnerKey("org_1:user_1");
     await storage.deleteToken();
 
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "native-token");
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "refresh-token");
+    expect(secureStore.setItemAsync).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY, "org_1:user_1");
     expect(secureStore.getItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
   });
@@ -65,12 +67,14 @@ describe("token storage", () => {
     });
 
     await storage.setSession({ accessToken: "access-token", refreshToken: "refresh-token" });
+    await storage.setSessionOwnerKey("org_1:user_1");
     await storage.clearSession();
 
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "access-token");
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "refresh-token");
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);
+    expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY);
   });
 
   it("uses localStorage on web", async () => {
@@ -83,13 +87,16 @@ describe("token storage", () => {
     });
 
     await storage.setToken("web-token");
+    await storage.setSessionOwnerKey("org_1:user_1");
     await storage.setRefreshToken("ignored-refresh-token");
     await expect(storage.getToken()).resolves.toBe("web-token");
+    await expect(storage.getSessionOwnerKey()).resolves.toBe("org_1:user_1");
     await expect(storage.getRefreshToken()).resolves.toBeNull();
     await storage.deleteToken();
     await expect(storage.getToken()).resolves.toBeNull();
 
     expect(webStorage.setItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "web-token");
+    expect(webStorage.setItem).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY, "org_1:user_1");
     expect(webStorage.setItem).not.toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "ignored-refresh-token");
     expect(webStorage.getItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(webStorage.removeItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
