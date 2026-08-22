@@ -23,12 +23,12 @@ export function useConnectivityStatus() {
   return status;
 }
 
-function readConnectivityStatus(state: NetInfoState): ConnectivityStatus {
+export function readConnectivityStatus(state: Pick<NetInfoState, "isConnected" | "isInternetReachable">): ConnectivityStatus {
   if (state.isInternetReachable === false || state.isConnected === false) {
     return "offline";
   }
 
-  if (state.isInternetReachable === true || state.isConnected === true) {
+  if (state.isInternetReachable === true) {
     return "online";
   }
 

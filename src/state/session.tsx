@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Platform } from "react-native";
@@ -15,6 +16,7 @@ import { RecordsSyncSummary } from "@/lib/offline-records";
 import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
+import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
 import * as tokenStorage from "@/lib/token-storage";
 
@@ -27,6 +29,7 @@ type SessionContextValue = {
   me: MeResponse | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
+  recordsReconnectRefreshKey: number;
   recordsSyncSummary: RecordsSyncSummary;
   refreshRecordsSyncSummary(): Promise<void>;
   selectedContractId: string | null;
@@ -54,6 +57,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
+  const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
   const connectivityStatus = useConnectivityStatus();
@@ -140,6 +144,30 @@ export function SessionProvider({ children }: PropsWithChildren) {
       await refreshPendingRecordsCount();
     }
   }, [api, definitionCache, ownerKey, refreshPendingRecordsCount, token]);
+  const syncPendingRecordsRef = useRef(syncPendingRecords);
+  const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
+
+  useEffect(() => {
+    syncPendingRecordsRef.current = syncPendingRecords;
+  }, [syncPendingRecords]);
+
+  useEffect(() => {
+    const controller = createReconnectSyncController({
+      onSynced() {
+        setRecordsReconnectRefreshKey((key) => key + 1);
+      },
+      runSync() {
+        return syncPendingRecordsRef.current();
+      },
+    });
+
+    reconnectSyncControllerRef.current = controller;
+
+    return () => {
+      controller.dispose();
+      reconnectSyncControllerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -194,10 +222,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [refreshPendingRecordsCount]);
 
   useEffect(() => {
-    if ((status === "authenticated" || status === "offline") && connectivityStatus === "online") {
-      void syncPendingRecords();
+    if (status !== "authenticated" && status !== "offline") {
+      return;
     }
-  }, [connectivityStatus, status, syncPendingRecords]);
+
+    reconnectSyncControllerRef.current?.handleConnectivityStatus(connectivityStatus);
+  }, [connectivityStatus, status]);
 
   useEffect(() => {
     let isMounted = true;
@@ -278,6 +308,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         me,
         ownerKey,
         pendingRecordsCount,
+        recordsReconnectRefreshKey,
         recordsSyncSummary,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
         selectedContractId: selectedContractIdState,

@@ -67,12 +67,16 @@ export type OfflineRecordStore = {
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
+  reconcileRemoteRecordsSnapshot(input: ReconcileRemoteRecordsSnapshotInput): Promise<void>;
   retryFailedRecord(input: RetryFailedRecordInput): Promise<CachedEntityRecord>;
   resolveRecordConflictWithLocal(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
   resolveRecordConflictWithRemote(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
   updateLocalRecord(input: UpdateLocalRecordInput): Promise<CachedEntityRecord>;
   upsertRemoteRecords(input: UpsertRemoteRecordsInput): Promise<void>;
 };
+
+const FULL_REFRESH_PAGE_SIZE = 100;
+const FULL_REFRESH_MAX_PAGES = 1_000;
 
 type BaseScopedInput = {
   contractId: string;
@@ -116,6 +120,8 @@ export type UpsertRemoteRecordsInput = BaseScopedInput & {
   cachedAt?: string;
   records: EntityRecord[];
 };
+
+export type ReconcileRemoteRecordsSnapshotInput = UpsertRemoteRecordsInput;
 
 export type LoadRecordsParams = BaseScopedInput & {
   api: Pick<OpcoApi, "getEntityRecords">;
@@ -168,6 +174,86 @@ export async function loadRecordsWithOfflineCache({
         page,
         pageSize,
         search,
+      });
+
+      return {
+        ...cached,
+        fromCache: true,
+        offline: true,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export type RefreshEntityRecordsCacheParams = BaseScopedInput & {
+  api: Pick<OpcoApi, "getEntityRecords">;
+  pageSize?: number;
+  resultPageSize?: number;
+  store: Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot">;
+  token: string;
+};
+
+export async function refreshEntityRecordsCache({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  pageSize = FULL_REFRESH_PAGE_SIZE,
+  resultPageSize = 25,
+  store,
+  token,
+}: RefreshEntityRecordsCacheParams): Promise<CachedRecordsResult> {
+  try {
+    const records: EntityRecord[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const remote = await api.getEntityRecords(token, contractId, entityTypeId, {
+        page,
+        pageSize,
+      });
+
+      records.push(...remote.records);
+      totalPages = Math.max(1, remote.pagination.totalPages);
+
+      if (page >= FULL_REFRESH_MAX_PAGES && page < totalPages) {
+        throw new Error("Opco devolvio demasiadas paginas de registros para refrescar el cache local.");
+      }
+
+      page += 1;
+    } while (page <= totalPages);
+
+    await store.reconcileRemoteRecordsSnapshot({
+      contractId,
+      entityTypeId,
+      ownerKey,
+      records,
+    });
+
+    const cached = await store.listCachedRecords({
+      contractId,
+      entityTypeId,
+      ownerKey,
+      page: 1,
+      pageSize: resultPageSize,
+    });
+
+    return {
+      ...cached,
+      fromCache: false,
+      offline: false,
+    };
+  } catch (error) {
+    if (isNetworkLikeError(error)) {
+      const cached = await store.listCachedRecords({
+        contractId,
+        entityTypeId,
+        ownerKey,
+        page: 1,
+        pageSize: resultPageSize,
       });
 
       return {

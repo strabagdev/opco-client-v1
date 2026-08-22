@@ -18,8 +18,18 @@ const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "4";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
+const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 
-let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+type LocalDatabaseGlobalState = {
+  database: SQLite.SQLiteDatabase | null;
+  databasePromise: Promise<SQLite.SQLiteDatabase> | null;
+  migrationPromise: Promise<void> | null;
+  migratedSchemaVersion: string | null;
+};
+
+type LocalDatabaseGlobal = typeof globalThis & {
+  [GLOBAL_DATABASE_STATE_KEY]?: LocalDatabaseGlobalState;
+};
 
 export type LocalDatabase = AppNavigationCache &
   EntityDefinitionCache &
@@ -48,6 +58,7 @@ export function getLocalDatabase(): LocalDatabase {
     markPendingOperationSyncing,
     markPendingOperationConflict,
     readRecordRemoteUpdatedAt,
+    reconcileRemoteRecordsSnapshot,
     resolveRecordConflictWithLocal,
     resolveRecordConflictWithRemote,
     retryFailedRecord,
@@ -62,16 +73,55 @@ export function getLocalDatabase(): LocalDatabase {
 }
 
 async function getDatabase() {
-  if (!databasePromise) {
-    databasePromise = openAndMigrate();
+  const state = getLocalDatabaseGlobalState();
+
+  if (!state.databasePromise) {
+    const nextDatabasePromise = openAndMigrate().catch((error) => {
+      if (state.databasePromise === nextDatabasePromise) {
+        state.database = null;
+        state.databasePromise = null;
+        state.migratedSchemaVersion = null;
+        state.migrationPromise = null;
+      }
+
+      throw error;
+    });
+
+    state.databasePromise = nextDatabasePromise;
   }
 
-  return databasePromise;
+  return state.databasePromise;
 }
 
 async function openAndMigrate() {
-  const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+  const state = getLocalDatabaseGlobalState();
+  const db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
 
+  state.database = db;
+  await migrateDatabaseOnce(db, state);
+
+  return db;
+}
+
+async function migrateDatabaseOnce(db: SQLite.SQLiteDatabase, state = getLocalDatabaseGlobalState()) {
+  if (state.migratedSchemaVersion === SCHEMA_VERSION) {
+    return;
+  }
+
+  if (!state.migrationPromise) {
+    state.migrationPromise = runMigrations(db)
+      .then(() => {
+        state.migratedSchemaVersion = SCHEMA_VERSION;
+      })
+      .finally(() => {
+        state.migrationPromise = null;
+      });
+  }
+
+  await state.migrationPromise;
+}
+
+async function runMigrations(db: SQLite.SQLiteDatabase) {
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS app_metadata (
@@ -152,8 +202,38 @@ async function openAndMigrate() {
     SCHEMA_VERSION_KEY,
     SCHEMA_VERSION,
   );
+}
 
-  return db;
+function getLocalDatabaseGlobalState() {
+  const globalState = globalThis as LocalDatabaseGlobal;
+
+  if (!globalState[GLOBAL_DATABASE_STATE_KEY]) {
+    globalState[GLOBAL_DATABASE_STATE_KEY] = {
+      database: null,
+      databasePromise: null,
+      migratedSchemaVersion: null,
+      migrationPromise: null,
+    };
+  }
+
+  return globalState[GLOBAL_DATABASE_STATE_KEY];
+}
+
+export function __resetLocalDatabaseForTests() {
+  const globalState = globalThis as LocalDatabaseGlobal;
+
+  delete globalState[GLOBAL_DATABASE_STATE_KEY];
+}
+
+export function __getLocalDatabaseDebugStateForTests() {
+  const state = getLocalDatabaseGlobalState();
+
+  return {
+    hasDatabase: Boolean(state.database),
+    hasDatabasePromise: Boolean(state.databasePromise),
+    hasMigrationPromise: Boolean(state.migrationPromise),
+    migratedSchemaVersion: state.migratedSchemaVersion,
+  };
 }
 
 async function migrateEntityRecordsTable(db: SQLite.SQLiteDatabase) {
@@ -378,6 +458,59 @@ async function upsertRemoteRecords({
       JSON.stringify(record.values),
       record.updatedAt,
       cachedAt,
+    );
+  }
+}
+
+async function reconcileRemoteRecordsSnapshot({
+  cachedAt = new Date().toISOString(),
+  contractId,
+  entityTypeId,
+  ownerKey,
+  records,
+}: {
+  cachedAt?: string;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  records: EntityRecord[];
+}) {
+  const db = await getDatabase();
+  const seenServerIds = new Set(records.map((record) => record.id));
+
+  await upsertRemoteRecords({
+    cachedAt,
+    contractId,
+    entityTypeId,
+    ownerKey,
+    records,
+  });
+
+  const syncedRows = await db.getAllAsync<{ local_id: string; server_id: string | null }>(
+    `
+      SELECT local_id, server_id
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND sync_status = 'synced'
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+
+  for (const row of syncedRows) {
+    if (row.server_id && seenServerIds.has(row.server_id)) {
+      continue;
+    }
+
+    await db.runAsync(
+      `
+        DELETE FROM entity_records
+        WHERE local_id = ? AND sync_status = 'synced'
+      `,
+      row.local_id,
     );
   }
 }

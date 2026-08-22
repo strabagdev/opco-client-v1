@@ -15,7 +15,7 @@ import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecord
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
-import { CachedEntityRecord, loadRecordsWithOfflineCache } from "@/lib/offline-records";
+import { CachedEntityRecord, loadRecordsWithOfflineCache, refreshEntityRecordsCache } from "@/lib/offline-records";
 import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
 import {
   stableTextInputStyle,
@@ -30,7 +30,7 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, recordsSyncSummary, selectedContractId, syncPendingRecords, token } =
+  const { api, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, selectedContractId, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
@@ -94,17 +94,27 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           entityTypeId,
           token,
         });
-        const recordsResult = await loadRecordsWithOfflineCache({
-          api,
-          contractId: selectedContractId,
-          entityTypeId,
-          ownerKey,
-          page: 1,
-          pageSize: PAGE_SIZE,
-          search: debouncedSearch,
-          store: definitionCache,
-          token,
-        });
+        const recordsResult = debouncedSearch
+          ? await loadRecordsWithOfflineCache({
+              api,
+              contractId: selectedContractId,
+              entityTypeId,
+              ownerKey,
+              page: 1,
+              pageSize: PAGE_SIZE,
+              search: debouncedSearch,
+              store: definitionCache,
+              token,
+            })
+          : await refreshEntityRecordsCache({
+              api,
+              contractId: selectedContractId,
+              entityTypeId,
+              ownerKey,
+              resultPageSize: PAGE_SIZE,
+              store: definitionCache,
+              token,
+            });
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
@@ -130,7 +140,17 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     return () => {
       isMounted = false;
     };
-  }, [api, debouncedSearch, definitionCache, entityTypeId, ownerKey, retryCount, selectedContractId, token]);
+  }, [
+    api,
+    debouncedSearch,
+    definitionCache,
+    entityTypeId,
+    ownerKey,
+    recordsReconnectRefreshKey,
+    retryCount,
+    selectedContractId,
+    token,
+  ]);
 
   async function loadMoreRecords() {
     if (!token || !selectedContractId || !entityTypeId || !ownerKey || !pagination || isLoadingMore) {
@@ -162,6 +182,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     } finally {
       setIsLoadingMore(false);
     }
+  }
+
+  async function synchronizeRecords() {
+    await syncPendingRecords();
+    setRetryCount((count) => count + 1);
   }
 
   return (
@@ -199,7 +224,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               </Link>
             ) : null}
             {recordsSyncSummary.pendingCount > 0 ? (
-              <Pressable onPress={syncPendingRecords} style={styles.syncButton}>
+              <Pressable onPress={synchronizeRecords} style={styles.syncButton}>
                 <Text style={styles.syncButtonText}>Sincronizar</Text>
               </Pressable>
             ) : null}

@@ -5,6 +5,7 @@ import {
   PendingOperation,
   loadRecordWithOfflineCache,
   loadRecordsWithOfflineCache,
+  refreshEntityRecordsCache,
 } from "./offline-records";
 import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "./opco-api";
 
@@ -125,6 +126,125 @@ describe("offline records cache", () => {
     const result = await store.listCachedRecords(scope);
 
     expect(result.records.map((item) => item.id).sort()).toEqual(["local_1", "record_1"]);
+  });
+
+  it("removes synced records missing from a completed full remote refresh", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [
+        record("record_1", "Equipo 1", { codigo: "EQ-1" }),
+        record("record_2", "Equipo 2", { codigo: "EQ-2" }),
+        record("record_3", "Equipo 3", { codigo: "EQ-3" }),
+      ],
+    });
+
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 2, totalPages: 1 },
+          records: [
+            record("record_1", "Equipo 1", { codigo: "EQ-1" }),
+            record("record_3", "Equipo 3", { codigo: "EQ-3" }),
+          ],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    const result = await store.listCachedRecords(scope);
+
+    expect(result.records.map((item) => item.id).sort()).toEqual(["record_1", "record_3"]);
+  });
+
+  it("removes all synced records when a completed full remote refresh is empty", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: Array.from({ length: 10 }, (_, index) =>
+        record(`record_${index + 1}`, `Equipo ${index + 1}`, { codigo: `EQ-${index + 1}` }),
+      ),
+    });
+
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 0, totalPages: 1 },
+          records: [],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    const result = await store.listCachedRecords(scope);
+
+    expect(result.records).toEqual([]);
+  });
+
+  it("keeps pending local records when a completed full remote refresh is empty", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+    });
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "LOCAL" },
+    });
+
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 0, totalPages: 1 },
+          records: [],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    const result = await store.listCachedRecords(scope);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({ id: "local_1", syncStatus: "pending_create" });
+  });
+
+  it("does not reconcile destructive cache cleanup when a full remote refresh fails mid-pagination", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [
+        record("record_1", "Equipo 1", { codigo: "EQ-1" }),
+        record("record_2", "Equipo 2", { codigo: "EQ-2" }),
+      ],
+    });
+
+    await expect(
+      refreshEntityRecordsCache({
+        ...scope,
+        api: {
+          getEntityRecords: async (_token, _contractId, _entityTypeId, query) => {
+            if (query?.page === 2) {
+              throw new OpcoApiError("Fallo remoto.", "SERVER_ERROR", 500);
+            }
+
+            return {
+              pagination: { page: 1, pageSize: 100, total: 2, totalPages: 2 },
+              records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+            };
+          },
+        },
+        store,
+        token: "token_1",
+      }),
+    ).rejects.toMatchObject({ code: "SERVER_ERROR" });
+
+    const result = await store.listCachedRecords(scope);
+
+    expect(result.records.map((item) => item.id).sort()).toEqual(["record_1", "record_2"]);
   });
 
   it("creates offline records immediately with a pending CREATE", async () => {
@@ -427,6 +547,28 @@ class MemoryRecordStore implements OfflineRecordStore {
         serverId: remote.id,
         syncStatus: "synced",
       });
+    });
+  }
+
+  async reconcileRemoteRecordsSnapshot(input: Parameters<OfflineRecordStore["reconcileRemoteRecordsSnapshot"]>[0]) {
+    await this.upsertRemoteRecords(input);
+
+    const seenServerIds = new Set(input.records.map((remote) => remote.id));
+
+    [...this.records.entries()].forEach(([recordKey, cached]) => {
+      if (!this.recordMatches(cached, input.ownerKey, input.contractId, input.entityTypeId)) {
+        return;
+      }
+
+      if (cached.syncStatus !== "synced") {
+        return;
+      }
+
+      if (cached.serverId && seenServerIds.has(cached.serverId)) {
+        return;
+      }
+
+      this.records.delete(recordKey);
     });
   }
 
