@@ -5,7 +5,7 @@ import { registerOfflineAppShell, SERVICE_WORKER_PATH, WEB_MANIFEST_PATH } from 
 describe("offline PWA app shell", () => {
   it("uses same-origin manifest and service worker paths", () => {
     expect(WEB_MANIFEST_PATH).toBe("/manifest.json");
-    expect(SERVICE_WORKER_PATH).toBe("/sw.js");
+    expect(SERVICE_WORKER_PATH).toBe("/sw.js?opco-shell=hardening-1a");
   });
 
   it("registers the service worker on web load", () => {
@@ -32,7 +32,7 @@ describe("offline PWA app shell", () => {
     registerOfflineAppShell();
     listeners.get("load")?.();
 
-    expect(register).toHaveBeenCalledWith("/sw.js");
+    expect(register).toHaveBeenCalledWith("/sw.js?opco-shell=hardening-1a");
 
     Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: previousNavigator });

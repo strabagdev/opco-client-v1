@@ -1,4 +1,4 @@
-export const SERVICE_WORKER_PATH = "/sw.js";
+export const SERVICE_WORKER_PATH = "/sw.js?opco-shell=hardening-1a";
 export const WEB_MANIFEST_PATH = "/manifest.json";
 
 export function registerOfflineAppShell() {
