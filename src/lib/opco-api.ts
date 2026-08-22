@@ -229,19 +229,41 @@ export type EntityRecordResponse = {
   record: EntityRecord;
 };
 
-export type AttendanceStatus = "PRESENTE" | "AUSENTE";
+export type AttendanceWorkflowQuery = {
+  date: string;
+  personRecordId?: string;
+  search?: string;
+};
+
+export type AttendanceStatusOption = {
+  isDefaultCheckIn: boolean;
+  label: string;
+  optionId: string;
+};
 
 export type AttendanceItem = {
   attendance: {
     observation: string | null;
     recordId: string;
-    status: AttendanceStatus | null;
+    statusLabel: string | null;
+    statusOptionId: string | null;
     updatedAt: string;
   } | null;
   person: {
     displayName: string;
     id: string;
   };
+};
+
+export type AttendanceLatestItem = {
+  attendanceRecordId: string;
+  person: {
+    displayName: string;
+    id: string;
+  };
+  statusLabel: string | null;
+  statusOptionId: string | null;
+  updatedAt?: string;
 };
 
 export type AttendanceResponse = {
@@ -252,9 +274,14 @@ export type AttendanceResponse = {
   };
   date: string;
   items: AttendanceItem[];
+  latest: AttendanceLatestItem[];
   sourceEntityType: {
     id: string;
     name: string;
+  };
+  statuses: AttendanceStatusOption[];
+  summary: {
+    totalRegistered: number;
   };
   targetEntityType: {
     id: string;
@@ -263,12 +290,11 @@ export type AttendanceResponse = {
 };
 
 export type AttendanceBatchEntry = {
-  expectedStatus?: AttendanceStatus;
   expectedUpdatedAt?: string;
   observation?: string | null;
   overwrite?: boolean;
   personRecordId: string;
-  status: AttendanceStatus;
+  statusOptionId: string;
 };
 
 export type AttendanceBatchRequest = {
@@ -286,11 +312,15 @@ export type AttendanceBatchResult =
   | {
       existing: {
         recordId: string;
-        status: AttendanceStatus | null;
+        statusLabel: string | null;
+        statusOptionId: string | null;
         updatedAt: string;
       };
       personRecordId: string;
-      requestedStatus: AttendanceStatus;
+      requested: {
+        statusLabel: string;
+        statusOptionId: string;
+      };
       result: "CONFLICT";
     }
   | {
@@ -643,9 +673,18 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       token: string,
       contractId: string,
       appViewId: string,
-      date: string,
+      query: string | AttendanceWorkflowQuery,
     ) {
-      const searchParams = new URLSearchParams({ date });
+      const normalizedQuery = typeof query === "string" ? { date: query } : query;
+      const searchParams = new URLSearchParams({ date: normalizedQuery.date });
+
+      if (normalizedQuery.search?.trim()) {
+        searchParams.set("search", normalizedQuery.search.trim());
+      }
+
+      if (normalizedQuery.personRecordId?.trim()) {
+        searchParams.set("personRecordId", normalizedQuery.personRecordId.trim());
+      }
 
       return authenticatedRequest<AttendanceResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(
@@ -687,6 +726,12 @@ function normalizeEntityRecordResponse(response: EntityRecordResponse): EntityRe
 }
 
 function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceResponse {
+  response.latest.forEach((item) => {
+    if (item.updatedAt) {
+      assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo registro de asistencia.");
+    }
+  });
+
   return {
     ...response,
     items: response.items.map((item) => {

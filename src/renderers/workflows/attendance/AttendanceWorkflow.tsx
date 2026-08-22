@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -12,51 +12,139 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { createClientRequestId } from "@/lib/client-request-id";
+import { useConnectivityStatus } from "@/lib/connectivity";
 import {
   AttendanceBatchEntry,
   AttendanceBatchResult,
   AttendanceItem,
-  AttendanceStatus,
+  AttendanceLatestItem,
+  AttendanceStatusOption,
   AttendanceWorkflowConfig,
   WorkflowAppView,
 } from "@/lib/opco-api";
+import {
+  ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  firstBlockingAttendanceResult,
+  formatDisplayDate,
+  formatLocalDateInput,
+  hasSuccessfulAttendanceResult,
+  normalizeAttendanceSearch,
+  shouldSearchAttendancePeople,
+  shiftLocalDate,
+  splitStatusButtons,
+} from "@/renderers/workflows/attendance/attendance-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 
-type AttendanceDraft = {
-  error: string | null;
-  initialObservation: string | null;
-  initialStatus: AttendanceStatus | null;
-  observation: string | null;
-  status: AttendanceStatus | null;
+type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
+  personName: string;
 };
-
-type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }>;
-
-const STATUS_OPTIONS: { label: string; value: AttendanceStatus }[] = [
-  { label: "Presente", value: "PRESENTE" },
-  { label: "Ausente", value: "AUSENTE" },
-];
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
   const { api, selectedContractId, token } = useSession();
+  const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
+  const [searchText, setSearchText] = useState("");
   const [items, setItems] = useState<AttendanceItem[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, AttendanceDraft>>({});
-  const [expandedObservationId, setExpandedObservationId] = useState<string | null>(null);
-  const [conflicts, setConflicts] = useState<ConflictState[]>([]);
+  const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
+  const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
+  const [latest, setLatest] = useState<AttendanceLatestItem[]>([]);
+  const [totalRegistered, setTotalRegistered] = useState(0);
+  const [observationExpanded, setObservationExpanded] = useState(false);
+  const [observation, setObservation] = useState("");
+  const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const currentConflict = conflicts[0] ?? null;
+  const requestSequenceRef = useRef(0);
   const supportsObservation = Boolean(appView.config.observationFieldId);
-  const dirtyPersonIds = useMemo(
-    () => Object.entries(drafts)
-      .filter(([, draft]) => isDraftDirty(draft))
-      .map(([personId]) => personId),
-    [drafts],
-  );
-  const dirtyCount = dirtyPersonIds.length;
+  const isOnline = connectivityStatus === "online";
+  const normalizedSearch = normalizeAttendanceSearch(searchText);
+  const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
+
+  const applyAttendanceResponse = useCallback((response: {
+    latest: AttendanceLatestItem[];
+    statuses: AttendanceStatusOption[];
+    summary: { totalRegistered: number };
+  }) => {
+    setStatuses(response.statuses);
+    setLatest(response.latest);
+    setTotalRegistered(response.summary.totalRegistered);
+  }, []);
+
+  const clearPersonFlow = useCallback(() => {
+    setSearchText("");
+    setItems([]);
+    setSelectedItem(null);
+    setObservation("");
+    setObservationExpanded(false);
+    setConflict(null);
+  }, []);
+
+  const loadDay = useCallback(async () => {
+    if (!token || !selectedContractId) {
+      setError("Selecciona un contrato antes de abrir asistencia.");
+      setIsLoading(false);
+      return;
+    }
+
+    const requestId = ++requestSequenceRef.current;
+
+    setIsLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
+
+      if (requestId !== requestSequenceRef.current) {
+        return;
+      }
+
+      applyAttendanceResponse(response);
+      setItems([]);
+    } catch (nextError) {
+      if (requestId === requestSequenceRef.current) {
+        setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
+      }
+    } finally {
+      if (requestId === requestSequenceRef.current) {
+        setIsLoading(false);
+      }
+    }
+  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
+
+  const searchPeople = useCallback(async (search: string) => {
+    if (!token || !selectedContractId) {
+      return;
+    }
+
+    const requestId = ++requestSequenceRef.current;
+
+    setIsSearching(true);
+    setError(null);
+
+    try {
+      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, search });
+
+      if (requestId !== requestSequenceRef.current) {
+        return;
+      }
+
+      applyAttendanceResponse(response);
+      setItems(response.items);
+    } catch (nextError) {
+      if (requestId === requestSequenceRef.current) {
+        setError(nextError instanceof Error ? nextError.message : "No fue posible buscar personas.");
+      }
+    } finally {
+      if (requestId === requestSequenceRef.current) {
+        setIsSearching(false);
+      }
+    }
+  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
 
   useEffect(() => {
     let isMounted = true;
@@ -68,23 +156,27 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      const requestId = ++requestSequenceRef.current;
+
       setIsLoading(true);
       setError(null);
+      setSuccessMessage(null);
 
       try {
-        const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, date);
+        const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
 
-        if (!isMounted) {
+        if (!isMounted || requestId !== requestSequenceRef.current) {
           return;
         }
 
-        applyRemoteItems(response.items, false);
+        applyAttendanceResponse(response);
+        setItems([]);
       } catch (nextError) {
-        if (isMounted) {
+        if (isMounted && requestId === requestSequenceRef.current) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
         }
       } finally {
-        if (isMounted) {
+        if (isMounted && requestId === requestSequenceRef.current) {
           setIsLoading(false);
         }
       }
@@ -95,214 +187,131 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, date, selectedContractId, token]);
+  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
 
-  function applyRemoteItems(nextItems: AttendanceItem[], preserveDirty: boolean) {
-    if (!preserveDirty) {
-      setConflicts([]);
-      setExpandedObservationId(null);
-    }
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (!shouldSearchAttendancePeople(searchText)) {
+        setItems([]);
+        setIsSearching(false);
+        return;
+      }
 
-    setItems(nextItems);
-    setDrafts((current) => {
-      const nextDrafts: Record<string, AttendanceDraft> = {};
+      void searchPeople(normalizeAttendanceSearch(searchText));
+    }, ATTENDANCE_SEARCH_DEBOUNCE_MS);
 
-      nextItems.forEach((item) => {
-        const currentDraft = current[item.person.id];
-        const remoteStatus = item.attendance?.status ?? null;
-        const remoteObservation = item.attendance?.observation ?? null;
+    return () => clearTimeout(timeoutId);
+  }, [searchPeople, searchText]);
 
-        if (preserveDirty && currentDraft && isDraftDirty(currentDraft)) {
-          nextDrafts[item.person.id] = {
-            ...currentDraft,
-            initialObservation: remoteObservation,
-            initialStatus: remoteStatus,
-          };
-          return;
-        }
+  async function selectPerson(item: AttendanceItem) {
+    setSelectedItem(item);
+    setObservation(item.attendance?.observation ?? "");
+    setObservationExpanded(false);
+    setConflict(null);
+    setError(null);
+    setSuccessMessage(null);
 
-        nextDrafts[item.person.id] = {
-          error: null,
-          initialObservation: remoteObservation,
-          initialStatus: remoteStatus,
-          observation: remoteObservation,
-          status: remoteStatus,
-        };
-      });
-
-      return nextDrafts;
-    });
-  }
-
-  function updateStatus(personId: string, status: AttendanceStatus) {
-    setDrafts((current) => ({
-      ...current,
-      [personId]: {
-        ...current[personId],
-        error: null,
-        status,
-      },
-    }));
-  }
-
-  function updateObservation(personId: string, observation: string) {
-    setDrafts((current) => ({
-      ...current,
-      [personId]: {
-        ...current[personId],
-        error: null,
-        observation: observation.trim() ? observation : null,
-      },
-    }));
-  }
-
-  async function refreshPreservingDirty() {
     if (!token || !selectedContractId) {
       return;
     }
 
-    const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, date);
-
-    applyRemoteItems(response.items, true);
-  }
-
-  async function saveDirtyAttendance() {
-    if (!token || !selectedContractId || isSaving) {
-      return;
-    }
-
-    const entries = dirtyPersonIds
-      .map((personId) => buildEntry(personId, drafts[personId]))
-      .filter((entry): entry is AttendanceBatchEntry => Boolean(entry));
-
-    if (entries.length === 0) {
-      setDrafts((current) => markMissingStatusErrors(current, dirtyPersonIds));
-      return;
-    }
-
-    setIsSaving(true);
-    setError(null);
+    const requestId = ++requestSequenceRef.current;
 
     try {
-      const response = await api.saveAttendanceWorkflow(token, selectedContractId, appView.id, {
-        clientRequestId: createClientRequestId(),
+      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, {
         date,
-        entries,
+        personRecordId: item.person.id,
       });
 
-      handleBatchResults(response.results);
-
-      if (response.results.some((result) => result.result !== "ERROR" && result.result !== "CONFLICT")) {
-        await refreshPreservingDirty();
+      if (requestId !== requestSequenceRef.current) {
+        return;
       }
+
+      applyAttendanceResponse(response);
+      setSelectedItem(response.items[0] ?? item);
+      setObservation(response.items[0]?.attendance?.observation ?? "");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible guardar asistencia.");
-    } finally {
-      setIsSaving(false);
+      if (requestId === requestSequenceRef.current) {
+        setError(nextError instanceof Error ? nextError.message : "No fue posible cargar la persona.");
+      }
     }
+  }
+
+  async function saveStatus(status: AttendanceStatusOption) {
+    if (!token || !selectedContractId || !selectedItem || isSaving || !isOnline) {
+      return;
+    }
+
+    await saveEntry({
+      observation: supportsObservation ? observation : undefined,
+      personRecordId: selectedItem.person.id,
+      statusOptionId: status.optionId,
+    });
   }
 
   async function confirmConflict() {
-    if (!token || !selectedContractId || !currentConflict || isSaving) {
+    if (!conflict || isSaving) {
       return;
     }
 
-    const draft = drafts[currentConflict.personRecordId];
-    const entry = buildEntry(currentConflict.personRecordId, draft);
+    await saveEntry({
+      expectedUpdatedAt: conflict.existing.updatedAt,
+      observation: supportsObservation ? observation : undefined,
+      overwrite: true,
+      personRecordId: conflict.personRecordId,
+      statusOptionId: conflict.requested.statusOptionId,
+    });
+  }
 
-    if (!entry) {
+  async function saveEntry(entry: AttendanceBatchEntry) {
+    if (!token || !selectedContractId || !selectedItem) {
       return;
     }
 
     setIsSaving(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
       const response = await api.saveAttendanceWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: createClientRequestId(),
         date,
-        entries: [{
-          ...entry,
-          expectedUpdatedAt: currentConflict.existing.updatedAt,
-          overwrite: true,
-        }],
+        entries: [entry],
       });
+      const blockingResult = firstBlockingAttendanceResult(response.results);
 
-      handleBatchResults(response.results);
+      if (blockingResult?.result === "ERROR") {
+        setError(blockingResult.message);
+        return;
+      }
 
-      if (response.results.some((result) => result.result !== "ERROR" && result.result !== "CONFLICT")) {
-        await refreshPreservingDirty();
+      if (blockingResult?.result === "CONFLICT") {
+        setConflict({ ...blockingResult, personName: selectedItem.person.displayName });
+        return;
+      }
+
+      if (hasSuccessfulAttendanceResult(response.results)) {
+        const message = successLabel(response.results[0]);
+
+        clearPersonFlow();
+        await loadDay();
+        setSuccessMessage(message);
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible confirmar el cambio.");
+      setError(nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.");
     } finally {
       setIsSaving(false);
     }
   }
 
   function cancelConflict() {
-    if (!currentConflict) {
-      return;
-    }
-
-    setDrafts((current) => ({
-      ...current,
-      [currentConflict.personRecordId]: {
-        ...current[currentConflict.personRecordId],
-        error: null,
-        observation: null,
-        status: currentConflict.existing.status,
-      },
-    }));
-    setConflicts((current) => current.slice(1));
+    setConflict(null);
+    setError(null);
   }
 
-  function handleBatchResults(results: AttendanceBatchResult[]) {
-    const nextConflicts: ConflictState[] = [];
-
-    setDrafts((current) => {
-      const next = { ...current };
-
-      results.forEach((result) => {
-        const draft = next[result.personRecordId];
-
-        if (!draft) {
-          return;
-        }
-
-        if (result.result === "ERROR") {
-          next[result.personRecordId] = {
-            ...draft,
-            error: result.message,
-          };
-          return;
-        }
-
-        if (result.result === "CONFLICT") {
-          nextConflicts.push(result);
-          next[result.personRecordId] = {
-            ...draft,
-            error: "Revisa el conflicto antes de guardar.",
-          };
-          return;
-        }
-
-        next[result.personRecordId] = {
-          ...draft,
-          error: null,
-          initialObservation: draft.observation,
-          initialStatus: draft.status,
-        };
-      });
-
-      return next;
-    });
-
-    if (nextConflicts.length > 0) {
-      setConflicts((current) => [...current.slice(1), ...nextConflicts]);
-    } else {
-      setConflicts((current) => current.slice(1));
-    }
+  function changeDate(amount: number) {
+    clearPersonFlow();
+    setDate((current) => shiftLocalDate(current, amount));
   }
 
   return (
@@ -312,109 +321,154 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           <AppIcon icon={appView.icon} size={26} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>{appView.name}</Text>
+          <Text style={styles.title}>Registro de Asistencia</Text>
+          <Text style={styles.meta}>{appView.name}</Text>
           <Text style={styles.meta}>{formatDisplayDate(date)}</Text>
         </View>
       </View>
 
       <View style={styles.dateBar}>
-        <Pressable onPress={() => setDate(shiftLocalDate(date, -1))} style={styles.dateButton}>
+        <Pressable onPress={() => changeDate(-1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Anterior</Text>
         </Pressable>
         <Text style={styles.dateLabel}>{date}</Text>
-        <Pressable onPress={() => setDate(shiftLocalDate(date, 1))} style={styles.dateButton}>
+        <Pressable onPress={() => changeDate(1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Siguiente</Text>
         </Pressable>
       </View>
 
-      {dirtyCount > 0 ? <Text style={styles.changeCount}>{dirtyCount} cambios</Text> : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-
-      {isLoading ? <ActivityIndicator /> : null}
-      {!isLoading && items.length === 0 ? <Text style={styles.empty}>No hay personas para esta fecha.</Text> : null}
-
-      <View style={styles.list}>
-        {items.map((item) => {
-          const draft = drafts[item.person.id];
-          const selectedStatus = draft?.status ?? null;
-          const isDirty = draft ? isDraftDirty(draft) : false;
-          const observationExpanded = expandedObservationId === item.person.id;
-
-          return (
-            <View key={item.person.id} style={styles.item}>
-              <View style={styles.itemHeader}>
-                <View style={styles.personText}>
-                  <Text style={styles.personName}>{item.person.displayName}</Text>
-                  <Text style={[styles.statusMeta, isDirty && styles.statusMetaDirty]}>
-                    {isDirty ? "Cambio pendiente" : selectedStatus ? statusLabel(selectedStatus) : "Sin marcar"}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.statusControls}>
-                {STATUS_OPTIONS.map((option) => (
-                  <Pressable
-                    key={option.value}
-                    onPress={() => updateStatus(item.person.id, option.value)}
-                    style={[
-                      styles.statusButton,
-                      selectedStatus === option.value && styles.statusButtonSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusButtonText,
-                        selectedStatus === option.value && styles.statusButtonTextSelected,
-                      ]}
-                    >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {supportsObservation ? (
-                <View style={styles.observationBlock}>
-                  <Pressable
-                    onPress={() => setExpandedObservationId(observationExpanded ? null : item.person.id)}
-                    style={styles.observationToggle}
-                  >
-                    <Text style={styles.observationToggleText}>Observación</Text>
-                  </Pressable>
-                  {observationExpanded ? (
-                    <TextInput
-                      multiline
-                      onChangeText={(value) => updateObservation(item.person.id, value)}
-                      placeholder="Agregar observación"
-                      style={styles.observationInput}
-                      value={draft?.observation ?? ""}
-                    />
-                  ) : null}
-                </View>
-              ) : null}
-
-              {draft?.error ? <Text style={styles.itemError}>{draft.error}</Text> : null}
-            </View>
-          );
-        })}
+      <View style={styles.summaryBar}>
+        <Text style={styles.summaryLabel}>Registrados hoy</Text>
+        <Text style={styles.summaryValue}>{totalRegistered}</Text>
       </View>
 
-      <Pressable
-        disabled={isSaving || dirtyCount === 0 || Boolean(currentConflict)}
-        onPress={saveDirtyAttendance}
-        style={[styles.saveButton, (isSaving || dirtyCount === 0 || Boolean(currentConflict)) && styles.saveButtonDisabled]}
-      >
-        {isSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveButtonText}>Guardar asistencia</Text>}
-      </Pressable>
+      {connectivityStatus !== "online" ? (
+        <Text style={styles.offline}>El registro de asistencia requiere conexion.</Text>
+      ) : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
+
+      <View style={styles.searchBlock}>
+        <TextInput
+          autoCapitalize="words"
+          onChangeText={(value) => {
+            setSearchText(value);
+            setSelectedItem(null);
+            setConflict(null);
+            setSuccessMessage(null);
+          }}
+          placeholder="Buscar persona"
+          style={styles.searchInput}
+          value={searchText}
+        />
+        {isSearching ? <ActivityIndicator size="small" /> : null}
+      </View>
+
+      {isLoading ? <ActivityIndicator /> : null}
+
+      {!selectedItem && normalizedSearch ? (
+        <View style={styles.list}>
+          {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
+          {items.map((item) => (
+            <Pressable key={item.person.id} onPress={() => void selectPerson(item)} style={styles.personRow}>
+              <View style={styles.personText}>
+                <Text style={styles.personName}>{item.person.displayName}</Text>
+                <Text style={styles.statusMeta}>{item.attendance?.statusLabel ?? "Sin registrar"}</Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      {selectedItem ? (
+        <View style={styles.checkInPanel}>
+          <View style={styles.personText}>
+            <Text style={styles.panelName}>{selectedItem.person.displayName}</Text>
+            <Text style={styles.statusMeta}>Actual: {selectedItem.attendance?.statusLabel ?? "Sin registrar"}</Text>
+          </View>
+
+          {supportsObservation ? (
+            <View style={styles.observationBlock}>
+              <Pressable
+                onPress={() => setObservationExpanded((current) => !current)}
+                style={styles.observationToggle}
+              >
+                <Text style={styles.observationToggleText}>
+                  {observationExpanded ? "Ocultar observacion" : "Agregar observacion"}
+                </Text>
+              </Pressable>
+              {observationExpanded ? (
+                <TextInput
+                  multiline
+                  onChangeText={setObservation}
+                  placeholder="Observacion"
+                  style={styles.observationInput}
+                  value={observation}
+                />
+              ) : null}
+            </View>
+          ) : null}
+
+          {defaultStatus ? (
+            <Pressable
+              disabled={isSaving || !isOnline}
+              onPress={() => void saveStatus(defaultStatus)}
+              style={[styles.primaryStatusButton, (isSaving || !isOnline) && styles.disabledButton]}
+            >
+              {isSaving ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.primaryStatusText}>Registrar {defaultStatus.label}</Text>
+              )}
+            </Pressable>
+          ) : (
+            <Text style={styles.error}>No hay estados de asistencia configurados.</Text>
+          )}
+
+          {otherStatuses.length > 0 ? (
+            <View style={styles.statusGrid}>
+              {otherStatuses.map((status) => (
+                <Pressable
+                  disabled={isSaving || !isOnline}
+                  key={status.optionId}
+                  onPress={() => void saveStatus(status)}
+                  style={[styles.secondaryStatusButton, (isSaving || !isOnline) && styles.disabledButton]}
+                >
+                  <Text style={styles.secondaryStatusText}>{status.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {!normalizedSearch && !selectedItem ? <LatestAttendanceList latest={latest} /> : null}
 
       <ConflictModal
-        conflict={currentConflict}
+        conflict={conflict}
         isSaving={isSaving}
         onCancel={cancelConflict}
         onConfirm={confirmConflict}
-        personName={currentConflict ? personNameFor(items, currentConflict.personRecordId) : ""}
       />
     </ScrollView>
+  );
+}
+
+function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
+  return (
+    <View style={styles.latestBlock}>
+      <Text style={styles.sectionTitle}>Ultimos registros</Text>
+      {latest.length === 0 ? <Text style={styles.empty}>Sin registros para esta fecha.</Text> : null}
+      {latest.map((item) => (
+        <View key={item.attendanceRecordId} style={styles.latestRow}>
+          <View style={styles.personText}>
+            <Text style={styles.personName}>{item.person.displayName}</Text>
+            <Text style={styles.statusMeta}>{item.statusLabel ?? "Sin estado"}</Text>
+          </View>
+          {item.updatedAt ? <Text style={styles.latestTime}>{formatLocalTime(item.updatedAt)}</Text> : null}
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -423,23 +477,21 @@ function ConflictModal({
   isSaving,
   onCancel,
   onConfirm,
-  personName,
 }: {
   conflict: ConflictState | null;
   isSaving: boolean;
   onCancel(): void;
   onConfirm(): void;
-  personName: string;
 }) {
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalPanel}>
-          <Text style={styles.modalTitle}>{personName}</Text>
-          <Text style={styles.modalMessage}>Ya existe una asistencia para esta fecha.</Text>
+          <Text style={styles.modalTitle}>{conflict?.personName ?? "Persona"}</Text>
+          <Text style={styles.modalMessage}>Ya existe una asistencia distinta para esta fecha.</Text>
           <View style={styles.conflictRows}>
-            <Text style={styles.conflictText}>Actual: {conflict?.existing.status ? statusLabel(conflict.existing.status) : "Sin marcar"}</Text>
-            <Text style={styles.conflictText}>Quieres cambiar a: {conflict ? statusLabel(conflict.requestedStatus) : ""}</Text>
+            <Text style={styles.conflictText}>Actual: {conflict?.existing.statusLabel ?? "Sin estado"}</Text>
+            <Text style={styles.conflictText}>Solicitado: {conflict?.requested.statusLabel ?? ""}</Text>
           </View>
           <View style={styles.modalActions}>
             <Pressable disabled={isSaving} onPress={onCancel} style={styles.modalSecondaryButton}>
@@ -455,78 +507,37 @@ function ConflictModal({
   );
 }
 
-function buildEntry(personRecordId: string, draft: AttendanceDraft | undefined): AttendanceBatchEntry | null {
-  if (!draft?.status || !isDraftDirty(draft)) {
-    return null;
+function successLabel(result: AttendanceBatchResult | undefined) {
+  if (!result) {
+    return "Asistencia registrada.";
   }
 
-  return {
-    observation: draft.observation,
-    personRecordId,
-    status: draft.status,
-  };
+  if (result.result === "UNCHANGED") {
+    return "Asistencia ya estaba registrada.";
+  }
+
+  if (result.result === "UPDATED") {
+    return "Asistencia actualizada.";
+  }
+
+  return "Asistencia registrada.";
 }
 
-function markMissingStatusErrors(current: Record<string, AttendanceDraft>, personIds: string[]) {
-  const next = { ...current };
-
-  personIds.forEach((personId) => {
-    const draft = next[personId];
-
-    if (draft && !draft.status) {
-      next[personId] = {
-        ...draft,
-        error: "Marca Presente o Ausente antes de guardar.",
-      };
-    }
-  });
-
-  return next;
-}
-
-function isDraftDirty(draft: AttendanceDraft) {
-  return draft.status !== draft.initialStatus || (draft.observation ?? null) !== (draft.initialObservation ?? null);
-}
-
-function formatLocalDateInput(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function shiftLocalDate(value: string, amount: number) {
-  const [year, month, day] = value.split("-").map(Number);
-  const date = new Date(year, month - 1, day);
-
-  date.setDate(date.getDate() + amount);
-
-  return formatLocalDateInput(date);
-}
-
-function formatDisplayDate(value: string) {
-  const [year, month, day] = value.split("-").map(Number);
-
+function formatLocalTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(year, month - 1, day));
-}
-
-function personNameFor(items: AttendanceItem[], personId: string) {
-  return items.find((item) => item.person.id === personId)?.person.displayName ?? "Persona";
-}
-
-function statusLabel(status: AttendanceStatus) {
-  return status === "PRESENTE" ? "Presente" : "Ausente";
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 const styles = StyleSheet.create({
-  changeCount: {
-    color: "#135d66",
-    fontWeight: "800",
+  checkInPanel: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 14,
+    padding: 14,
   },
   conflictRows: {
     gap: 6,
@@ -536,9 +547,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   content: {
-    gap: 16,
-    padding: 20,
-    paddingBottom: 36,
+    gap: 14,
+    padding: 18,
+    paddingBottom: 32,
   },
   dateBar: {
     alignItems: "center",
@@ -561,6 +572,9 @@ const styles = StyleSheet.create({
   dateLabel: {
     color: "#0f3036",
     fontWeight: "800",
+  },
+  disabledButton: {
+    opacity: 0.55,
   },
   empty: {
     color: "#587078",
@@ -586,27 +600,29 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 42,
   },
-  item: {
+  latestBlock: {
+    gap: 10,
+  },
+  latestRow: {
+    alignItems: "center",
     backgroundColor: "#ffffff",
     borderColor: "#d7e4e7",
     borderRadius: 8,
     borderWidth: 1,
-    gap: 12,
-    padding: 14,
-  },
-  itemError: {
-    color: "#b42318",
-    lineHeight: 19,
-  },
-  itemHeader: {
     flexDirection: "row",
+    gap: 10,
+    padding: 12,
+  },
+  latestTime: {
+    color: "#587078",
+    fontWeight: "700",
   },
   list: {
-    gap: 12,
+    gap: 10,
   },
   meta: {
     color: "#587078",
-    marginTop: 3,
+    marginTop: 2,
   },
   modalActions: {
     flexDirection: "row",
@@ -684,16 +700,37 @@ const styles = StyleSheet.create({
     color: "#135d66",
     fontWeight: "800",
   },
+  offline: {
+    backgroundColor: "#fff7ed",
+    borderColor: "#fed7aa",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#9a3412",
+    lineHeight: 20,
+    padding: 10,
+  },
+  panelName: {
+    color: "#0f3036",
+    fontSize: 19,
+    fontWeight: "800",
+  },
   personName: {
     color: "#0f3036",
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: "800",
+  },
+  personRow: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
   },
   personText: {
     flex: 1,
     gap: 4,
   },
-  saveButton: {
+  primaryStatusButton: {
     alignItems: "center",
     backgroundColor: "#135d66",
     borderRadius: 8,
@@ -701,10 +738,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 16,
   },
-  saveButtonDisabled: {
-    opacity: 0.55,
-  },
-  saveButtonText: {
+  primaryStatusText: {
     color: "#ffffff",
     fontWeight: "800",
   },
@@ -712,40 +746,75 @@ const styles = StyleSheet.create({
     backgroundColor: "#eef4f4",
     flex: 1,
   },
-  statusButton: {
+  searchBlock: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+  },
+  searchInput: {
+    backgroundColor: "#ffffff",
+    borderColor: "#b7cdd2",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#0f3036",
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+  },
+  secondaryStatusButton: {
     alignItems: "center",
     borderColor: "#b7cdd2",
     borderRadius: 8,
     borderWidth: 1,
-    flex: 1,
+    flexGrow: 1,
     justifyContent: "center",
     minHeight: 44,
+    minWidth: 112,
+    paddingHorizontal: 12,
   },
-  statusButtonSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
-  },
-  statusButtonText: {
+  secondaryStatusText: {
     color: "#135d66",
     fontWeight: "800",
   },
-  statusButtonTextSelected: {
-    color: "#ffffff",
+  sectionTitle: {
+    color: "#0f3036",
+    fontSize: 16,
+    fontWeight: "800",
   },
-  statusControls: {
+  statusGrid: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
   },
   statusMeta: {
     color: "#587078",
   },
-  statusMetaDirty: {
-    color: "#9a3412",
+  success: {
+    color: "#067647",
+    lineHeight: 20,
+  },
+  summaryBar: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: 12,
+  },
+  summaryLabel: {
+    color: "#587078",
+    fontWeight: "700",
+  },
+  summaryValue: {
+    color: "#0f3036",
+    fontSize: 22,
     fontWeight: "800",
   },
   title: {
     color: "#0f3036",
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: "800",
   },
 });
