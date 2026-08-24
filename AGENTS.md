@@ -49,6 +49,7 @@
 - Automatic reconnect sync must be single-flight.
 - Network failures must not delete pending work.
 - Push pending operations before remote refresh/reconciliation.
+- `RECORDS` sync telemetry is scoped by `ownerKey + contractId + entityTypeId`.
 - Preserve `clientRequestId` and idempotency semantics.
 - Conflicts must not create automatic retry loops.
 

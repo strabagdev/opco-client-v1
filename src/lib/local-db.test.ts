@@ -61,16 +61,47 @@ describe("local database singleton", () => {
 
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
     expect(db.runAsync).toHaveBeenCalledWith(
-      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+        `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
       "schema_version",
-      "5",
+      "7",
     );
     expect(db.runAsync.mock.calls.filter((call) => call[1] === "schema_version")).toHaveLength(1);
     expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
       hasDatabase: true,
       hasDatabasePromise: true,
       hasMigrationPromise: false,
-      migratedSchemaVersion: "5",
+      migratedSchemaVersion: "7",
+    });
+  });
+
+  it("restores sync telemetry by owner and contract", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM sync_telemetry")) {
+        return {
+          contract_id: "contract_1",
+          entity_type_id: "entity_1",
+          last_full_refresh_completed_at: "2026-08-24T10:03:00.000Z",
+          last_push_completed_at: "2026-08-24T10:02:00.000Z",
+          last_reconcile_completed_at: "2026-08-24T10:04:00.000Z",
+          last_successful_sync_at: "2026-08-24T10:04:00.000Z",
+          last_sync_attempt_at: "2026-08-24T10:01:00.000Z",
+          last_sync_error_at: null,
+          last_sync_error_code: null,
+          last_sync_error_phase: null,
+          owner_key: "org_1:user_1",
+          sync_phase: "idle",
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "entity_1", ownerKey: "org_1:user_1" })).resolves.toMatchObject({
+      entityTypeId: "entity_1",
+      lastSuccessfulSyncAt: "2026-08-24T10:04:00.000Z",
+      ownerKey: "org_1:user_1",
+      syncPhase: "idle",
     });
   });
 
@@ -109,6 +140,10 @@ function createMockDatabase(): MockDatabase {
 
       if (sql.includes("PRAGMA table_info(app_views)")) {
         return [{ name: "owner_key" }];
+      }
+
+      if (sql.includes("PRAGMA table_info(sync_telemetry)")) {
+        return [{ name: "entity_type_id" }];
       }
 
       return [];

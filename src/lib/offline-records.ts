@@ -7,6 +7,7 @@ import {
   OpcoApi,
   OpcoNetworkError,
 } from "./opco-api";
+import { classifySyncTelemetryError, SyncTelemetryStore } from "./sync-telemetry";
 
 export type RecordSyncStatus = "synced" | "pending_create" | "pending_update" | "syncing" | "failed" | "conflict";
 
@@ -73,7 +74,7 @@ export type OfflineRecordStore = {
   resolveRecordConflictWithRemote(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
   updateLocalRecord(input: UpdateLocalRecordInput): Promise<CachedEntityRecord>;
   upsertRemoteRecords(input: UpsertRemoteRecordsInput): Promise<void>;
-};
+} & Partial<Pick<SyncTelemetryStore, "getSyncTelemetry" | "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 const FULL_REFRESH_PAGE_SIZE = 100;
 const FULL_REFRESH_MAX_PAGES = 1_000;
@@ -191,7 +192,9 @@ export type RefreshEntityRecordsCacheParams = BaseScopedInput & {
   api: Pick<OpcoApi, "getEntityRecords">;
   pageSize?: number;
   resultPageSize?: number;
-  store: Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot">;
+  store: Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
+    Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
+  suppressNetworkTelemetry?: boolean;
   token: string;
 };
 
@@ -203,8 +206,21 @@ export async function refreshEntityRecordsCache({
   pageSize = FULL_REFRESH_PAGE_SIZE,
   resultPageSize = 25,
   store,
+  suppressNetworkTelemetry = false,
   token,
 }: RefreshEntityRecordsCacheParams): Promise<CachedRecordsResult> {
+  let currentTelemetryPhase: "refreshing" | "reconciling" = "refreshing";
+
+  if (!suppressNetworkTelemetry) {
+    await store.markSyncPhase?.({
+      attemptedAt: new Date().toISOString(),
+      contractId,
+      entityTypeId,
+      ownerKey,
+      phase: "refreshing",
+    });
+  }
+
   try {
     const records: EntityRecord[] = [];
     let page = 1;
@@ -226,12 +242,35 @@ export async function refreshEntityRecordsCache({
       page += 1;
     } while (page <= totalPages);
 
+    if (!suppressNetworkTelemetry) {
+      await store.markSyncPhaseCompleted?.({
+        contractId,
+        entityTypeId,
+        ownerKey,
+        phase: "refreshing",
+      });
+      await store.markSyncPhase?.({
+        contractId,
+        entityTypeId,
+        ownerKey,
+        phase: "reconciling",
+      });
+    }
+    currentTelemetryPhase = "reconciling";
     await store.reconcileRemoteRecordsSnapshot({
       contractId,
       entityTypeId,
       ownerKey,
       records,
     });
+    if (!suppressNetworkTelemetry) {
+      await store.markSyncPhaseCompleted?.({
+        contractId,
+        entityTypeId,
+        ownerKey,
+        phase: "reconciling",
+      });
+    }
 
     const cached = await store.listCachedRecords({
       contractId,
@@ -247,6 +286,16 @@ export async function refreshEntityRecordsCache({
       offline: false,
     };
   } catch (error) {
+    if (!(suppressNetworkTelemetry && isNetworkLikeError(error))) {
+      await store.markSyncError?.({
+        code: classifySyncTelemetryError(error),
+        contractId,
+        entityTypeId,
+        ownerKey,
+        phase: currentTelemetryPhase,
+      });
+    }
+
     if (isNetworkLikeError(error)) {
       const cached = await store.listCachedRecords({
         contractId,

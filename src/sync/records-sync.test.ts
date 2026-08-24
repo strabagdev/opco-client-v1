@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
 import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "../lib/sync-telemetry";
 import { RecordsSyncStore, syncPendingRecordsOnce } from "./records-sync";
 
 let store: MemorySyncStore;
@@ -184,6 +185,91 @@ describe("records sync engine", () => {
 
     expect(api.createEntityRecord).toHaveBeenCalledOnce();
   });
+
+  it("records push attempt and completion telemetry", async () => {
+    store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
+    const api = {
+      createEntityRecord: vi.fn(async () => ({ record: record("record_1", { codigo: "EQ-1" }) })),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    const telemetry = await store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "entity_1", ownerKey: "org_1:user_1" });
+
+    expect(telemetry).toMatchObject({
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+    expect(telemetry?.lastSyncAttemptAt).toBeTruthy();
+    expect(telemetry?.lastPushCompletedAt).toBeTruthy();
+  });
+
+  it("records push failure telemetry without dropping pending operations", async () => {
+    store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
+    const api = {
+      createEntityRecord: vi.fn(async () => {
+        throw new OpcoNetworkError();
+      }),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    const telemetry = await store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "entity_1", ownerKey: "org_1:user_1" });
+
+    expect(telemetry).toMatchObject({
+      lastPushCompletedAt: null,
+      lastSyncErrorCode: "NETWORK",
+      lastSyncErrorPhase: "pushing",
+      syncPhase: "error",
+    });
+    expect(await store.listPendingOperations("org_1:user_1")).toHaveLength(1);
+  });
+
+  it("clears the current telemetry error on the next successful push", async () => {
+    store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
+    const api = {
+      createEntityRecord: vi
+        .fn()
+        .mockRejectedValueOnce(new OpcoNetworkError())
+        .mockResolvedValueOnce({ record: record("record_1", { codigo: "EQ-1" }) }),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    const telemetry = await store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "entity_1", ownerKey: "org_1:user_1" });
+
+    expect(telemetry).toMatchObject({
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+  });
+
+  it("does not update push telemetry for another entity type in the same contract", async () => {
+    store.operations = [operation({ entityTypeId: "personas", localRecordId: "local_1", operation: "CREATE" })];
+    const api = {
+      createEntityRecord: vi.fn(async () => ({ record: record("record_1", { codigo: "P-1" }) })),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    await expect(
+      store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "materiales", ownerKey: "org_1:user_1" }),
+    ).resolves.toBeNull();
+    await expect(
+      store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "personas", ownerKey: "org_1:user_1" }),
+    ).resolves.toMatchObject({ lastPushCompletedAt: expect.any(String) });
+  });
 });
 
 function record(id: string, values: Record<string, EntityRecordValue>): EntityRecord {
@@ -221,6 +307,7 @@ class MemorySyncStore implements RecordsSyncStore {
   remoteUpdatedAt: string | null = "2026-08-20T12:00:00.000Z";
   retried: { code: string; message: string; operation: PendingOperation }[] = [];
   syncing: string[] = [];
+  telemetry = new Map<string, SyncTelemetry>();
 
   async completePendingOperation(operationItem: PendingOperation, recordItem: EntityRecord) {
     this.completed.push({ operation: operationItem, record: recordItem });
@@ -249,4 +336,63 @@ class MemorySyncStore implements RecordsSyncStore {
   async retryPendingOperation(operationItem: PendingOperation, code: string, message: string) {
     this.retried.push({ code, message, operation: operationItem });
   }
+
+  async getSyncTelemetry(scope: SyncTelemetryScope) {
+    return this.telemetry.get(telemetryKey(scope)) ?? null;
+  }
+
+  async markSyncError(input: SyncTelemetryScope & { code: SyncTelemetry["lastSyncErrorCode"]; phase: NonNullable<SyncTelemetry["lastSyncErrorPhase"]> }) {
+    const current = this.ensureTelemetry(input);
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastSyncErrorAt: new Date().toISOString(),
+      lastSyncErrorCode: input.code,
+      lastSyncErrorPhase: input.phase,
+      syncPhase: "error",
+    });
+  }
+
+  async markSyncPhase(input: SyncTelemetryScope & { attemptedAt?: string; phase: SyncTelemetry["syncPhase"] }) {
+    const current = this.ensureTelemetry(input);
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastSyncAttemptAt: input.attemptedAt ?? current.lastSyncAttemptAt,
+      lastSyncErrorAt: null,
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: input.phase,
+    });
+  }
+
+  async markSyncPhaseCompleted(input: SyncTelemetryScope & { phase: NonNullable<SyncTelemetry["lastSyncErrorPhase"]> }) {
+    const current = this.ensureTelemetry(input);
+    const now = new Date().toISOString();
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastFullRefreshCompletedAt: input.phase === "refreshing" ? now : current.lastFullRefreshCompletedAt,
+      lastPushCompletedAt: input.phase === "pushing" ? now : current.lastPushCompletedAt,
+      lastReconcileCompletedAt: input.phase === "reconciling" ? now : current.lastReconcileCompletedAt,
+      lastSuccessfulSyncAt: input.phase === "reconciling" ? now : current.lastSuccessfulSyncAt,
+      lastSyncErrorAt: null,
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+  }
+
+  private ensureTelemetry(scope: SyncTelemetryScope) {
+    const keyValue = telemetryKey(scope);
+    const current = this.telemetry.get(keyValue) ?? emptySyncTelemetry(scope);
+
+    this.telemetry.set(keyValue, current);
+
+    return current;
+  }
+}
+
+function telemetryKey(scope: SyncTelemetryScope) {
+  return `${scope.ownerKey}:${scope.contractId}:${scope.entityTypeId}`;
 }

@@ -8,6 +8,7 @@ import {
   refreshEntityRecordsCache,
 } from "./offline-records";
 import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "./opco-api";
+import { SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "./sync-telemetry";
 
 const scope = {
   contractId: "contract_1",
@@ -245,6 +246,180 @@ describe("offline records cache", () => {
     const result = await store.listCachedRecords(scope);
 
     expect(result.records.map((item) => item.id).sort()).toEqual(["record_1", "record_2"]);
+    const telemetry = await store.getSyncTelemetry(scope);
+
+    expect(telemetry).toMatchObject({
+      lastFullRefreshCompletedAt: null,
+      lastSyncErrorCode: "SERVER",
+      lastSyncErrorPhase: "refreshing",
+      syncPhase: "error",
+    });
+  });
+
+  it("records refresh and reconcile completion telemetry", async () => {
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 },
+          records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    const telemetry = await store.getSyncTelemetry(scope);
+
+    expect(telemetry).toMatchObject({
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+    expect(telemetry?.lastFullRefreshCompletedAt).toBeTruthy();
+    expect(telemetry?.lastReconcileCompletedAt).toBeTruthy();
+    expect(telemetry?.lastSuccessfulSyncAt).toBe(telemetry?.lastReconcileCompletedAt);
+  });
+
+  it("records offline refresh as error without pretending success", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+    });
+
+    const result = await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => {
+          throw new OpcoNetworkError();
+        },
+      },
+      store,
+      token: "token_1",
+    });
+    const telemetry = await store.getSyncTelemetry(scope);
+
+    expect(result.offline).toBe(true);
+    expect(telemetry).toMatchObject({
+      lastSuccessfulSyncAt: null,
+      lastSyncErrorCode: "NETWORK",
+      lastSyncErrorPhase: "refreshing",
+      syncPhase: "error",
+    });
+  });
+
+  it("can suppress known-offline network refresh telemetry noise", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+    });
+
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => {
+          throw new OpcoNetworkError();
+        },
+      },
+      store,
+      suppressNetworkTelemetry: true,
+      token: "token_1",
+    });
+
+    await expect(store.getSyncTelemetry(scope)).resolves.toBeNull();
+  });
+
+  it("isolates sync telemetry by owner key", async () => {
+    await refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 },
+          records: [record("record_1", "Equipo 1", { codigo: "EQ-1" })],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    await expect(store.getSyncTelemetry({ ...scope, ownerKey: "org_1:user_2" })).resolves.toBeNull();
+  });
+
+  it("keeps successful sync timestamps independent between entity types in the same contract", async () => {
+    await refreshEntityRecordsCache({
+      ...scope,
+      entityTypeId: "personas",
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 },
+          records: [record("persona_1", "Persona 1", { nombre: "Ana" })],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    const personas = await store.getSyncTelemetry({ ...scope, entityTypeId: "personas" });
+    const materiales = await store.getSyncTelemetry({ ...scope, entityTypeId: "materiales" });
+
+    expect(personas?.lastSuccessfulSyncAt).toBeTruthy();
+    expect(materiales).toBeNull();
+  });
+
+  it("refresh failure affects only the current entity type telemetry", async () => {
+    await refreshEntityRecordsCache({
+      ...scope,
+      entityTypeId: "personas",
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 },
+          records: [record("persona_1", "Persona 1", { nombre: "Ana" })],
+        }),
+      },
+      store,
+      token: "token_1",
+    });
+
+    await expect(
+      refreshEntityRecordsCache({
+        ...scope,
+        entityTypeId: "materiales",
+        api: {
+          getEntityRecords: async () => {
+            throw new OpcoApiError("Fallo remoto.", "SERVER_ERROR", 500);
+          },
+        },
+        store,
+        token: "token_1",
+      }),
+    ).rejects.toMatchObject({ code: "SERVER_ERROR" });
+
+    await expect(store.getSyncTelemetry({ ...scope, entityTypeId: "personas" })).resolves.toMatchObject({
+      syncPhase: "idle",
+      lastSyncErrorCode: null,
+    });
+    await expect(store.getSyncTelemetry({ ...scope, entityTypeId: "materiales" })).resolves.toMatchObject({
+      syncPhase: "error",
+      lastSyncErrorPhase: "refreshing",
+    });
+  });
+
+  it("restores telemetry for the current app view entity type", async () => {
+    store.telemetry.set(telemetryKey({ ...scope, entityTypeId: "personas" }), {
+      ...emptySyncTelemetry({ ...scope, entityTypeId: "personas" }),
+      lastSuccessfulSyncAt: "2026-08-24T16:32:00.000Z",
+      syncPhase: "idle",
+    });
+    store.telemetry.set(telemetryKey({ ...scope, entityTypeId: "materiales" }), {
+      ...emptySyncTelemetry({ ...scope, entityTypeId: "materiales" }),
+      lastSuccessfulSyncAt: "2026-08-24T15:01:00.000Z",
+      syncPhase: "idle",
+    });
+
+    await expect(store.getSyncTelemetry({ ...scope, entityTypeId: "personas" })).resolves.toMatchObject({
+      entityTypeId: "personas",
+      lastSuccessfulSyncAt: "2026-08-24T16:32:00.000Z",
+    });
   });
 
   it("creates offline records immediately with a pending CREATE", async () => {
@@ -421,6 +596,7 @@ function record(id: string, displayName: string, values: Record<string, EntityRe
 class MemoryRecordStore implements OfflineRecordStore {
   records = new Map<string, Awaited<ReturnType<OfflineRecordStore["createLocalRecord"]>>>();
   operations = new Map<string, PendingOperation>();
+  telemetry = new Map<string, SyncTelemetry>();
 
   async countPendingOperations(ownerKey: string) {
     return [...this.operations.values()].filter((operation) => operation.ownerKey === ownerKey).length;
@@ -597,6 +773,52 @@ class MemoryRecordStore implements OfflineRecordStore {
     );
   }
 
+  async getSyncTelemetry(scopeInput: SyncTelemetryScope) {
+    return this.telemetry.get(telemetryKey(scopeInput)) ?? null;
+  }
+
+  async markSyncError(input: SyncTelemetryScope & { code: SyncTelemetry["lastSyncErrorCode"]; phase: NonNullable<SyncTelemetry["lastSyncErrorPhase"]> }) {
+    const current = this.ensureTelemetry(input);
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastSyncErrorAt: new Date().toISOString(),
+      lastSyncErrorCode: input.code,
+      lastSyncErrorPhase: input.phase,
+      syncPhase: "error",
+    });
+  }
+
+  async markSyncPhase(input: SyncTelemetryScope & { attemptedAt?: string; phase: SyncTelemetry["syncPhase"] }) {
+    const current = this.ensureTelemetry(input);
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastSyncAttemptAt: input.attemptedAt ?? current.lastSyncAttemptAt,
+      lastSyncErrorAt: null,
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: input.phase,
+    });
+  }
+
+  async markSyncPhaseCompleted(input: SyncTelemetryScope & { phase: NonNullable<SyncTelemetry["lastSyncErrorPhase"]> }) {
+    const current = this.ensureTelemetry(input);
+    const now = new Date().toISOString();
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastFullRefreshCompletedAt: input.phase === "refreshing" ? now : current.lastFullRefreshCompletedAt,
+      lastPushCompletedAt: input.phase === "pushing" ? now : current.lastPushCompletedAt,
+      lastReconcileCompletedAt: input.phase === "reconciling" ? now : current.lastReconcileCompletedAt,
+      lastSuccessfulSyncAt: input.phase === "reconciling" ? now : current.lastSuccessfulSyncAt,
+      lastSyncErrorAt: null,
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+  }
+
   async retryFailedRecord(input: Parameters<OfflineRecordStore["retryFailedRecord"]>[0]) {
     const existing = await this.getCachedRecord(input);
 
@@ -676,8 +898,21 @@ class MemoryRecordStore implements OfflineRecordStore {
   ) {
     return this.records.has(key(ownerKey, contractId, entityTypeId, record.localId));
   }
+
+  private ensureTelemetry(scopeInput: SyncTelemetryScope) {
+    const keyValue = telemetryKey(scopeInput);
+    const current = this.telemetry.get(keyValue) ?? emptySyncTelemetry(scopeInput);
+
+    this.telemetry.set(keyValue, current);
+
+    return current;
+  }
 }
 
 function key(ownerKey: string, contractId: string, entityTypeId: string, localId: string) {
   return `${ownerKey}:${contractId}:${entityTypeId}:${localId}`;
+}
+
+function telemetryKey(scopeInput: SyncTelemetryScope) {
+  return `${scopeInput.ownerKey}:${scopeInput.contractId}:${scopeInput.entityTypeId}`;
 }

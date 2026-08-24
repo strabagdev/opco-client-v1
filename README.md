@@ -179,6 +179,8 @@ Editar offline:
 
 El sync engine procesa una sola corrida a la vez con single-flight. Marca operaciones como syncing, incrementa attempts, llama POST/PATCH, guarda la respuesta en cache y elimina la operacion exitosa. `clientRequestId` se conserva en todos los reintentos de CREATE para aprovechar la idempotencia de Operational Core si una respuesta se pierde.
 
+La observabilidad local de sincronizacion de `RECORDS` se guarda en SQLite por `ownerKey + contractId + entityTypeId`. Distingue push de `pending_operations`, refresh de snapshot remoto completo y reconcile local de ese snapshot. La UI normal muestra `Ultima sincronizacion` para la EntityType de la AppView actual, no para todo el contrato. `lastSuccessfulSyncAt` significa ultima sincronizacion completa y exitosa de esa EntityType: push si habia pendientes, refresh completo y reconcile. No se considera sincronizado solo porque el push termino si el pull/reconcile fallo. Ejemplo: si Personas sincroniza correctamente, no cambia la telemetria de Materiales o Equipos aunque compartan contrato. Si hay problemas, muestra `Problema de sincronizacion` sin detalles tecnicos. En desarrollo o con `?syncDiagnostics=1`, `RECORDS` muestra diagnostico no sensible: fase actual, ultimo intento, ultimo push, ultimo snapshot remoto, ultima reconciliacion, ultima sincronizacion exitosa, codigo/fase del ultimo error y conteos de pendientes, errores y conflictos.
+
 Antes de sincronizar un UPDATE, el cliente hace preflight con `GET /api/v1/contracts/:contractId/entities/:entityTypeId/records/:recordId` y compara `remote.record.updatedAt` contra `entity_records.remote_updated_at`.
 
 - Si coinciden, ejecuta PATCH y guarda `remote_updated_at = response.record.updatedAt`.
@@ -305,11 +307,28 @@ pending_operations (
   last_error_code TEXT,
   last_error_message TEXT
 )
+
+sync_telemetry (
+  owner_key TEXT NOT NULL,
+  contract_id TEXT NOT NULL,
+  entity_type_id TEXT NOT NULL,
+  sync_phase TEXT NOT NULL,
+  last_sync_attempt_at TEXT,
+  last_push_completed_at TEXT,
+  last_full_refresh_completed_at TEXT,
+  last_reconcile_completed_at TEXT,
+  last_successful_sync_at TEXT,
+  last_sync_error_at TEXT,
+  last_sync_error_code TEXT,
+  last_sync_error_phase TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (owner_key, contract_id, entity_type_id)
+)
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
 
-La migracion a schema version 4 no resetea la DB local. Agrega `remote_updated_at` y columnas de snapshot; si una instalacion antigua tiene `updated_at_remote`, copia ese valor a `remote_updated_at` y conserva `local_id`, `server_id`, cache y pending operations existentes.
+Las migraciones SQLite no resetean la DB local. Agregan columnas/tablas nuevas y conservan `local_id`, `server_id`, cache, telemetria y pending operations existentes.
 
 ## Cache
 

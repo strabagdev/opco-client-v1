@@ -1,5 +1,5 @@
 import { Link } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -17,10 +17,12 @@ import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
 import { CachedEntityRecord, loadRecordsWithOfflineCache, refreshEntityRecordsCache } from "@/lib/offline-records";
 import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
+import { formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   stableTextInputStyle,
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
 } from "@/lib/visual-stability";
+import { getSyncDiagnosticsRows } from "@/renderers/records/sync-diagnostics";
 import { AppViewRendererProps } from "@/renderers/types";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
@@ -30,7 +32,7 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, selectedContractId, syncPendingRecords, token } =
+  const { api, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
@@ -42,6 +44,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [recordsSyncTelemetry, setRecordsSyncTelemetry] = useState<SyncTelemetry | null>(null);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -66,6 +69,23 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       clearTimeout(timeoutId);
     };
   }, [searchText]);
+
+  const refreshCurrentSyncTelemetry = useCallback(async () => {
+    if (!ownerKey || !selectedContractId || !entityTypeId) {
+      setRecordsSyncTelemetry(null);
+      return;
+    }
+
+    try {
+      setRecordsSyncTelemetry(await definitionCache.getSyncTelemetry({
+        contractId: selectedContractId,
+        entityTypeId,
+        ownerKey,
+      }));
+    } catch {
+      setRecordsSyncTelemetry(null);
+    }
+  }, [definitionCache, entityTypeId, ownerKey, selectedContractId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -113,6 +133,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               ownerKey,
               resultPageSize: PAGE_SIZE,
               store: definitionCache,
+              suppressNetworkTelemetry: status === "offline",
               token,
             });
 
@@ -124,6 +145,8 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           setRecords(recordsResult.records);
           setPagination(recordsResult.pagination);
         }
+        await refreshRecordsSyncSummary();
+        await refreshCurrentSyncTelemetry();
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar registros.");
@@ -147,8 +170,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     entityTypeId,
     ownerKey,
     recordsReconnectRefreshKey,
+    refreshCurrentSyncTelemetry,
+    refreshRecordsSyncSummary,
     retryCount,
     selectedContractId,
+    status,
     token,
   ]);
 
@@ -186,6 +212,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
   async function synchronizeRecords() {
     await syncPendingRecords();
+    await refreshCurrentSyncTelemetry();
     setRetryCount((count) => count + 1);
   }
 
@@ -211,6 +238,8 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           {syncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {syncedAt}</Text> : null}
         </View>
       ) : null}
+
+      <SyncTelemetrySummary telemetry={recordsSyncTelemetry} />
 
       {hasSyncActivity ? (
         <View style={styles.syncBar}>
@@ -292,8 +321,30 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
         </Pressable>
       ) : null}
+
+      {shouldShowSyncDiagnostics() ? (
+        <SyncDiagnostics summary={recordsSyncSummary} telemetry={recordsSyncTelemetry} />
+      ) : null}
     </ScrollView>
   );
+}
+
+function SyncTelemetrySummary({ telemetry }: { telemetry: SyncTelemetry | null }) {
+  if (!telemetry) {
+    return null;
+  }
+
+  if (telemetry.syncPhase === "error" || telemetry.lastSyncErrorAt) {
+    return <Text style={styles.syncProblemText}>Problema de sincronizacion</Text>;
+  }
+
+  const formatted = formatLastSuccessfulSyncAt(telemetry.lastSuccessfulSyncAt);
+
+  if (!formatted) {
+    return null;
+  }
+
+  return <Text style={styles.lastSyncText}>Ultima sincronizacion: {formatted}</Text>;
 }
 
 function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {
@@ -330,6 +381,45 @@ function formatSyncSummary(summary: {
     summary.failedCount ? `${summary.failedCount} errores` : null,
     summary.conflictCount ? `${summary.conflictCount} conflictos` : null,
   ].filter(Boolean).join(" · ");
+}
+
+function shouldShowSyncDiagnostics() {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
+    return true;
+  }
+
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).has("syncDiagnostics");
+}
+
+function SyncDiagnostics({
+  summary,
+  telemetry,
+}: {
+  summary: {
+    conflictCount: number;
+    failedCount: number;
+    pendingCount: number;
+    syncingCount: number;
+  };
+  telemetry: SyncTelemetry | null;
+}) {
+  const rows = getSyncDiagnosticsRows({ summary, telemetry });
+
+  return (
+    <View style={styles.syncDiagnostics}>
+      <Text style={styles.syncDiagnosticsTitle}>Diagnostico de sincronizacion</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.syncDiagnosticsRow}>
+          <Text style={styles.syncDiagnosticsLabel}>{label}</Text>
+          <Text style={styles.syncDiagnosticsValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -425,6 +515,10 @@ const styles = StyleSheet.create({
   loadMoreText: {
     color: "#ffffff",
     fontWeight: "800",
+  },
+  lastSyncText: {
+    color: "#587078",
+    fontSize: 13,
   },
   meta: {
     color: "#587078",
@@ -533,6 +627,40 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
     justifyContent: "flex-end",
+  },
+  syncDiagnostics: {
+    backgroundColor: "#ffffff",
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+    padding: 12,
+  },
+  syncDiagnosticsLabel: {
+    color: "#587078",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  syncDiagnosticsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  syncDiagnosticsTitle: {
+    color: "#17363c",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  syncDiagnosticsValue: {
+    color: "#17363c",
+    flex: 1,
+    fontSize: 12,
+    textAlign: "right",
+  },
+  syncProblemText: {
+    color: "#9a3412",
+    fontSize: 13,
+    fontWeight: "700",
   },
   syncButton: {
     alignItems: "center",

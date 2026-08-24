@@ -1,5 +1,6 @@
 import { CachedEntityRecord, PendingOperation } from "../lib/offline-records";
 import { EntityRecord, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { classifySyncTelemetryError, SyncTelemetryStore } from "../lib/sync-telemetry";
 
 export type RecordsSyncStore = {
   completePendingOperation(operation: PendingOperation, record: EntityRecord): Promise<void>;
@@ -9,7 +10,7 @@ export type RecordsSyncStore = {
   markPendingOperationSyncing(operationId: string): Promise<void>;
   readRecordRemoteUpdatedAt(operation: PendingOperation): Promise<string | null>;
   retryPendingOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
-};
+} & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export type RecordsSyncResult = {
   completed: number;
@@ -47,12 +48,26 @@ async function runSync({
   token: string;
 }): Promise<RecordsSyncResult> {
   const operations = await store.listPendingOperations(ownerKey);
+  const scopes = uniqueOperationScopes(operations);
+  const scopesWithErrors = new Set<string>();
   const result = {
     completed: 0,
     conflicts: 0,
     failed: 0,
     retriable: 0,
   };
+
+  await Promise.all(
+    scopes.map((scope) =>
+      store.markSyncPhase?.({
+        attemptedAt: new Date().toISOString(),
+        contractId: scope.contractId,
+        entityTypeId: scope.entityTypeId,
+        ownerKey,
+        phase: "pushing",
+      }),
+    ),
+  );
 
   for (const operation of operations) {
     await store.markPendingOperationSyncing(operation.id);
@@ -71,11 +86,27 @@ async function runSync({
     } catch (error) {
       if (error instanceof RecordConflictDetected) {
         await store.markPendingOperationConflict(operation, error.remoteRecord, error.code, error.message);
+        scopesWithErrors.add(operationScopeKey(operation));
+        await store.markSyncError?.({
+          code: "CONFLICT",
+          contractId: operation.contractId,
+          entityTypeId: operation.entityTypeId,
+          ownerKey: operation.ownerKey,
+          phase: "pushing",
+        });
         result.conflicts += 1;
         continue;
       }
 
       const classification = classifySyncError(error);
+      scopesWithErrors.add(operationScopeKey(operation));
+      await store.markSyncError?.({
+        code: classifySyncTelemetryError(error),
+        contractId: operation.contractId,
+        entityTypeId: operation.entityTypeId,
+        ownerKey: operation.ownerKey,
+        phase: "pushing",
+      });
 
       if (classification.action === "retry") {
         await store.retryPendingOperation(operation, classification.code, classification.message);
@@ -88,7 +119,35 @@ async function runSync({
     }
   }
 
+  await Promise.all(
+    scopes.filter((scope) => !scopesWithErrors.has(operationScopeKey(scope))).map((scope) =>
+      store.markSyncPhaseCompleted?.({
+        contractId: scope.contractId,
+        entityTypeId: scope.entityTypeId,
+        ownerKey,
+        phase: "pushing",
+      }),
+    ),
+  );
+
   return result;
+}
+
+function uniqueOperationScopes(operations: PendingOperation[]) {
+  const scopes = new Map<string, { contractId: string; entityTypeId: string }>();
+
+  for (const operation of operations) {
+    scopes.set(operationScopeKey(operation), {
+      contractId: operation.contractId,
+      entityTypeId: operation.entityTypeId,
+    });
+  }
+
+  return [...scopes.values()];
+}
+
+function operationScopeKey(scope: Pick<PendingOperation, "contractId" | "entityTypeId">) {
+  return `${scope.contractId}:${scope.entityTypeId}`;
 }
 
 async function syncUpdate({

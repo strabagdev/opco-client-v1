@@ -12,10 +12,18 @@ import {
   RecordsSyncSummary,
 } from "./offline-records";
 import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi } from "./opco-api";
+import {
+  emptySyncTelemetry,
+  SyncErrorCode,
+  SyncErrorPhase,
+  SyncPhase,
+  SyncTelemetry,
+  SyncTelemetryStore,
+} from "./sync-telemetry";
 import { RecordsSyncStore } from "../sync/records-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "5";
+const SCHEMA_VERSION = "7";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -34,6 +42,7 @@ type LocalDatabaseGlobal = typeof globalThis & {
 export type LocalDatabase = AppNavigationCache &
   EntityDefinitionCache &
   OfflineRecordStore &
+  SyncTelemetryStore &
   RecordsSyncStore & {
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
@@ -50,6 +59,7 @@ export function getLocalDatabase(): LocalDatabase {
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
+    getSyncTelemetry,
     getEntityDefinition,
     getSelectedContractId,
     listCachedRecords,
@@ -58,6 +68,9 @@ export function getLocalDatabase(): LocalDatabase {
     markPendingOperationSyncing,
     markPendingOperationConflict,
     readRecordRemoteUpdatedAt,
+    markSyncError,
+    markSyncPhase,
+    markSyncPhaseCompleted,
     reconcileRemoteRecordsSnapshot,
     resolveRecordConflictWithLocal,
     resolveRecordConflictWithRemote,
@@ -196,10 +209,27 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
       WHERE operation = 'UPDATE';
     CREATE INDEX IF NOT EXISTS pending_operations_queue
       ON pending_operations(owner_key, created_at);
+    CREATE TABLE IF NOT EXISTS sync_telemetry (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      entity_type_id TEXT NOT NULL,
+      sync_phase TEXT NOT NULL,
+      last_sync_attempt_at TEXT,
+      last_push_completed_at TEXT,
+      last_full_refresh_completed_at TEXT,
+      last_reconcile_completed_at TEXT,
+      last_successful_sync_at TEXT,
+      last_sync_error_at TEXT,
+      last_sync_error_code TEXT,
+      last_sync_error_phase TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, entity_type_id)
+    );
   `);
 
   await migrateEntityRecordsTable(db);
   await migrateNavigationCacheTables(db);
+  await migrateSyncTelemetryTable(db);
 
   await db.runAsync(
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
@@ -294,6 +324,64 @@ async function migrateNavigationCacheTables(db: SQLite.SQLiteDatabase) {
       SELECT 'legacy', contract_id, views_json, synced_at
       FROM app_views_legacy;
       DROP TABLE app_views_legacy;
+    `);
+  }
+}
+
+async function migrateSyncTelemetryTable(db: SQLite.SQLiteDatabase) {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(sync_telemetry)`);
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (columns.length > 0 && !columnNames.has("entity_type_id")) {
+    await db.execAsync(`
+      ALTER TABLE sync_telemetry RENAME TO sync_telemetry_legacy;
+      CREATE TABLE sync_telemetry (
+        owner_key TEXT NOT NULL,
+        contract_id TEXT NOT NULL,
+        entity_type_id TEXT NOT NULL,
+        sync_phase TEXT NOT NULL,
+        last_sync_attempt_at TEXT,
+        last_push_completed_at TEXT,
+        last_full_refresh_completed_at TEXT,
+        last_reconcile_completed_at TEXT,
+        last_successful_sync_at TEXT,
+        last_sync_error_at TEXT,
+        last_sync_error_code TEXT,
+        last_sync_error_phase TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (owner_key, contract_id, entity_type_id)
+      );
+      INSERT INTO sync_telemetry (
+        owner_key,
+        contract_id,
+        entity_type_id,
+        sync_phase,
+        last_sync_attempt_at,
+        last_push_completed_at,
+        last_full_refresh_completed_at,
+        last_reconcile_completed_at,
+        last_successful_sync_at,
+        last_sync_error_at,
+        last_sync_error_code,
+        last_sync_error_phase,
+        updated_at
+      )
+      SELECT
+        owner_key,
+        contract_id,
+        '__contract_legacy__',
+        sync_phase,
+        last_sync_attempt_at,
+        last_push_completed_at,
+        last_full_refresh_completed_at,
+        last_reconcile_completed_at,
+        last_successful_sync_at,
+        last_sync_error_at,
+        last_sync_error_code,
+        last_sync_error_phase,
+        updated_at
+      FROM sync_telemetry_legacy;
+      DROP TABLE sync_telemetry_legacy;
     `);
   }
 }
@@ -883,6 +971,147 @@ async function getRecordsSyncSummary({
   };
 }
 
+async function getSyncTelemetry({
+  contractId,
+  entityTypeId,
+  ownerKey,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+}): Promise<SyncTelemetry | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<SyncTelemetryRow>(
+    `
+      SELECT *
+      FROM sync_telemetry
+      WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+
+  return row ? mapSyncTelemetryRow(row) : null;
+}
+
+async function markSyncPhase({
+  attemptedAt,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  phase,
+}: {
+  attemptedAt?: string;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  phase: SyncPhase;
+}) {
+  const db = await getDatabase();
+  const now = attemptedAt ?? new Date().toISOString();
+
+  await ensureSyncTelemetryRow(db, ownerKey, contractId, entityTypeId, now);
+  await db.runAsync(
+    `
+      UPDATE sync_telemetry
+      SET sync_phase = ?,
+          last_sync_attempt_at = COALESCE(?, last_sync_attempt_at),
+          last_sync_error_at = NULL,
+          last_sync_error_code = NULL,
+          last_sync_error_phase = NULL,
+          updated_at = ?
+      WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+    `,
+    phase,
+    attemptedAt ?? null,
+    now,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+}
+
+async function markSyncPhaseCompleted({
+  completedAt,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  phase,
+}: {
+  completedAt?: string;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  phase: SyncErrorPhase;
+}) {
+  const db = await getDatabase();
+  const now = completedAt ?? new Date().toISOString();
+  const completedColumn = getSyncCompletedColumn(phase);
+  const lastSuccessfulSyncAt = phase === "reconciling" ? now : null;
+
+  await ensureSyncTelemetryRow(db, ownerKey, contractId, entityTypeId, now);
+  await db.runAsync(
+    `
+      UPDATE sync_telemetry
+      SET ${completedColumn} = ?,
+          last_successful_sync_at = COALESCE(?, last_successful_sync_at),
+          sync_phase = 'idle',
+          last_sync_error_at = NULL,
+          last_sync_error_code = NULL,
+          last_sync_error_phase = NULL,
+          updated_at = ?
+      WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+    `,
+    now,
+    lastSuccessfulSyncAt,
+    now,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+}
+
+async function markSyncError({
+  code,
+  contractId,
+  entityTypeId,
+  occurredAt,
+  ownerKey,
+  phase,
+}: {
+  code: SyncErrorCode;
+  contractId: string;
+  entityTypeId: string;
+  occurredAt?: string;
+  ownerKey: string;
+  phase: SyncErrorPhase;
+}) {
+  const db = await getDatabase();
+  const now = occurredAt ?? new Date().toISOString();
+
+  await ensureSyncTelemetryRow(db, ownerKey, contractId, entityTypeId, now);
+  await db.runAsync(
+    `
+      UPDATE sync_telemetry
+      SET sync_phase = 'error',
+          last_sync_error_at = ?,
+          last_sync_error_code = ?,
+          last_sync_error_phase = ?,
+          updated_at = ?
+      WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+    `,
+    now,
+    code,
+    phase,
+    now,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+}
+
 async function listProblemRecords({
   contractId,
   entityTypeId,
@@ -1391,6 +1620,21 @@ type PendingOperationRow = {
   updated_at: string;
 };
 
+type SyncTelemetryRow = {
+  contract_id: string;
+  entity_type_id: string;
+  last_full_refresh_completed_at: string | null;
+  last_push_completed_at: string | null;
+  last_reconcile_completed_at: string | null;
+  last_successful_sync_at: string | null;
+  last_sync_attempt_at: string | null;
+  last_sync_error_at: string | null;
+  last_sync_error_code: SyncErrorCode | null;
+  last_sync_error_phase: SyncErrorPhase | null;
+  owner_key: string;
+  sync_phase: SyncPhase;
+};
+
 function mapRecordRow(row: EntityRecordRow): CachedEntityRecord {
   return {
     conflictRemoteDisplayName: row.conflict_remote_display_name,
@@ -1411,6 +1655,23 @@ function mapRecordRow(row: EntityRecordRow): CachedEntityRecord {
   };
 }
 
+function mapSyncTelemetryRow(row: SyncTelemetryRow): SyncTelemetry {
+  return {
+    contractId: row.contract_id,
+    entityTypeId: row.entity_type_id,
+    lastFullRefreshCompletedAt: row.last_full_refresh_completed_at,
+    lastPushCompletedAt: row.last_push_completed_at,
+    lastReconcileCompletedAt: row.last_reconcile_completed_at,
+    lastSuccessfulSyncAt: row.last_successful_sync_at,
+    lastSyncAttemptAt: row.last_sync_attempt_at,
+    lastSyncErrorAt: row.last_sync_error_at,
+    lastSyncErrorCode: row.last_sync_error_code,
+    lastSyncErrorPhase: row.last_sync_error_phase,
+    ownerKey: row.owner_key,
+    syncPhase: row.sync_phase,
+  };
+}
+
 function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
   return {
     attempts: row.attempts,
@@ -1428,6 +1689,61 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
     serverRecordId: row.server_record_id,
     updatedAt: row.updated_at,
   };
+}
+
+async function ensureSyncTelemetryRow(
+  db: SQLite.SQLiteDatabase,
+  ownerKey: string,
+  contractId: string,
+  entityTypeId: string,
+  timestamp: string,
+) {
+  const empty = emptySyncTelemetry({ contractId, entityTypeId, ownerKey });
+
+  await db.runAsync(
+    `
+      INSERT OR IGNORE INTO sync_telemetry (
+        owner_key,
+        contract_id,
+        entity_type_id,
+        sync_phase,
+        last_sync_attempt_at,
+        last_push_completed_at,
+        last_full_refresh_completed_at,
+        last_reconcile_completed_at,
+        last_successful_sync_at,
+        last_sync_error_at,
+        last_sync_error_code,
+        last_sync_error_phase,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    empty.ownerKey,
+    empty.contractId,
+    empty.entityTypeId,
+    empty.syncPhase,
+    empty.lastSyncAttemptAt,
+    empty.lastPushCompletedAt,
+    empty.lastFullRefreshCompletedAt,
+    empty.lastReconcileCompletedAt,
+    empty.lastSuccessfulSyncAt,
+    empty.lastSyncErrorAt,
+    empty.lastSyncErrorCode,
+    empty.lastSyncErrorPhase,
+    timestamp,
+  );
+}
+
+function getSyncCompletedColumn(phase: SyncErrorPhase) {
+  switch (phase) {
+    case "pushing":
+      return "last_push_completed_at";
+    case "refreshing":
+      return "last_full_refresh_completed_at";
+    case "reconciling":
+      return "last_reconcile_completed_at";
+  }
 }
 
 async function markRecordConflict(
