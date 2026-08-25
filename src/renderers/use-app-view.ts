@@ -4,11 +4,12 @@ import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
+import { resolveAppViewLoadError } from "./use-app-view-state";
+
 export function useAppView(appViewId: string | undefined) {
   const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
   const [views, setViews] = useState<AppView[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [offlineDefinitionMissing, setOfflineDefinitionMissing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
 
@@ -29,7 +30,6 @@ export function useAppView(appViewId: string | undefined) {
 
       setIsLoading(true);
       setError(null);
-      setOfflineDefinitionMissing(false);
 
       try {
         const data = await loadAppViewsWithCache({
@@ -42,17 +42,6 @@ export function useAppView(appViewId: string | undefined) {
 
         if (isMounted) {
           setViews(data.views);
-        }
-
-        if (data.offline) {
-          const nextAppView = data.views.find((view) => view.id === appViewId) ?? null;
-          const prepared = nextAppView
-            ? await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, nextAppView.id)
-            : null;
-
-          if (isMounted && nextAppView && (!prepared || prepared.status !== "ready")) {
-            setOfflineDefinitionMissing(true);
-          }
         }
       } catch (nextError) {
         if (isMounted) {
@@ -74,9 +63,7 @@ export function useAppView(appViewId: string | undefined) {
 
   return {
     appView,
-    error: offlineDefinitionMissing
-      ? "Esta experiencia aun no esta preparada para uso sin conexion."
-      : !isLoading && !error && !appView ? "Esta experiencia no esta asignada para este contrato." : error,
+    error: resolveAppViewLoadError({ appView, error, isLoading }),
     isLoading,
     retry: () => setRetryCount((count) => count + 1),
   };

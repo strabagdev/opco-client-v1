@@ -256,6 +256,52 @@ describe("offline records cache", () => {
     });
   });
 
+  it("reconciles a 388-record remote snapshot across four refresh pages", async () => {
+    const remoteRecords = Array.from({ length: 388 }, (_, index) =>
+      record(`persona_${index + 1}`, `Persona ${index + 1}`, {
+        nombre: `Persona ${index + 1}`,
+      }),
+    );
+    const requestedPages: number[] = [];
+
+    await refreshEntityRecordsCache({
+      ...scope,
+      entityTypeId: "personas",
+      api: {
+        getEntityRecords: async (_token, _contractId, _entityTypeId, query) => {
+          const page = query?.page ?? 1;
+          const pageSize = query?.pageSize ?? 100;
+          const start = (page - 1) * pageSize;
+
+          requestedPages.push(page);
+
+          return {
+            pagination: {
+              page,
+              pageSize,
+              total: remoteRecords.length,
+              totalPages: Math.ceil(remoteRecords.length / pageSize),
+            },
+            records: remoteRecords.slice(start, start + pageSize),
+          };
+        },
+      },
+      store,
+      token: "token_1",
+    });
+
+    const result = await store.listCachedRecords({ ...scope, entityTypeId: "personas" });
+    const telemetry = await store.getSyncTelemetry({ ...scope, entityTypeId: "personas" });
+
+    expect(requestedPages).toEqual([1, 2, 3, 4]);
+    expect(result.pagination.total).toBe(388);
+    expect(result.records).toHaveLength(388);
+    expect(telemetry).toMatchObject({
+      lastSyncErrorCode: null,
+      syncPhase: "idle",
+    });
+  });
+
   it("records refresh and reconcile completion telemetry", async () => {
     await refreshEntityRecordsCache({
       ...scope,
