@@ -263,6 +263,7 @@ describe("offline records cache", () => {
       }),
     );
     const requestedPages: number[] = [];
+    const diagnosticsSnapshots: unknown[] = [];
 
     await refreshEntityRecordsCache({
       ...scope,
@@ -286,6 +287,7 @@ describe("offline records cache", () => {
           };
         },
       },
+      onDiagnostics: (diagnostics) => diagnosticsSnapshots.push(diagnostics),
       store,
       token: "token_1",
     });
@@ -294,6 +296,23 @@ describe("offline records cache", () => {
     const telemetry = await store.getSyncTelemetry({ ...scope, entityTypeId: "personas" });
 
     expect(requestedPages).toEqual([1, 2, 3, 4]);
+    expect(diagnosticsSnapshots).toHaveLength(1);
+    expect(diagnosticsSnapshots[0]).toMatchObject({
+      afterReconcile: {
+        synced: 388,
+        total: 388,
+      },
+      lastHttpStatus: 200,
+      pages: [
+        { count: 100, page: 1, pageSize: 100 },
+        { count: 100, page: 2, pageSize: 100 },
+        { count: 100, page: 3, pageSize: 100 },
+        { count: 88, page: 4, pageSize: 100 },
+      ],
+      recordsFetched: 388,
+      remoteTotal: 388,
+      totalPages: 4,
+    });
     expect(result.pagination.total).toBe(388);
     expect(result.records).toHaveLength(388);
     expect(telemetry).toMatchObject({
@@ -809,6 +828,22 @@ class MemoryRecordStore implements OfflineRecordStore {
       failedCount: count("failed"),
       pendingCount: count("pending_create", "pending_update"),
       syncingCount: count("syncing"),
+    };
+  }
+
+  async getRecordCacheStatusCounts(input: Parameters<OfflineRecordStore["getRecordCacheStatusCounts"]>[0]) {
+    const records = [...this.records.values()].filter((item) =>
+      this.recordMatches(item, input.ownerKey, input.contractId, input.entityTypeId),
+    );
+    const count = (...statuses: string[]) => records.filter((item) => statuses.includes(item.syncStatus)).length;
+
+    return {
+      conflict: count("conflict"),
+      failed: count("failed"),
+      pendingCreate: count("pending_create"),
+      pendingUpdate: count("pending_update"),
+      synced: count("synced"),
+      total: records.length,
     };
   }
 

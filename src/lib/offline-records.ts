@@ -5,6 +5,7 @@ import {
   EntityRecordPagination,
   EntityRecordValue,
   OpcoApi,
+  OpcoApiError,
   OpcoNetworkError,
 } from "./opco-api";
 import { classifySyncTelemetryError, SyncTelemetryStore } from "./sync-telemetry";
@@ -61,10 +62,30 @@ export type RecordsSyncSummary = {
   syncingCount: number;
 };
 
+export type RecordCacheStatusCounts = {
+  conflict: number;
+  failed: number;
+  pendingCreate: number;
+  pendingUpdate: number;
+  synced: number;
+  total: number;
+};
+
+export type RecordsRefreshDiagnostics = {
+  afterReconcile?: RecordCacheStatusCounts;
+  beforeRefresh?: RecordCacheStatusCounts;
+  lastHttpStatus: number | null;
+  pages: { count: number; page: number; pageSize: number }[];
+  recordsFetched: number;
+  remoteTotal: number | null;
+  totalPages: number | null;
+};
+
 export type OfflineRecordStore = {
   countPendingOperations(ownerKey: string): Promise<number>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
   getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;
+  getRecordCacheStatusCounts(input: BaseScopedInput): Promise<RecordCacheStatusCounts>;
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
@@ -190,9 +211,11 @@ export async function loadRecordsWithOfflineCache({
 
 export type RefreshEntityRecordsCacheParams = BaseScopedInput & {
   api: Pick<OpcoApi, "getEntityRecords">;
+  onDiagnostics?: (diagnostics: RecordsRefreshDiagnostics) => void;
   pageSize?: number;
   resultPageSize?: number;
   store: Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
+    Partial<Pick<OfflineRecordStore, "getRecordCacheStatusCounts">> &
     Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
   suppressNetworkTelemetry?: boolean;
   token: string;
@@ -203,6 +226,7 @@ export async function refreshEntityRecordsCache({
   contractId,
   entityTypeId,
   ownerKey,
+  onDiagnostics,
   pageSize = FULL_REFRESH_PAGE_SIZE,
   resultPageSize = 25,
   store,
@@ -210,6 +234,15 @@ export async function refreshEntityRecordsCache({
   token,
 }: RefreshEntityRecordsCacheParams): Promise<CachedRecordsResult> {
   let currentTelemetryPhase: "refreshing" | "reconciling" = "refreshing";
+  const diagnostics: RecordsRefreshDiagnostics = {
+    lastHttpStatus: null,
+    pages: [],
+    recordsFetched: 0,
+    remoteTotal: null,
+    totalPages: null,
+  };
+
+  diagnostics.beforeRefresh = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
 
   if (!suppressNetworkTelemetry) {
     await store.markSyncPhase?.({
@@ -232,6 +265,11 @@ export async function refreshEntityRecordsCache({
         pageSize,
       });
 
+      diagnostics.lastHttpStatus = 200;
+      diagnostics.pages.push({ count: remote.records.length, page, pageSize });
+      diagnostics.recordsFetched += remote.records.length;
+      diagnostics.remoteTotal = remote.pagination.total;
+      diagnostics.totalPages = remote.pagination.totalPages;
       records.push(...remote.records);
       totalPages = Math.max(1, remote.pagination.totalPages);
 
@@ -263,6 +301,8 @@ export async function refreshEntityRecordsCache({
       ownerKey,
       records,
     });
+    diagnostics.afterReconcile = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
+    onDiagnostics?.(diagnostics);
     if (!suppressNetworkTelemetry) {
       await store.markSyncPhaseCompleted?.({
         contractId,
@@ -286,6 +326,10 @@ export async function refreshEntityRecordsCache({
       offline: false,
     };
   } catch (error) {
+    if (error instanceof OpcoApiError) {
+      diagnostics.lastHttpStatus = error.status;
+    }
+    onDiagnostics?.(diagnostics);
     if (!(suppressNetworkTelemetry && isNetworkLikeError(error))) {
       await store.markSyncError?.({
         code: classifySyncTelemetryError(error),

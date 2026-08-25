@@ -77,6 +77,7 @@ export function getLocalDatabase(): LocalDatabase {
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
+    getRecordCacheStatusCounts,
     getSyncTelemetry,
     getEntityDefinition,
     listAppViewDefinitions,
@@ -1368,6 +1369,42 @@ async function getRecordsSyncSummary({
     failedCount: count(["failed"]),
     pendingCount: count(["pending_create", "pending_update"]),
     syncingCount: count(["syncing"]),
+  };
+}
+
+async function getRecordCacheStatusCounts({
+  contractId,
+  entityTypeId,
+  ownerKey,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+}) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ sync_status: RecordSyncStatus; total: number }>(
+    `
+      SELECT sync_status, COUNT(*) AS total
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+      GROUP BY sync_status
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+  const count = (status: RecordSyncStatus) =>
+    rows.filter((row) => row.sync_status === status).reduce((total, row) => total + row.total, 0);
+
+  return {
+    conflict: count("conflict"),
+    failed: count("failed"),
+    pendingCreate: count("pending_create"),
+    pendingUpdate: count("pending_update"),
+    synced: count("synced"),
+    total: rows.reduce((total, row) => total + row.total, 0),
   };
 }
 

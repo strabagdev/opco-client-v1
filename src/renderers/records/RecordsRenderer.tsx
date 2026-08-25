@@ -1,5 +1,5 @@
 import { Link } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -15,14 +15,23 @@ import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecord
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
-import { CachedEntityRecord, loadRecordsWithOfflineCache, refreshEntityRecordsCache } from "@/lib/offline-records";
+import {
+  CachedEntityRecord,
+  loadRecordsWithOfflineCache,
+  refreshEntityRecordsCache,
+} from "@/lib/offline-records";
 import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
 import { formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   stableTextInputStyle,
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
 } from "@/lib/visual-stability";
-import { getSyncDiagnosticsRows } from "@/renderers/records/sync-diagnostics";
+import {
+  RecordsDiagnosticsState,
+  getRecordsDiagnosticsRows,
+  getSyncDiagnosticsRows,
+} from "@/renderers/records/sync-diagnostics";
+import { resolveRecordsSearchForScopeChange } from "@/renderers/records/records-renderer-state";
 import { AppViewRendererProps } from "@/renderers/types";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
@@ -45,8 +54,10 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [recordsSyncTelemetry, setRecordsSyncTelemetry] = useState<SyncTelemetry | null>(null);
+  const [recordsDiagnostics, setRecordsDiagnostics] = useState<RecordsDiagnosticsState | null>(null);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
 
   const listItems = useMemo(
     () => (definition ? records.map((record) => buildRecordListItem({ definition, record })) : []),
@@ -59,6 +70,23 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.syncingCount > 0 ||
     recordsSyncSummary.failedCount > 0 ||
     recordsSyncSummary.conflictCount > 0;
+
+  useEffect(() => {
+    const nextScope = { appViewId: appView.id, entityTypeId };
+    const nextSearch = resolveRecordsSearchForScopeChange({
+      currentSearch: { debouncedSearch: "preserve", searchText: "preserve" },
+      nextScope,
+      previousScope: previousScopeRef.current,
+    });
+
+    previousScopeRef.current = nextScope;
+    if (nextSearch.searchText === "preserve" && nextSearch.debouncedSearch === "preserve") {
+      return;
+    }
+
+    setSearchText(nextSearch.searchText);
+    setDebouncedSearch(nextSearch.debouncedSearch);
+  }, [appView.id, entityTypeId]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -105,6 +133,21 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setFromCache(false);
       setIsOfflineData(false);
       setSyncedAt(null);
+      setRecordsDiagnostics({
+        appViewId: appView.id,
+        connectivityStatus: status === "offline" ? "offline" : "online",
+        contractId: selectedContractId,
+        entityTypeId,
+        error: null,
+        isLoading: true,
+        local: null,
+        ownerKey,
+        page: 1,
+        refresh: null,
+        rendererRecords: 0,
+        search: debouncedSearch,
+        sessionStatus: status,
+      });
 
       try {
         const definitionResult = await getEntityDefinitionWithCache({
@@ -131,6 +174,27 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               contractId: selectedContractId,
               entityTypeId,
               ownerKey,
+              onDiagnostics: (diagnostics) => {
+                if (!isMounted) {
+                  return;
+                }
+
+                setRecordsDiagnostics({
+                  appViewId: appView.id,
+                  connectivityStatus: status === "offline" ? "offline" : "online",
+                  contractId: selectedContractId,
+                  entityTypeId,
+                  error: null,
+                  isLoading: true,
+                  local: diagnostics.afterReconcile ?? null,
+                  ownerKey,
+                  page: 1,
+                  refresh: diagnostics,
+                  rendererRecords: 0,
+                  search: debouncedSearch,
+                  sessionStatus: status,
+                });
+              },
               resultPageSize: PAGE_SIZE,
               store: definitionCache,
               suppressNetworkTelemetry: status === "offline",
@@ -144,12 +208,30 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           setSyncedAt(definitionResult.syncedAt);
           setRecords(recordsResult.records);
           setPagination(recordsResult.pagination);
+          setRecordsDiagnostics((current) => ({
+            appViewId: current?.appViewId ?? appView.id,
+            connectivityStatus: current?.connectivityStatus ?? (status === "offline" ? "offline" : "online"),
+            contractId: current?.contractId ?? selectedContractId,
+            entityTypeId: current?.entityTypeId ?? entityTypeId,
+            error: null,
+            isLoading: false,
+            local: current?.local ?? null,
+            ownerKey: current?.ownerKey ?? ownerKey,
+            page: recordsResult.pagination.page,
+            refresh: current?.refresh ?? null,
+            rendererRecords: recordsResult.records.length,
+            search: debouncedSearch,
+            sessionStatus: current?.sessionStatus ?? status,
+          }));
         }
         await refreshRecordsSyncSummary();
         await refreshCurrentSyncTelemetry();
       } catch (nextError) {
         if (isMounted) {
-          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar registros.");
+          const message = nextError instanceof Error ? nextError.message : "No fue posible cargar registros.";
+
+          setError(message);
+          setRecordsDiagnostics((current) => current ? { ...current, error: message, isLoading: false } : current);
         }
       } finally {
         if (isMounted) {
@@ -165,6 +247,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     };
   }, [
     api,
+    appView.id,
     debouncedSearch,
     definitionCache,
     entityTypeId,
@@ -327,9 +410,13 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       {shouldShowSyncDiagnostics() ? (
         <SyncDiagnostics summary={recordsSyncSummary} telemetry={recordsSyncTelemetry} />
       ) : null}
+      {shouldShowRecordsDiagnostics() ? (
+        <RecordsDiagnostics diagnostics={recordsDiagnostics} telemetry={recordsSyncTelemetry} />
+      ) : null}
     </ScrollView>
   );
 }
+
 
 function SyncTelemetrySummary({ telemetry }: { telemetry: SyncTelemetry | null }) {
   if (!telemetry) {
@@ -395,6 +482,36 @@ function shouldShowSyncDiagnostics() {
   }
 
   return new URLSearchParams(window.location.search).has("syncDiagnostics");
+}
+
+function shouldShowRecordsDiagnostics() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).get("recordsDiagnostics") === "1";
+}
+
+function RecordsDiagnostics({
+  diagnostics,
+  telemetry,
+}: {
+  diagnostics: RecordsDiagnosticsState | null;
+  telemetry: SyncTelemetry | null;
+}) {
+  const rows = getRecordsDiagnosticsRows(diagnostics, telemetry);
+
+  return (
+    <View style={styles.syncDiagnostics}>
+      <Text style={styles.syncDiagnosticsTitle}>Diagnostico de records</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.syncDiagnosticsRow}>
+          <Text style={styles.syncDiagnosticsLabel}>{label}</Text>
+          <Text style={styles.syncDiagnosticsValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 function SyncDiagnostics({
