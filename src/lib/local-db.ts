@@ -23,8 +23,10 @@ import {
   createLocalRecordId,
   OfflineRecordStore,
   PendingOperation,
+  RecordsReconcileDiagnostics,
   RecordSyncStatus,
   RecordsSyncSummary,
+  fingerprintRecordsScope,
 } from "./offline-records";
 import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi } from "./opco-api";
 import {
@@ -1012,9 +1014,9 @@ async function upsertRemoteRecords({
           conflict_remote_updated_at = CASE
             WHEN entity_records.sync_status = 'synced' THEN NULL
             ELSE entity_records.conflict_remote_updated_at
-          END
+      END
       `,
-      existing?.local_id ?? record.id,
+      existing?.local_id ?? createRemoteRecordLocalId({ contractId, entityTypeId, ownerKey, serverId: record.id }),
       record.id,
       ownerKey,
       contractId,
@@ -1025,6 +1027,31 @@ async function upsertRemoteRecords({
       cachedAt,
     );
   }
+}
+
+function createRemoteRecordLocalId({
+  contractId,
+  entityTypeId,
+  ownerKey,
+  serverId,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  serverId: string;
+}) {
+  return `remote_${fingerprintLocalIdPart(ownerKey)}_${fingerprintLocalIdPart(contractId)}_${fingerprintLocalIdPart(entityTypeId)}_${serverId}`;
+}
+
+function fingerprintLocalIdPart(value: string) {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 async function reconcileRemoteRecordsSnapshot({
@@ -1050,6 +1077,7 @@ async function reconcileRemoteRecordsSnapshot({
     ownerKey,
     records,
   });
+  const afterUpsert = await getRecordCacheStatusCounts({ contractId, entityTypeId, ownerKey });
 
   const syncedRows = await db.getAllAsync<{ local_id: string; server_id: string | null }>(
     `
@@ -1078,6 +1106,16 @@ async function reconcileRemoteRecordsSnapshot({
       row.local_id,
     );
   }
+
+  const afterReconcile = await getRecordCacheStatusCounts({ contractId, entityTypeId, ownerKey });
+  const scope = fingerprintRecordsScope({ contractId, entityTypeId, ownerKey });
+
+  return {
+    afterReconcile,
+    afterUpsert,
+    reconcileScope: scope,
+    writeScope: scope,
+  } satisfies RecordsReconcileDiagnostics;
 }
 
 async function listCachedRecords({

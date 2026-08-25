@@ -71,14 +71,33 @@ export type RecordCacheStatusCounts = {
   total: number;
 };
 
+export type RecordsScopeFingerprint = {
+  contract: string;
+  entity: string;
+  owner: string;
+  scope: string;
+};
+
+export type RecordsReconcileDiagnostics = {
+  afterReconcile: RecordCacheStatusCounts;
+  afterUpsert: RecordCacheStatusCounts;
+  reconcileScope: RecordsScopeFingerprint;
+  writeScope: RecordsScopeFingerprint;
+};
+
 export type RecordsRefreshDiagnostics = {
   afterReconcile?: RecordCacheStatusCounts;
+  afterUpsert?: RecordCacheStatusCounts;
   beforeRefresh?: RecordCacheStatusCounts;
+  beforeRender?: RecordCacheStatusCounts;
   lastHttpStatus: number | null;
   pages: { count: number; page: number; pageSize: number }[];
   recordsFetched: number;
+  readScope?: RecordsScopeFingerprint;
+  reconcileScope?: RecordsScopeFingerprint;
   remoteTotal: number | null;
   totalPages: number | null;
+  writeScope?: RecordsScopeFingerprint;
 };
 
 export type OfflineRecordStore = {
@@ -89,7 +108,7 @@ export type OfflineRecordStore = {
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
-  reconcileRemoteRecordsSnapshot(input: ReconcileRemoteRecordsSnapshotInput): Promise<void>;
+  reconcileRemoteRecordsSnapshot(input: ReconcileRemoteRecordsSnapshotInput): Promise<RecordsReconcileDiagnostics | void>;
   retryFailedRecord(input: RetryFailedRecordInput): Promise<CachedEntityRecord>;
   resolveRecordConflictWithLocal(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
   resolveRecordConflictWithRemote(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;
@@ -99,6 +118,13 @@ export type OfflineRecordStore = {
 
 const FULL_REFRESH_PAGE_SIZE = 100;
 const FULL_REFRESH_MAX_PAGES = 1_000;
+
+class RecordsRefreshInvariantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RecordsRefreshInvariantError";
+  }
+}
 
 type BaseScopedInput = {
   contractId: string;
@@ -238,8 +264,11 @@ export async function refreshEntityRecordsCache({
     lastHttpStatus: null,
     pages: [],
     recordsFetched: 0,
+    readScope: fingerprintRecordsScope({ contractId, entityTypeId, ownerKey }),
+    reconcileScope: fingerprintRecordsScope({ contractId, entityTypeId, ownerKey }),
     remoteTotal: null,
     totalPages: null,
+    writeScope: fingerprintRecordsScope({ contractId, entityTypeId, ownerKey }),
   };
 
   diagnostics.beforeRefresh = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
@@ -295,14 +324,20 @@ export async function refreshEntityRecordsCache({
       });
     }
     currentTelemetryPhase = "reconciling";
-    await store.reconcileRemoteRecordsSnapshot({
+    const reconcileDiagnostics = await store.reconcileRemoteRecordsSnapshot({
       contractId,
       entityTypeId,
       ownerKey,
       records,
     });
-    diagnostics.afterReconcile = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
+    diagnostics.afterUpsert = reconcileDiagnostics?.afterUpsert;
+    diagnostics.afterReconcile = reconcileDiagnostics?.afterReconcile ?? await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
+    diagnostics.writeScope = reconcileDiagnostics?.writeScope ?? diagnostics.writeScope;
+    diagnostics.reconcileScope = reconcileDiagnostics?.reconcileScope ?? diagnostics.reconcileScope;
     onDiagnostics?.(diagnostics);
+    if ((diagnostics.remoteTotal ?? 0) > 0 && (diagnostics.recordsFetched > 0 || records.length > 0) && diagnostics.afterReconcile?.synced === 0) {
+      throw new RecordsRefreshInvariantError("El refresco remoto devolvio registros, pero el cache local quedo sin registros sincronizados.");
+    }
     if (!suppressNetworkTelemetry) {
       await store.markSyncPhaseCompleted?.({
         contractId,
@@ -319,6 +354,8 @@ export async function refreshEntityRecordsCache({
       page: 1,
       pageSize: resultPageSize,
     });
+    diagnostics.beforeRender = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
+    onDiagnostics?.(diagnostics);
 
     return {
       ...cached,
@@ -326,6 +363,18 @@ export async function refreshEntityRecordsCache({
       offline: false,
     };
   } catch (error) {
+    if (error instanceof RecordsRefreshInvariantError) {
+      onDiagnostics?.(diagnostics);
+      await store.markSyncError?.({
+        code: "SQLITE",
+        contractId,
+        entityTypeId,
+        ownerKey,
+        phase: currentTelemetryPhase,
+      });
+      throw error;
+    }
+
     if (error instanceof OpcoApiError) {
       diagnostics.lastHttpStatus = error.status;
     }
@@ -412,6 +461,26 @@ export async function loadRecordWithOfflineCache({
 
     throw error;
   }
+}
+
+export function fingerprintRecordsScope({ contractId, entityTypeId, ownerKey }: BaseScopedInput): RecordsScopeFingerprint {
+  return {
+    contract: fingerprintValue(contractId),
+    entity: fingerprintValue(entityTypeId),
+    owner: fingerprintValue(ownerKey),
+    scope: fingerprintValue(`${ownerKey}\u001f${contractId}\u001f${entityTypeId}`),
+  };
+}
+
+function fingerprintValue(value: string) {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 export type SaveRecordParams = BaseScopedInput & {

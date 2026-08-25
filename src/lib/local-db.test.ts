@@ -151,6 +151,68 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
 
+  it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {
+    const store = getLocalDatabase();
+    const records = Array.from({ length: 388 }, (_, index) => remoteRecord(`persona_${index + 1}`));
+
+    await store.upsertRemoteRecords({
+      contractId: "contract_1",
+      entityTypeId: "personas",
+      ownerKey: "org_1:user_brenda",
+      records,
+    });
+
+    const recordInserts = db.runAsync.mock.calls.filter(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO entity_records"),
+    );
+    const localIds = recordInserts.map(([, localId]) => localId);
+
+    expect(recordInserts).toHaveLength(388);
+    expect(localIds).toHaveLength(new Set(localIds).size);
+    expect(localIds[0]).toMatch(/^remote_/);
+    expect(localIds).not.toContain("persona_1");
+  });
+
+  it("preserves an existing current-scope local id when refreshing a known remote record", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return {
+          cached_at: "2026-08-24T10:00:00.000Z",
+          conflict_remote_display_name: null,
+          conflict_remote_updated_at: null,
+          conflict_remote_values_json: null,
+          contract_id: "contract_1",
+          display_name: "Persona 1",
+          entity_type_id: "personas",
+          local_id: "legacy_current_local_id",
+          owner_key: "org_1:user_brenda",
+          remote_updated_at: "2026-08-24T10:00:00.000Z",
+          server_id: "persona_1",
+          sync_error_code: null,
+          sync_error_message: null,
+          sync_status: "synced",
+          values_json: "{}",
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.upsertRemoteRecords({
+      contractId: "contract_1",
+      entityTypeId: "personas",
+      ownerKey: "org_1:user_brenda",
+      records: [remoteRecord("persona_1")],
+    });
+
+    const recordInsert = db.runAsync.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO entity_records"),
+    );
+
+    expect(recordInsert?.[1]).toBe("legacy_current_local_id");
+  });
+
   it("marks storage unavailable when SQLite open fails", async () => {
     sqliteMock.openDatabaseAsync.mockRejectedValueOnce(new Error("OPFS access handle unavailable"));
     const store = getLocalDatabase();
@@ -318,5 +380,14 @@ function createMockDatabase(): MockDatabase {
     }),
     getFirstAsync: vi.fn(async () => null),
     runAsync: vi.fn(async () => undefined),
+  };
+}
+
+function remoteRecord(id: string) {
+  return {
+    displayName: id,
+    id,
+    updatedAt: "2026-08-24T10:00:00.000Z",
+    values: { nombre: id },
   };
 }

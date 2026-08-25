@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   OfflineRecordStore,
   PendingOperation,
+  fingerprintRecordsScope,
   loadRecordWithOfflineCache,
   loadRecordsWithOfflineCache,
   refreshEntityRecordsCache,
@@ -296,9 +297,17 @@ describe("offline records cache", () => {
     const telemetry = await store.getSyncTelemetry({ ...scope, entityTypeId: "personas" });
 
     expect(requestedPages).toEqual([1, 2, 3, 4]);
-    expect(diagnosticsSnapshots).toHaveLength(1);
-    expect(diagnosticsSnapshots[0]).toMatchObject({
+    expect(diagnosticsSnapshots).toHaveLength(2);
+    expect(diagnosticsSnapshots[1]).toMatchObject({
       afterReconcile: {
+        synced: 388,
+        total: 388,
+      },
+      afterUpsert: {
+        synced: 388,
+        total: 388,
+      },
+      beforeRender: {
         synced: 388,
         total: 388,
       },
@@ -312,6 +321,9 @@ describe("offline records cache", () => {
       recordsFetched: 388,
       remoteTotal: 388,
       totalPages: 4,
+      writeScope: fingerprintRecordsScope({ ...scope, entityTypeId: "personas" }),
+      reconcileScope: fingerprintRecordsScope({ ...scope, entityTypeId: "personas" }),
+      readScope: fingerprintRecordsScope({ ...scope, entityTypeId: "personas" }),
     });
     expect(result.pagination.total).toBe(388);
     expect(result.records).toHaveLength(388);
@@ -344,6 +356,31 @@ describe("offline records cache", () => {
     expect(telemetry?.lastFullRefreshCompletedAt).toBeTruthy();
     expect(telemetry?.lastReconcileCompletedAt).toBeTruthy();
     expect(telemetry?.lastSuccessfulSyncAt).toBe(telemetry?.lastReconcileCompletedAt);
+  });
+
+  it("does not mark a remote refresh successful when reconcile leaves an impossible empty local snapshot", async () => {
+    store.forceEmptyReconcileDiagnostics = true;
+
+    await expect(refreshEntityRecordsCache({
+      ...scope,
+      api: {
+        getEntityRecords: async () => ({
+          pagination: { page: 1, pageSize: 100, total: 388, totalPages: 1 },
+          records: [record("persona_1", "Persona 1", { nombre: "Persona 1" })],
+        }),
+      },
+      store,
+      token: "token_1",
+    })).rejects.toThrow("cache local quedo sin registros sincronizados");
+
+    const telemetry = await store.getSyncTelemetry(scope);
+
+    expect(telemetry).toMatchObject({
+      lastSuccessfulSyncAt: null,
+      lastSyncErrorCode: "SQLITE",
+      lastSyncErrorPhase: "reconciling",
+      syncPhase: "error",
+    });
   });
 
   it("records offline refresh as error without pretending success", async () => {
@@ -659,6 +696,7 @@ function record(id: string, displayName: string, values: Record<string, EntityRe
 }
 
 class MemoryRecordStore implements OfflineRecordStore {
+  forceEmptyReconcileDiagnostics = false;
   records = new Map<string, Awaited<ReturnType<OfflineRecordStore["createLocalRecord"]>>>();
   operations = new Map<string, PendingOperation>();
   telemetry = new Map<string, SyncTelemetry>();
@@ -793,6 +831,7 @@ class MemoryRecordStore implements OfflineRecordStore {
 
   async reconcileRemoteRecordsSnapshot(input: Parameters<OfflineRecordStore["reconcileRemoteRecordsSnapshot"]>[0]) {
     await this.upsertRemoteRecords(input);
+    const afterUpsert = await this.getRecordCacheStatusCounts(input);
 
     const seenServerIds = new Set(input.records.map((remote) => remote.id));
 
@@ -811,6 +850,18 @@ class MemoryRecordStore implements OfflineRecordStore {
 
       this.records.delete(recordKey);
     });
+
+    const scopeFingerprint = fingerprintRecordsScope(input);
+    const afterReconcile = this.forceEmptyReconcileDiagnostics
+      ? { conflict: 0, failed: 0, pendingCreate: 0, pendingUpdate: 0, synced: 0, total: 0 }
+      : await this.getRecordCacheStatusCounts(input);
+
+    return {
+      afterReconcile,
+      afterUpsert,
+      reconcileScope: scopeFingerprint,
+      writeScope: scopeFingerprint,
+    };
   }
 
   async listPendingOperations(ownerKey: string) {
