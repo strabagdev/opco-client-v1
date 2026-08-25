@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatLocalStorageResetWarning } from "./local-db-recovery";
+import { formatLocalStorageResetWarning, isAccessHandleBusyError, sanitizeLocalDatabaseErrorMessage } from "./local-db-recovery";
 
 describe("local database recovery copy", () => {
   it("shows the number of local changes at risk before reset", () => {
@@ -31,5 +31,25 @@ describe("local database recovery copy", () => {
     expect(message).toContain("No pudimos contar los cambios locales");
     expect(message).not.toContain("OPFS");
     expect(message).not.toContain("MIGRATION_FAILED");
+  });
+
+  it("detects OPFS Access Handle contention without treating every storage error as corruption", () => {
+    const error = new Error(
+      "Failed to execute 'createSyncAccessHandle' on 'FileSystemFileHandle': Access Handles cannot be created if there is another open Access Handle or Writable stream associated with the same file.",
+    );
+    error.name = "NoModificationAllowedError";
+
+    expect(isAccessHandleBusyError(error)).toBe(true);
+  });
+
+  it("sanitizes technical SQLite messages before displaying diagnostics", () => {
+    const message = sanitizeLocalDatabaseErrorMessage(
+      new Error("NoModificationAllowedError: /home/user/private/opco-client.db createSyncAccessHandle https://secret.example/token"),
+    );
+
+    expect(message).toContain("NoModificationAllowedError");
+    expect(message).toContain("createSyncAccessHandle");
+    expect(message).not.toContain("/home/user/private");
+    expect(message).not.toContain("https://secret.example");
   });
 });

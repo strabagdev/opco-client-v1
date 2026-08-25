@@ -14,6 +14,8 @@ import {
   LocalDatabaseStorageState,
   LocalDatabaseUnavailableCause,
   LocalDatabaseUnavailableError,
+  isAccessHandleBusyError,
+  sanitizeLocalDatabaseErrorMessage,
 } from "./local-db-recovery";
 import {
   buildLocalDisplayName,
@@ -44,6 +46,7 @@ const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 type LocalDatabaseGlobalState = {
   database: SQLite.SQLiteDatabase | null;
   databasePromise: Promise<SQLite.SQLiteDatabase> | null;
+  lifecycleCloseRegistered: boolean;
   lastUnavailableError: LocalDatabaseUnavailableError | null;
   listeners: Set<() => void>;
   migrationPromise: Promise<void> | null;
@@ -147,6 +150,7 @@ async function openAndMigrate() {
 
   try {
     db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
+    registerWebDatabaseLifecycleClose(state);
   } catch (error) {
     throw toLocalDatabaseUnavailableError(error, "OPEN_FAILED");
   }
@@ -314,6 +318,7 @@ function getLocalDatabaseGlobalState() {
     globalState[GLOBAL_DATABASE_STATE_KEY] = {
       database: null,
       databasePromise: null,
+      lifecycleCloseRegistered: false,
       lastUnavailableError: null,
       listeners: new Set(),
       migratedSchemaVersion: null,
@@ -342,7 +347,8 @@ function setLocalDatabaseStorageState(state: LocalDatabaseGlobalState, storageSt
 function isSameLocalDatabaseStorageState(current: LocalDatabaseStorageState, next: LocalDatabaseStorageState) {
   return current.status === next.status && current.errorCode === next.errorCode && current.retryable === next.retryable &&
     current.destructiveRecoveryAvailable === next.destructiveRecoveryAvailable &&
-    ("cause" in current ? current.cause : null) === ("cause" in next ? next.cause : null);
+    ("cause" in current ? current.cause : null) === ("cause" in next ? next.cause : null) &&
+    ("technicalMessage" in current ? current.technicalMessage : null) === ("technicalMessage" in next ? next.technicalMessage : null);
 }
 
 function notifyLocalDatabaseStorageListeners(state = getLocalDatabaseGlobalState()) {
@@ -355,8 +361,9 @@ function markLocalDatabaseUnavailable(state: LocalDatabaseGlobalState, error: Lo
   state.lastUnavailableError = error;
   setLocalDatabaseStorageState(state, {
     cause: error.causeCode,
-    destructiveRecoveryAvailable: true,
+    destructiveRecoveryAvailable: error.causeCode !== "ACCESS_HANDLE_BUSY",
     errorCode: "SQLITE_UNAVAILABLE",
+    technicalMessage: sanitizeLocalDatabaseErrorMessage(error.originalError),
     retryable: true,
     status: "unavailable",
   });
@@ -385,6 +392,10 @@ function classifyLocalDatabaseFailureCause(
   error: unknown,
   fallbackCause: LocalDatabaseUnavailableCause,
 ): LocalDatabaseUnavailableCause {
+  if (isAccessHandleBusyError(error)) {
+    return "ACCESS_HANDLE_BUSY";
+  }
+
   const message = error instanceof Error ? error.message.toLocaleLowerCase("en-US") : "";
 
   if (message.includes("corrupt") || message.includes("malformed") || message.includes("not a database")) {
@@ -403,6 +414,30 @@ function classifyLocalDatabaseFailureCause(
   }
 
   return fallbackCause;
+}
+
+function registerWebDatabaseLifecycleClose(state: LocalDatabaseGlobalState) {
+  if (state.lifecycleCloseRegistered || typeof window === "undefined") {
+    return;
+  }
+
+  const closeCurrentDatabase = () => {
+    const currentDatabase = state.database;
+
+    if (!currentDatabase) {
+      return;
+    }
+
+    state.database = null;
+    state.databasePromise = null;
+    state.migrationPromise = null;
+    state.migratedSchemaVersion = null;
+    void closeDatabaseQuietly(currentDatabase);
+  };
+
+  window.addEventListener("pagehide", closeCurrentDatabase);
+  window.addEventListener("beforeunload", closeCurrentDatabase);
+  state.lifecycleCloseRegistered = true;
 }
 
 export function __resetLocalDatabaseForTests() {

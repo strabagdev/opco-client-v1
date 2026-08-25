@@ -26,6 +26,7 @@ import {
 import {
   formatLocalStorageResetWarning,
   isLocalDatabaseUnavailableError,
+  LocalDatabaseUnavailableCause,
   LocalDatabaseRecoverySummary,
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
@@ -504,9 +505,57 @@ function LocalStorageRecoveryScreen({
   onResetConfirmed(): Promise<void>;
   onRetry(): Promise<void>;
 }) {
+  const { localDatabaseStorageState } = useSession();
   const [error, setError] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [summary, setSummary] = useState<LocalDatabaseRecoverySummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const isAccessHandleBusy =
+    localDatabaseStorageState.status === "unavailable" && localDatabaseStorageState.cause === "ACCESS_HANDLE_BUSY";
+  const showDiagnostics = shouldShowLocalStorageDiagnostics();
+
+  const refreshSummary = useCallback(async () => {
+    if (!showDiagnostics) {
+      return;
+    }
+
+    try {
+      const nextSummary = await getRecoverySummary();
+
+      setSummary(nextSummary);
+      setSummaryError(null);
+    } catch {
+      setSummary(null);
+      setSummaryError("summary unavailable");
+    }
+  }, [getRecoverySummary, showDiagnostics]);
+
+  useEffect(() => {
+    if (!showDiagnostics) {
+      return;
+    }
+
+    let isMounted = true;
+
+    getRecoverySummary()
+      .then((nextSummary) => {
+        if (isMounted) {
+          setSummary(nextSummary);
+          setSummaryError(null);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setSummary(null);
+          setSummaryError("summary unavailable");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [getRecoverySummary, showDiagnostics]);
 
   async function retry() {
     setError(null);
@@ -516,6 +565,7 @@ function LocalStorageRecoveryScreen({
       await onRetry();
     } catch {
       setError("Todavia no pudimos abrir los datos guardados.");
+      await refreshSummary();
     } finally {
       setIsRetrying(false);
     }
@@ -553,25 +603,101 @@ function LocalStorageRecoveryScreen({
   return (
     <View style={storageStyles.screen}>
       <View style={storageStyles.panel}>
-        <Text style={storageStyles.title}>No pudimos abrir los datos guardados en este dispositivo.</Text>
+        <Text style={storageStyles.title}>
+          {isAccessHandleBusy
+            ? "Opco Client ya esta abierto en otra pestana."
+            : "No pudimos abrir los datos guardados en este dispositivo."}
+        </Text>
         <Text style={storageStyles.body}>
-          Puedes reintentar sin borrar nada. Restablecer datos locales elimina la cache de este dispositivo y puede
-          borrar cambios no sincronizados.
+          {isAccessHandleBusy
+            ? "Cierra las otras pestanas o ventanas de Opco Client y luego reintenta. No es necesario restablecer los datos locales."
+            : "Puedes reintentar sin borrar nada. Restablecer datos locales elimina la cache de este dispositivo y puede borrar cambios no sincronizados."}
         </Text>
         {error ? <Text style={storageStyles.error}>{error}</Text> : null}
+        {showDiagnostics ? (
+          <LocalStorageDiagnostics summary={summary} summaryError={summaryError} />
+        ) : null}
         <Pressable disabled={isRetrying || isResetting} onPress={retry} style={storageStyles.primaryButton}>
           {isRetrying ? <ActivityIndicator color="#ffffff" /> : <Text style={storageStyles.primaryText}>Reintentar</Text>}
         </Pressable>
-        <Pressable disabled={isRetrying || isResetting} onPress={requestReset} style={storageStyles.dangerButton}>
-          {isResetting ? (
-            <ActivityIndicator color="#b42318" />
-          ) : (
-            <Text style={storageStyles.dangerText}>Restablecer datos locales</Text>
-          )}
-        </Pressable>
+        {isAccessHandleBusy ? null : (
+          <Pressable disabled={isRetrying || isResetting} onPress={requestReset} style={storageStyles.dangerButton}>
+            {isResetting ? (
+              <ActivityIndicator color="#b42318" />
+            ) : (
+              <Text style={storageStyles.dangerText}>Restablecer datos locales</Text>
+            )}
+          </Pressable>
+        )}
       </View>
     </View>
   );
+}
+
+function shouldShowLocalStorageDiagnostics() {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
+    return true;
+  }
+
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).get("localStorageDiagnostics") === "1";
+}
+
+function LocalStorageDiagnostics({
+  summary,
+  summaryError,
+}: {
+  summary: LocalDatabaseRecoverySummary | null;
+  summaryError: string | null;
+}) {
+  const { localDatabaseStorageState } = useSession();
+  const rows: [string, string | number | boolean][] = localDatabaseStorageState.status === "unavailable"
+    ? [
+        ["errorCode", localDatabaseStorageState.errorCode],
+        ["cause", localDatabaseStorageState.cause],
+        ["phase", getLocalDatabaseFailurePhase(localDatabaseStorageState.cause)],
+        ["technicalMessage", localDatabaseStorageState.technicalMessage || "none"],
+        ["retryable", localDatabaseStorageState.retryable],
+        ["destructiveRecoveryAvailable", localDatabaseStorageState.destructiveRecoveryAvailable],
+        ["summary", summaryError ?? (summary ? "available" : "loading")],
+        ["pendingCreate", summary?.pendingCreateCount ?? "none"],
+        ["pendingUpdate", summary?.pendingUpdateCount ?? "none"],
+        ["failed", summary?.failedCount ?? "none"],
+        ["conflict", summary?.conflictCount ?? "none"],
+        ["totalAtRisk", summary?.totalAtRiskCount ?? "none"],
+      ]
+    : [["status", localDatabaseStorageState.status]];
+
+  return (
+    <View style={storageStyles.diagnostics}>
+      <Text style={storageStyles.diagnosticsTitle}>Diagnostico SQLite</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={storageStyles.diagnosticsRow}>
+          <Text style={storageStyles.diagnosticsLabel}>{label}</Text>
+          <Text style={storageStyles.diagnosticsValue}>{String(value)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function getLocalDatabaseFailurePhase(cause: LocalDatabaseUnavailableCause) {
+  if (cause === "ACCESS_HANDLE_BUSY") {
+    return "OPFS Access Handle";
+  }
+
+  if (cause === "OPEN_FAILED" || cause === "STORAGE_UNAVAILABLE" || cause === "CORRUPTION_SUSPECTED") {
+    return "openDatabaseAsync";
+  }
+
+  if (cause === "MIGRATION_FAILED") {
+    return "migration";
+  }
+
+  return "unknown";
 }
 
 const storageStyles = StyleSheet.create({
@@ -591,6 +717,29 @@ const storageStyles = StyleSheet.create({
   dangerText: {
     color: "#b42318",
     fontWeight: "800",
+  },
+  diagnostics: {
+    backgroundColor: "#eef4f4",
+    borderRadius: 8,
+    gap: 6,
+    padding: 12,
+  },
+  diagnosticsLabel: {
+    color: "#466068",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  diagnosticsRow: {
+    gap: 4,
+  },
+  diagnosticsTitle: {
+    color: "#0f3036",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  diagnosticsValue: {
+    color: "#0f3036",
+    fontSize: 12,
   },
   error: {
     color: "#b42318",

@@ -1,4 +1,5 @@
 export type LocalDatabaseUnavailableCause =
+  | "ACCESS_HANDLE_BUSY"
   | "OPEN_FAILED"
   | "MIGRATION_FAILED"
   | "STORAGE_UNAVAILABLE"
@@ -12,8 +13,9 @@ export type LocalDatabaseStorageState =
       status: "unavailable";
       cause: LocalDatabaseUnavailableCause;
       errorCode: "SQLITE_UNAVAILABLE";
+      technicalMessage: string;
       retryable: true;
-      destructiveRecoveryAvailable: true;
+      destructiveRecoveryAvailable: boolean;
     };
 
 export type LocalDatabaseRecoverySummary = {
@@ -49,4 +51,28 @@ export function formatLocalStorageResetWarning(summary: LocalDatabaseRecoverySum
   }
 
   return `Hay ${summary.totalAtRiskCount} cambios locales que aun no se han sincronizado. Si restableces los datos locales, se perderan.`;
+}
+
+export function sanitizeLocalDatabaseErrorMessage(error: unknown) {
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "unknown");
+
+  return rawMessage
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .replace(/[A-Za-z]:[\\/][^\s)]+/g, "[path]")
+    .replace(/\/[^\s)]+/g, "[path]")
+    .slice(0, 240);
+}
+
+export function isAccessHandleBusyError(error: unknown) {
+  const isNamedError = (typeof DOMException !== "undefined" && error instanceof DOMException) || error instanceof Error;
+  const name = isNamedError ? error.name.toLocaleLowerCase("en-US") : "";
+  const message = error instanceof Error ? error.message.toLocaleLowerCase("en-US") : String(error ?? "").toLocaleLowerCase("en-US");
+
+  return (
+    name.includes("nomodificationallowederror") ||
+    message.includes("createsyncaccesshandle") ||
+    message.includes("access handles cannot be created") ||
+    message.includes("another open access handle") ||
+    message.includes("writable stream associated with the same file")
+  );
 }

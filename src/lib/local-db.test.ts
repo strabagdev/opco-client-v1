@@ -32,6 +32,7 @@ let db: MockDatabase;
 
 beforeEach(() => {
   __resetLocalDatabaseForTests();
+  vi.unstubAllGlobals();
   db = createMockDatabase();
   sqliteMock.openDatabaseAsync.mockReset();
   sqliteMock.deleteDatabaseAsync.mockReset();
@@ -80,6 +81,27 @@ describe("local database singleton", () => {
       hasDatabasePromise: true,
       hasMigrationPromise: false,
       migratedSchemaVersion: "8",
+    });
+  });
+
+  it("closes the web SQLite handle on pagehide so a later runtime can reopen it", async () => {
+    const listeners = new Map<string, () => void>();
+
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn((eventName: string, listener: () => void) => {
+        listeners.set(eventName, listener);
+      }),
+    });
+    const store = getLocalDatabase();
+
+    await store.getSelectedContractId();
+    listeners.get("pagehide")?.();
+
+    expect(db.closeAsync).toHaveBeenCalledOnce();
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
+      hasDatabase: false,
+      hasDatabasePromise: false,
+      migratedSchemaVersion: null,
     });
   });
 
@@ -141,6 +163,41 @@ describe("local database singleton", () => {
       retryable: true,
       status: "unavailable",
     });
+  });
+
+  it("classifies OPFS Access Handle contention separately from unavailable storage", async () => {
+    const accessHandleError = new Error(
+      "Failed to execute 'createSyncAccessHandle' on 'FileSystemFileHandle': Access Handles cannot be created if there is another open Access Handle or Writable stream associated with the same file.",
+    );
+    accessHandleError.name = "NoModificationAllowedError";
+    sqliteMock.openDatabaseAsync.mockRejectedValueOnce(accessHandleError);
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    expect(getLocalDatabaseStorageState()).toMatchObject({
+      cause: "ACCESS_HANDLE_BUSY",
+      destructiveRecoveryAvailable: false,
+      errorCode: "SQLITE_UNAVAILABLE",
+      retryable: true,
+      status: "unavailable",
+      technicalMessage: expect.stringContaining("createSyncAccessHandle"),
+    });
+  });
+
+  it("retries after an OPFS Access Handle is released without deleting SQLite", async () => {
+    const accessHandleError = new Error("createSyncAccessHandle failed because another open Access Handle exists");
+
+    sqliteMock.openDatabaseAsync
+      .mockRejectedValueOnce(accessHandleError)
+      .mockResolvedValueOnce(db);
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    await expect(retryLocalDatabaseInitialization()).resolves.toBe(db);
+
+    expect(getLocalDatabaseStorageState()).toMatchObject({ status: "ready" });
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
   });
 
   it("recovers the singleton after a failed open promise when retry succeeds", async () => {
