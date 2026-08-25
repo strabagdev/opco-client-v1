@@ -1,6 +1,7 @@
 import { CachedEntityRecord, PendingOperation } from "../lib/offline-records";
+import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { EntityRecord, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
-import { classifySyncTelemetryError, SyncTelemetryStore } from "../lib/sync-telemetry";
+import { classifySyncTelemetryError, SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetryStore } from "../lib/sync-telemetry";
 
 export type RecordsSyncStore = {
   completePendingOperation(operation: PendingOperation, record: EntityRecord): Promise<void>;
@@ -59,7 +60,7 @@ async function runSync({
 
   await Promise.all(
     scopes.map((scope) =>
-      store.markSyncPhase?.({
+      safeMarkSyncPhase(store, {
         attemptedAt: new Date().toISOString(),
         contractId: scope.contractId,
         entityTypeId: scope.entityTypeId,
@@ -70,9 +71,9 @@ async function runSync({
   );
 
   for (const operation of operations) {
-    await store.markPendingOperationSyncing(operation.id);
-
     try {
+      await store.markPendingOperationSyncing(operation.id);
+
       const response =
         operation.operation === "CREATE"
           ? await api.createEntityRecord(token, operation.contractId, operation.entityTypeId, {
@@ -87,7 +88,7 @@ async function runSync({
       if (error instanceof RecordConflictDetected) {
         await store.markPendingOperationConflict(operation, error.remoteRecord, error.code, error.message);
         scopesWithErrors.add(operationScopeKey(operation));
-        await store.markSyncError?.({
+        await safeMarkSyncError(store, {
           code: "CONFLICT",
           contractId: operation.contractId,
           entityTypeId: operation.entityTypeId,
@@ -100,7 +101,7 @@ async function runSync({
 
       const classification = classifySyncError(error);
       scopesWithErrors.add(operationScopeKey(operation));
-      await store.markSyncError?.({
+      await safeMarkSyncError(store, {
         code: classifySyncTelemetryError(error),
         contractId: operation.contractId,
         entityTypeId: operation.entityTypeId,
@@ -121,7 +122,7 @@ async function runSync({
 
   await Promise.all(
     scopes.filter((scope) => !scopesWithErrors.has(operationScopeKey(scope))).map((scope) =>
-      store.markSyncPhaseCompleted?.({
+      safeMarkSyncPhaseCompleted(store, {
         contractId: scope.contractId,
         entityTypeId: scope.entityTypeId,
         ownerKey,
@@ -131,6 +132,39 @@ async function runSync({
   );
 
   return result;
+}
+
+async function safeMarkSyncPhase(
+  store: RecordsSyncStore,
+  input: { attemptedAt?: string; contractId: string; entityTypeId: string; ownerKey: string; phase: SyncPhase },
+) {
+  try {
+    await store.markSyncPhase?.(input);
+  } catch {
+    // Telemetry writes must not create retry loops or drop pending work.
+  }
+}
+
+async function safeMarkSyncPhaseCompleted(
+  store: RecordsSyncStore,
+  input: { completedAt?: string; contractId: string; entityTypeId: string; ownerKey: string; phase: SyncErrorPhase },
+) {
+  try {
+    await store.markSyncPhaseCompleted?.(input);
+  } catch {
+    // A failed telemetry write cannot turn a sync cycle into a false success.
+  }
+}
+
+async function safeMarkSyncError(
+  store: RecordsSyncStore,
+  input: { code: SyncErrorCode; contractId: string; entityTypeId: string; ownerKey: string; phase: SyncErrorPhase },
+) {
+  try {
+    await store.markSyncError?.(input);
+  } catch {
+    // If SQLite itself is unavailable, the storage recovery state owns the visible error.
+  }
 }
 
 function uniqueOperationScopes(operations: PendingOperation[]) {
@@ -209,6 +243,10 @@ export class RecordConflictDetected extends Error {
 }
 
 function classifySyncError(error: unknown): { action: "failed" | "retry"; code: string; message: string } {
+  if (isLocalDatabaseUnavailableError(error)) {
+    return { action: "retry", code: "SQLITE_UNAVAILABLE", message: "No fue posible acceder a SQLite local." };
+  }
+
   if (error instanceof OpcoNetworkError) {
     return { action: "retry", code: "NETWORK", message: error.message };
   }

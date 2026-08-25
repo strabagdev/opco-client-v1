@@ -3,19 +3,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __getLocalDatabaseDebugStateForTests,
   __resetLocalDatabaseForTests,
+  getLocalDatabaseRecoverySummary,
+  getLocalDatabaseStorageState,
   getLocalDatabase,
+  resetLocalDatabaseAfterConfirmation,
+  retryLocalDatabaseInitialization,
 } from "./local-db";
 
 const sqliteMock = vi.hoisted(() => ({
+  deleteDatabaseAsync: vi.fn(),
   openDatabaseAsync: vi.fn(),
 }));
 
 vi.mock("expo-sqlite", () => ({
+  deleteDatabaseAsync: sqliteMock.deleteDatabaseAsync,
   openDatabaseAsync: sqliteMock.openDatabaseAsync,
 }));
 
 type MockDatabase = {
   execAsync: ReturnType<typeof vi.fn>;
+  closeAsync: ReturnType<typeof vi.fn>;
   getAllAsync: ReturnType<typeof vi.fn>;
   getFirstAsync: ReturnType<typeof vi.fn>;
   runAsync: ReturnType<typeof vi.fn>;
@@ -27,6 +34,8 @@ beforeEach(() => {
   __resetLocalDatabaseForTests();
   db = createMockDatabase();
   sqliteMock.openDatabaseAsync.mockReset();
+  sqliteMock.deleteDatabaseAsync.mockReset();
+  sqliteMock.deleteDatabaseAsync.mockResolvedValue(undefined);
   sqliteMock.openDatabaseAsync.mockResolvedValue(db);
 });
 
@@ -119,10 +128,108 @@ describe("local database singleton", () => {
 
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
+
+  it("marks storage unavailable when SQLite open fails", async () => {
+    sqliteMock.openDatabaseAsync.mockRejectedValueOnce(new Error("OPFS access handle unavailable"));
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    expect(getLocalDatabaseStorageState()).toMatchObject({
+      cause: "STORAGE_UNAVAILABLE",
+      destructiveRecoveryAvailable: true,
+      errorCode: "SQLITE_UNAVAILABLE",
+      retryable: true,
+      status: "unavailable",
+    });
+  });
+
+  it("recovers the singleton after a failed open promise when retry succeeds", async () => {
+    sqliteMock.openDatabaseAsync
+      .mockRejectedValueOnce(new Error("open failed"))
+      .mockResolvedValueOnce(db);
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    await expect(retryLocalDatabaseInitialization()).resolves.toBe(db);
+
+    expect(getLocalDatabaseStorageState()).toMatchObject({ status: "ready" });
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps storage unavailable when retry fails again", async () => {
+    sqliteMock.openDatabaseAsync.mockRejectedValue(new Error("open failed"));
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    await expect(retryLocalDatabaseInitialization()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+
+    expect(getLocalDatabaseStorageState()).toMatchObject({
+      errorCode: "SQLITE_UNAVAILABLE",
+      status: "unavailable",
+    });
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not advance schema version when migrations fail", async () => {
+    db.execAsync.mockRejectedValueOnce(new Error("migration failed"));
+    const store = getLocalDatabase();
+
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+
+    expect(db.runAsync.mock.calls.filter((call) => call[1] === "schema_version")).toHaveLength(0);
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
+      hasDatabase: false,
+      migratedSchemaVersion: null,
+      storageState: {
+        cause: "MIGRATION_FAILED",
+        status: "unavailable",
+      },
+    });
+  });
+
+  it("does not reset the database without explicit confirmation", async () => {
+    await expect(resetLocalDatabaseAfterConfirmation({ confirmed: false })).rejects.toThrow(/confirmation/i);
+
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+  });
+
+  it("counts local changes at risk before destructive recovery", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return [
+          { sync_status: "pending_create", total: 2 },
+          { sync_status: "pending_update", total: 3 },
+          { sync_status: "failed", total: 1 },
+          { sync_status: "conflict", total: 4 },
+        ];
+      }
+
+      return [];
+    });
+
+    await expect(getLocalDatabaseRecoverySummary()).resolves.toEqual({
+      canCount: true,
+      conflictCount: 4,
+      failedCount: 1,
+      pendingCreateCount: 2,
+      pendingUpdateCount: 3,
+      totalAtRiskCount: 10,
+    });
+  });
+
+  it("deletes local SQLite only after confirmation and recreates schema", async () => {
+    await resetLocalDatabaseAfterConfirmation({ confirmed: true });
+
+    expect(sqliteMock.deleteDatabaseAsync).toHaveBeenCalledWith("opco-client.db");
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(1);
+    expect(getLocalDatabaseStorageState()).toMatchObject({ status: "ready" });
+  });
 });
 
 function createMockDatabase(): MockDatabase {
   return {
+    closeAsync: vi.fn(async () => undefined),
     execAsync: vi.fn(async () => undefined),
     getAllAsync: vi.fn(async (sql: string) => {
       if (sql.includes("PRAGMA table_info(entity_records)")) {

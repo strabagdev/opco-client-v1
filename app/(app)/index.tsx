@@ -22,6 +22,8 @@ export default function HomeScreen() {
     api,
     context,
     definitionCache,
+    localDatabaseStorageState,
+    localStorageRecoveryNotice,
     me,
     ownerKey,
     selectedContractId,
@@ -38,7 +40,7 @@ export default function HomeScreen() {
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId && views.length > 0),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
-    sqliteReady: Boolean(definitionCache),
+    sqliteReady: localDatabaseStorageState.status === "ready",
   });
 
   const selectedContract = useMemo(
@@ -129,6 +131,7 @@ export default function HomeScreen() {
         <Text style={offlineReadiness.offlineReadiness === "ready" ? styles.readyText : styles.meta}>
           {getOfflineReadinessText(offlineReadiness.offlineReadiness)}
         </Text>
+        {localStorageRecoveryNotice ? <Text style={styles.error}>{localStorageRecoveryNotice}</Text> : null}
       </View>
 
       <View style={styles.section}>

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
+import { LocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "../lib/sync-telemetry";
 import { RecordsSyncStore, syncPendingRecordsOnce } from "./records-sync";
@@ -269,6 +270,31 @@ describe("records sync engine", () => {
     await expect(
       store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "personas", ownerKey: "org_1:user_1" }),
     ).resolves.toMatchObject({ lastPushCompletedAt: expect.any(String) });
+  });
+
+  it("records SQLite sync failures without marking push success", async () => {
+    store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
+    store.markPendingOperationSyncing = vi.fn(async () => {
+      throw new LocalDatabaseUnavailableError("STORAGE_UNAVAILABLE");
+    });
+    store.retryPendingOperation = vi.fn(async () => undefined);
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    await expect(
+      store.getSyncTelemetry({ contractId: "contract_1", entityTypeId: "entity_1", ownerKey: "org_1:user_1" }),
+    ).resolves.toMatchObject({
+      lastPushCompletedAt: null,
+      lastSuccessfulSyncAt: null,
+      lastSyncErrorCode: "SQLITE",
+      lastSyncErrorPhase: "pushing",
+      syncPhase: "error",
+    });
   });
 });
 

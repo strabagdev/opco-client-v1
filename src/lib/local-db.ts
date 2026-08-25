@@ -3,6 +3,12 @@ import * as SQLite from "expo-sqlite";
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
 import { CachedEntityDefinition, EntityDefinitionCache } from "./definition-cache";
 import {
+  LocalDatabaseRecoverySummary,
+  LocalDatabaseStorageState,
+  LocalDatabaseUnavailableCause,
+  LocalDatabaseUnavailableError,
+} from "./local-db-recovery";
+import {
   buildLocalDisplayName,
   CachedEntityRecord,
   createLocalRecordId,
@@ -31,8 +37,11 @@ const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 type LocalDatabaseGlobalState = {
   database: SQLite.SQLiteDatabase | null;
   databasePromise: Promise<SQLite.SQLiteDatabase> | null;
+  lastUnavailableError: LocalDatabaseUnavailableError | null;
+  listeners: Set<() => void>;
   migrationPromise: Promise<void> | null;
   migratedSchemaVersion: string | null;
+  storageState: LocalDatabaseStorageState;
 };
 
 type LocalDatabaseGlobal = typeof globalThis & {
@@ -88,7 +97,17 @@ export function getLocalDatabase(): LocalDatabase {
 async function getDatabase() {
   const state = getLocalDatabaseGlobalState();
 
+  if (state.storageState.status === "unavailable" && !state.databasePromise) {
+    throw state.lastUnavailableError ?? new LocalDatabaseUnavailableError("UNKNOWN");
+  }
+
   if (!state.databasePromise) {
+    setLocalDatabaseStorageState(state, {
+      destructiveRecoveryAvailable: false,
+      errorCode: null,
+      retryable: false,
+      status: "initializing",
+    });
     const nextDatabasePromise = openAndMigrate().catch((error) => {
       if (state.databasePromise === nextDatabasePromise) {
         state.database = null;
@@ -97,7 +116,10 @@ async function getDatabase() {
         state.migrationPromise = null;
       }
 
-      throw error;
+      const unavailableError = toLocalDatabaseUnavailableError(error, "UNKNOWN");
+
+      markLocalDatabaseUnavailable(state, unavailableError);
+      throw unavailableError;
     });
 
     state.databasePromise = nextDatabasePromise;
@@ -108,10 +130,32 @@ async function getDatabase() {
 
 async function openAndMigrate() {
   const state = getLocalDatabaseGlobalState();
-  const db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
+  let db: SQLite.SQLiteDatabase;
+
+  try {
+    db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
+  } catch (error) {
+    throw toLocalDatabaseUnavailableError(error, "OPEN_FAILED");
+  }
 
   state.database = db;
-  await migrateDatabaseOnce(db, state);
+  try {
+    await migrateDatabaseOnce(db, state);
+  } catch (error) {
+    await closeDatabaseQuietly(db);
+    state.database = null;
+    state.migrationPromise = null;
+    state.migratedSchemaVersion = null;
+    throw toLocalDatabaseUnavailableError(error, "MIGRATION_FAILED");
+  }
+
+  state.lastUnavailableError = null;
+  setLocalDatabaseStorageState(state, {
+    destructiveRecoveryAvailable: false,
+    errorCode: null,
+    retryable: false,
+    status: "ready",
+  });
 
   return db;
 }
@@ -245,12 +289,95 @@ function getLocalDatabaseGlobalState() {
     globalState[GLOBAL_DATABASE_STATE_KEY] = {
       database: null,
       databasePromise: null,
+      lastUnavailableError: null,
+      listeners: new Set(),
       migratedSchemaVersion: null,
       migrationPromise: null,
+      storageState: {
+        destructiveRecoveryAvailable: false,
+        errorCode: null,
+        retryable: false,
+        status: "initializing",
+      },
     };
   }
 
   return globalState[GLOBAL_DATABASE_STATE_KEY];
+}
+
+function setLocalDatabaseStorageState(state: LocalDatabaseGlobalState, storageState: LocalDatabaseStorageState) {
+  if (isSameLocalDatabaseStorageState(state.storageState, storageState)) {
+    return;
+  }
+
+  state.storageState = storageState;
+  notifyLocalDatabaseStorageListeners(state);
+}
+
+function isSameLocalDatabaseStorageState(current: LocalDatabaseStorageState, next: LocalDatabaseStorageState) {
+  return current.status === next.status && current.errorCode === next.errorCode && current.retryable === next.retryable &&
+    current.destructiveRecoveryAvailable === next.destructiveRecoveryAvailable &&
+    ("cause" in current ? current.cause : null) === ("cause" in next ? next.cause : null);
+}
+
+function notifyLocalDatabaseStorageListeners(state = getLocalDatabaseGlobalState()) {
+  for (const listener of state.listeners) {
+    listener();
+  }
+}
+
+function markLocalDatabaseUnavailable(state: LocalDatabaseGlobalState, error: LocalDatabaseUnavailableError) {
+  state.lastUnavailableError = error;
+  setLocalDatabaseStorageState(state, {
+    cause: error.causeCode,
+    destructiveRecoveryAvailable: true,
+    errorCode: "SQLITE_UNAVAILABLE",
+    retryable: true,
+    status: "unavailable",
+  });
+}
+
+async function closeDatabaseQuietly(db: SQLite.SQLiteDatabase) {
+  try {
+    await db.closeAsync();
+  } catch {
+    // Recovery must keep moving even when the underlying handle is already gone.
+  }
+}
+
+function toLocalDatabaseUnavailableError(
+  error: unknown,
+  fallbackCause: LocalDatabaseUnavailableCause,
+): LocalDatabaseUnavailableError {
+  if (error instanceof LocalDatabaseUnavailableError) {
+    return error;
+  }
+
+  return new LocalDatabaseUnavailableError(classifyLocalDatabaseFailureCause(error, fallbackCause), error);
+}
+
+function classifyLocalDatabaseFailureCause(
+  error: unknown,
+  fallbackCause: LocalDatabaseUnavailableCause,
+): LocalDatabaseUnavailableCause {
+  const message = error instanceof Error ? error.message.toLocaleLowerCase("en-US") : "";
+
+  if (message.includes("corrupt") || message.includes("malformed") || message.includes("not a database")) {
+    return "CORRUPTION_SUSPECTED";
+  }
+
+  if (
+    message.includes("opfs") ||
+    message.includes("access handle") ||
+    message.includes("quota") ||
+    message.includes("storage") ||
+    message.includes("sharedarraybuffer") ||
+    message.includes("cross-origin")
+  ) {
+    return "STORAGE_UNAVAILABLE";
+  }
+
+  return fallbackCause;
 }
 
 export function __resetLocalDatabaseForTests() {
@@ -266,7 +393,131 @@ export function __getLocalDatabaseDebugStateForTests() {
     hasDatabase: Boolean(state.database),
     hasDatabasePromise: Boolean(state.databasePromise),
     hasMigrationPromise: Boolean(state.migrationPromise),
+    lastUnavailableCause: state.lastUnavailableError?.causeCode ?? null,
     migratedSchemaVersion: state.migratedSchemaVersion,
+    storageState: state.storageState,
+  };
+}
+
+export function getLocalDatabaseStorageState() {
+  return getLocalDatabaseGlobalState().storageState;
+}
+
+export function subscribeLocalDatabaseStorageState(listener: () => void) {
+  const state = getLocalDatabaseGlobalState();
+
+  state.listeners.add(listener);
+
+  return () => {
+    state.listeners.delete(listener);
+  };
+}
+
+export async function retryLocalDatabaseInitialization() {
+  const state = getLocalDatabaseGlobalState();
+
+  state.databasePromise = null;
+  state.migrationPromise = null;
+  state.migratedSchemaVersion = null;
+  state.lastUnavailableError = null;
+  setLocalDatabaseStorageState(state, {
+    destructiveRecoveryAvailable: false,
+    errorCode: null,
+    retryable: false,
+    status: "initializing",
+  });
+
+  return getDatabase();
+}
+
+export async function getLocalDatabaseRecoverySummary(): Promise<LocalDatabaseRecoverySummary> {
+  let db: SQLite.SQLiteDatabase | null = null;
+  let shouldClose = false;
+
+  try {
+    const state = getLocalDatabaseGlobalState();
+
+    db = state.database;
+    if (!db) {
+      db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+      shouldClose = true;
+    }
+
+    const rows = await db.getAllAsync<{ sync_status: RecordSyncStatus; total: number }>(
+      `
+        SELECT sync_status, COUNT(*) AS total
+        FROM entity_records
+        WHERE sync_status IN ('pending_create', 'pending_update', 'failed', 'conflict')
+        GROUP BY sync_status
+      `,
+    );
+    const count = (status: RecordSyncStatus) =>
+      rows.filter((row) => row.sync_status === status).reduce((total, row) => total + row.total, 0);
+    const summary = {
+      canCount: true,
+      conflictCount: count("conflict"),
+      failedCount: count("failed"),
+      pendingCreateCount: count("pending_create"),
+      pendingUpdateCount: count("pending_update"),
+      totalAtRiskCount: 0,
+    };
+
+    return {
+      ...summary,
+      totalAtRiskCount: summary.pendingCreateCount + summary.pendingUpdateCount + summary.failedCount + summary.conflictCount,
+    };
+  } catch {
+    return emptyLocalDatabaseRecoverySummary(false);
+  } finally {
+    if (shouldClose && db) {
+      await closeDatabaseQuietly(db);
+    }
+  }
+}
+
+export async function resetLocalDatabaseAfterConfirmation({ confirmed }: { confirmed: boolean }) {
+  if (!confirmed) {
+    throw new Error("Local database reset requires explicit confirmation.");
+  }
+
+  const state = getLocalDatabaseGlobalState();
+
+  if (state.database) {
+    await closeDatabaseQuietly(state.database);
+  }
+
+  state.database = null;
+  state.databasePromise = null;
+  state.migrationPromise = null;
+  state.migratedSchemaVersion = null;
+  state.lastUnavailableError = null;
+  setLocalDatabaseStorageState(state, {
+    destructiveRecoveryAvailable: false,
+    errorCode: null,
+    retryable: false,
+    status: "initializing",
+  });
+
+  try {
+    await SQLite.deleteDatabaseAsync(DATABASE_NAME);
+
+    return await getDatabase();
+  } catch (error) {
+    const unavailableError = toLocalDatabaseUnavailableError(error, "STORAGE_UNAVAILABLE");
+
+    markLocalDatabaseUnavailable(state, unavailableError);
+    throw unavailableError;
+  }
+}
+
+function emptyLocalDatabaseRecoverySummary(canCount: boolean): LocalDatabaseRecoverySummary {
+  return {
+    canCount,
+    conflictCount: 0,
+    failedCount: 0,
+    pendingCreateCount: 0,
+    pendingUpdateCount: 0,
+    totalAtRiskCount: 0,
   };
 }
 

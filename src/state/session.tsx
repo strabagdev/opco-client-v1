@@ -8,11 +8,25 @@ import {
   useRef,
   useState,
 } from "react";
-import { Platform } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { buildOwnerKey } from "@/lib/app-navigation-cache";
 import { useConnectivityStatus } from "@/lib/connectivity";
-import { getLocalDatabase, LocalDatabase } from "@/lib/local-db";
+import {
+  getLocalDatabase,
+  getLocalDatabaseRecoverySummary,
+  getLocalDatabaseStorageState,
+  LocalDatabase,
+  resetLocalDatabaseAfterConfirmation,
+  retryLocalDatabaseInitialization,
+  subscribeLocalDatabaseStorageState,
+} from "@/lib/local-db";
+import {
+  formatLocalStorageResetWarning,
+  isLocalDatabaseUnavailableError,
+  LocalDatabaseRecoverySummary,
+  LocalDatabaseStorageState,
+} from "@/lib/local-db-recovery";
 import { RecordsSyncSummary } from "@/lib/offline-records";
 import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
@@ -30,6 +44,8 @@ type SessionContextValue = {
   me: MeResponse | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
+  localDatabaseStorageState: LocalDatabaseStorageState;
+  localStorageRecoveryNotice: string | null;
   recordsReconnectRefreshKey: number;
   recordsSyncSummary: RecordsSyncSummary;
   refreshRecordsSyncSummary(): Promise<void>;
@@ -54,6 +70,11 @@ const emptyRecordsSyncSummary: RecordsSyncSummary = {
 export function SessionProvider({ children }: PropsWithChildren) {
   const definitionCache = useMemo(() => getLocalDatabase(), []);
   const [status, setStatus] = useState<SessionStatus>("loading");
+  const [localDatabaseStorageState, setLocalDatabaseStorageState] = useState<LocalDatabaseStorageState>(
+    getLocalDatabaseStorageState,
+  );
+  const [localStorageRecoveryNotice, setLocalStorageRecoveryNotice] = useState<string | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
@@ -80,6 +101,35 @@ export function SessionProvider({ children }: PropsWithChildren) {
       }),
     [],
   );
+
+  useEffect(
+    () =>
+      subscribeLocalDatabaseStorageState(() => {
+        setLocalDatabaseStorageState(getLocalDatabaseStorageState());
+      }),
+    [],
+  );
+
+  const retryLocalStorage = useCallback(async () => {
+    await retryLocalDatabaseInitialization();
+    setBootstrapAttempt((attempt) => attempt + 1);
+    setStatus("loading");
+  }, []);
+
+  const resetLocalStorage = useCallback(async () => {
+    await resetLocalDatabaseAfterConfirmation({ confirmed: true });
+    setMe(null);
+    setContext(null);
+    setSelectedContractIdState(null);
+    setRecordsSyncSummary(emptyRecordsSyncSummary);
+    setPendingRecordsCount(0);
+    setRecordsReconnectRefreshKey((key) => key + 1);
+    setLocalStorageRecoveryNotice(
+      connectivityStatus === "offline" ? "Conectate para volver a descargar los datos." : null,
+    );
+    setBootstrapAttempt((attempt) => attempt + 1);
+    setStatus("loading");
+  }, [connectivityStatus]);
 
   const loadContext = useCallback(
     async (accessToken: string, currentMe: MeResponse) => {
@@ -242,8 +292,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }
 
         setStatus("anonymous");
-      } catch {
+      } catch (error) {
         if (isMounted) {
+          if (isLocalDatabaseUnavailableError(error)) {
+            return;
+          }
+
           setStatus("anonymous");
         }
       }
@@ -254,7 +308,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, loadContext]);
+  }, [api, bootstrapAttempt, definitionCache, loadContext]);
 
   useEffect(() => {
     async function refreshCount() {
@@ -354,6 +408,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
         me,
         ownerKey,
         pendingRecordsCount,
+        localDatabaseStorageState,
+        localStorageRecoveryNotice,
         recordsReconnectRefreshKey,
         recordsSyncSummary,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
@@ -366,7 +422,15 @@ export function SessionProvider({ children }: PropsWithChildren) {
         token,
       }}
     >
-      {children}
+      {localDatabaseStorageState.status === "unavailable" ? (
+        <LocalStorageRecoveryScreen
+          getRecoverySummary={getLocalDatabaseRecoverySummary}
+          onResetConfirmed={resetLocalStorage}
+          onRetry={retryLocalStorage}
+        />
+      ) : (
+        children
+      )}
     </SessionContext.Provider>
   );
 }
@@ -380,3 +444,134 @@ export function useSession() {
 
   return value;
 }
+
+function LocalStorageRecoveryScreen({
+  getRecoverySummary,
+  onResetConfirmed,
+  onRetry,
+}: {
+  getRecoverySummary(): Promise<LocalDatabaseRecoverySummary>;
+  onResetConfirmed(): Promise<void>;
+  onRetry(): Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  async function retry() {
+    setError(null);
+    setIsRetrying(true);
+
+    try {
+      await onRetry();
+    } catch {
+      setError("Todavia no pudimos abrir los datos guardados.");
+    } finally {
+      setIsRetrying(false);
+    }
+  }
+
+  async function requestReset() {
+    setError(null);
+    const summary = await getRecoverySummary();
+    const message = formatLocalStorageResetWarning(summary);
+
+    Alert.alert("Restablecer datos locales", message, [
+      { style: "cancel", text: "Cancelar" },
+      {
+        onPress: () => {
+          void reset();
+        },
+        style: "destructive",
+        text: "Restablecer",
+      },
+    ]);
+  }
+
+  async function reset() {
+    setIsResetting(true);
+
+    try {
+      await onResetConfirmed();
+    } catch {
+      setError("No pudimos restablecer los datos locales. Intenta nuevamente.");
+    } finally {
+      setIsResetting(false);
+    }
+  }
+
+  return (
+    <View style={storageStyles.screen}>
+      <View style={storageStyles.panel}>
+        <Text style={storageStyles.title}>No pudimos abrir los datos guardados en este dispositivo.</Text>
+        <Text style={storageStyles.body}>
+          Puedes reintentar sin borrar nada. Restablecer datos locales elimina la cache de este dispositivo y puede
+          borrar cambios no sincronizados.
+        </Text>
+        {error ? <Text style={storageStyles.error}>{error}</Text> : null}
+        <Pressable disabled={isRetrying || isResetting} onPress={retry} style={storageStyles.primaryButton}>
+          {isRetrying ? <ActivityIndicator color="#ffffff" /> : <Text style={storageStyles.primaryText}>Reintentar</Text>}
+        </Pressable>
+        <Pressable disabled={isRetrying || isResetting} onPress={requestReset} style={storageStyles.dangerButton}>
+          {isResetting ? (
+            <ActivityIndicator color="#b42318" />
+          ) : (
+            <Text style={storageStyles.dangerText}>Restablecer datos locales</Text>
+          )}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+const storageStyles = StyleSheet.create({
+  body: {
+    color: "#466068",
+    lineHeight: 22,
+  },
+  dangerButton: {
+    alignItems: "center",
+    borderColor: "#fda29b",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 16,
+  },
+  dangerText: {
+    color: "#b42318",
+    fontWeight: "800",
+  },
+  error: {
+    color: "#b42318",
+    fontWeight: "700",
+  },
+  panel: {
+    gap: 14,
+    maxWidth: 460,
+    width: "100%",
+  },
+  primaryButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 16,
+  },
+  primaryText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  screen: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+  },
+  title: {
+    color: "#0f3036",
+    fontSize: 22,
+    fontWeight: "800",
+    lineHeight: 28,
+  },
+});

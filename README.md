@@ -330,6 +330,14 @@ sync_telemetry (
 
 Las migraciones SQLite no resetean la DB local. Agregan columnas/tablas nuevas y conservan `local_id`, `server_id`, cache, telemetria y pending operations existentes.
 
+Si SQLite no abre, una migracion falla o el storage local queda inaccesible, la app marca `SQLITE_UNAVAILABLE` en un estado global de storage (`initializing`, `ready`, `unavailable`). Este estado no se mezcla con `NETWORK`: una falla de red puede usar cache local, mientras que `SQLITE_UNAVAILABLE` significa que el dispositivo no pudo acceder a esa cache. Las causas internas se clasifican como `OPEN_FAILED`, `MIGRATION_FAILED`, `STORAGE_UNAVAILABLE`, `CORRUPTION_SUSPECTED` o `UNKNOWN`, pero la UI no muestra detalles tecnicos.
+
+En cold start, `SQLITE_UNAVAILABLE` muestra una pantalla controlada: `No pudimos abrir los datos guardados en este dispositivo.`, con `Reintentar` y `Restablecer datos locales`. `Reintentar` reutiliza el singleton, limpia solo promises fallidas y vuelve a abrir/migrar sin borrar la DB, cache, pending operations ni sesion. Si una migracion falla, no se avanza `schema_version` y la DB no queda marcada como valida hasta que una inicializacion posterior complete correctamente.
+
+`Restablecer datos locales` es un escape hatch destructivo, no la ruta principal. Antes de ejecutar reset, la app intenta contar registros `pending_create`, `pending_update`, `failed` y `conflict` y advierte: `Hay N cambios locales que aun no se han sincronizado. Si restableces los datos locales, se perderan.` Solo despues de confirmacion explicita cierra la DB si puede, elimina la SQLite local de Opco Client, limpia singleton/promises y recrea el schema. No toca el servidor, no hace logout remoto y no borra tokens innecesariamente. Si despues del reset no hay red, muestra `Conectate para volver a descargar los datos.` y no simula cache existente.
+
+En `RECORDS`, si SQLite esta `unavailable`, los writes offline quedan bloqueados para no crear pendientes falsos. Si SQLite falla durante sync, la telemetry registra `SQLITE` en la fase correspondiente cuando el store puede escribirlo, y nunca actualiza `lastSuccessfulSyncAt` por un ciclo incompleto.
+
 ## Cache
 
 Cuando login, `/me` y `/context` responden correctamente, la app guarda el snapshot minimo de navegacion. Si al reabrir `/me` o `/context` fallan por red y existe snapshot, el estado queda offline con `me`, `context`, contrato seleccionado y `owner_key` disponibles.
@@ -340,7 +348,7 @@ Cuando `GET /api/v1/contracts/:contractId/entities/:entityTypeId` responde corre
 
 Cuando `GET records` responde correctamente, los records remotos se upsertean en SQLite y se combinan con operaciones locales pendientes. Si falla por red, el listado y detalle intentan leer cache local y muestran `Sin conexion. Datos guardados localmente.`
 
-En Expo Web, `expo-sqlite` depende de WASM y de headers de aislamiento cross-origin para `SharedArrayBuffer`. El proyecto incluye `metro.config.js` para empaquetar `.wasm` y configura `Cross-Origin-Embedder-Policy`/`Cross-Origin-Opener-Policy` en `app.json`. Aun asi, SQLite Web tiene limitaciones propias de navegador y la UI no debe depender de que la cache termine para mostrar datos remotos.
+En Expo Web, `expo-sqlite` depende de WASM y de headers de aislamiento cross-origin para `SharedArrayBuffer`. El proyecto incluye `metro.config.js` para empaquetar `.wasm` y configura `Cross-Origin-Embedder-Policy`/`Cross-Origin-Opener-Policy` en `app.json`. Aun asi, SQLite Web tiene limitaciones propias de navegador: OPFS puede no estar disponible, el Access Handle puede estar ocupado, el navegador puede restringir storage o puede haber eviction. La UI no debe depender de que la cache termine para mostrar datos remotos, y la recuperacion destructiva solo borra el almacenamiento local despues de confirmacion.
 
 `@react-native-community/netinfo` entrega el estado `online`/`offline`/`unknown` y dispara sync al recuperar conectividad. Aun asi, la app no confia solo en ese estado: una request puede fallar aunque NetInfo diga online, y ese error real conserva la operacion pendiente para retry posterior.
 

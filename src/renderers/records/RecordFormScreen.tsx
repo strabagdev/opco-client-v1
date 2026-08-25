@@ -37,7 +37,8 @@ type Props = {
 
 export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, selectedContractId, syncPendingRecords, token } = useSession();
+  const { api, definitionCache, localDatabaseStorageState, ownerKey, selectedContractId, syncPendingRecords, token } =
+    useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
   const [initialValues, setInitialValues] = useState<RecordFormValues>({});
@@ -132,6 +133,11 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
   async function handleSubmit() {
     if (!definition || !token || !selectedContractId || !ownerKey) {
+      return;
+    }
+
+    if (localDatabaseStorageState.status !== "ready") {
+      setError("No pudimos acceder a los datos locales. Reintenta desde la pantalla de almacenamiento.");
       return;
     }
 

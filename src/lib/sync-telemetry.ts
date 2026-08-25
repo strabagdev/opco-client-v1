@@ -1,3 +1,4 @@
+import { isLocalDatabaseUnavailableError } from "./local-db-recovery";
 import { OpcoApiError, OpcoNetworkError } from "./opco-api";
 
 export type SyncPhase = "idle" | "pushing" | "refreshing" | "reconciling" | "error";
@@ -52,6 +53,10 @@ export function emptySyncTelemetry({ contractId, entityTypeId, ownerKey }: SyncT
 }
 
 export function classifySyncTelemetryError(error: unknown): SyncErrorCode {
+  if (isLocalDatabaseUnavailableError(error)) {
+    return "SQLITE";
+  }
+
   if (error instanceof OpcoNetworkError) {
     return "NETWORK";
   }

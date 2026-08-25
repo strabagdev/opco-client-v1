@@ -41,6 +41,7 @@
 - Open SQLite through the shared singleton only.
 - Expo Web Fast Refresh must not open a second SQLite Access Handle.
 - SQLite migrations must be single-flight.
+- Never reset SQLite automatically; it may contain unsynchronized work.
 - Do not assume multi-tab support with Expo Web / OPFS.
 
 ## Connectivity / Sync
