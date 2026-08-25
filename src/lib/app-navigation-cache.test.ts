@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { appViewsFixture } from "../test/fixtures";
 import { AppNavigationCache, loadAppViewsWithCache } from "./app-navigation-cache";
+import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitionInput } from "./app-view-definitions-cache";
 import { AppView, ContextResponse, MeResponse, OpcoApiError, OpcoNetworkError } from "./opco-api";
 
 describe("app navigation cache", () => {
@@ -112,11 +113,13 @@ describe("app navigation cache", () => {
   });
 });
 
-class MemoryNavigationCache implements AppNavigationCache {
+class MemoryNavigationCache implements AppNavigationCache, AppViewDefinitionCache {
   private appViews = new Map<string, { syncedAt: string; views: AppView[] }>();
+  private definitions = new Map<string, CachedAppViewDefinition>();
 
   async clearNavigationCache() {
     this.appViews.clear();
+    this.definitions.clear();
   }
 
   async getAppViews(ownerKey: string, contractId: string) {
@@ -127,11 +130,46 @@ class MemoryNavigationCache implements AppNavigationCache {
     return null;
   }
 
+  async getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string) {
+    return this.definitions.get(`${ownerKey}:${contractId}:${appViewId}`) ?? null;
+  }
+
+  async listAppViewDefinitions(ownerKey: string, contractId: string) {
+    return [...this.definitions.values()].filter(
+      (definition) => definition.ownerKey === ownerKey && definition.contractId === contractId,
+    );
+  }
+
+  async reconcileAppViewDefinitions(ownerKey: string, contractId: string, assignedAppViewIds: string[]) {
+    for (const [key, definition] of this.definitions) {
+      if (
+        definition.ownerKey === ownerKey &&
+        definition.contractId === contractId &&
+        !assignedAppViewIds.includes(definition.appViewId)
+      ) {
+        this.definitions.delete(key);
+      }
+    }
+  }
+
   async upsertAppViews(ownerKey: string, contractId: string, views: AppView[], syncedAt: string) {
     this.appViews.set(`${ownerKey}:${contractId}`, { syncedAt, views });
   }
 
   async upsertContextSnapshot(_ownerKey: string, _me: MeResponse, _context: ContextResponse, _syncedAt: string) {
     // Not needed by these tests.
+  }
+
+  async upsertAppViewDefinition(input: UpsertAppViewDefinitionInput) {
+    this.definitions.set(`${input.ownerKey}:${input.contractId}:${input.appViewId}`, {
+      appViewId: input.appViewId,
+      appViewType: input.appViewType,
+      contractId: input.contractId,
+      definition: input.definition,
+      lastPreparedAt: input.lastPreparedAt,
+      ownerKey: input.ownerKey,
+      status: input.status,
+      workflowKey: input.workflowKey ?? null,
+    });
   }
 }

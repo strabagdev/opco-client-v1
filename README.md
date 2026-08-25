@@ -150,6 +150,12 @@ En iOS hay que distinguir Safari normal de una Web App agregada a la pantalla de
 
 Las AppViews `RECORDS` son offline-first para navegacion, listado, detalle, creacion y edicion. La app conserva snapshots por `ownerKey` de `/me`, `/context`, contrato seleccionado y AppViews por contrato, sin persistir credenciales adicionales. Con ese snapshot puede reabrir sin red, reconstruir `owner_key` y llegar hasta las pantallas cacheadas. La cache de records esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
 
+Al estar online, el cliente precachea en segundo plano las definiciones de todas las AppViews asignadas del contrato activo. Este prewarm corre por `ownerKey + contractId`, con concurrencia limitada y single-flight, y no bloquea Home. `RECORDS` guarda la definicion de EntityType, campos, opciones y configuracion de display; `WORKFLOW` guarda la config de workflow, y attendance prepara sus statuses dinamicos (`optionId`, `label`, `isDefaultCheckIn`) sin descargar roster completo. `BOARD` y `DASHBOARD` guardan lo suficiente para mostrar el estado unsupported offline.
+
+El prewarm de definiciones no descarga EntityRecords. Los records siguen siendo cache bajo demanda cuando el usuario visita, busca o refresca una experiencia. Por eso la disponibilidad offline distingue definicion de datos: `definition-missing`, `data-not-cached`, `ready`, `online-only` y `unsupported`. Un `RECORDS` con definicion preparada pero sin records cacheados abre su estructura y muestra `No hay datos guardados para esta experiencia.` Attendance sigue `online-only` en esta etapa: offline puede mostrar nombre, fecha y statuses cacheados, pero mantiene registro deshabilitado hasta la etapa de writes offline.
+
+Al reconectar o cambiar contrato, el cliente refresca `/views`, reconcilia AppViews revocadas, prepara nuevas/cambiadas y conserva una definicion previa valida si un prewarm falla por red. Las definiciones preparadas se guardan en SQLite en `app_view_definitions`, scopeadas por `owner_key`, `contract_id` y `app_view_id`, separadas de records y de la telemetry de sync. Precargar una definicion nunca actualiza `lastSuccessfulSyncAt` de records.
+
 Cada record local tiene:
 
 - `local_id`: identidad estable generada por cliente. Un CREATE offline navega y renderiza usando este id.
@@ -324,9 +330,21 @@ sync_telemetry (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (owner_key, contract_id, entity_type_id)
 )
+
+app_view_definitions (
+  owner_key TEXT NOT NULL,
+  contract_id TEXT NOT NULL,
+  app_view_id TEXT NOT NULL,
+  app_view_type TEXT NOT NULL,
+  workflow_key TEXT,
+  definition_json TEXT NOT NULL,
+  last_prepared_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  PRIMARY KEY (owner_key, contract_id, app_view_id)
+)
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `app_view_definitions` guarda el shell preparado por owner/contrato/AppView. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
 
 Las migraciones SQLite no resetean la DB local. Agregan columnas/tablas nuevas y conservan `local_id`, `server_id`, cache, telemetria y pending operations existentes.
 

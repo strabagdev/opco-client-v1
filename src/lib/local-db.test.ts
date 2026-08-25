@@ -72,14 +72,14 @@ describe("local database singleton", () => {
     expect(db.runAsync).toHaveBeenCalledWith(
         `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
       "schema_version",
-      "7",
+      "8",
     );
     expect(db.runAsync.mock.calls.filter((call) => call[1] === "schema_version")).toHaveLength(1);
     expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
       hasDatabase: true,
       hasDatabasePromise: true,
       hasMigrationPromise: false,
-      migratedSchemaVersion: "7",
+      migratedSchemaVersion: "8",
     });
   });
 
@@ -246,6 +246,10 @@ function createMockDatabase(): MockDatabase {
       }
 
       if (sql.includes("PRAGMA table_info(app_views)")) {
+        return [{ name: "owner_key" }];
+      }
+
+      if (sql.includes("PRAGMA table_info(app_view_definitions)")) {
         return [{ name: "owner_key" }];
       }
 

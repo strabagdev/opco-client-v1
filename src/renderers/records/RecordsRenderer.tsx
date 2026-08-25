@@ -287,7 +287,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       ) : null}
       {!isLoading && !error && records.length === 0 ? (
         <Text style={styles.empty}>
-          {debouncedSearch ? "No hay registros para esta busqueda." : "Esta experiencia no tiene registros."}
+          {isOfflineData && !debouncedSearch
+            ? "No hay datos guardados para esta experiencia."
+            : debouncedSearch ? "No hay registros para esta busqueda." : "Esta experiencia no tiene registros."}
         </Text>
       ) : null}
 

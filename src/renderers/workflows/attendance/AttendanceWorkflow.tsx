@@ -41,7 +41,7 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
-  const { api, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -156,6 +156,21 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      if (connectivityStatus !== "online") {
+        if (ownerKey) {
+          const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
+
+          if (prepared?.definition.kind === "attendance") {
+            setStatuses(prepared.definition.statuses);
+          }
+        }
+
+        setItems([]);
+        setLatest([]);
+        setIsLoading(false);
+        return;
+      }
+
       const requestId = ++requestSequenceRef.current;
 
       setIsLoading(true);
@@ -187,7 +202,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
+  }, [api, appView.id, applyAttendanceResponse, connectivityStatus, date, definitionCache, ownerKey, selectedContractId, token]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -343,7 +358,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       {connectivityStatus !== "online" ? (
-        <Text style={styles.offline}>El registro de asistencia requiere conexion.</Text>
+        <Text style={styles.offline}>Registro de asistencia requiere conexion en esta version.</Text>
       ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
@@ -365,6 +380,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       {isLoading ? <ActivityIndicator /> : null}
+
+      {connectivityStatus !== "online" && statuses.length > 0 ? (
+        <View style={styles.statusGrid}>
+          {statuses.map((status) => (
+            <View key={status.optionId} style={styles.offlineStatusPill}>
+              <Text style={styles.secondaryStatusText}>{status.label}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
@@ -725,6 +750,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
+  },
+  offlineStatusPill: {
+    backgroundColor: "#ffffff",
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   personText: {
     flex: 1,

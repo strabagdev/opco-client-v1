@@ -10,8 +10,10 @@ import {
 } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
-import { buildOwnerKey } from "@/lib/app-navigation-cache";
+import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
+import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
+import { selectContractId } from "@/lib/contract-selection";
 import {
   getLocalDatabase,
   getLocalDatabaseRecoverySummary,
@@ -230,6 +232,29 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setContext(nextContext);
     setStatus("authenticated");
 
+    const nextContractId = selectContractId(nextContext.contracts, selectedContractIdState ?? await readPersistedContractId(definitionCache, nextOwnerKey));
+
+    if (nextContractId) {
+      const appViewsResult = await loadAppViewsWithCache({
+        api,
+        cache: definitionCache,
+        contractId: nextContractId,
+        ownerKey: nextOwnerKey,
+        token: nextToken,
+      });
+
+      if (!appViewsResult.offline) {
+        void prewarmAssignedAppViewsOnce({
+          api,
+          appViews: appViewsResult.views,
+          contractId: nextContractId,
+          ownerKey: nextOwnerKey,
+          store: definitionCache,
+          token: nextToken,
+        });
+      }
+    }
+
     await syncPendingRecordsOnce({
       api,
       ownerKey: nextOwnerKey,
@@ -237,7 +262,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       token: nextToken,
     });
     await refreshPendingRecordsCount();
-  }, [api, definitionCache, refreshPendingRecordsCount, token]);
+  }, [api, definitionCache, refreshPendingRecordsCount, selectedContractIdState, token]);
 
   useEffect(() => {
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
@@ -397,6 +422,31 @@ export function SessionProvider({ children }: PropsWithChildren) {
   async function setSelectedContractId(contractId: string | null) {
     setSelectedContractIdState(contractId);
     await persistSelectedContractId(definitionCache, contractId, ownerKey);
+
+    if (contractId && ownerKey && token && status === "authenticated") {
+      try {
+        const result = await loadAppViewsWithCache({
+          api,
+          cache: definitionCache,
+          contractId,
+          ownerKey,
+          token,
+        });
+
+        if (!result.offline) {
+          void prewarmAssignedAppViewsOnce({
+            api,
+            appViews: result.views,
+            contractId,
+            ownerKey,
+            store: definitionCache,
+            token,
+          });
+        }
+      } catch {
+        // Home owns visible navigation errors; prewarm must not block contract selection.
+      }
+    }
   }
 
   return (

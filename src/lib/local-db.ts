@@ -1,6 +1,13 @@
 import * as SQLite from "expo-sqlite";
 
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
+import {
+  AppViewDefinitionCache,
+  AppViewDefinitionStatus,
+  CachedAppViewDefinition,
+  PreparedAppViewDefinition,
+  UpsertAppViewDefinitionInput,
+} from "./app-view-definitions-cache";
 import { CachedEntityDefinition, EntityDefinitionCache } from "./definition-cache";
 import {
   LocalDatabaseRecoverySummary,
@@ -29,7 +36,7 @@ import {
 import { RecordsSyncStore } from "../sync/records-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "7";
+const SCHEMA_VERSION = "8";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -49,6 +56,7 @@ type LocalDatabaseGlobal = typeof globalThis & {
 };
 
 export type LocalDatabase = AppNavigationCache &
+  AppViewDefinitionCache &
   EntityDefinitionCache &
   OfflineRecordStore &
   SyncTelemetryStore &
@@ -65,11 +73,13 @@ export function getLocalDatabase(): LocalDatabase {
     createLocalRecord,
     failPendingOperation,
     getAppViews,
+    getAppViewDefinition,
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
     getSyncTelemetry,
     getEntityDefinition,
+    listAppViewDefinitions,
     getSelectedContractId,
     listCachedRecords,
     listProblemRecords,
@@ -80,6 +90,7 @@ export function getLocalDatabase(): LocalDatabase {
     markSyncError,
     markSyncPhase,
     markSyncPhaseCompleted,
+    reconcileAppViewDefinitions,
     reconcileRemoteRecordsSnapshot,
     resolveRecordConflictWithLocal,
     resolveRecordConflictWithRemote,
@@ -88,6 +99,7 @@ export function getLocalDatabase(): LocalDatabase {
     setSelectedContractId,
     updateLocalRecord,
     upsertAppViews,
+    upsertAppViewDefinition,
     upsertContextSnapshot,
     upsertRemoteRecords,
     upsertEntityDefinition,
@@ -206,6 +218,17 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
       synced_at TEXT NOT NULL,
       PRIMARY KEY (owner_key, contract_id)
     );
+    CREATE TABLE IF NOT EXISTS app_view_definitions (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      app_view_type TEXT NOT NULL,
+      workflow_key TEXT,
+      definition_json TEXT NOT NULL,
+      last_prepared_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id)
+    );
     CREATE TABLE IF NOT EXISTS entity_records (
       local_id TEXT PRIMARY KEY NOT NULL,
       server_id TEXT,
@@ -273,6 +296,7 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
 
   await migrateEntityRecordsTable(db);
   await migrateNavigationCacheTables(db);
+  await migrateAppViewDefinitionsTable(db);
   await migrateSyncTelemetryTable(db);
 
   await db.runAsync(
@@ -579,6 +603,22 @@ async function migrateNavigationCacheTables(db: SQLite.SQLiteDatabase) {
   }
 }
 
+async function migrateAppViewDefinitionsTable(db: SQLite.SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS app_view_definitions (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      app_view_type TEXT NOT NULL,
+      workflow_key TEXT,
+      definition_json TEXT NOT NULL,
+      last_prepared_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id)
+    );
+  `);
+}
+
 async function migrateSyncTelemetryTable(db: SQLite.SQLiteDatabase) {
   const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(sync_telemetry)`);
   const columnNames = new Set(columns.map((column) => column.name));
@@ -732,6 +772,115 @@ async function clearNavigationCache() {
 
   await db.runAsync(`DELETE FROM context_snapshot`);
   await db.runAsync(`DELETE FROM app_views`);
+  await db.runAsync(`DELETE FROM app_view_definitions`);
+}
+
+async function upsertAppViewDefinition({
+  appViewId,
+  appViewType,
+  contractId,
+  definition,
+  lastPreparedAt,
+  ownerKey,
+  status,
+  workflowKey = null,
+}: UpsertAppViewDefinitionInput) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      INSERT INTO app_view_definitions (
+        owner_key,
+        contract_id,
+        app_view_id,
+        app_view_type,
+        workflow_key,
+        definition_json,
+        last_prepared_at,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_key, contract_id, app_view_id)
+      DO UPDATE SET
+        app_view_type = excluded.app_view_type,
+        workflow_key = excluded.workflow_key,
+        definition_json = excluded.definition_json,
+        last_prepared_at = excluded.last_prepared_at,
+        status = excluded.status
+    `,
+    ownerKey,
+    contractId,
+    appViewId,
+    appViewType,
+    workflowKey,
+    JSON.stringify(definition),
+    lastPreparedAt,
+    status,
+  );
+}
+
+async function getAppViewDefinition(
+  ownerKey: string,
+  contractId: string,
+  appViewId: string,
+): Promise<CachedAppViewDefinition | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<AppViewDefinitionRow>(
+    `
+      SELECT *
+      FROM app_view_definitions
+      WHERE owner_key = ? AND contract_id = ? AND app_view_id = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    contractId,
+    appViewId,
+  );
+
+  return row ? mapAppViewDefinitionRow(row) : null;
+}
+
+async function listAppViewDefinitions(ownerKey: string, contractId: string): Promise<CachedAppViewDefinition[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<AppViewDefinitionRow>(
+    `
+      SELECT *
+      FROM app_view_definitions
+      WHERE owner_key = ? AND contract_id = ?
+      ORDER BY last_prepared_at DESC
+    `,
+    ownerKey,
+    contractId,
+  );
+
+  return rows.map(mapAppViewDefinitionRow);
+}
+
+async function reconcileAppViewDefinitions(ownerKey: string, contractId: string, assignedAppViewIds: string[]) {
+  const db = await getDatabase();
+
+  if (assignedAppViewIds.length === 0) {
+    await db.runAsync(
+      `DELETE FROM app_view_definitions WHERE owner_key = ? AND contract_id = ?`,
+      ownerKey,
+      contractId,
+    );
+    return;
+  }
+
+  const placeholders = assignedAppViewIds.map(() => "?").join(", ");
+
+  await db.runAsync(
+    `
+      DELETE FROM app_view_definitions
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND app_view_id NOT IN (${placeholders})
+    `,
+    ownerKey,
+    contractId,
+    ...assignedAppViewIds,
+  );
 }
 
 async function upsertRemoteRecords({
@@ -1871,6 +2020,17 @@ type PendingOperationRow = {
   updated_at: string;
 };
 
+type AppViewDefinitionRow = {
+  app_view_id: string;
+  app_view_type: AppView["type"];
+  contract_id: string;
+  definition_json: string;
+  last_prepared_at: string;
+  owner_key: string;
+  status: AppViewDefinitionStatus;
+  workflow_key: string | null;
+};
+
 type SyncTelemetryRow = {
   contract_id: string;
   entity_type_id: string;
@@ -1885,6 +2045,19 @@ type SyncTelemetryRow = {
   owner_key: string;
   sync_phase: SyncPhase;
 };
+
+function mapAppViewDefinitionRow(row: AppViewDefinitionRow): CachedAppViewDefinition {
+  return {
+    appViewId: row.app_view_id,
+    appViewType: row.app_view_type,
+    contractId: row.contract_id,
+    definition: JSON.parse(row.definition_json) as PreparedAppViewDefinition,
+    lastPreparedAt: row.last_prepared_at,
+    ownerKey: row.owner_key,
+    status: row.status,
+    workflowKey: row.workflow_key,
+  };
+}
 
 function mapRecordRow(row: EntityRecordRow): CachedEntityRecord {
   return {

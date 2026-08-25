@@ -42,6 +42,7 @@
 - Expo Web Fast Refresh must not open a second SQLite Access Handle.
 - SQLite migrations must be single-flight.
 - Never reset SQLite automatically; it may contain unsynchronized work.
+- Assigned AppView definitions are precached online; records remain demand-cached unless explicitly designed otherwise.
 - Do not assume multi-tab support with Expo Web / OPFS.
 
 ## Connectivity / Sync

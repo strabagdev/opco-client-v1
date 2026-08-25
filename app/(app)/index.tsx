@@ -11,6 +11,8 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
+import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
+import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
@@ -36,6 +38,7 @@ export default function HomeScreen() {
   const [isLoadingViews, setIsLoadingViews] = useState(false);
   const [viewsFromCache, setViewsFromCache] = useState(false);
   const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
+  const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId && views.length > 0),
@@ -63,6 +66,37 @@ export default function HomeScreen() {
   useEffect(() => {
     let isMounted = true;
 
+    async function refreshOfflineAvailability(nextViews: AppView[]) {
+      if (!selectedContractId || !ownerKey) {
+        setOfflineAvailabilityByViewId({});
+        return;
+      }
+
+      try {
+        const entries = await Promise.all(nextViews.map(async (appView) => {
+          const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
+          const cachedRecordsCount = appView.type === "RECORDS"
+            ? (await definitionCache.listCachedRecords({
+                contractId: selectedContractId,
+                entityTypeId: appView.config.entityTypeId,
+                ownerKey,
+                pageSize: 1,
+              })).pagination.total
+            : 0;
+
+          return [appView.id, deriveOfflineAvailability({ appView, cachedRecordsCount, definition })] as const;
+        }));
+
+        if (isMounted) {
+          setOfflineAvailabilityByViewId(Object.fromEntries(entries));
+        }
+      } catch {
+        if (isMounted) {
+          setOfflineAvailabilityByViewId({});
+        }
+      }
+    }
+
     async function loadViews() {
       if (!token || !selectedContractId || !ownerKey) {
         setViews([]);
@@ -88,6 +122,22 @@ export default function HomeScreen() {
           setViewsFromCache(data.fromCache);
           setViewsSyncedAt(data.syncedAt);
         }
+
+        if (!data.offline) {
+          void prewarmAssignedAppViewsOnce({
+            api,
+            appViews: data.views,
+            contractId: selectedContractId,
+            ownerKey,
+            store: definitionCache,
+            token,
+          }).finally(() => {
+            if (isMounted) {
+              void refreshOfflineAvailability(data.views);
+            }
+          });
+        }
+        await refreshOfflineAvailability(data.views);
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
@@ -203,6 +253,9 @@ export default function HomeScreen() {
                   <View style={styles.typeBadge}>
                     <Text style={styles.typeBadgeText}>{getAppViewCardMetadata(appView)}</Text>
                   </View>
+                  <Text style={styles.availabilityText}>
+                    {getOfflineAvailabilityText(offlineAvailabilityByViewId[appView.id] ?? "definition-missing")}
+                  </Text>
                 </View>
               </Pressable>
             </Link>
@@ -212,6 +265,22 @@ export default function HomeScreen() {
       </View>
     </ScrollView>
   );
+}
+
+function getOfflineAvailabilityText(availability: OfflineAvailability) {
+  switch (availability) {
+    case "ready":
+      return "Disponible sin conexion";
+    case "data-not-cached":
+      return "Datos bajo demanda";
+    case "online-only":
+      return "Requiere conexion";
+    case "unsupported":
+      return "No soportada";
+    case "definition-missing":
+    default:
+      return "Preparando";
+  }
 }
 
 function getOfflineReadinessText(readiness: ReturnType<typeof useOfflineReadiness>["offlineReadiness"]) {
@@ -324,6 +393,10 @@ const styles = StyleSheet.create({
   empty: {
     color: "#587078",
     lineHeight: 21,
+  },
+  availabilityText: {
+    color: "#587078",
+    fontSize: 12,
   },
   viewButton: {
     alignItems: "center",
