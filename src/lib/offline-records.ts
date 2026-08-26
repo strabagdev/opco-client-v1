@@ -24,7 +24,7 @@ export type CachedEntityRecord = EntityRecord & {
   syncStatus: RecordSyncStatus;
 };
 
-export type PendingOperationType = "CREATE" | "UPDATE";
+export type PendingOperationType = "CREATE" | "UPDATE" | "STATE_UPDATE";
 
 export type PendingOperation = {
   attempts: number;
@@ -38,7 +38,7 @@ export type PendingOperation = {
   localRecordId: string;
   operation: PendingOperationType;
   ownerKey: string;
-  payload: OfflineRecordPayload;
+  payload: OfflineRecordPayload | Record<string, unknown>;
   serverRecordId: string | null;
   updatedAt: string;
 };

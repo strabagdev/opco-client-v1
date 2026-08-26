@@ -11,15 +11,26 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import {
+  attendanceStateFields,
+  CachedAttendanceRecord,
+  getAttendanceStatusLabel,
+  stateUpdateConflictToAttendanceRecord,
+  stateUpdateItemToAttendanceItem,
+  stateUpdateLatestToAttendanceLatest,
+} from "@/lib/attendance-offline";
 import { createClientRequestId } from "@/lib/client-request-id";
 import { useConnectivityStatus } from "@/lib/connectivity";
+import { refreshEntityRecordsCache } from "@/lib/offline-records";
 import {
   AttendanceBatchEntry,
   AttendanceBatchResult,
   AttendanceItem,
   AttendanceLatestItem,
+  AttendanceResponse,
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
+  StateUpdateBatchResult,
   WorkflowAppView,
 } from "@/lib/opco-api";
 import {
@@ -41,7 +52,7 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
-  const { api, definitionCache, ownerKey, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -53,6 +64,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [observationExpanded, setObservationExpanded] = useState(false);
   const [observation, setObservation] = useState("");
   const [conflict, setConflict] = useState<ConflictState | null>(null);
+  const [localConflicts, setLocalConflicts] = useState<CachedAttendanceRecord[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -73,6 +86,89 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setLatest(response.latest);
     setTotalRegistered(response.summary.totalRegistered);
   }, []);
+
+  const refreshLocalDayState = useCallback(async () => {
+    if (!ownerKey || !selectedContractId) {
+      return;
+    }
+
+    const [summary, localLatest, conflicts] = await Promise.all([
+      definitionCache.getStateUpdateSummary({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
+      definitionCache.listStateUpdateLatest({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
+      definitionCache.listStateUpdateConflicts({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
+    ]);
+
+    setLatest(localLatest.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId)));
+    setTotalRegistered(summary.totalRegistered);
+    setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
+    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+  }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
+
+  const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse) => {
+    if (!ownerKey || !selectedContractId) {
+      return;
+    }
+
+    const syncedAt = new Date().toISOString();
+    const sourceDefinition = await api.getEntityDefinition(token!, selectedContractId, response.sourceEntityType.id);
+
+    await definitionCache.upsertEntityDefinition(selectedContractId, response.sourceEntityType.id, sourceDefinition.entity, syncedAt);
+    await refreshEntityRecordsCache({
+      api,
+      contractId: selectedContractId,
+      entityTypeId: response.sourceEntityType.id,
+      ownerKey,
+      store: definitionCache,
+      token: token!,
+    });
+    await definitionCache.upsertStateUpdateSnapshot({
+      appViewId: appView.id,
+      contractId: selectedContractId,
+      date: response.date,
+      items: response.items.map((item) => ({
+        current: item.attendance
+          ? {
+              extraValues: appView.config.observationFieldId
+                ? { [appView.config.observationFieldId]: item.attendance.observation }
+                : undefined,
+              recordId: item.attendance.recordId,
+              stateValues: [{
+                fieldId: appView.config.statusFieldId,
+                label: item.attendance.statusLabel,
+                optionId: item.attendance.statusOptionId,
+              }],
+              updatedAt: item.attendance.updatedAt,
+            }
+          : null,
+        subject: item.person,
+      })),
+      ownerKey,
+      targetEntityTypeId: response.targetEntityType.id,
+    });
+  }, [api, appView.config.observationFieldId, appView.config.statusFieldId, appView.id, definitionCache, ownerKey, selectedContractId, token]);
+
+  const applyDayState = useCallback(async (response: AttendanceResponse) => {
+    applyAttendanceResponse(response);
+    await refreshLocalDayState();
+  }, [applyAttendanceResponse, refreshLocalDayState]);
 
   const clearPersonFlow = useCallback(() => {
     setSearchText("");
@@ -98,12 +194,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     try {
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
+      await cacheAttendanceOnlineResponse(response);
 
       if (requestId !== requestSequenceRef.current) {
         return;
       }
 
-      applyAttendanceResponse(response);
+      await applyDayState(response);
       setItems([]);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -114,10 +211,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setIsLoading(false);
       }
     }
-  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
+  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, date, selectedContractId, token]);
 
   const searchPeople = useCallback(async (search: string) => {
-    if (!token || !selectedContractId) {
+    if (!selectedContractId || !ownerKey) {
       return;
     }
 
@@ -127,13 +224,38 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setError(null);
 
     try {
+      if (!isOnline) {
+        const localItems = await definitionCache.searchStateUpdateSubjects({
+          appViewId: appView.id,
+          contractId: selectedContractId,
+          date,
+          ownerKey,
+          search,
+          sourceEntityTypeId: appView.config.sourceEntityTypeId,
+          targetEntityTypeId: appView.config.targetEntityTypeId,
+        });
+
+        if (requestId !== requestSequenceRef.current) {
+          return;
+        }
+
+        setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId)));
+        await refreshLocalDayState();
+        return;
+      }
+
+      if (!token) {
+        return;
+      }
+
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, search });
+      await cacheAttendanceOnlineResponse(response);
 
       if (requestId !== requestSequenceRef.current) {
         return;
       }
 
-      applyAttendanceResponse(response);
+      await applyDayState(response);
       setItems(response.items);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -144,7 +266,22 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setIsSearching(false);
       }
     }
-  }, [api, appView.id, applyAttendanceResponse, date, selectedContractId, token]);
+  }, [
+    api,
+    appView.config.sourceEntityTypeId,
+    appView.config.statusFieldId,
+    appView.config.targetEntityTypeId,
+    appView.id,
+    applyDayState,
+    cacheAttendanceOnlineResponse,
+    date,
+    definitionCache,
+    isOnline,
+    ownerKey,
+    refreshLocalDayState,
+    selectedContractId,
+    token,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -159,14 +296,29 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if (connectivityStatus !== "online") {
         if (ownerKey) {
           const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
+          const sourceDefinition = await definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId);
+          const cachedPeople = await definitionCache.listCachedRecords({
+            contractId: selectedContractId,
+            entityTypeId: appView.config.sourceEntityTypeId,
+            ownerKey,
+            page: 1,
+            pageSize: 1,
+          });
 
           if (prepared?.definition.kind === "attendance") {
             setStatuses(prepared.definition.statuses);
           }
+
+          if (!prepared || prepared.status !== "ready" || !sourceDefinition || cachedPeople.pagination.total === 0) {
+            setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
+          } else {
+            setError(null);
+          }
+
+          await refreshLocalDayState();
         }
 
         setItems([]);
-        setLatest([]);
         setIsLoading(false);
         return;
       }
@@ -184,7 +336,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
         }
 
-        applyAttendanceResponse(response);
+        await cacheAttendanceOnlineResponse(response);
+        await applyDayState(response);
         setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
@@ -202,7 +355,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, applyAttendanceResponse, connectivityStatus, date, definitionCache, ownerKey, selectedContractId, token]);
+  }, [
+    api,
+    appView.config.sourceEntityTypeId,
+    appView.id,
+    applyDayState,
+    cacheAttendanceOnlineResponse,
+    connectivityStatus,
+    date,
+    definitionCache,
+    ownerKey,
+    refreshLocalDayState,
+    selectedContractId,
+    token,
+  ]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -225,6 +391,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setConflict(null);
     setError(null);
     setSuccessMessage(null);
+
+    if (!isOnline) {
+      return;
+    }
 
     if (!token || !selectedContractId) {
       return;
@@ -253,7 +423,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function saveStatus(status: AttendanceStatusOption) {
-    if (!token || !selectedContractId || !selectedItem || isSaving || !isOnline) {
+    if (!selectedContractId || !selectedItem || isSaving) {
       return;
     }
 
@@ -279,7 +449,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function saveEntry(entry: AttendanceBatchEntry) {
-    if (!token || !selectedContractId || !selectedItem) {
+    if (!selectedContractId || !selectedItem || !ownerKey) {
       return;
     }
 
@@ -288,12 +458,45 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setSuccessMessage(null);
 
     try {
-      const response = await api.saveAttendanceWorkflow(token, selectedContractId, appView.id, {
+      if (!isOnline) {
+        await definitionCache.saveStateUpdateLocally({
+          appViewId: appView.id,
+          contractId: selectedContractId,
+          date,
+          expectedUpdatedAt: selectedItem.attendance?.updatedAt ?? null,
+          extraValues: appView.config.observationFieldId && entry.observation !== undefined
+            ? { [appView.config.observationFieldId]: entry.observation }
+            : undefined,
+          historyMode: "update-current",
+          overwrite: entry.overwrite,
+          ownerKey,
+          stateFields: attendanceStateFields(statuses, appView.config),
+          stateValues: [{ fieldId: appView.config.statusFieldId, optionId: entry.statusOptionId }],
+          subjectDisplayName: selectedItem.person.displayName,
+          subjectRecordId: selectedItem.person.id,
+          targetEntityTypeId: appView.config.targetEntityTypeId,
+          uniqueness: "subject-date",
+        });
+        clearPersonFlow();
+        await refreshLocalDayState();
+        await refreshRecordsSyncSummary();
+        setSuccessMessage("Guardado en este dispositivo.");
+        return;
+      }
+
+      if (!token) {
+        return;
+      }
+
+      const response = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: createClientRequestId(),
         date,
-        entries: [entry],
+        entries: [attendanceEntryToStateUpdateEntry(entry, appView.config)],
       });
-      const blockingResult = firstBlockingAttendanceResult(response.results);
+      const attendanceResults = response.results.map((result) =>
+        stateUpdateResultToAttendanceResult(result, appView.config.statusFieldId, statuses),
+      );
+      const blockingResult = firstBlockingAttendanceResult(attendanceResults);
 
       if (blockingResult?.result === "ERROR") {
         setError(blockingResult.message);
@@ -305,11 +508,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      if (hasSuccessfulAttendanceResult(response.results)) {
-        const message = successLabel(response.results[0]);
+      if (hasSuccessfulAttendanceResult(attendanceResults)) {
+        const message = successLabel(attendanceResults[0]);
 
         clearPersonFlow();
         await loadDay();
+        await refreshRecordsSyncSummary();
         setSuccessMessage(message);
       }
     } catch (nextError) {
@@ -322,6 +526,75 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   function cancelConflict() {
     setConflict(null);
     setError(null);
+  }
+
+  async function handleUseLocalConflictChange(record: CachedAttendanceRecord) {
+    if (!ownerKey || !selectedContractId || !record.statusOptionId || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      await definitionCache.saveStateUpdateLocally({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        expectedUpdatedAt: record.conflictRemoteUpdatedAt,
+        extraValues: appView.config.observationFieldId && record.observation !== undefined
+          ? { [appView.config.observationFieldId]: record.observation }
+          : undefined,
+        historyMode: "update-current",
+        overwrite: true,
+        ownerKey,
+        stateFields: attendanceStateFields(statuses, appView.config),
+        stateValues: [{ fieldId: appView.config.statusFieldId, optionId: record.statusOptionId }],
+        subjectDisplayName: record.person.displayName,
+        subjectRecordId: record.person.id,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+        uniqueness: "subject-date",
+      });
+
+      if (isOnline) {
+        await syncPendingRecords();
+      }
+
+      await refreshLocalDayState();
+      await refreshRecordsSyncSummary();
+      setSuccessMessage(isOnline ? "Cambio enviado a Opco." : "Guardado en este dispositivo.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleUseRemoteConflictChange(record: CachedAttendanceRecord) {
+    if (!ownerKey || !selectedContractId || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      await definitionCache.discardStateUpdateLocalChange({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        subjectRecordId: record.person.id,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      });
+      await refreshLocalDayState();
+      await refreshRecordsSyncSummary();
+      setSuccessMessage("Se uso el estado de Opco.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   function changeDate(amount: number) {
@@ -358,10 +631,36 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       {connectivityStatus !== "online" ? (
-        <Text style={styles.offline}>Registro de asistencia requiere conexion en esta version.</Text>
+        <Text style={styles.offline}>Sin conexion. Los registros se guardan en este dispositivo.</Text>
+      ) : null}
+      {pendingCount > 0 ? (
+        <Text style={styles.offline}>{pendingCount} registros por sincronizar</Text>
       ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
+
+      {localConflicts.length > 0 ? (
+        <View style={styles.latestBlock}>
+          <Text style={styles.sectionTitle}>Conflictos por resolver</Text>
+          {localConflicts.map((record) => (
+            <View key={record.localRecordId} style={styles.latestRow}>
+              <View style={styles.personText}>
+                <Text style={styles.personName}>{record.person.displayName}</Text>
+                <Text style={styles.statusMeta}>Registraste sin conexion: {record.statusLabel ?? "Sin estado"}</Text>
+                <Text style={styles.statusMeta}>En Opco existe: {record.conflictRemoteStatusLabel ?? "Sin estado"}</Text>
+              </View>
+              <View style={styles.conflictActions}>
+                <Pressable disabled={isSaving} onPress={() => void handleUseLocalConflictChange(record)} style={styles.smallPrimaryButton}>
+                  <Text style={styles.smallPrimaryText}>Usar mi cambio</Text>
+                </Pressable>
+                <Pressable disabled={isSaving} onPress={() => void handleUseRemoteConflictChange(record)} style={styles.smallSecondaryButton}>
+                  <Text style={styles.smallSecondaryText}>Usar Opco</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.searchBlock}>
         <TextInput
@@ -436,9 +735,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
           {defaultStatus ? (
             <Pressable
-              disabled={isSaving || !isOnline}
+              disabled={isSaving}
               onPress={() => void saveStatus(defaultStatus)}
-              style={[styles.primaryStatusButton, (isSaving || !isOnline) && styles.disabledButton]}
+              style={[styles.primaryStatusButton, isSaving && styles.disabledButton]}
             >
               {isSaving ? (
                 <ActivityIndicator color="#ffffff" />
@@ -454,10 +753,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             <View style={styles.statusGrid}>
               {otherStatuses.map((status) => (
                 <Pressable
-                  disabled={isSaving || !isOnline}
+                  disabled={isSaving}
                   key={status.optionId}
                   onPress={() => void saveStatus(status)}
-                  style={[styles.secondaryStatusButton, (isSaving || !isOnline) && styles.disabledButton]}
+                  style={[styles.secondaryStatusButton, isSaving && styles.disabledButton]}
                 >
                   <Text style={styles.secondaryStatusText}>{status.label}</Text>
                 </Pressable>
@@ -548,6 +847,59 @@ function successLabel(result: AttendanceBatchResult | undefined) {
   return "Asistencia registrada.";
 }
 
+function attendanceEntryToStateUpdateEntry(entry: AttendanceBatchEntry, config: AttendanceWorkflowConfig) {
+  return {
+    expectedUpdatedAt: entry.expectedUpdatedAt,
+    extraValues: config.observationFieldId && entry.observation !== undefined
+      ? { [config.observationFieldId]: entry.observation }
+      : undefined,
+    overwrite: entry.overwrite,
+    stateValues: [{ fieldId: config.statusFieldId, optionId: entry.statusOptionId }],
+    subjectRecordId: entry.personRecordId,
+  };
+}
+
+function stateUpdateResultToAttendanceResult(
+  result: StateUpdateBatchResult,
+  statusFieldId: string,
+  statuses: AttendanceStatusOption[],
+): AttendanceBatchResult {
+  if (result.result === "ERROR") {
+    return {
+      code: result.code,
+      message: result.message,
+      personRecordId: result.subjectRecordId,
+      result: "ERROR",
+    };
+  }
+
+  if (result.result === "CONFLICT") {
+    const existingStatus = result.existing.stateValues.find((value) => value.fieldId === statusFieldId);
+    const requestedStatus = result.requested.stateValues.find((value) => value.fieldId === statusFieldId);
+
+    return {
+      existing: {
+        recordId: result.existing.recordId,
+        statusLabel: existingStatus?.label ?? getAttendanceStatusLabel(statuses, existingStatus?.optionId ?? ""),
+        statusOptionId: existingStatus?.optionId ?? null,
+        updatedAt: result.existing.updatedAt,
+      },
+      personRecordId: result.subjectRecordId,
+      requested: {
+        statusLabel: requestedStatus?.label ?? getAttendanceStatusLabel(statuses, requestedStatus?.optionId ?? "") ?? "",
+        statusOptionId: requestedStatus?.optionId ?? "",
+      },
+      result: "CONFLICT",
+    };
+  }
+
+  return {
+    personRecordId: result.subjectRecordId,
+    recordId: result.recordId,
+    result: result.result,
+  };
+}
+
 function formatLocalTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -566,6 +918,10 @@ const styles = StyleSheet.create({
   },
   conflictRows: {
     gap: 6,
+  },
+  conflictActions: {
+    gap: 8,
+    minWidth: 132,
   },
   conflictText: {
     color: "#0f3036",
@@ -806,6 +1162,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   secondaryStatusText: {
+    color: "#135d66",
+    fontWeight: "800",
+  },
+  smallPrimaryButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    minHeight: 36,
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  smallPrimaryText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  smallSecondaryButton: {
+    alignItems: "center",
+    backgroundColor: "#eef4f4",
+    borderRadius: 8,
+    minHeight: 36,
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  smallSecondaryText: {
     color: "#135d66",
     fontWeight: "800",
   },

@@ -36,6 +36,7 @@ import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
+import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -198,6 +199,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: definitionCache,
         token,
       });
+      await syncPendingStateUpdatesOnce({
+        api,
+        ownerKey,
+        store: definitionCache,
+        token,
+      });
     } finally {
       await refreshPendingRecordsCount();
     }
@@ -257,6 +264,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     await syncPendingRecordsOnce({
+      api,
+      ownerKey: nextOwnerKey,
+      store: definitionCache,
+      token: nextToken,
+    });
+    await syncPendingStateUpdatesOnce({
       api,
       ownerKey: nextOwnerKey,
       store: definitionCache,
@@ -398,7 +411,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
       ownerKey: nextOwnerKey,
       store: definitionCache,
       token: loginResponse.accessToken,
-    }).finally(refreshPendingRecordsCount);
+    })
+      .then(() => syncPendingStateUpdatesOnce({
+        api,
+        ownerKey: nextOwnerKey,
+        store: definitionCache,
+        token: loginResponse.accessToken,
+      }))
+      .finally(refreshPendingRecordsCount);
   }
 
   async function signOut() {

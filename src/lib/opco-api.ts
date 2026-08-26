@@ -80,7 +80,26 @@ export type AttendanceWorkflowConfig = {
   workflowKey: "attendance";
 };
 
-export type WorkflowAppViewConfig = AttendanceWorkflowConfig | (Record<string, unknown> & { workflowKey?: string });
+export type StateUpdateWorkflowConfig = {
+  dateFieldId?: string;
+  extraFieldIds?: string[];
+  historyMode?: StateUpdateHistoryMode;
+  sourceEntityTypeId: string;
+  stateFields?: {
+    defaultOptionId?: string;
+    fieldId: string;
+    required?: boolean;
+  }[];
+  subjectFieldId: string;
+  targetEntityTypeId: string;
+  uniqueness?: StateUpdateUniqueness;
+  workflowKey: "state-update";
+};
+
+export type WorkflowAppViewConfig =
+  | AttendanceWorkflowConfig
+  | StateUpdateWorkflowConfig
+  | (Record<string, unknown> & { workflowKey?: string });
 export type BoardAppViewConfig = Record<string, unknown>;
 export type DashboardAppViewConfig = Record<string, unknown>;
 
@@ -338,6 +357,146 @@ export type AttendanceBatchResponse = {
   };
   date: string;
   results: AttendanceBatchResult[];
+};
+
+export type StateUpdateUniqueness = "none" | "subject" | "subject-date";
+export type StateUpdateHistoryMode = "append" | "update-current";
+
+export type StateUpdateWorkflowQuery = {
+  date?: string;
+  search?: string;
+  subjectRecordId?: string;
+};
+
+export type StateUpdateOption = {
+  active?: boolean;
+  id?: string;
+  label: string;
+  optionId: string;
+  order?: number;
+};
+
+export type StateUpdateField = {
+  defaultOptionId?: string;
+  fieldId: string;
+  key?: string;
+  label: string;
+  name?: string;
+  options: StateUpdateOption[];
+  required: boolean;
+};
+
+export type StateUpdateSubject = {
+  displayName: string;
+  id: string;
+};
+
+export type StateUpdateCurrentFieldValue = {
+  fieldId: string;
+  label: string | null;
+  optionId: string | null;
+};
+
+export type StateUpdateCurrent = {
+  extraValues?: Record<string, EntityRecordValue>;
+  recordId: string;
+  stateValues: StateUpdateCurrentFieldValue[];
+  updatedAt: string;
+} | null;
+
+export type StateUpdateItem = {
+  current: StateUpdateCurrent;
+  subject: StateUpdateSubject;
+};
+
+export type StateUpdateLatestItem = {
+  recordId: string;
+  stateValues?: StateUpdateCurrentFieldValue[];
+  subject: StateUpdateSubject;
+  updatedAt?: string;
+};
+
+export type StateUpdateSummary = {
+  totalRegistered?: number;
+  [key: string]: unknown;
+};
+
+export type StateUpdateResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  date?: string;
+  dateFieldId?: string;
+  extraFields: EntityField[];
+  historyMode: StateUpdateHistoryMode;
+  items: StateUpdateItem[];
+  latest?: StateUpdateLatestItem[];
+  sourceEntityType: {
+    id: string;
+    name: string;
+  };
+  stateFields: StateUpdateField[];
+  subjectFieldId: string;
+  summary?: StateUpdateSummary;
+  targetEntityType: {
+    id: string;
+    name: string;
+  };
+  uniqueness: StateUpdateUniqueness;
+};
+
+export type StateUpdateEntry = {
+  expectedUpdatedAt?: string;
+  extraValues?: Record<string, EntityRecordValue>;
+  overwrite?: boolean;
+  stateValues: {
+    fieldId: string;
+    optionId: string | null;
+  }[];
+  subjectRecordId: string;
+};
+
+export type StateUpdateRequest = {
+  clientRequestId?: string;
+  date?: string;
+  entries: StateUpdateEntry[];
+};
+
+export type StateUpdateBatchResult =
+  | {
+      recordId: string;
+      result: "CREATED" | "UNCHANGED" | "UPDATED";
+      subjectRecordId: string;
+    }
+  | {
+      existing: {
+        recordId: string;
+        stateValues: StateUpdateCurrentFieldValue[];
+        updatedAt: string;
+      };
+      requested: {
+        stateValues: StateUpdateCurrentFieldValue[];
+      };
+      result: "CONFLICT";
+      subjectRecordId: string;
+    }
+  | {
+      code: string;
+      message: string;
+      result: "ERROR";
+      subjectRecordId: string;
+    };
+
+export type StateUpdateBatchResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  date?: string;
+  results: StateUpdateBatchResult[];
 };
 
 export type CreateEntityRecordInput = {
@@ -693,6 +852,35 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
       ).then(normalizeAttendanceResponse);
     },
+    getStateUpdateWorkflow(
+      token: string,
+      contractId: string,
+      appViewId: string,
+      query: StateUpdateWorkflowQuery = {},
+    ) {
+      const searchParams = new URLSearchParams();
+
+      if (query.date?.trim()) {
+        searchParams.set("date", query.date.trim());
+      }
+
+      if (query.search?.trim()) {
+        searchParams.set("search", query.search.trim());
+      }
+
+      if (query.subjectRecordId?.trim()) {
+        searchParams.set("subjectRecordId", query.subjectRecordId.trim());
+      }
+
+      const serializedQuery = searchParams.toString();
+
+      return authenticatedRequest<StateUpdateResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(
+          appViewId,
+        )}/workflow/state-update${serializedQuery ? `?${serializedQuery}` : ""}`,
+        token,
+      ).then(normalizeStateUpdateResponse);
+    },
     saveAttendanceWorkflow(
       token: string,
       contractId: string,
@@ -707,6 +895,21 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           method: "POST",
         },
       ).then(normalizeAttendanceBatchResponse);
+    },
+    saveStateUpdateWorkflow(
+      token: string,
+      contractId: string,
+      appViewId: string,
+      input: StateUpdateRequest,
+    ) {
+      return authenticatedRequest<StateUpdateBatchResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update`,
+        token,
+        {
+          body: JSON.stringify(input),
+          method: "POST",
+        },
+      ).then(normalizeStateUpdateBatchResponse);
     },
   };
 }
@@ -748,6 +951,32 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
   response.results.forEach((result) => {
     if (result.result === "CONFLICT") {
       assertIsoDateTime(result.existing.updatedAt, "Opco devolvio un updatedAt invalido para el conflicto de asistencia.");
+    }
+  });
+
+  return response;
+}
+
+function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdateResponse {
+  response.latest?.forEach((item) => {
+    if (item.updatedAt) {
+      assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
+    }
+  });
+
+  response.items.forEach((item) => {
+    if (item.current) {
+      assertIsoDateTime(item.current.updatedAt, "Opco devolvio un updatedAt invalido para el estado actual.");
+    }
+  });
+
+  return response;
+}
+
+function normalizeStateUpdateBatchResponse(response: StateUpdateBatchResponse): StateUpdateBatchResponse {
+  response.results.forEach((result) => {
+    if (result.result === "CONFLICT") {
+      assertIsoDateTime(result.existing.updatedAt, "Opco devolvio un updatedAt invalido para el conflicto de estado.");
     }
   });
 

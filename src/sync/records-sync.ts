@@ -1,6 +1,6 @@
 import { CachedEntityRecord, PendingOperation } from "../lib/offline-records";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
-import { EntityRecord, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { EntityRecord, EntityRecordValue, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { classifySyncTelemetryError, SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetryStore } from "../lib/sync-telemetry";
 
 export type RecordsSyncStore = {
@@ -78,7 +78,7 @@ async function runSync({
         operation.operation === "CREATE"
           ? await api.createEntityRecord(token, operation.contractId, operation.entityTypeId, {
               clientRequestId: operation.clientRequestId,
-              values: operation.payload.values,
+              values: (operation.payload as { values: Record<string, EntityRecordValue> }).values,
             })
           : await syncUpdate({ api, operation, store, token });
 
@@ -209,7 +209,7 @@ async function syncUpdate({
   }
 
   return api.updateEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId, {
-    values: operation.payload.values,
+    values: (operation.payload as { values: Record<string, EntityRecordValue> }).values,
   });
 }
 

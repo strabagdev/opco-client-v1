@@ -22,6 +22,12 @@ vi.mock("@/renderers/workflows/attendance/AttendanceWorkflow", () => ({
   },
 }));
 
+vi.mock("@/renderers/workflows/state-update/StateUpdateWorkflow", () => ({
+  StateUpdateWorkflow() {
+    return null;
+  },
+}));
+
 vi.mock("@/renderers/workflows/unsupported/UnsupportedWorkflow", () => ({
   UnsupportedWorkflow() {
     return null;
@@ -48,6 +54,21 @@ const attendanceView: WorkflowAppView = {
 describe("workflow renderer registry", () => {
   it("resolves attendance workflow by workflowKey", () => {
     expect(resolveWorkflowRenderer(attendanceView).name).toBe("AttendanceWorkflow");
+  });
+
+  it("resolves state-update workflow by workflowKey", () => {
+    expect(resolveWorkflowRenderer({
+      ...attendanceView,
+      config: {
+        sourceEntityTypeId: "equipment",
+        subjectFieldId: "field_equipment",
+        targetEntityTypeId: "equipment_events",
+        workflowKey: "state-update",
+      },
+      id: "view_state_update",
+      name: "Estados",
+      slug: "estados",
+    }).name).toBe("StateUpdateWorkflow");
   });
 
   it("uses controlled unsupported renderer for unknown workflow keys", () => {

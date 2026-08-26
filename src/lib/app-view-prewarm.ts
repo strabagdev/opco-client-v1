@@ -4,7 +4,17 @@ import {
   PreparedAppViewDefinition,
   UpsertAppViewDefinitionInput,
 } from "./app-view-definitions-cache";
-import { AppView, AttendanceStatusOption, EntityDefinition, OpcoApi, OpcoNetworkError } from "./opco-api";
+import {
+  AppView,
+  AttendanceStatusOption,
+  AttendanceWorkflowConfig,
+  EntityDefinition,
+  OpcoApi,
+  OpcoNetworkError,
+  StateUpdateResponse,
+} from "./opco-api";
+import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records";
+import { SyncTelemetryStore } from "./sync-telemetry";
 
 const PREWARM_CONCURRENCY = 4;
 
@@ -16,10 +26,11 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & {
     status: string;
   } | null>;
   upsertEntityDefinition(contractId: string, entityTypeId: string, definition: EntityDefinition, syncedAt: string): Promise<void>;
-};
+} & Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
+  Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export function prewarmAssignedAppViewsOnce(params: {
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getEntityDefinition">;
+  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
   ownerKey: string;
@@ -43,7 +54,7 @@ export async function prewarmAssignedAppViews({
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getEntityDefinition">;
+  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
   ownerKey: string;
@@ -64,7 +75,7 @@ async function prewarmOneAppView({
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getEntityDefinition">;
+  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appView: AppView;
   contractId: string;
   ownerKey: string;
@@ -94,8 +105,20 @@ async function prewarmOneAppView({
     }
 
     if (appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance") {
+      const attendanceConfig = appView.config as AttendanceWorkflowConfig;
       const response = await api.getAttendanceWorkflow(token, contractId, appView.id, {
         date: formatLocalDateInput(new Date()),
+      });
+      const sourceDefinition = await api.getEntityDefinition(token, contractId, response.sourceEntityType.id);
+
+      await store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt);
+      await refreshEntityRecordsCache({
+        api,
+        contractId,
+        entityTypeId: response.sourceEntityType.id,
+        ownerKey,
+        store,
+        token,
       });
 
       await store.upsertAppViewDefinition(baseDefinitionInput({
@@ -103,9 +126,49 @@ async function prewarmOneAppView({
         contractId,
         definition: {
           appView,
-          kind: "attendance",
-          statuses: response.statuses.map(copyAttendanceStatus),
+          dateFieldId: attendanceConfig.dateFieldId,
+          extraFields: [],
+          historyMode: "update-current",
+          kind: "state-update",
+          sourceEntityTypeId: response.sourceEntityType.id,
+          stateFields: [{
+            defaultOptionId: response.statuses.find((status) => status.isDefaultCheckIn)?.optionId,
+            fieldId: attendanceConfig.statusFieldId,
+            label: "Estado",
+            options: response.statuses.map(copyAttendanceStatus),
+            required: true,
+          }],
+          subjectFieldId: attendanceConfig.personFieldId,
+          targetEntityTypeId: response.targetEntityType.id,
+          uniqueness: "subject-date",
         },
+        lastPreparedAt,
+        ownerKey,
+        status: "ready",
+      }));
+      return;
+    }
+
+    if (appView.type === "WORKFLOW" && appView.config.workflowKey === "state-update") {
+      const response = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
+        date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
+      });
+      const sourceDefinition = await api.getEntityDefinition(token, contractId, response.sourceEntityType.id);
+
+      await store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt);
+      await refreshEntityRecordsCache({
+        api,
+        contractId,
+        entityTypeId: response.sourceEntityType.id,
+        ownerKey,
+        store,
+        token,
+      });
+
+      await store.upsertAppViewDefinition(baseDefinitionInput({
+        appView,
+        contractId,
+        definition: stateUpdatePreparedDefinition(appView, response),
         lastPreparedAt,
         ownerKey,
         status: "ready",
@@ -214,9 +277,23 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
 
 function copyAttendanceStatus(status: AttendanceStatusOption) {
   return {
-    isDefaultCheckIn: status.isDefaultCheckIn,
     label: status.label,
     optionId: status.optionId,
+  };
+}
+
+function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): PreparedAppViewDefinition {
+  return {
+    appView,
+    dateFieldId: response.dateFieldId,
+    extraFields: response.extraFields,
+    historyMode: response.historyMode,
+    kind: "state-update",
+    sourceEntityTypeId: response.sourceEntityType.id,
+    stateFields: response.stateFields,
+    subjectFieldId: response.subjectFieldId,
+    targetEntityTypeId: response.targetEntityType.id,
+    uniqueness: response.uniqueness,
   };
 }
 

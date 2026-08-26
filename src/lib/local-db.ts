@@ -1,6 +1,21 @@
 import * as SQLite from "expo-sqlite";
 
+import { createClientRequestId } from "./client-request-id";
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
+import {
+  buildOfflineStateValues,
+  createStateUpdateLocalRecordId,
+  normalizeStateUpdateRecord,
+  OfflineStateUpdatePayload,
+  OfflineStateUpdateValues,
+  SaveStateUpdateLocallyInput,
+  SearchStateUpdateSubjectsInput,
+  STATE_UPDATE_OPERATION,
+  StateUpdateOfflineStore,
+  StateUpdateScope,
+  stateUpdateRecordToItem,
+  UpsertStateUpdateSnapshotInput,
+} from "./state-update-offline";
 import {
   AppViewDefinitionCache,
   AppViewDefinitionStatus,
@@ -28,7 +43,7 @@ import {
   RecordsSyncSummary,
   fingerprintRecordsScope,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -38,6 +53,7 @@ import {
   SyncTelemetryStore,
 } from "./sync-telemetry";
 import { RecordsSyncStore } from "../sync/records-sync";
+import { StateUpdateSyncStore } from "../sync/state-update-sync";
 
 const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "8";
@@ -64,8 +80,10 @@ export type LocalDatabase = AppNavigationCache &
   AppViewDefinitionCache &
   EntityDefinitionCache &
   OfflineRecordStore &
+  StateUpdateOfflineStore &
   SyncTelemetryStore &
-  RecordsSyncStore & {
+  RecordsSyncStore &
+  StateUpdateSyncStore & {
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
 };
@@ -74,24 +92,32 @@ export function getLocalDatabase(): LocalDatabase {
   return {
     clearNavigationCache,
     completePendingOperation,
+    completeStateUpdateOperation,
     countPendingOperations,
     createLocalRecord,
     failPendingOperation,
+    failStateUpdateOperation,
     getAppViews,
     getAppViewDefinition,
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
     getRecordCacheStatusCounts,
+    getStateUpdateSummary,
     getSyncTelemetry,
     getEntityDefinition,
+    listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
     listCachedRecords,
     listProblemRecords,
     listPendingOperations,
+    listPendingStateUpdateOperations,
+    listStateUpdateLatest,
     markPendingOperationSyncing,
+    markStateUpdateOperationSyncing,
     markPendingOperationConflict,
+    markStateUpdateOperationConflict,
     readRecordRemoteUpdatedAt,
     markSyncError,
     markSyncPhase,
@@ -102,11 +128,16 @@ export function getLocalDatabase(): LocalDatabase {
     resolveRecordConflictWithRemote,
     retryFailedRecord,
     retryPendingOperation,
+    retryStateUpdateOperation,
+    discardStateUpdateLocalChange,
+    saveStateUpdateLocally,
+    searchStateUpdateSubjects,
     setSelectedContractId,
     updateLocalRecord,
     upsertAppViews,
     upsertAppViewDefinition,
     upsertContextSnapshot,
+    upsertStateUpdateSnapshot,
     upsertRemoteRecords,
     upsertEntityDefinition,
   };
@@ -1385,6 +1416,7 @@ async function listPendingOperations(ownerKey: string) {
       INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
       WHERE pending_operations.owner_key = ?
         AND entity_records.sync_status IN ('pending_create', 'pending_update')
+        AND pending_operations.operation IN ('CREATE', 'UPDATE')
       ORDER BY
         pending_operations.local_record_id ASC,
         CASE pending_operations.operation WHEN 'CREATE' THEN 0 ELSE 1 END ASC,
@@ -1650,6 +1682,353 @@ async function listProblemRecords({
   return rows.map(mapRecordRow);
 }
 
+async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  const localRecordId = createStateUpdateLocalRecordId(input);
+  const existingRecord = await getCachedRecord({
+    contractId: input.contractId,
+    entityTypeId: input.targetEntityTypeId,
+    ownerKey: input.ownerKey,
+    recordId: localRecordId,
+  });
+  const existingOperation = input.historyMode === "update-current"
+    ? await db.getFirstAsync<PendingOperationRow>(
+        `
+          SELECT *
+          FROM pending_operations
+          WHERE owner_key = ?
+            AND contract_id = ?
+            AND entity_type_id = ?
+            AND local_record_id = ?
+            AND operation = ?
+          LIMIT 1
+        `,
+        input.ownerKey,
+        input.contractId,
+        input.targetEntityTypeId,
+        localRecordId,
+        STATE_UPDATE_OPERATION,
+      )
+    : null;
+  const clientRequestId = existingOperation?.client_request_id ?? createClientRequestId();
+  const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
+  const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
+  const values: OfflineStateUpdateValues = {
+    appViewId: input.appViewId,
+    date: input.date,
+    expectedUpdatedAt,
+    extraValues: input.extraValues,
+    stateValues,
+    subjectDisplayName: input.subjectDisplayName,
+    subjectRecordId: input.subjectRecordId,
+  };
+  const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
+
+  await db.runAsync(
+    `
+      INSERT INTO entity_records (
+        local_id,
+        server_id,
+        owner_key,
+        contract_id,
+        entity_type_id,
+        display_name,
+        values_json,
+        remote_updated_at,
+        cached_at,
+        sync_status,
+        sync_error_code,
+        sync_error_message,
+        conflict_remote_values_json,
+        conflict_remote_display_name,
+        conflict_remote_updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)
+      ON CONFLICT(local_id)
+      DO UPDATE SET
+        display_name = excluded.display_name,
+        values_json = excluded.values_json,
+        remote_updated_at = COALESCE(entity_records.remote_updated_at, excluded.remote_updated_at),
+        cached_at = excluded.cached_at,
+        sync_status = excluded.sync_status,
+        sync_error_code = NULL,
+        sync_error_message = NULL,
+        conflict_remote_values_json = NULL,
+        conflict_remote_display_name = NULL,
+        conflict_remote_updated_at = NULL
+    `,
+    localRecordId,
+    existingRecord?.serverId ?? null,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.subjectDisplayName,
+    JSON.stringify(values),
+    expectedUpdatedAt,
+    now,
+    syncStatus,
+  );
+
+  await upsertStateUpdatePendingOperation({
+    clientRequestId,
+    input,
+    localRecordId,
+    payload: {
+      appViewId: input.appViewId,
+      clientRequestId,
+      date: input.date,
+      expectedUpdatedAt,
+      extraValues: input.extraValues,
+      historyMode: input.historyMode,
+      overwrite: input.overwrite,
+      stateValues,
+      subjectDisplayName: input.subjectDisplayName,
+      subjectRecordId: input.subjectRecordId,
+      uniqueness: input.uniqueness,
+    },
+    serverRecordId: existingRecord?.serverId ?? null,
+    timestamp: now,
+  });
+
+  const saved = await getCachedRecord({
+    contractId: input.contractId,
+    entityTypeId: input.targetEntityTypeId,
+    ownerKey: input.ownerKey,
+    recordId: localRecordId,
+  });
+
+  if (!saved) {
+    throw new Error("No fue posible leer el cambio de estado local guardado.");
+  }
+
+  return normalizeStateUpdateRecord(saved);
+}
+
+async function searchStateUpdateSubjects({
+  appViewId,
+  contractId,
+  date,
+  ownerKey,
+  search,
+  sourceEntityTypeId,
+  targetEntityTypeId,
+}: SearchStateUpdateSubjectsInput) {
+  const subjects = await listCachedRecords({
+    contractId,
+    entityTypeId: sourceEntityTypeId,
+    ownerKey,
+    page: 1,
+    pageSize: 25,
+    search,
+  });
+  const results = await Promise.all(
+    subjects.records.map(async (record) => {
+      const localState = await findStateUpdateRecordForSubject({
+        appViewId,
+        contractId,
+        date,
+        ownerKey,
+        subjectRecordId: record.serverId ?? record.id,
+        targetEntityTypeId,
+      });
+
+      return localState
+        ? stateUpdateRecordToItem(normalizeStateUpdateRecord(localState))
+        : {
+            current: null,
+            subject: {
+              displayName: record.displayName,
+              id: record.serverId ?? record.id,
+            },
+          };
+    }),
+  );
+
+  return results;
+}
+
+async function upsertStateUpdateSnapshot({ appViewId, contractId, date, items, ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput) {
+  const db = await getDatabase();
+  const cachedAt = new Date().toISOString();
+
+  for (const item of items) {
+    if (!item.current) {
+      continue;
+    }
+
+    const localRecordId = createStateUpdateLocalRecordId({
+      appViewId,
+      date,
+      historyMode: "update-current",
+      subjectRecordId: item.subject.id,
+      uniqueness: date ? "subject-date" : "subject",
+    });
+    const existing = await getCachedRecord({
+      contractId,
+      entityTypeId: targetEntityTypeId,
+      ownerKey,
+      recordId: localRecordId,
+    });
+
+    if (existing && existing.syncStatus !== "synced") {
+      continue;
+    }
+
+    const values: OfflineStateUpdateValues = {
+      appViewId,
+      date,
+      expectedUpdatedAt: item.current.updatedAt,
+      extraValues: item.current.extraValues,
+      stateValues: item.current.stateValues,
+      subjectDisplayName: item.subject.displayName,
+      subjectRecordId: item.subject.id,
+    };
+
+    await db.runAsync(
+      `
+        INSERT INTO entity_records (
+          local_id,
+          server_id,
+          owner_key,
+          contract_id,
+          entity_type_id,
+          display_name,
+          values_json,
+          remote_updated_at,
+          cached_at,
+          sync_status,
+          sync_error_code,
+          sync_error_message,
+          conflict_remote_values_json,
+          conflict_remote_display_name,
+          conflict_remote_updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', NULL, NULL, NULL, NULL, NULL)
+        ON CONFLICT(local_id)
+        DO UPDATE SET
+          server_id = excluded.server_id,
+          display_name = excluded.display_name,
+          values_json = excluded.values_json,
+          remote_updated_at = excluded.remote_updated_at,
+          cached_at = excluded.cached_at,
+          sync_status = 'synced',
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      `,
+      localRecordId,
+      item.current.recordId,
+      ownerKey,
+      contractId,
+      targetEntityTypeId,
+      item.subject.displayName,
+      JSON.stringify(values),
+      item.current.updatedAt,
+      cachedAt,
+    );
+  }
+}
+
+async function getStateUpdateSummary(input: StateUpdateScope): Promise<import("./state-update-offline").StateUpdateSummary> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ sync_status: RecordSyncStatus; total: number }>(
+    `
+      SELECT sync_status, COUNT(*) AS total
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+      GROUP BY sync_status
+    `,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.appViewId,
+    input.date ?? null,
+    input.date ?? null,
+  );
+  const count = (statuses: RecordSyncStatus[]) =>
+    rows
+      .filter((row) => statuses.includes(row.sync_status))
+      .reduce((total, row) => total + row.total, 0);
+
+  return {
+    conflictCount: count(["conflict"]),
+    failedCount: count(["failed"]),
+    pendingCount: count(["pending_create", "pending_update"]),
+    syncingCount: count(["syncing"]),
+    totalRegistered: rows.reduce((total, row) => total + row.total, 0),
+  };
+}
+
+async function listStateUpdateLatest(input: StateUpdateScope & { limit?: number }) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<EntityRecordRow>(
+    `
+      SELECT *
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+      ORDER BY cached_at DESC
+      LIMIT ?
+    `,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.appViewId,
+    input.date ?? null,
+    input.date ?? null,
+    input.limit ?? 10,
+  );
+
+  return rows.map((row) => {
+    const record = normalizeStateUpdateRecord(mapRecordRow(row));
+
+    return {
+      recordId: record.localRecordId,
+      stateValues: record.stateValues.map((value) => ({
+        ...value,
+        label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label,
+      })),
+      subject: record.subject,
+      updatedAt: record.updatedAt ?? undefined,
+    };
+  });
+}
+
+async function listStateUpdateConflicts(input: StateUpdateScope) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<EntityRecordRow>(
+    `
+      SELECT *
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND sync_status = 'conflict'
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+      ORDER BY cached_at DESC, display_name ASC
+    `,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.appViewId,
+    input.date ?? null,
+    input.date ?? null,
+  );
+
+  return rows.map((row) => normalizeStateUpdateRecord(mapRecordRow(row)));
+}
+
 async function markPendingOperationSyncing(operationId: string) {
   const db = await getDatabase();
 
@@ -1664,6 +2043,58 @@ async function markPendingOperationSyncing(operationId: string) {
     `,
     new Date().toISOString(),
     operationId,
+  );
+
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = 'syncing',
+          sync_error_code = NULL,
+          sync_error_message = NULL
+      WHERE local_id = (
+        SELECT local_record_id
+        FROM pending_operations
+        WHERE id = ?
+      )
+    `,
+    operationId,
+  );
+}
+
+async function listPendingStateUpdateOperations(ownerKey: string) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<PendingOperationRow>(
+    `
+      SELECT pending_operations.*
+      FROM pending_operations
+      INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
+      WHERE pending_operations.owner_key = ?
+        AND pending_operations.operation = ?
+        AND entity_records.sync_status IN ('pending_create', 'pending_update')
+      ORDER BY pending_operations.created_at ASC
+    `,
+    ownerKey,
+    STATE_UPDATE_OPERATION,
+  );
+
+  return rows.map(mapPendingOperationRow);
+}
+
+async function markStateUpdateOperationSyncing(operationId: string) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET attempts = attempts + 1,
+          updated_at = ?,
+          last_error_code = NULL,
+          last_error_message = NULL
+      WHERE id = ? AND operation = ?
+    `,
+    new Date().toISOString(),
+    operationId,
+    STATE_UPDATE_OPERATION,
   );
 
   await db.runAsync(
@@ -1735,13 +2166,79 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
   );
 }
 
+async function completeStateUpdateOperation(
+  operation: PendingOperation,
+  result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>,
+) {
+  const db = await getDatabase();
+  const payload = operation.payload as OfflineStateUpdatePayload;
+  const now = new Date().toISOString();
+  const values: OfflineStateUpdateValues = {
+    appViewId: payload.appViewId,
+    date: payload.date,
+    expectedUpdatedAt: null,
+    extraValues: payload.extraValues,
+    stateValues: payload.stateValues.map((value) => ({
+      fieldId: value.fieldId,
+      label: value.label ?? null,
+      optionId: value.optionId,
+    })),
+    subjectDisplayName: payload.subjectDisplayName,
+    subjectRecordId: payload.subjectRecordId,
+  };
+
+  await db.runAsync(`DELETE FROM pending_operations WHERE id = ? AND operation = ?`, operation.id, STATE_UPDATE_OPERATION);
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET server_id = COALESCE(?, server_id),
+          display_name = ?,
+          values_json = ?,
+          remote_updated_at = COALESCE(remote_updated_at, ?),
+          cached_at = ?,
+          sync_status = 'synced',
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      WHERE local_id = ?
+    `,
+    result.recordId,
+    payload.subjectDisplayName,
+    JSON.stringify(values),
+    now,
+    now,
+    operation.localRecordId,
+  );
+}
+
 async function retryPendingOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
   await setOperationError(db, operation, code, message, operation.operation === "CREATE" ? "pending_create" : "pending_update");
 }
 
+async function retryStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
+  const db = await getDatabase();
+  const payload = operation.payload as OfflineStateUpdatePayload;
+
+  await setOperationError(
+    db,
+    operation,
+    code,
+    message,
+    payload.expectedUpdatedAt || operation.serverRecordId ? "pending_update" : "pending_create",
+  );
+}
+
 async function failPendingOperation(operation: PendingOperation, code: string, message: string) {
+  const db = await getDatabase();
+
+  await setOperationError(db, operation, code, message, "failed");
+}
+
+async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
   await setOperationError(db, operation, code, message, "failed");
@@ -1784,6 +2281,102 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
     syncErrorCode: code,
     syncErrorMessage: message,
   });
+}
+
+async function markStateUpdateOperationConflict(
+  operation: PendingOperation,
+  result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>,
+) {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  const payload = operation.payload as OfflineStateUpdatePayload;
+  const remoteValues: OfflineStateUpdateValues = {
+    appViewId: payload.appViewId,
+    date: payload.date,
+    expectedUpdatedAt: result.existing.updatedAt,
+    extraValues: payload.extraValues,
+    stateValues: result.existing.stateValues,
+    subjectDisplayName: payload.subjectDisplayName,
+    subjectRecordId: result.subjectRecordId,
+  };
+
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET updated_at = ?,
+          last_error_code = ?,
+          last_error_message = ?
+      WHERE id = ?
+    `,
+    now,
+    "CONFLICT",
+    "Opco tiene un estado distinto para este registro.",
+    operation.id,
+  );
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = 'conflict',
+          sync_error_code = ?,
+          sync_error_message = ?,
+          conflict_remote_values_json = ?,
+          conflict_remote_display_name = ?,
+          conflict_remote_updated_at = ?
+      WHERE local_id = ?
+    `,
+    "CONFLICT",
+    "Opco tiene un estado distinto para este registro.",
+    JSON.stringify(remoteValues),
+    payload.subjectDisplayName,
+    result.existing.updatedAt,
+    operation.localRecordId,
+  );
+}
+
+async function discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }) {
+  const db = await getDatabase();
+  const existing = await findStateUpdateRecordForSubject(input);
+
+  if (!existing) {
+    return;
+  }
+
+  const conflictValues = existing.conflictRemoteValues as Record<string, EntityRecordValue> | null;
+
+  await db.runAsync(
+    `
+      DELETE FROM pending_operations
+      WHERE owner_key = ? AND local_record_id = ? AND operation = ?
+    `,
+    input.ownerKey,
+    existing.localId,
+    STATE_UPDATE_OPERATION,
+  );
+
+  if (!conflictValues) {
+    await db.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
+    return;
+  }
+
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET values_json = ?,
+          remote_updated_at = ?,
+          cached_at = ?,
+          sync_status = 'synced',
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      WHERE local_id = ?
+    `,
+    JSON.stringify(conflictValues),
+    existing.conflictRemoteUpdatedAt ?? null,
+    new Date().toISOString(),
+    existing.localId,
+  );
 }
 
 async function retryFailedRecord({
@@ -2008,7 +2601,7 @@ async function upsertPendingOperation({
   contractId: string;
   entityTypeId: string;
   localRecordId: string;
-  operation: "CREATE" | "UPDATE";
+  operation: PendingOperation["operation"];
   ownerKey: string;
   payload: { clientRequestId?: string; values: Record<string, EntityRecordValue> };
   serverRecordId: string | null;
@@ -2055,6 +2648,91 @@ async function upsertPendingOperation({
     timestamp,
     timestamp,
   );
+}
+
+async function upsertStateUpdatePendingOperation({
+  clientRequestId,
+  input,
+  localRecordId,
+  payload,
+  serverRecordId,
+  timestamp,
+}: {
+  clientRequestId: string;
+  input: SaveStateUpdateLocallyInput;
+  localRecordId: string;
+  payload: OfflineStateUpdatePayload;
+  serverRecordId: string | null;
+  timestamp: string;
+}) {
+  const db = await getDatabase();
+  const id = `state_update_${localRecordId}`;
+
+  await db.runAsync(
+    `
+      INSERT INTO pending_operations (
+        id,
+        client_request_id,
+        operation,
+        owner_key,
+        contract_id,
+        entity_type_id,
+        local_record_id,
+        server_record_id,
+        payload_json,
+        created_at,
+        updated_at,
+        attempts
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(id)
+      DO UPDATE SET
+        client_request_id = pending_operations.client_request_id,
+        server_record_id = COALESCE(excluded.server_record_id, pending_operations.server_record_id),
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at,
+        last_error_code = NULL,
+        last_error_message = NULL
+    `,
+    id,
+    clientRequestId,
+    STATE_UPDATE_OPERATION,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    localRecordId,
+    serverRecordId,
+    JSON.stringify(payload),
+    timestamp,
+    timestamp,
+  );
+}
+
+async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subjectRecordId: string }) {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<EntityRecordRow>(
+    `
+      SELECT *
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND json_extract(values_json, '$.subjectRecordId') = ?
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+      ORDER BY cached_at DESC
+      LIMIT 1
+    `,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.appViewId,
+    input.subjectRecordId,
+    input.date ?? null,
+    input.date ?? null,
+  );
+
+  return row ? mapRecordRow(row) : null;
 }
 
 async function setOperationError(

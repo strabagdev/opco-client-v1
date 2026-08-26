@@ -28,7 +28,10 @@
 - API/domain statuses are `PRESENTE` and `AUSENTE`.
 - The client must not know or persist internal `FieldOption.value` values for attendance.
 - Conflicts come from the backend; existing status changes may require explicit overwrite.
-- Attendance v1 is online-only. Do not claim offline support until the workflow has real SQLite persistence.
+- Offline workflow writes must reuse shared SQLite, `pending_operations`, sync, reconnect, recovery, and telemetry infrastructure.
+- Do not create ad-hoc parallel offline queues for workflows.
+- Offline state workflows must use the shared `STATE_UPDATE` outbox/runtime; workflow presets such as attendance may adapt labels and fields but must not create workflow-specific offline queues or sync engines.
+- Workflow conflicts are explicit; never resolve remote/local status differences with silent overwrite.
 
 ## Offline / SQLite
 

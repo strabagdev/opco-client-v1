@@ -5,6 +5,7 @@ import { RecordsRenderer } from "@/renderers/records/RecordsRenderer";
 import { AppViewRendererProps } from "@/renderers/types";
 import { UnsupportedRenderer } from "@/renderers/unsupported/UnsupportedRenderer";
 import { AttendanceWorkflow } from "@/renderers/workflows/attendance/AttendanceWorkflow";
+import { StateUpdateWorkflow } from "@/renderers/workflows/state-update/StateUpdateWorkflow";
 import { UnsupportedWorkflow } from "@/renderers/workflows/unsupported/UnsupportedWorkflow";
 
 export const rendererRegistry: Record<AppViewType, ComponentType<AppViewRendererProps>> = {
@@ -21,6 +22,10 @@ export function resolveAppViewRenderer(type: AppViewType) {
 export function resolveWorkflowRenderer(appView: WorkflowAppView) {
   if (appView.config.workflowKey === "attendance") {
     return AttendanceWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
+  }
+
+  if (appView.config.workflowKey === "state-update") {
+    return StateUpdateWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
   }
 
   return UnsupportedWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;

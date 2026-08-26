@@ -1,4 +1,11 @@
-import { AppView, AppViewType } from "./opco-api";
+import {
+  AppView,
+  AppViewType,
+  EntityField,
+  StateUpdateField,
+  StateUpdateHistoryMode,
+  StateUpdateUniqueness,
+} from "./opco-api";
 
 export type AppViewDefinitionStatus = "ready" | "partial" | "error";
 
@@ -29,11 +36,25 @@ export type PreparedAppViewDefinition =
   | {
       appView: AppView;
       kind: "attendance";
+      sourceEntityTypeId?: string;
+      targetEntityTypeId?: string;
       statuses: {
         isDefaultCheckIn: boolean;
         label: string;
         optionId: string;
       }[];
+    }
+  | {
+      appView: AppView;
+      dateFieldId?: string;
+      extraFields: EntityField[];
+      historyMode: StateUpdateHistoryMode;
+      kind: "state-update";
+      sourceEntityTypeId: string;
+      stateFields: StateUpdateField[];
+      subjectFieldId: string;
+      targetEntityTypeId: string;
+      uniqueness: StateUpdateUniqueness;
     }
   | {
       appView: AppView;
@@ -81,8 +102,8 @@ export function deriveOfflineAvailability({
   }
 
   if (appView.type === "WORKFLOW") {
-    return appView.config.workflowKey === "attendance" && definition?.status === "ready"
-      ? "online-only"
+    return (appView.config.workflowKey === "attendance" || appView.config.workflowKey === "state-update") && definition?.status === "ready"
+      ? "ready"
       : "definition-missing";
   }
 

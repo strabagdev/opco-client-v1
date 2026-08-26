@@ -673,6 +673,127 @@ describe("createOpcoApi", () => {
     expect(result.results[0]).toMatchObject({ result: "CREATED" });
   });
 
+  it("loads generic state-update workflow state", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            date: "2026-08-22",
+            dateFieldId: "field_date",
+            extraFields: [],
+            historyMode: "update-current",
+            items: [
+              {
+                current: {
+                  recordId: "event_1",
+                  stateValues: [{ fieldId: "field_status", label: "Disponible", optionId: "available" }],
+                  updatedAt: "2026-08-22T12:00:00.000Z",
+                },
+                subject: { displayName: "Equipo 1", id: "asset_1" },
+              },
+            ],
+            latest: [
+              {
+                recordId: "event_1",
+                stateValues: [{ fieldId: "field_status", label: "Disponible", optionId: "available" }],
+                subject: { displayName: "Equipo 1", id: "asset_1" },
+                updatedAt: "2026-08-22T12:00:00.000Z",
+              },
+            ],
+            sourceEntityType: { id: "assets", name: "Activos" },
+            stateFields: [
+              {
+                fieldId: "field_status",
+                label: "Estado",
+                options: [{ label: "Disponible", optionId: "available" }],
+                required: true,
+              },
+            ],
+            subjectFieldId: "field_asset",
+            summary: { totalRegistered: 1 },
+            targetEntityType: { id: "events", name: "Eventos" },
+            uniqueness: "subject-date",
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.getStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      date: "2026-08-22",
+      search: " equipo ",
+      subjectRecordId: "asset_1",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?date=2026-08-22&search=equipo&subjectRecordId=asset_1",
+    );
+    expect(result.stateFields[0].fieldId).toBe("field_status");
+    expect(result.items[0].current?.stateValues[0].optionId).toBe("available");
+    expect(result.summary?.totalRegistered).toBe(1);
+  });
+
+  it("saves generic state-update entries with multiple state fields and extra values", async () => {
+    const requests: RequestInit[] = [];
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        urls.push(String(url));
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            date: "2026-08-22",
+            results: [{ recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1" }],
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      clientRequestId: "request_1",
+      date: "2026-08-22",
+      entries: [
+        {
+          extraValues: { note: "Turno AM" },
+          stateValues: [
+            { fieldId: "field_operational", optionId: "running" },
+            { fieldId: "field_maintenance", optionId: "ok" },
+          ],
+          subjectRecordId: "asset_1",
+        },
+      ],
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update");
+    expect(requests[0].method).toBe("POST");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      clientRequestId: "request_1",
+      date: "2026-08-22",
+      entries: [
+        {
+          extraValues: { note: "Turno AM" },
+          stateValues: [
+            { fieldId: "field_operational", optionId: "running" },
+            { fieldId: "field_maintenance", optionId: "ok" },
+          ],
+          subjectRecordId: "asset_1",
+        },
+      ],
+    });
+    expect(result.results[0]).toMatchObject({ result: "UPDATED" });
+  });
+
   it("parses attendance conflicts with expected overwrite data", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
