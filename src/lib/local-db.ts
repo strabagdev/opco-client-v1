@@ -1729,70 +1729,72 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
   };
   const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
 
-  await db.runAsync(
-    `
-      INSERT INTO entity_records (
-        local_id,
-        server_id,
-        owner_key,
-        contract_id,
-        entity_type_id,
-        display_name,
-        values_json,
-        remote_updated_at,
-        cached_at,
-        sync_status,
-        sync_error_code,
-        sync_error_message,
-        conflict_remote_values_json,
-        conflict_remote_display_name,
-        conflict_remote_updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)
-      ON CONFLICT(local_id)
-      DO UPDATE SET
-        display_name = excluded.display_name,
-        values_json = excluded.values_json,
-        remote_updated_at = COALESCE(entity_records.remote_updated_at, excluded.remote_updated_at),
-        cached_at = excluded.cached_at,
-        sync_status = excluded.sync_status,
-        sync_error_code = NULL,
-        sync_error_message = NULL,
-        conflict_remote_values_json = NULL,
-        conflict_remote_display_name = NULL,
-        conflict_remote_updated_at = NULL
-    `,
-    localRecordId,
-    existingRecord?.serverId ?? null,
-    input.ownerKey,
-    input.contractId,
-    input.targetEntityTypeId,
-    input.subjectDisplayName,
-    JSON.stringify(values),
-    expectedUpdatedAt,
-    now,
-    syncStatus,
-  );
-
-  await upsertStateUpdatePendingOperation({
-    clientRequestId,
-    input,
-    localRecordId,
-    payload: {
-      appViewId: input.appViewId,
-      clientRequestId,
-      date: input.date,
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        INSERT INTO entity_records (
+          local_id,
+          server_id,
+          owner_key,
+          contract_id,
+          entity_type_id,
+          display_name,
+          values_json,
+          remote_updated_at,
+          cached_at,
+          sync_status,
+          sync_error_code,
+          sync_error_message,
+          conflict_remote_values_json,
+          conflict_remote_display_name,
+          conflict_remote_updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)
+        ON CONFLICT(local_id)
+        DO UPDATE SET
+          display_name = excluded.display_name,
+          values_json = excluded.values_json,
+          remote_updated_at = COALESCE(entity_records.remote_updated_at, excluded.remote_updated_at),
+          cached_at = excluded.cached_at,
+          sync_status = excluded.sync_status,
+          sync_error_code = NULL,
+          sync_error_message = NULL,
+          conflict_remote_values_json = NULL,
+          conflict_remote_display_name = NULL,
+          conflict_remote_updated_at = NULL
+      `,
+      localRecordId,
+      existingRecord?.serverId ?? null,
+      input.ownerKey,
+      input.contractId,
+      input.targetEntityTypeId,
+      input.subjectDisplayName,
+      JSON.stringify(values),
       expectedUpdatedAt,
-      extraValues: input.extraValues,
-      historyMode: input.historyMode,
-      overwrite: input.overwrite,
-      stateValues,
-      subjectDisplayName: input.subjectDisplayName,
-      subjectRecordId: input.subjectRecordId,
-      uniqueness: input.uniqueness,
-    },
-    serverRecordId: existingRecord?.serverId ?? null,
-    timestamp: now,
+      now,
+      syncStatus,
+    );
+
+    await upsertStateUpdatePendingOperation({
+      clientRequestId,
+      input,
+      localRecordId,
+      payload: {
+        appViewId: input.appViewId,
+        clientRequestId,
+        date: input.date,
+        expectedUpdatedAt,
+        extraValues: input.extraValues,
+        historyMode: input.historyMode,
+        overwrite: input.overwrite,
+        stateValues,
+        subjectDisplayName: input.subjectDisplayName,
+        subjectRecordId: input.subjectRecordId,
+        uniqueness: input.uniqueness,
+      },
+      serverRecordId: existingRecord?.serverId ?? null,
+      timestamp: now,
+    });
   });
 
   const saved = await getCachedRecord({

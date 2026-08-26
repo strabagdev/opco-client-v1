@@ -26,6 +26,7 @@ type MockDatabase = {
   getAllAsync: ReturnType<typeof vi.fn>;
   getFirstAsync: ReturnType<typeof vi.fn>;
   runAsync: ReturnType<typeof vi.fn>;
+  withTransactionAsync: ReturnType<typeof vi.fn>;
 };
 
 let db: MockDatabase;
@@ -589,6 +590,129 @@ describe("local database singleton", () => {
     );
   });
 
+  it("persists the local STATE_UPDATE record and outbox operation in one SQLite transaction", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_attendance_2026_08_26_person_a",
+          sync_status: "pending_create",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a"));
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("INSERT INTO entity_records");
+    expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("does not report local save success when the STATE_UPDATE outbox insert fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("pending insert failed");
+      throw new Error("pending insert failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO pending_operations")) {
+        throw new Error("pending insert failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.saveStateUpdateLocally(stateUpdateSaveInput("person_a"))).rejects.toThrow("pending insert failed");
+
+    const saveCalls = db.runAsync.mock.calls.filter(([sql]) =>
+      String(sql).includes("INSERT INTO entity_records") || String(sql).includes("INSERT INTO pending_operations"),
+    );
+
+    expect(saveCalls[0][0]).toContain("INSERT INTO entity_records");
+    expect(saveCalls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("creates three persisted STATE_UPDATE intents for three different Attendance people", async () => {
+    const savedRows = new Map<string, ReturnType<typeof stateUpdateEntityRecordRow>>();
+
+    db.getFirstAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes("FROM entity_records")) {
+        return savedRows.get(String(params.at(-1))) ?? null;
+      }
+
+      return null;
+    });
+    db.runAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes("INSERT INTO entity_records")) {
+        const localId = String(params[0]);
+
+        savedRows.set(localId, stateUpdateEntityRecordRow({
+          display_name: String(params[5]),
+          local_id: localId,
+          sync_status: params[9],
+          values_json: String(params[6]),
+        }));
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a"));
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_b"));
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_c"));
+
+    const recordInserts = db.runAsync.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO entity_records"));
+    const operationInserts = db.runAsync.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+
+    expect(recordInserts).toHaveLength(3);
+    expect(operationInserts).toHaveLength(3);
+    expect(new Set(recordInserts.map((call) => call[0])).size).toBe(1);
+    expect(new Set(recordInserts.map((call) => call[1])).size).toBe(3);
+    expect(recordInserts.map((call) => call[1])).toEqual([
+      expect.stringContaining("person_a"),
+      expect.stringContaining("person_b"),
+      expect.stringContaining("person_c"),
+    ]);
+  });
+
+  it("consolidates repeated Attendance update-current saves for the same person and date", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations")) {
+        return stateUpdateDiagnosticsRow({
+          client_request_id: "stable-client-request",
+          local_record_id: "state_update_view_attendance_2026_08_26_person_a",
+        });
+      }
+
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_view_attendance_2026_08_26_person_a",
+          sync_status: "pending_update",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "present_option"));
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "absent_option"));
+
+    const operationInserts = db.runAsync.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+
+    expect(operationInserts).toHaveLength(2);
+    expect(new Set(operationInserts.map((call) => call[1])).size).toBe(1);
+    expect(operationInserts[0][2]).toBe("stable-client-request");
+    expect(operationInserts[1][2]).toBe("stable-client-request");
+    expect(String(operationInserts[1][9])).toContain("absent_option");
+  });
+
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {
     const store = getLocalDatabase();
     const records = Array.from({ length: 388 }, (_, index) => remoteRecord(`persona_${index + 1}`));
@@ -818,6 +942,7 @@ function createMockDatabase(): MockDatabase {
     }),
     getFirstAsync: vi.fn(async () => null),
     runAsync: vi.fn(async () => undefined),
+    withTransactionAsync: vi.fn(async (task: () => Promise<void>) => task()),
   };
 }
 
@@ -951,5 +1076,29 @@ function stateUpdateEntityRecordRow(overrides: Record<string, unknown>) {
       subjectRecordId: "person_real_1",
     }),
     ...overrides,
+  };
+}
+
+function stateUpdateSaveInput(subjectRecordId: string, optionId = "present_option") {
+  return {
+    appViewId: "view_attendance",
+    contractId: "contract_real_1",
+    date: "2026-08-26",
+    historyMode: "update-current" as const,
+    ownerKey: "org_1:user_1",
+    stateFields: [{
+      fieldId: "status_field",
+      label: "Estado",
+      options: [
+        { label: "Presente", optionId: "present_option" },
+        { label: "Ausente", optionId: "absent_option" },
+      ],
+      required: true,
+    }],
+    stateValues: [{ fieldId: "status_field", optionId }],
+    subjectDisplayName: `Persona ${subjectRecordId}`,
+    subjectRecordId,
+    targetEntityTypeId: "attendance",
+    uniqueness: "subject-date" as const,
   };
 }

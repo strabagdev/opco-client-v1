@@ -84,6 +84,57 @@ describe("state-update sync engine", () => {
     expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastPushCompletedAt).toBe("now");
   });
 
+  it("syncs three distinct offline Attendance STATE_UPDATE operations through the generic engine", async () => {
+    store.operations = [
+      operation({ clientRequestId: "request_a", id: "state_update_a", localRecordId: "local_a", payload: attendancePayload("person_a", "request_a") }),
+      operation({ clientRequestId: "request_b", id: "state_update_b", localRecordId: "local_b", payload: attendancePayload("person_b", "request_b") }),
+      operation({ clientRequestId: "request_c", id: "state_update_c", localRecordId: "local_c", payload: attendancePayload("person_c", "request_c") }),
+    ];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async (_token: string, _contractId: string, _appViewId: string, input: { subjectRecordId: string }) => ({
+        appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
+        results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId }],
+      })),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 3, failed: 0 });
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledTimes(3);
+    expect(api.saveStateUpdateWorkflow.mock.calls.map((call) => call[3].subjectRecordId)).toEqual(["person_a", "person_b", "person_c"]);
+    expect(store.operations).toHaveLength(0);
+    expect(store.completed.map((item) => item.operation.localRecordId)).toEqual(["local_a", "local_b", "local_c"]);
+  });
+
+  it("keeps only the failed Attendance operation pending after partial state-update sync failure", async () => {
+    store.operations = [
+      operation({ clientRequestId: "request_a", id: "state_update_a", localRecordId: "local_a", payload: attendancePayload("person_a", "request_a") }),
+      operation({ clientRequestId: "request_b", id: "state_update_b", localRecordId: "local_b", payload: attendancePayload("person_b", "request_b") }),
+      operation({ clientRequestId: "request_c", id: "state_update_c", localRecordId: "local_c", payload: attendancePayload("person_c", "request_c") }),
+    ];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async (_token: string, _contractId: string, _appViewId: string, input: { subjectRecordId: string }) => {
+        if (input.subjectRecordId === "person_c") {
+          return {
+            appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
+            results: [{ code: "INVALID_STATE", message: "Estado invalido", result: "ERROR" as const, subjectRecordId: input.subjectRecordId }],
+          };
+        }
+
+        return {
+          appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
+          results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId }],
+        };
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 2, failed: 1 });
+    expect(store.operations.map((item) => item.localRecordId)).toEqual(["local_c"]);
+    expect(store.failed[0]).toMatchObject({ code: "INVALID_STATE" });
+  });
+
   it("keeps the same clientRequestId when a network retry is needed", async () => {
     store.operations = [operation()];
     const api = {
@@ -111,7 +162,10 @@ describe("state-update sync engine", () => {
     const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
 
     expect(result.failed).toBe(1);
-    expect(store.failed[0]).toMatchObject({ code: "INVALID_STATE", operation: store.operations[0] });
+    expect(store.failed[0]).toMatchObject({
+      code: "INVALID_STATE",
+      operation: { id: "state_update_local_1" },
+    });
   });
 
   it("marks validation API errors as failed instead of retrying forever", async () => {
@@ -183,6 +237,8 @@ class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
 
   async failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
     this.failed.push({ code, message, operation });
+    this.operations = this.operations.filter((item) => item.id !== operation.id);
+    this.operations.push({ ...operation, lastErrorCode: code, lastErrorMessage: message });
   }
 
   async listPendingStateUpdateOperations(ownerKey: string) {
@@ -191,6 +247,7 @@ class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
 
   async markStateUpdateOperationConflict(operation: PendingOperation, result: never) {
     this.conflicts.push({ operation, result });
+    this.operations = this.operations.filter((item) => item.id !== operation.id);
   }
 
   async markStateUpdateOperationSyncing(_operationId: string) {}
@@ -250,6 +307,20 @@ function operation(overrides: Partial<PendingOperation> = {}): PendingOperation 
     serverRecordId: "event_1",
     updatedAt: "2026-08-25T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function attendancePayload(subjectRecordId: string, clientRequestId: string): OfflineStateUpdatePayload {
+  return {
+    appViewId: "view_attendance",
+    clientRequestId,
+    date: "2026-08-26",
+    extraValues: { field_observation: "Turno AM" },
+    historyMode: "update-current",
+    stateValues: [{ fieldId: "field_attendance_status", label: "Presente", optionId: "present_option" }],
+    subjectDisplayName: `Persona ${subjectRecordId}`,
+    subjectRecordId,
+    uniqueness: "subject-date",
   };
 }
 
