@@ -2070,7 +2070,7 @@ async function listPendingStateUpdateOperations(ownerKey: string) {
       INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
       WHERE pending_operations.owner_key = ?
         AND pending_operations.operation = ?
-        AND entity_records.sync_status IN ('pending_create', 'pending_update')
+        AND entity_records.sync_status IN ('pending_create', 'pending_update', 'syncing')
       ORDER BY pending_operations.created_at ASC
     `,
     ownerKey,

@@ -151,6 +151,18 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
 
+  it("returns interrupted syncing STATE_UPDATE operations for retry on reconnect", async () => {
+    const store = getLocalDatabase();
+
+    await store.listPendingStateUpdateOperations("org_1:user_1");
+
+    expect(db.getAllAsync).toHaveBeenCalledWith(
+      expect.stringContaining("entity_records.sync_status IN ('pending_create', 'pending_update', 'syncing')"),
+      "org_1:user_1",
+      "STATE_UPDATE",
+    );
+  });
+
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {
     const store = getLocalDatabase();
     const records = Array.from({ length: 388 }, (_, index) => remoteRecord(`persona_${index + 1}`));
