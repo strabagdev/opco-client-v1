@@ -129,6 +129,7 @@ export function getLocalDatabase(): LocalDatabase {
     resolveRecordConflictWithLocal,
     resolveRecordConflictWithRemote,
     retryFailedRecord,
+    retryFailedStateUpdateOperations,
     retryPendingOperation,
     retryStateUpdateOperation,
     discardStateUpdateLocalChange,
@@ -2275,6 +2276,61 @@ async function retryStateUpdateOperation(operation: PendingOperation, code: stri
   );
 }
 
+async function retryFailedStateUpdateOperations({
+  manualRetryToken,
+  ownerKey,
+}: {
+  manualRetryToken?: string | null;
+  ownerKey: string;
+}) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<PendingOperationRow>(
+    `
+      SELECT pending_operations.*
+      FROM pending_operations
+      INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
+      WHERE pending_operations.owner_key = ?
+        AND pending_operations.operation = ?
+        AND entity_records.sync_status = 'failed'
+      ORDER BY pending_operations.created_at ASC
+    `,
+    ownerKey,
+    STATE_UPDATE_OPERATION,
+  );
+  const selectedRows = manualRetryToken
+    ? rows.filter((row) => stateUpdateManualRetryToken(row.id) === manualRetryToken)
+    : rows;
+  const now = new Date().toISOString();
+
+  for (const row of selectedRows) {
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET updated_at = ?,
+            last_error_code = NULL,
+            last_error_message = NULL
+        WHERE id = ? AND owner_key = ? AND operation = ?
+      `,
+      now,
+      row.id,
+      ownerKey,
+      STATE_UPDATE_OPERATION,
+    );
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET sync_status = 'pending_update',
+            sync_error_code = NULL,
+            sync_error_message = NULL
+        WHERE local_id = ?
+      `,
+      row.local_record_id,
+    );
+  }
+
+  return selectedRows.length;
+}
+
 async function failPendingOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
@@ -2995,6 +3051,8 @@ function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow
     lastHttpStatus: null,
     operationType: row.operation,
     payloadSchema: getDiagnosticPayloadSchema(payload),
+    manualRetryToken: syncStatus === "failed" && row.operation === STATE_UPDATE_OPERATION ? stateUpdateManualRetryToken(row.id) : null,
+    manualRetryable: syncStatus === "failed" && row.operation === STATE_UPDATE_OPERATION,
     retryable: row.operation === STATE_UPDATE_OPERATION && isStateUpdateAutoSyncStatus(syncStatus),
     retryCount: row.attempts,
     stateValuesCount: selectedStateValues.length,
@@ -3143,6 +3201,10 @@ function getDiagnosticBackendErrorCode(code: string | null) {
 
 function isStateUpdateAutoSyncStatus(syncStatus: string) {
   return syncStatus === "pending_create" || syncStatus === "pending_update" || syncStatus === "syncing";
+}
+
+function stateUpdateManualRetryToken(value: string) {
+  return fingerprintDiagnosticValue(`retry:${value}`);
 }
 
 function abbreviateDiagnosticValue(value: string | null) {

@@ -161,6 +161,11 @@ describe("local database singleton", () => {
       "org_1:user_1",
       "STATE_UPDATE",
     );
+    expect(db.getAllAsync).not.toHaveBeenCalledWith(
+      expect.stringContaining("entity_records.sync_status IN ('pending_create', 'pending_update', 'syncing', 'failed')"),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("summarizes STATE_UPDATE outbox diagnostics without exposing raw ids or payloads", async () => {
@@ -240,18 +245,121 @@ describe("local database singleton", () => {
       contractFingerprint: expect.stringMatching(/^fp_/),
       extraValuesCount: 1,
       payloadSchema: "current",
+      manualRetryable: false,
       retryable: true,
       stateValuesCount: 1,
       subjectFingerprint: expect.stringMatching(/^fp_/),
       syncStatus: "syncing",
     });
     expect(diagnostics.operations[1]).toMatchObject({
+      manualRetryToken: expect.stringMatching(/^fp_/),
+      manualRetryable: true,
       payloadSchema: "legacy-batch",
       retryable: false,
       syncStatus: "failed",
     });
     expect(JSON.stringify(diagnostics)).not.toContain("person_real_1");
     expect(JSON.stringify(diagnostics)).not.toContain("safe-count-only");
+  });
+
+  it("moves failed STATE_UPDATE operations back to pending_update only after explicit manual retry", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("entity_records.sync_status = 'failed'")) {
+        return [
+          stateUpdateDiagnosticsRow({
+            client_request_id: "client-request-id-current-1",
+            id: "state_update_pending_1",
+            local_record_id: "state_update_local_record_1",
+            payload_json: JSON.stringify({
+              appViewId: "attendance_view_real_1",
+              clientRequestId: "client-request-id-current-1",
+              date: "2026-08-26",
+              extraValues: { motivo: "safe-count-only" },
+              stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+              subjectRecordId: "person_real_1",
+            }),
+            record_sync_status: "failed",
+          }),
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const retried = await store.retryFailedStateUpdateOperations({ ownerKey: "org_1:user_1" });
+
+    expect(retried).toBe(1);
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE pending_operations"),
+      expect.any(String),
+      "state_update_pending_1",
+      "org_1:user_1",
+      "STATE_UPDATE",
+    );
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("sync_status = 'pending_update'"),
+      "state_update_local_record_1",
+    );
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("payload_json"))).toBe(false);
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("client_request_id"))).toBe(false);
+  });
+
+  it("uses the sanitized diagnostics token to retry one failed STATE_UPDATE operation", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("app_view_definitions")) {
+        return [
+          stateUpdateDiagnosticsRow({
+            id: "state_update_pending_1",
+            local_record_id: "state_update_local_record_1",
+            record_sync_status: "failed",
+          }),
+          stateUpdateDiagnosticsRow({
+            client_request_id: "client-request-id-current-2",
+            id: "state_update_pending_2",
+            local_record_id: "state_update_local_record_2",
+            record_sync_status: "failed",
+          }),
+        ];
+      }
+
+      if (sql.includes("FROM pending_operations") && sql.includes("entity_records.sync_status = 'failed'")) {
+        return [
+          stateUpdateDiagnosticsRow({
+            id: "state_update_pending_1",
+            local_record_id: "state_update_local_record_1",
+            record_sync_status: "failed",
+          }),
+          stateUpdateDiagnosticsRow({
+            client_request_id: "client-request-id-current-2",
+            id: "state_update_pending_2",
+            local_record_id: "state_update_local_record_2",
+            record_sync_status: "failed",
+          }),
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+    const diagnostics = await store.getStateUpdateOutboxDiagnostics("org_1:user_1");
+    const manualRetryToken = diagnostics.operations[1].manualRetryToken;
+
+    db.runAsync.mockClear();
+    const retried = await store.retryFailedStateUpdateOperations({
+      manualRetryToken,
+      ownerKey: "org_1:user_1",
+    });
+
+    expect(retried).toBe(1);
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE pending_operations"),
+      expect.any(String),
+      "state_update_pending_2",
+      "org_1:user_1",
+      "STATE_UPDATE",
+    );
+    expect(db.runAsync.mock.calls.some((call) => call.includes("state_update_pending_1"))).toBe(false);
   });
 
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {

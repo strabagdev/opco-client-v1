@@ -199,6 +199,30 @@ export default function StateUpdateDiagnosticsRoute() {
     }
   }, [api, definitionCache, refresh, routeState, token]);
 
+  const retryFailed = useCallback(async (manualRetryToken?: string | null) => {
+    if (!routeState.ready || !token) {
+      setError("session unavailable");
+      return;
+    }
+
+    try {
+      const retried = await definitionCache.retryFailedStateUpdateOperations({
+        manualRetryToken,
+        ownerKey: routeState.ownerKey,
+      });
+
+      if (!retried) {
+        await refresh();
+        return;
+      }
+
+      await syncNow();
+    } catch {
+      setError("retry unavailable");
+      await refresh();
+    }
+  }, [definitionCache, refresh, routeState, syncNow, token]);
+
   useEffect(() => {
     if (!routeState.ready) {
       return;
@@ -242,6 +266,7 @@ export default function StateUpdateDiagnosticsRoute() {
         error={error}
         isSyncing={isSyncing}
         onRefresh={refresh}
+        onRetryFailed={retryFailed}
         onSyncNow={syncNow}
         reconnect={stateUpdateReconnectDiagnostics}
         run={run}

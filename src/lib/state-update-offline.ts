@@ -90,6 +90,8 @@ export type StateUpdateOutboxDiagnosticsOperation = {
   lastHttpStatus: number | null;
   operationType: string;
   payloadSchema: "current" | "legacy-batch" | "legacy-wire-states" | "unknown";
+  manualRetryToken: string | null;
+  manualRetryable: boolean;
   retryable: boolean;
   retryCount: number;
   stateValuesCount: number;
@@ -154,6 +156,7 @@ export type StateUpdateOfflineStore = {
   listStateUpdateLatest(input: StateUpdateScope & { limit?: number }): Promise<StateUpdateLatestItem[]>;
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
   markStateUpdateOperationSyncing(operationId: string): Promise<void>;
+  retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;

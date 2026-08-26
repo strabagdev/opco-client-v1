@@ -396,6 +396,30 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
   }, [api, definitionCache, ownerKey, refreshStateUpdateDiagnostics, token]);
 
+  const retryFailedStateUpdateDiagnostics = useCallback(async (manualRetryToken?: string | null) => {
+    if (!token || !ownerKey) {
+      setStateUpdateDiagnosticsError("session unavailable");
+      return;
+    }
+
+    try {
+      const retried = await definitionCache.retryFailedStateUpdateOperations({
+        manualRetryToken,
+        ownerKey,
+      });
+
+      if (!retried) {
+        await refreshStateUpdateDiagnostics();
+        return;
+      }
+
+      await runStateUpdateDiagnosticSync();
+    } catch {
+      setStateUpdateDiagnosticsError("retry unavailable");
+      await refreshStateUpdateDiagnostics();
+    }
+  }, [definitionCache, ownerKey, refreshStateUpdateDiagnostics, runStateUpdateDiagnosticSync, token]);
+
   const syncPendingRecords = useCallback(async () => {
     if (!token || !ownerKey) {
       return;
@@ -791,6 +815,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
               error={stateUpdateDiagnosticsError}
               isSyncing={isStateUpdateDiagnosticSyncing}
               onRefresh={refreshStateUpdateDiagnostics}
+              onRetryFailed={retryFailedStateUpdateDiagnostics}
               onSyncNow={runStateUpdateDiagnosticSync}
               reconnect={stateUpdateReconnectDiagnostics}
               run={stateUpdateDiagnosticRun}
@@ -975,6 +1000,7 @@ export function StateUpdateDiagnosticsPanel({
   error,
   isSyncing,
   onRefresh,
+  onRetryFailed,
   onSyncNow,
   reconnect,
   run,
@@ -984,6 +1010,7 @@ export function StateUpdateDiagnosticsPanel({
   error: string | null;
   isSyncing: boolean;
   onRefresh(): Promise<void>;
+  onRetryFailed?(manualRetryToken?: string | null): Promise<void>;
   onSyncNow(): Promise<void>;
   reconnect: StateUpdateReconnectDiagnostics;
   run: StateUpdateDiagnosticRun | null;
@@ -1022,6 +1049,11 @@ export function StateUpdateDiagnosticsPanel({
             <Pressable disabled={isSyncing} onPress={onSyncNow} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
               <Text style={diagnosticsPanelStyles.buttonText}>{isSyncing ? "Sincronizando" : "Intentar sincronizar ahora"}</Text>
             </Pressable>
+            {onRetryFailed && (summary?.failed ?? 0) > 0 ? (
+              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(null)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
+                <Text style={diagnosticsPanelStyles.buttonText}>Reintentar errores</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
         {error ? <Text style={diagnosticsPanelStyles.error}>{error}</Text> : null}
@@ -1034,6 +1066,11 @@ export function StateUpdateDiagnosticsPanel({
         ) : diagnostics.operations.length ? diagnostics.operations.map((operation, index) => (
           <View key={`${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
             <Text style={diagnosticsPanelStyles.operationTitle}>#{index + 1}</Text>
+            {onRetryFailed && operation.manualRetryable && operation.manualRetryToken ? (
+              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operation.manualRetryToken)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
+                <Text style={diagnosticsPanelStyles.buttonText}>Reintentar</Text>
+              </Pressable>
+            ) : null}
             <DiagnosticsRows
               rows={[
                 ["sync_status", operation.syncStatus],
