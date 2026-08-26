@@ -459,10 +459,9 @@ export type StateUpdateEntry = {
   subjectRecordId: string;
 };
 
-export type StateUpdateRequest = {
+export type StateUpdateRequest = StateUpdateEntry & {
   clientRequestId?: string;
   date?: string;
-  entries: StateUpdateEntry[];
 };
 
 export type StateUpdateBatchResult =
@@ -498,6 +497,34 @@ export type StateUpdateBatchResponse = {
   };
   date?: string;
   results: StateUpdateBatchResult[];
+};
+
+type StateUpdateApiConflictResult = {
+  differences: {
+    existingLabel: string | null;
+    existingOptionId: string | null;
+    fieldId: string;
+    requestedLabel: string;
+    requestedOptionId: string;
+  }[];
+  existing: {
+    recordId: string;
+    updatedAt: string;
+  };
+  requested: {
+    states: Record<string, string>;
+  };
+  result: "CONFLICT";
+  subjectRecordId: string;
+};
+
+type StateUpdateApiResult =
+  | Extract<StateUpdateBatchResult, { result: "CREATED" | "ERROR" | "UNCHANGED" | "UPDATED" }>
+  | StateUpdateApiConflictResult;
+
+type StateUpdateApiResponse = Omit<StateUpdateBatchResponse, "results"> & {
+  result?: StateUpdateApiResult;
+  results?: StateUpdateApiResult[];
 };
 
 export type CreateEntityRecordInput = {
@@ -903,11 +930,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       appViewId: string,
       input: StateUpdateRequest,
     ) {
-      return authenticatedRequest<StateUpdateBatchResponse>(
+      return authenticatedRequest<StateUpdateApiResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update`,
         token,
         {
-          body: JSON.stringify(input),
+          body: JSON.stringify(serializeStateUpdateRequest(input)),
           method: "POST",
         },
       ).then(normalizeStateUpdateBatchResponse);
@@ -996,14 +1023,67 @@ function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdat
   return response;
 }
 
-function normalizeStateUpdateBatchResponse(response: StateUpdateBatchResponse): StateUpdateBatchResponse {
-  response.results.forEach((result) => {
+function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): StateUpdateBatchResponse {
+  const results = (response.results ?? ("result" in response && response.result ? [response.result] : []))
+    .map(normalizeStateUpdateBatchResult);
+
+  results.forEach((result) => {
     if (result.result === "CONFLICT") {
       assertIsoDateTime(result.existing.updatedAt, "Opco devolvio un updatedAt invalido para el conflicto de estado.");
     }
   });
 
-  return response;
+  return {
+    ...response,
+    results,
+  };
+}
+
+function serializeStateUpdateRequest(input: StateUpdateRequest) {
+  return {
+    clientRequestId: input.clientRequestId,
+    date: input.date,
+    expectedUpdatedAt: input.expectedUpdatedAt,
+    extraValues: input.extraValues,
+    overwrite: input.overwrite,
+    states: stateValuesToStates(input.stateValues),
+    subjectRecordId: input.subjectRecordId,
+  };
+}
+
+function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpdateBatchResult {
+  if (result.result !== "CONFLICT") {
+    return result;
+  }
+
+  return {
+    existing: {
+      recordId: result.existing.recordId,
+      stateValues: result.differences.map((difference) => ({
+        fieldId: difference.fieldId,
+        label: difference.existingLabel,
+        optionId: difference.existingOptionId,
+      })),
+      updatedAt: result.existing.updatedAt,
+    },
+    requested: {
+      stateValues: result.differences.map((difference) => ({
+        fieldId: difference.fieldId,
+        label: difference.requestedLabel,
+        optionId: difference.requestedOptionId,
+      })),
+    },
+    result: "CONFLICT",
+    subjectRecordId: result.subjectRecordId,
+  };
+}
+
+function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
+  return Object.fromEntries(
+    stateValues
+      .filter((value): value is { fieldId: string; optionId: string } => typeof value.optionId === "string" && value.optionId.trim().length > 0)
+      .map((value) => [value.fieldId, value.optionId]),
+  );
 }
 
 function normalizeEntityRecord(record: EntityRecord): EntityRecord {

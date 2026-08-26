@@ -504,7 +504,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const response = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: createClientRequestId(),
         date,
-        entries: [attendanceEntryToStateUpdateEntry(entry, appView.config)],
+        ...attendanceEntryToStateUpdateEntry(entry, appView.config),
       });
       const attendanceResults = response.results.map((result) =>
         stateUpdateResultToAttendanceResult(result, appView.config.statusFieldId, statuses),

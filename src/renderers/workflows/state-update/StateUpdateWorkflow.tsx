@@ -356,7 +356,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       const result = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: createClientRequestId(),
         date: hasDate ? date : undefined,
-        entries: [entry],
+        ...entry,
       });
       const blockingResult = firstBlockingStateUpdateResult(result.results);
 

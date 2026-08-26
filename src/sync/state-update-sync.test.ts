@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
-import { OpcoNetworkError } from "../lib/opco-api";
+import { OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { OfflineStateUpdatePayload, STATE_UPDATE_OPERATION } from "../lib/state-update-offline";
 import { SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "../lib/sync-telemetry";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "./state-update-sync";
@@ -13,6 +13,48 @@ beforeEach(() => {
 });
 
 describe("state-update sync engine", () => {
+  it("syncs an Attendance offline STATE_UPDATE through the generic state-update endpoint and removes pending", async () => {
+    store.operations = [operation({
+      clientRequestId: "attendance_request_1",
+      contractId: "contract_attendance",
+      entityTypeId: "entity_attendance",
+      id: "state_update_attendance_1",
+      localRecordId: "state_update_view_attendance_2026_08_25_person_1",
+      payload: {
+        appViewId: "view_attendance",
+        clientRequestId: "attendance_request_1",
+        date: "2026-08-25",
+        extraValues: { field_observation: "Turno AM" },
+        historyMode: "update-current",
+        stateValues: [{ fieldId: "field_attendance_status", label: "Presente", optionId: "status_present" }],
+        subjectDisplayName: "Ana Perez",
+        subjectRecordId: "person_1",
+        uniqueness: "subject-date",
+      },
+      serverRecordId: null,
+    })];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
+        results: [{ recordId: "attendance_1", result: "CREATED" as const, subjectRecordId: "person_1" }],
+      })),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result.completed).toBe(1);
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_attendance", "view_attendance", {
+      clientRequestId: "attendance_request_1",
+      date: "2026-08-25",
+      expectedUpdatedAt: undefined,
+      extraValues: { field_observation: "Turno AM" },
+      overwrite: undefined,
+      stateValues: [{ fieldId: "field_attendance_status", optionId: "status_present" }],
+      subjectRecordId: "person_1",
+    });
+    expect(store.operations).toHaveLength(0);
+  });
+
   it("syncs multi-state offline changes with the stable clientRequestId and extra values", async () => {
     store.operations = [operation()];
     const api = {
@@ -29,16 +71,14 @@ describe("state-update sync engine", () => {
     expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", {
       clientRequestId: "request_original",
       date: "2026-08-25",
-      entries: [{
-        expectedUpdatedAt: "2026-08-24T10:00:00.000Z",
-        extraValues: { motivo: "mantencion", observacion: "Turno AM" },
-        overwrite: undefined,
-        stateValues: [
-          { fieldId: "field_operational_status", optionId: "running" },
-          { fieldId: "field_availability", optionId: "available" },
-        ],
-        subjectRecordId: "equipment_1",
-      }],
+      expectedUpdatedAt: "2026-08-24T10:00:00.000Z",
+      extraValues: { motivo: "mantencion", observacion: "Turno AM" },
+      overwrite: undefined,
+      stateValues: [
+        { fieldId: "field_operational_status", optionId: "running" },
+        { fieldId: "field_availability", optionId: "available" },
+      ],
+      subjectRecordId: "equipment_1",
     });
     expect(store.completed).toHaveLength(1);
     expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastPushCompletedAt).toBe("now");
@@ -72,6 +112,25 @@ describe("state-update sync engine", () => {
 
     expect(result.failed).toBe(1);
     expect(store.failed[0]).toMatchObject({ code: "INVALID_STATE", operation: store.operations[0] });
+  });
+
+  it("marks validation API errors as failed instead of retrying forever", async () => {
+    store.operations = [operation()];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw new OpcoApiError("subjectRecordId es obligatorio.", "INVALID_STATE_UPDATE_BODY", 400);
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result.failed).toBe(1);
+    expect(result.retriable).toBe(0);
+    expect(store.failed[0]).toMatchObject({
+      code: "INVALID_STATE_UPDATE_BODY",
+      message: "subjectRecordId es obligatorio.",
+    });
+    expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastSyncErrorCode).toBe("VALIDATION");
   });
 
   it("persists generic CONFLICT snapshots for explicit user resolution", async () => {

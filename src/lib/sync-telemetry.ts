@@ -3,7 +3,7 @@ import { OpcoApiError, OpcoNetworkError } from "./opco-api";
 
 export type SyncPhase = "idle" | "pushing" | "refreshing" | "reconciling" | "error";
 
-export type SyncErrorCode = "NETWORK" | "AUTH" | "SERVER" | "CONFLICT" | "SQLITE" | "UNKNOWN";
+export type SyncErrorCode = "NETWORK" | "AUTH" | "SERVER" | "VALIDATION" | "CONFLICT" | "SQLITE" | "UNKNOWN";
 
 export type SyncErrorPhase = Exclude<SyncPhase, "idle" | "error">;
 
@@ -72,6 +72,10 @@ export function classifySyncTelemetryError(error: unknown): SyncErrorCode {
 
     if (error.status >= 500) {
       return "SERVER";
+    }
+
+    if (error.status === 400 || error.status === 422) {
+      return "VALIDATION";
     }
 
     return "UNKNOWN";

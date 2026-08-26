@@ -85,16 +85,14 @@ async function runSync({
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
         clientRequestId: operation.clientRequestId,
         date: payload.date,
-        entries: [{
-          expectedUpdatedAt: payload.expectedUpdatedAt ?? undefined,
-          extraValues: payload.extraValues,
-          overwrite: payload.overwrite,
-          stateValues: payload.stateValues.map((value) => ({
-            fieldId: value.fieldId,
-            optionId: value.optionId,
-          })),
-          subjectRecordId: payload.subjectRecordId,
-        }],
+        expectedUpdatedAt: payload.expectedUpdatedAt ?? undefined,
+        extraValues: payload.extraValues,
+        overwrite: payload.overwrite,
+        stateValues: payload.stateValues.map((value) => ({
+          fieldId: value.fieldId,
+          optionId: value.optionId,
+        })),
+        subjectRecordId: payload.subjectRecordId,
       });
       const operationResult = response.results[0];
 
@@ -113,7 +111,7 @@ async function runSync({
       if (operationResult.result === "ERROR") {
         await store.failStateUpdateOperation(operation, operationResult.code, operationResult.message);
         scopesWithErrors.add(stateUpdateScopeKey(payload, operation.contractId));
-        await markStateUpdateSyncError(store, ownerKey, operation.contractId, payload.appViewId, "SERVER");
+        await markStateUpdateSyncError(store, ownerKey, operation.contractId, payload.appViewId, "VALIDATION");
         result.failed += 1;
         continue;
       }

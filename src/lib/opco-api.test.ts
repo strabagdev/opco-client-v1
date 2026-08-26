@@ -801,8 +801,7 @@ describe("createOpcoApi", () => {
         return jsonResponse({
           data: {
             appView: { id: "view_state", name: "Estados", slug: "estados" },
-            date: "2026-08-22",
-            results: [{ recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1" }],
+            result: { recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1" },
           },
           ok: true,
         });
@@ -812,16 +811,12 @@ describe("createOpcoApi", () => {
     const result = await api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
       clientRequestId: "request_1",
       date: "2026-08-22",
-      entries: [
-        {
-          extraValues: { note: "Turno AM" },
-          stateValues: [
-            { fieldId: "field_operational", optionId: "running" },
-            { fieldId: "field_maintenance", optionId: "ok" },
-          ],
-          subjectRecordId: "asset_1",
-        },
+      extraValues: { note: "Turno AM" },
+      stateValues: [
+        { fieldId: "field_operational", optionId: "running" },
+        { fieldId: "field_maintenance", optionId: "ok" },
       ],
+      subjectRecordId: "asset_1",
     });
 
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update");
@@ -829,18 +824,60 @@ describe("createOpcoApi", () => {
     expect(JSON.parse(String(requests[0].body))).toEqual({
       clientRequestId: "request_1",
       date: "2026-08-22",
-      entries: [
-        {
-          extraValues: { note: "Turno AM" },
-          stateValues: [
-            { fieldId: "field_operational", optionId: "running" },
-            { fieldId: "field_maintenance", optionId: "ok" },
-          ],
-          subjectRecordId: "asset_1",
-        },
-      ],
+      extraValues: { note: "Turno AM" },
+      states: {
+        field_maintenance: "ok",
+        field_operational: "running",
+      },
+      subjectRecordId: "asset_1",
     });
     expect(result.results[0]).toMatchObject({ result: "UPDATED" });
+  });
+
+  it("normalizes backend state-update conflict differences to generic stateValues", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            result: {
+              differences: [{
+                existingLabel: "Detenido",
+                existingOptionId: "stopped",
+                fieldId: "field_operational",
+                requestedLabel: "Operando",
+                requestedOptionId: "running",
+              }],
+              existing: {
+                recordId: "event_1",
+                updatedAt: "2026-08-22T12:00:00.000Z",
+              },
+              requested: { states: { field_operational: "running" } },
+              result: "CONFLICT",
+              subjectRecordId: "asset_1",
+            },
+          },
+          ok: true,
+        }),
+    });
+
+    const result = await api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      date: "2026-08-22",
+      stateValues: [{ fieldId: "field_operational", optionId: "running" }],
+      subjectRecordId: "asset_1",
+    });
+
+    expect(result.results[0]).toMatchObject({
+      existing: {
+        stateValues: [{ fieldId: "field_operational", label: "Detenido", optionId: "stopped" }],
+      },
+      requested: {
+        stateValues: [{ fieldId: "field_operational", label: "Operando", optionId: "running" }],
+      },
+      result: "CONFLICT",
+    });
   });
 
   it("parses attendance conflicts with expected overwrite data", async () => {
