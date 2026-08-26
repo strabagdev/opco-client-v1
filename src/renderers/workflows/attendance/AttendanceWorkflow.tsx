@@ -36,6 +36,7 @@ import {
 } from "@/lib/opco-api";
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatDisplayDate,
   formatLocalDateInput,
@@ -54,7 +55,7 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
-  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
+  const { api, context, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -78,6 +79,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const isOnline = connectivityStatus === "online";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
+  const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
 
   const applyAttendanceResponse = useCallback((response: {
     latest: AttendanceLatestItem[];
@@ -125,6 +127,32 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
   }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
+  const refreshLocalSyncIndicators = useCallback(async () => {
+    if (!ownerKey || !selectedContractId) {
+      return;
+    }
+
+    const [summary, conflicts] = await Promise.all([
+      definitionCache.getStateUpdateSummary({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
+      definitionCache.listStateUpdateConflicts({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
+    ]);
+
+    setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
+    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+  }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
+
   const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse) => {
     if (!ownerKey || !selectedContractId) {
       return;
@@ -146,32 +174,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       appViewId: appView.id,
       contractId: selectedContractId,
       date: response.date,
-      items: response.items.map((item) => ({
-        current: item.attendance
-          ? {
-              extraValues: appView.config.observationFieldId
-                ? { [appView.config.observationFieldId]: item.attendance.observation }
-                : undefined,
-              recordId: item.attendance.recordId,
-              stateValues: [{
-                fieldId: appView.config.statusFieldId,
-                label: item.attendance.statusLabel,
-                optionId: item.attendance.statusOptionId,
-              }],
-              updatedAt: item.attendance.updatedAt,
-            }
-          : null,
-        subject: item.person,
-      })),
+      items: attendanceResponseToStateUpdateItems(response, appView.config),
       ownerKey,
       targetEntityTypeId: response.targetEntityType.id,
     });
-  }, [api, appView.config.observationFieldId, appView.config.statusFieldId, appView.id, definitionCache, ownerKey, selectedContractId, token]);
+  }, [api, appView.config, appView.id, definitionCache, ownerKey, selectedContractId, token]);
+
+  const cacheAttendanceOnlineResponseInBackground = useCallback((response: AttendanceResponse) => {
+    void cacheAttendanceOnlineResponse(response).catch(() => undefined);
+  }, [cacheAttendanceOnlineResponse]);
 
   const applyDayState = useCallback(async (response: AttendanceResponse) => {
     applyAttendanceResponse(response);
-    await refreshLocalDayState();
-  }, [applyAttendanceResponse, refreshLocalDayState]);
+    await refreshLocalSyncIndicators();
+  }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
     setSearchText("");
@@ -184,8 +200,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
   const loadDay = useCallback(async () => {
     if (!token || !selectedContractId) {
-      setError("Selecciona un contrato antes de abrir asistencia.");
-      setIsLoading(false);
+      setError((status === "authenticated" || status === "offline") && !isContractBootstrapPending ? "Selecciona un contrato antes de abrir asistencia." : null);
+      setIsLoading(isContractBootstrapPending);
       return;
     }
 
@@ -197,13 +213,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     try {
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
-      await cacheAttendanceOnlineResponse(response);
 
       if (requestId !== requestSequenceRef.current) {
         return;
       }
 
       await applyDayState(response);
+      cacheAttendanceOnlineResponseInBackground(response);
       setItems([]);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -214,7 +230,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setIsLoading(false);
       }
     }
-  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, date, selectedContractId, token]);
+  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponseInBackground, date, isContractBootstrapPending, selectedContractId, status, token]);
 
   const searchPeople = useCallback(async (search: string) => {
     if (!selectedContractId || !ownerKey) {
@@ -252,13 +268,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, search });
-      await cacheAttendanceOnlineResponse(response);
 
       if (requestId !== requestSequenceRef.current) {
         return;
       }
 
       await applyDayState(response);
+      cacheAttendanceOnlineResponseInBackground(response);
       setItems(response.items);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -276,7 +292,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.targetEntityTypeId,
     appView.id,
     applyDayState,
-    cacheAttendanceOnlineResponse,
+    cacheAttendanceOnlineResponseInBackground,
     date,
     definitionCache,
     isOnline,
@@ -291,8 +307,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     async function load() {
       if (!token || !selectedContractId) {
-        setError("Selecciona un contrato antes de abrir asistencia.");
-        setIsLoading(false);
+        setError((status === "authenticated" || status === "offline") && !isContractBootstrapPending ? "Selecciona un contrato antes de abrir asistencia." : null);
+        setIsLoading(isContractBootstrapPending);
         return;
       }
 
@@ -347,8 +363,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
         }
 
-        await cacheAttendanceOnlineResponse(response);
         await applyDayState(response);
+        cacheAttendanceOnlineResponseInBackground(response);
         setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
@@ -373,13 +389,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.statusFieldId,
     appView.id,
     applyDayState,
-    cacheAttendanceOnlineResponse,
+    cacheAttendanceOnlineResponseInBackground,
     connectivityStatus,
     date,
     definitionCache,
+    isContractBootstrapPending,
     ownerKey,
     refreshLocalDayState,
     selectedContractId,
+    status,
     token,
   ]);
 

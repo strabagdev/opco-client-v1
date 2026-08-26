@@ -188,10 +188,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
       try {
         const nextContext = await api.getContext(accessToken);
         const nextOwnerKey = buildOwnerKey(currentMe, nextContext);
+        const persistedContractId = await readPersistedContractId(definitionCache, nextOwnerKey);
+        const nextContractId = selectContractId(nextContext.contracts, persistedContractId);
 
         await tokenStorage.setSessionOwnerKey(nextOwnerKey);
         await definitionCache.upsertContextSnapshot(nextOwnerKey, currentMe, nextContext, new Date().toISOString());
         setContext(nextContext);
+        setSelectedContractIdState(nextContractId);
       } catch (error) {
         if (!(error instanceof OpcoNetworkError)) {
           return;
@@ -491,6 +494,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
     const nextContractId = selectContractId(nextContext.contracts, selectedContractIdState ?? await readPersistedContractId(definitionCache, nextOwnerKey));
 
+    setSelectedContractIdState(nextContractId);
+
     if (nextContractId) {
       const appViewsResult = await loadAppViewsWithCache({
         api,
@@ -704,6 +709,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     const nextMe = await api.getMe(loginResponse.accessToken);
     const nextContext = await api.getContext(loginResponse.accessToken);
     const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
+    const nextContractId = selectContractId(nextContext.contracts, await readPersistedContractId(definitionCache, nextOwnerKey));
 
     await tokenStorage.setSessionOwnerKey(nextOwnerKey);
     await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
@@ -711,6 +717,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setToken(loginResponse.accessToken);
     setMe(nextMe);
     setContext(nextContext);
+    setSelectedContractIdState(nextContractId);
     setStatus("authenticated");
     void syncPendingRecordsOnce({
       api,

@@ -1,4 +1,4 @@
-import { AttendanceBatchResult, AttendanceStatusOption } from "@/lib/opco-api";
+import { AttendanceBatchResult, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
 
 export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
 
@@ -66,4 +66,51 @@ export function hasSuccessfulAttendanceResult(results: AttendanceBatchResult[]) 
     result.result === "UNCHANGED" ||
     result.result === "UPDATED"
   ));
+}
+
+export function attendanceResponseToStateUpdateItems(
+  response: AttendanceResponse,
+  config: {
+    observationFieldId?: string;
+    statusFieldId: string;
+  },
+): StateUpdateItem[] {
+  const items = new Map<string, StateUpdateItem>();
+
+  for (const item of response.items) {
+    items.set(item.person.id, {
+      current: item.attendance
+        ? {
+            extraValues: config.observationFieldId
+              ? { [config.observationFieldId]: item.attendance.observation }
+              : undefined,
+            recordId: item.attendance.recordId,
+            stateValues: [{
+              fieldId: config.statusFieldId,
+              label: item.attendance.statusLabel,
+              optionId: item.attendance.statusOptionId,
+            }],
+            updatedAt: item.attendance.updatedAt,
+          }
+        : null,
+      subject: item.person,
+    });
+  }
+
+  for (const item of response.latest) {
+    items.set(item.person.id, {
+      current: {
+        recordId: item.attendanceRecordId,
+        stateValues: [{
+          fieldId: config.statusFieldId,
+          label: item.statusLabel,
+          optionId: item.statusOptionId,
+        }],
+        updatedAt: item.updatedAt ?? response.date,
+      },
+      subject: item.person,
+    });
+  }
+
+  return [...items.values()];
 }

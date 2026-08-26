@@ -4,6 +4,7 @@ import { AttendanceBatchResult, AttendanceStatusOption } from "@/lib/opco-api";
 
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
@@ -85,5 +86,87 @@ describe("attendance workflow logic", () => {
     expect(firstBlockingAttendanceResult([
       { code: "INVALID", message: "Persona invalida.", personRecordId: "person_3", result: "ERROR" },
     ])).toMatchObject({ result: "ERROR" });
+  });
+
+  it("hydrates state-update cache from three latest records when initial Attendance load has no searched items", () => {
+    const items = attendanceResponseToStateUpdateItems({
+      appView: { id: "view_attendance", name: "Asistencia", slug: "asistencia" },
+      date: "2026-08-26",
+      items: [],
+      latest: [
+        {
+          attendanceRecordId: "attendance_1",
+          person: { displayName: "Persona 1", id: "person_1" },
+          statusLabel: "Presente",
+          statusOptionId: "present_option",
+          updatedAt: "2026-08-26T12:00:00.000Z",
+        },
+        {
+          attendanceRecordId: "attendance_2",
+          person: { displayName: "Persona 2", id: "person_2" },
+          statusLabel: "Ausente",
+          statusOptionId: "absent_option",
+          updatedAt: "2026-08-26T12:05:00.000Z",
+        },
+        {
+          attendanceRecordId: "attendance_3",
+          person: { displayName: "Persona 3", id: "person_3" },
+          statusLabel: "Presente",
+          statusOptionId: "present_option",
+          updatedAt: "2026-08-26T12:10:00.000Z",
+        },
+      ],
+      sourceEntityType: { id: "personas", name: "Personas" },
+      statuses,
+      summary: { totalRegistered: 3 },
+      targetEntityType: { id: "attendance", name: "Attendance" },
+    }, {
+      observationFieldId: "observation",
+      statusFieldId: "status",
+    });
+
+    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.current?.recordId)).toEqual(["attendance_1", "attendance_2", "attendance_3"]);
+    expect(items.map((item) => item.current?.stateValues[0])).toEqual([
+      { fieldId: "status", label: "Presente", optionId: "present_option" },
+      { fieldId: "status", label: "Ausente", optionId: "absent_option" },
+      { fieldId: "status", label: "Presente", optionId: "present_option" },
+    ]);
+  });
+
+  it("prefers latest over stale roster item state when hydrating the Attendance day", () => {
+    const items = attendanceResponseToStateUpdateItems({
+      appView: { id: "view_attendance", name: "Asistencia", slug: "asistencia" },
+      date: "2026-08-26",
+      items: [{
+        attendance: {
+          observation: null,
+          recordId: "attendance_old",
+          statusLabel: "Ausente",
+          statusOptionId: "absent_option",
+          updatedAt: "2026-08-26T10:00:00.000Z",
+        },
+        person: { displayName: "Persona 1", id: "person_1" },
+      }],
+      latest: [{
+        attendanceRecordId: "attendance_latest",
+        person: { displayName: "Persona 1", id: "person_1" },
+        statusLabel: "Presente",
+        statusOptionId: "present_option",
+        updatedAt: "2026-08-26T12:00:00.000Z",
+      }],
+      sourceEntityType: { id: "personas", name: "Personas" },
+      statuses,
+      summary: { totalRegistered: 1 },
+      targetEntityType: { id: "attendance", name: "Attendance" },
+    }, {
+      statusFieldId: "status",
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0].current).toMatchObject({
+      recordId: "attendance_latest",
+      stateValues: [{ fieldId: "status", label: "Presente", optionId: "present_option" }],
+    });
   });
 });
