@@ -28,6 +28,7 @@ export default function AppLayout() {
       <Stack.Screen name="index" options={{ title: "Opco" }} />
       <Stack.Screen name="entity/[entityTypeId]" options={{ title: "Registros" }} />
       <Stack.Screen name="entity/[entityTypeId]/record/[recordId]" options={{ title: "Detalle" }} />
+      <Stack.Screen name="diagnostics/state-update" options={{ title: "Diagnostico STATE_UPDATE" }} />
       <Stack.Screen name="view/[appViewId]" options={{ title: "Experiencia" }} />
       <Stack.Screen name="view/[appViewId]/problems" options={{ title: "Problemas" }} />
       <Stack.Screen name="view/[appViewId]/record/new" options={{ title: "Crear registro" }} />

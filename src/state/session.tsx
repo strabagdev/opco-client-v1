@@ -57,6 +57,7 @@ type SessionContextValue = {
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
+  stateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnostics;
   signOut(): Promise<void>;
   status: SessionStatus;
   syncPendingRecords(): Promise<void>;
@@ -72,7 +73,7 @@ const emptyRecordsSyncSummary: RecordsSyncSummary = {
   syncingCount: 0,
 };
 
-type StateUpdateReconnectDiagnostics = {
+export type StateUpdateReconnectDiagnostics = {
   connectivityStatus: string;
   detectedAt: string | null;
   operationsAttempted: number;
@@ -83,7 +84,7 @@ type StateUpdateReconnectDiagnostics = {
   stateUpdateSyncInvokedAt: string | null;
 };
 
-type StateUpdateDiagnosticRun = {
+export type StateUpdateDiagnosticRun = {
   invokedAt: string;
   operationsAttempted: number;
   operationsCompleted: number;
@@ -768,6 +769,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
         signIn,
+        stateUpdateReconnectDiagnostics,
         signOut,
         status,
         syncPendingRecords,
@@ -968,7 +970,7 @@ function shouldShowStateUpdateDiagnostics() {
   return new URLSearchParams(window.location.search).get("stateUpdateDiagnostics") === "1";
 }
 
-function StateUpdateDiagnosticsPanel({
+export function StateUpdateDiagnosticsPanel({
   diagnostics,
   error,
   isSyncing,
@@ -976,6 +978,7 @@ function StateUpdateDiagnosticsPanel({
   onSyncNow,
   reconnect,
   run,
+  variant = "overlay",
 }: {
   diagnostics: StateUpdateOutboxDiagnostics | null;
   error: string | null;
@@ -984,6 +987,7 @@ function StateUpdateDiagnosticsPanel({
   onSyncNow(): Promise<void>;
   reconnect: StateUpdateReconnectDiagnostics;
   run: StateUpdateDiagnosticRun | null;
+  variant?: "embedded" | "overlay";
 }) {
   const summary = diagnostics?.summary;
   const reconnectRows: [string, string | number | boolean | null][] = [
@@ -1007,7 +1011,7 @@ function StateUpdateDiagnosticsPanel({
   ];
 
   return (
-    <View style={diagnosticsPanelStyles.shell}>
+    <View style={variant === "embedded" ? diagnosticsPanelStyles.embeddedShell : diagnosticsPanelStyles.shell}>
       <ScrollView style={diagnosticsPanelStyles.scroll}>
         <View style={diagnosticsPanelStyles.header}>
           <Text style={diagnosticsPanelStyles.title}>STATE_UPDATE diagnostics</Text>
@@ -1025,7 +1029,9 @@ function StateUpdateDiagnosticsPanel({
         <Text style={diagnosticsPanelStyles.sectionTitle}>Reconnect</Text>
         <DiagnosticsRows rows={reconnectRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Operations</Text>
-        {diagnostics?.operations.length ? diagnostics.operations.map((operation, index) => (
+        {!diagnostics ? (
+          <Text style={diagnosticsPanelStyles.empty}>Loading operations...</Text>
+        ) : diagnostics.operations.length ? diagnostics.operations.map((operation, index) => (
           <View key={`${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
             <Text style={diagnosticsPanelStyles.operationTitle}>#{index + 1}</Text>
             <DiagnosticsRows
@@ -1109,7 +1115,7 @@ function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | 
   );
 }
 
-function abbreviateDiagnosticValue(value: string | null) {
+export function abbreviateDiagnosticValue(value: string | null) {
   if (!value) {
     return "missing";
   }
@@ -1198,6 +1204,14 @@ const diagnosticsPanelStyles = StyleSheet.create({
   empty: {
     color: "#466068",
     fontSize: 12,
+  },
+  embeddedShell: {
+    backgroundColor: "#ffffff",
+    borderColor: "#9fb8b8",
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    padding: 12,
   },
   error: {
     color: "#b42318",
