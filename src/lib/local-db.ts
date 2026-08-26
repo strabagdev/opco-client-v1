@@ -11,6 +11,7 @@ import {
   SaveStateUpdateLocallyInput,
   SearchStateUpdateSubjectsInput,
   STATE_UPDATE_OPERATION,
+  StateUpdateOutboxDiagnostics,
   StateUpdateOfflineStore,
   StateUpdateScope,
   stateUpdateRecordToItem,
@@ -104,6 +105,7 @@ export function getLocalDatabase(): LocalDatabase {
     getRecordsSyncSummary,
     getRecordCacheStatusCounts,
     getStateUpdateSummary,
+    getStateUpdateOutboxDiagnostics,
     getSyncTelemetry,
     getEntityDefinition,
     listStateUpdateConflicts,
@@ -2080,6 +2082,47 @@ async function listPendingStateUpdateOperations(ownerKey: string) {
   return rows.map(mapPendingOperationRow);
 }
 
+async function getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<StateUpdateOutboxDiagnosticsRow>(
+    `
+      SELECT
+        pending_operations.*,
+        entity_records.sync_status AS record_sync_status,
+        entity_records.sync_error_code AS record_sync_error_code,
+        entity_records.sync_error_message AS record_sync_error_message,
+        entity_records.cached_at AS record_cached_at,
+        app_view_definitions.definition_json AS definition_json,
+        app_view_definitions.status AS definition_status,
+        app_view_definitions.workflow_key AS definition_workflow_key
+      FROM pending_operations
+      LEFT JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
+      LEFT JOIN app_view_definitions ON app_view_definitions.owner_key = pending_operations.owner_key
+        AND app_view_definitions.contract_id = pending_operations.contract_id
+        AND app_view_definitions.app_view_id = json_extract(pending_operations.payload_json, '$.appViewId')
+      WHERE pending_operations.owner_key = ?
+        AND pending_operations.operation = ?
+      ORDER BY pending_operations.created_at ASC
+    `,
+    ownerKey,
+    STATE_UPDATE_OPERATION,
+  );
+  const operations = rows.map(mapStateUpdateOutboxDiagnosticsRow);
+
+  return {
+    operations,
+    summary: {
+      conflict: operations.filter((operation) => operation.syncStatus === "conflict").length,
+      eligibleForAutoSync: operations.filter((operation) => operation.retryable).length,
+      failed: operations.filter((operation) => operation.syncStatus === "failed").length,
+      pendingCreate: operations.filter((operation) => operation.syncStatus === "pending_create").length,
+      pendingUpdate: operations.filter((operation) => operation.syncStatus === "pending_update").length,
+      stateUpdateTotalLocal: operations.length,
+      syncing: operations.filter((operation) => operation.syncStatus === "syncing").length,
+    },
+  };
+}
+
 async function markStateUpdateOperationSyncing(operationId: string) {
   const db = await getDatabase();
 
@@ -2801,11 +2844,21 @@ type PendingOperationRow = {
   last_error_code: string | null;
   last_error_message: string | null;
   local_record_id: string;
-  operation: "CREATE" | "UPDATE";
+  operation: PendingOperation["operation"];
   owner_key: string;
   payload_json: string;
   server_record_id: string | null;
   updated_at: string;
+};
+
+type StateUpdateOutboxDiagnosticsRow = PendingOperationRow & {
+  definition_json: string | null;
+  definition_status: AppViewDefinitionStatus | null;
+  definition_workflow_key: string | null;
+  record_cached_at: string | null;
+  record_sync_error_code: string | null;
+  record_sync_error_message: string | null;
+  record_sync_status: RecordSyncStatus | null;
 };
 
 type AppViewDefinitionRow = {
@@ -2901,6 +2954,222 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
     serverRecordId: row.server_record_id,
     updatedAt: row.updated_at,
   };
+}
+
+function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow): StateUpdateOutboxDiagnostics["operations"][number] {
+  const payload = parseJsonObject(row.payload_json);
+  const definition = row.definition_json ? parseJsonObject(row.definition_json) as PreparedAppViewDefinition | null : null;
+  const payloadStateValues = getDiagnosticStateValues(payload);
+  const definitionStateFields = getDiagnosticStateFields(definition);
+  const selectedStateValues = payloadStateValues.filter((value) => typeof value.fieldId === "string");
+  const matchingStateValues = selectedStateValues.filter((value) => {
+    const field = definitionStateFields.find((item) => item.fieldId === value.fieldId);
+
+    return field?.options.some((option) => option.optionId === value.optionId) ?? false;
+  });
+  const statusOptionResolved = selectedStateValues.length === 0
+    ? "no-state-values"
+    : matchingStateValues.length === selectedStateValues.length;
+  const syncStatus = row.record_sync_status ?? "missing-record";
+
+  return {
+    appViewFingerprint: fingerprintDiagnosticValue(getDiagnosticAppViewId(payload)),
+    appViewResolved: Boolean(definition),
+    clientRequestId: abbreviateDiagnosticValue(row.client_request_id),
+    config: {
+      definitionKind: getDiagnosticDefinitionKind(definition),
+      extraFieldsCount: getDiagnosticExtraFieldsCount(definition),
+      matchingStateValuesCount: matchingStateValues.length,
+      missingStateValuesCount: Math.max(0, selectedStateValues.length - matchingStateValues.length),
+      sourceTargetConfigured: hasDiagnosticSourceTargetConfig(definition),
+      stateFieldsCount: definitionStateFields.length,
+      statusOptionResolved,
+      workflowKey: row.definition_workflow_key ?? getDiagnosticWorkflowKey(definition),
+    },
+    contractFingerprint: fingerprintDiagnosticValue(row.contract_id),
+    date: getDiagnosticDate(payload),
+    extraValuesCount: countObjectKeys(getDiagnosticExtraValues(payload)),
+    lastBackendErrorCode: getDiagnosticBackendErrorCode(row.last_error_code),
+    lastErrorCode: row.last_error_code ?? row.record_sync_error_code,
+    lastErrorPhase: row.last_error_code || row.record_sync_error_code ? "pushing" : null,
+    lastHttpStatus: null,
+    operationType: row.operation,
+    payloadSchema: getDiagnosticPayloadSchema(payload),
+    retryable: row.operation === STATE_UPDATE_OPERATION && isStateUpdateAutoSyncStatus(syncStatus),
+    retryCount: row.attempts,
+    stateValuesCount: selectedStateValues.length,
+    subjectFingerprint: fingerprintDiagnosticValue(getDiagnosticSubjectRecordId(payload)),
+    syncStatus,
+    updatedAt: row.updated_at ?? row.record_cached_at ?? "unknown",
+  };
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function getDiagnosticPayloadSchema(payload: Record<string, unknown> | null): StateUpdateOutboxDiagnostics["operations"][number]["payloadSchema"] {
+  if (!payload) {
+    return "unknown";
+  }
+
+  if (typeof payload.appViewId === "string" && typeof payload.subjectRecordId === "string" && Array.isArray(payload.stateValues)) {
+    return "current";
+  }
+
+  if (Array.isArray(payload.entries)) {
+    return "legacy-batch";
+  }
+
+  if (typeof payload.subjectRecordId === "string" && payload.states && typeof payload.states === "object" && !Array.isArray(payload.states)) {
+    return "legacy-wire-states";
+  }
+
+  return "unknown";
+}
+
+function getDiagnosticAppViewId(payload: Record<string, unknown> | null) {
+  return typeof payload?.appViewId === "string" ? payload.appViewId : null;
+}
+
+function getDiagnosticSubjectRecordId(payload: Record<string, unknown> | null) {
+  if (typeof payload?.subjectRecordId === "string") {
+    return payload.subjectRecordId;
+  }
+
+  const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+  const firstEntry = entries[0];
+
+  if (firstEntry && typeof firstEntry === "object" && "subjectRecordId" in firstEntry && typeof firstEntry.subjectRecordId === "string") {
+    return firstEntry.subjectRecordId;
+  }
+
+  if (firstEntry && typeof firstEntry === "object" && "personRecordId" in firstEntry && typeof firstEntry.personRecordId === "string") {
+    return firstEntry.personRecordId;
+  }
+
+  return null;
+}
+
+function getDiagnosticDate(payload: Record<string, unknown> | null) {
+  return typeof payload?.date === "string" ? payload.date : null;
+}
+
+function getDiagnosticExtraValues(payload: Record<string, unknown> | null) {
+  if (payload?.extraValues && typeof payload.extraValues === "object" && !Array.isArray(payload.extraValues)) {
+    return payload.extraValues as Record<string, unknown>;
+  }
+
+  return null;
+}
+
+function getDiagnosticStateValues(payload: Record<string, unknown> | null): { fieldId: string | null; optionId: string | null }[] {
+  if (!payload) {
+    return [];
+  }
+
+  if (Array.isArray(payload.stateValues)) {
+    return payload.stateValues
+      .filter((value) => value && typeof value === "object")
+      .map((value) => {
+        const record = value as Record<string, unknown>;
+
+        return {
+          fieldId: typeof record.fieldId === "string" ? record.fieldId : null,
+          optionId: typeof record.optionId === "string" ? record.optionId : null,
+        };
+      });
+  }
+
+  if (payload.states && typeof payload.states === "object" && !Array.isArray(payload.states)) {
+    return Object.entries(payload.states).map(([fieldId, optionId]) => ({
+      fieldId,
+      optionId: typeof optionId === "string" ? optionId : null,
+    }));
+  }
+
+  return [];
+}
+
+function getDiagnosticStateFields(definition: PreparedAppViewDefinition | null) {
+  if (definition?.kind !== "state-update") {
+    return [];
+  }
+
+  return definition.stateFields;
+}
+
+function getDiagnosticDefinitionKind(definition: PreparedAppViewDefinition | null) {
+  return definition?.kind ?? "missing";
+}
+
+function getDiagnosticWorkflowKey(definition: PreparedAppViewDefinition | null) {
+  if (!definition || definition.appView.type !== "WORKFLOW") {
+    return null;
+  }
+
+  return String(definition.appView.config.workflowKey ?? "") || null;
+}
+
+function getDiagnosticExtraFieldsCount(definition: PreparedAppViewDefinition | null) {
+  return definition?.kind === "state-update" ? definition.extraFields.length : 0;
+}
+
+function hasDiagnosticSourceTargetConfig(definition: PreparedAppViewDefinition | null) {
+  if (definition?.kind !== "state-update") {
+    return false;
+  }
+
+  return Boolean(definition.sourceEntityTypeId && definition.targetEntityTypeId);
+}
+
+function countObjectKeys(value: Record<string, unknown> | null) {
+  return value ? Object.keys(value).length : 0;
+}
+
+function getDiagnosticBackendErrorCode(code: string | null) {
+  if (!code || code === "OpcoNetworkError" || code === "NETWORK") {
+    return null;
+  }
+
+  return code;
+}
+
+function isStateUpdateAutoSyncStatus(syncStatus: string) {
+  return syncStatus === "pending_create" || syncStatus === "pending_update" || syncStatus === "syncing";
+}
+
+function abbreviateDiagnosticValue(value: string | null) {
+  if (!value) {
+    return "missing";
+  }
+
+  if (value.length <= 12) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function fingerprintDiagnosticValue(value: string | null) {
+  if (!value) {
+    return "missing";
+  }
+
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `fp_${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 async function ensureSyncTelemetryRow(

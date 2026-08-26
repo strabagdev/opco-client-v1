@@ -163,6 +163,97 @@ describe("local database singleton", () => {
     );
   });
 
+  it("summarizes STATE_UPDATE outbox diagnostics without exposing raw ids or payloads", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("app_view_definitions")) {
+        return [
+          stateUpdateDiagnosticsRow({
+            client_request_id: "client-request-id-current-1",
+            contract_id: "contract_real_1",
+            payload_json: JSON.stringify({
+              appViewId: "attendance_view_real_1",
+              clientRequestId: "client-request-id-current-1",
+              date: "2026-08-26",
+              extraValues: { motivo: "safe-count-only" },
+              stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+              subjectRecordId: "person_real_1",
+            }),
+            record_sync_status: "syncing",
+          }),
+          stateUpdateDiagnosticsRow({
+            client_request_id: "client-request-id-legacy-1",
+            payload_json: JSON.stringify({
+              appViewId: "attendance_view_real_1",
+              date: "2026-08-26",
+              entries: [{ personRecordId: "person_real_2", statusOptionId: "absent_option" }],
+            }),
+            record_sync_status: "failed",
+          }),
+        ];
+      }
+
+      if (sql.includes("PRAGMA table_info(entity_records)")) {
+        return [
+          { name: "remote_updated_at" },
+          { name: "conflict_remote_values_json" },
+          { name: "conflict_remote_display_name" },
+          { name: "conflict_remote_updated_at" },
+        ];
+      }
+
+      if (sql.includes("PRAGMA table_info(context_snapshot)")) {
+        return [{ name: "owner_key" }];
+      }
+
+      if (sql.includes("PRAGMA table_info(app_views)")) {
+        return [{ name: "owner_key" }];
+      }
+
+      if (sql.includes("PRAGMA table_info(app_view_definitions)")) {
+        return [{ name: "owner_key" }];
+      }
+
+      if (sql.includes("PRAGMA table_info(sync_telemetry)")) {
+        return [{ name: "entity_type_id" }];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const diagnostics = await store.getStateUpdateOutboxDiagnostics("org_1:user_1");
+
+    expect(diagnostics.summary).toMatchObject({
+      eligibleForAutoSync: 1,
+      failed: 1,
+      stateUpdateTotalLocal: 2,
+      syncing: 1,
+    });
+    expect(diagnostics.operations[0]).toMatchObject({
+      appViewFingerprint: expect.stringMatching(/^fp_/),
+      clientRequestId: "client...nt-1",
+      config: {
+        matchingStateValuesCount: 1,
+        statusOptionResolved: true,
+        workflowKey: "attendance",
+      },
+      contractFingerprint: expect.stringMatching(/^fp_/),
+      extraValuesCount: 1,
+      payloadSchema: "current",
+      retryable: true,
+      stateValuesCount: 1,
+      subjectFingerprint: expect.stringMatching(/^fp_/),
+      syncStatus: "syncing",
+    });
+    expect(diagnostics.operations[1]).toMatchObject({
+      payloadSchema: "legacy-batch",
+      retryable: false,
+      syncStatus: "failed",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("person_real_1");
+    expect(JSON.stringify(diagnostics)).not.toContain("safe-count-only");
+  });
+
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {
     const store = getLocalDatabase();
     const records = Array.from({ length: 388 }, (_, index) => remoteRecord(`persona_${index + 1}`));
@@ -401,5 +492,61 @@ function remoteRecord(id: string) {
     id,
     updatedAt: "2026-08-24T10:00:00.000Z",
     values: { nombre: id },
+  };
+}
+
+function stateUpdateDiagnosticsRow(overrides: Record<string, unknown>) {
+  return {
+    attempts: 2,
+    client_request_id: "client-request-id-current-1",
+    contract_id: "contract_real_1",
+    created_at: "2026-08-26T10:00:00.000Z",
+    definition_json: JSON.stringify({
+      appView: {
+        config: { workflowKey: "attendance" },
+        id: "attendance_view_real_1",
+        icon: null,
+        name: "Attendance",
+        slug: "attendance",
+        sortOrder: 1,
+        type: "WORKFLOW",
+      },
+      dateFieldId: "date_field",
+      extraFields: [{ id: "motivo" }],
+      historyMode: "update-current",
+      kind: "state-update",
+      sourceEntityTypeId: "personas",
+      stateFields: [
+        {
+          fieldId: "status_field",
+          label: "Estado",
+          options: [
+            { label: "Presente", optionId: "present_option" },
+            { label: "Ausente", optionId: "absent_option" },
+          ],
+          required: true,
+        },
+      ],
+      subjectFieldId: "persona",
+      targetEntityTypeId: "attendance",
+      uniqueness: "subject-date",
+    }),
+    definition_status: "ready",
+    definition_workflow_key: "attendance",
+    entity_type_id: "attendance",
+    id: "state_update_local_1",
+    last_error_code: null,
+    last_error_message: null,
+    local_record_id: "state_update_local_record_1",
+    operation: "STATE_UPDATE",
+    owner_key: "org_real:user_real",
+    payload_json: "{}",
+    record_cached_at: "2026-08-26T10:01:00.000Z",
+    record_sync_error_code: null,
+    record_sync_error_message: null,
+    record_sync_status: "syncing",
+    server_record_id: null,
+    updated_at: "2026-08-26T10:02:00.000Z",
+    ...overrides,
   };
 }

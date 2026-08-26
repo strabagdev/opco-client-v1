@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
@@ -31,9 +31,10 @@ import {
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
 import { RecordsSyncSummary } from "@/lib/offline-records";
-import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
+import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
+import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
 import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
@@ -71,6 +72,44 @@ const emptyRecordsSyncSummary: RecordsSyncSummary = {
   syncingCount: 0,
 };
 
+type StateUpdateReconnectDiagnostics = {
+  connectivityStatus: string;
+  detectedAt: string | null;
+  operationsAttempted: number;
+  operationsCompleted: number;
+  operationsFailed: number;
+  operationsSelected: number;
+  reconnectDetected: boolean;
+  stateUpdateSyncInvokedAt: string | null;
+};
+
+type StateUpdateDiagnosticRun = {
+  invokedAt: string;
+  operationsAttempted: number;
+  operationsCompleted: number;
+  operationsFailed: number;
+  operationsSelected: number;
+  rows: {
+    clientRequestId: string;
+    finalSyncStatus: string;
+    httpStatus: number | null;
+    requestAttempted: boolean;
+    result: string;
+    selectedForSync: boolean;
+  }[];
+};
+
+const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnostics = {
+  connectivityStatus: "unknown",
+  detectedAt: null,
+  operationsAttempted: 0,
+  operationsCompleted: 0,
+  operationsFailed: 0,
+  operationsSelected: 0,
+  reconnectDetected: false,
+  stateUpdateSyncInvokedAt: null,
+};
+
 export function SessionProvider({ children }: PropsWithChildren) {
   const definitionCache = useMemo(() => getLocalDatabase(), []);
   const [status, setStatus] = useState<SessionStatus>("loading");
@@ -86,7 +125,15 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
+  const [stateUpdateDiagnostics, setStateUpdateDiagnostics] = useState<StateUpdateOutboxDiagnostics | null>(null);
+  const [stateUpdateDiagnosticsError, setStateUpdateDiagnosticsError] = useState<string | null>(null);
+  const [stateUpdateDiagnosticRun, setStateUpdateDiagnosticRun] = useState<StateUpdateDiagnosticRun | null>(null);
+  const [isStateUpdateDiagnosticSyncing, setIsStateUpdateDiagnosticSyncing] = useState(false);
+  const [stateUpdateReconnectDiagnostics, setStateUpdateReconnectDiagnostics] =
+    useState<StateUpdateReconnectDiagnostics>(emptyStateUpdateReconnectDiagnostics);
   const connectivityStatus = useConnectivityStatus();
+  const previousConnectivityStatusRef = useRef(connectivityStatus);
+  const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
   const ownerKey = me && context ? buildOwnerKey(me, context) : null;
   const api = useMemo(
     () =>
@@ -187,6 +234,167 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
   }, [definitionCache, ownerKey, selectedContractIdState]);
 
+  const refreshStateUpdateDiagnostics = useCallback(async () => {
+    if (!showStateUpdateDiagnostics || !ownerKey) {
+      setStateUpdateDiagnostics(null);
+      setStateUpdateDiagnosticsError(ownerKey ? null : "owner unavailable");
+      return;
+    }
+
+    try {
+      const diagnostics = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
+
+      setStateUpdateDiagnostics(diagnostics);
+      setStateUpdateDiagnosticsError(null);
+    } catch {
+      setStateUpdateDiagnostics(null);
+      setStateUpdateDiagnosticsError("diagnostics unavailable");
+    }
+  }, [definitionCache, ownerKey, showStateUpdateDiagnostics]);
+
+  const runStateUpdateDiagnosticSync = useCallback(async () => {
+    if (!token || !ownerKey) {
+      setStateUpdateDiagnosticsError("session unavailable");
+      return;
+    }
+
+    const events = new Map<string, StateUpdateDiagnosticRun["rows"][number]>();
+    const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
+
+    for (const operation of beforeRun.operations) {
+      events.set(operation.clientRequestId, {
+        clientRequestId: operation.clientRequestId,
+        finalSyncStatus: operation.syncStatus,
+        httpStatus: null,
+        requestAttempted: false,
+        result: "not-selected",
+        selectedForSync: false,
+      });
+    }
+
+    setIsStateUpdateDiagnosticSyncing(true);
+    try {
+      const diagnosticStore = {
+        ...definitionCache,
+        async listPendingStateUpdateOperations(nextOwnerKey: string) {
+          const operations = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
+
+          for (const operation of operations) {
+            events.set(abbreviateDiagnosticValue(operation.clientRequestId), {
+              clientRequestId: abbreviateDiagnosticValue(operation.clientRequestId),
+              finalSyncStatus: "unknown",
+              httpStatus: null,
+              requestAttempted: false,
+              result: "selected",
+              selectedForSync: true,
+            });
+          }
+
+          return operations;
+        },
+        async completeStateUpdateOperation(...args: Parameters<typeof definitionCache.completeStateUpdateOperation>) {
+          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
+
+          if (event) {
+            event.finalSyncStatus = "synced";
+            event.result = args[1].result;
+          }
+
+          return definitionCache.completeStateUpdateOperation(...args);
+        },
+        async failStateUpdateOperation(...args: Parameters<typeof definitionCache.failStateUpdateOperation>) {
+          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
+
+          if (event) {
+            event.finalSyncStatus = "failed";
+            event.result = args[1];
+          }
+
+          return definitionCache.failStateUpdateOperation(...args);
+        },
+        async markStateUpdateOperationConflict(...args: Parameters<typeof definitionCache.markStateUpdateOperationConflict>) {
+          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
+
+          if (event) {
+            event.finalSyncStatus = "conflict";
+            event.result = "CONFLICT";
+          }
+
+          return definitionCache.markStateUpdateOperationConflict(...args);
+        },
+        async retryStateUpdateOperation(...args: Parameters<typeof definitionCache.retryStateUpdateOperation>) {
+          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
+
+          if (event) {
+            event.finalSyncStatus = "pending_update";
+            event.result = args[1];
+          }
+
+          return definitionCache.retryStateUpdateOperation(...args);
+        },
+      };
+      const diagnosticApi = {
+        async saveStateUpdateWorkflow(...args: Parameters<typeof api.saveStateUpdateWorkflow>) {
+          const input = args[3];
+          const event = [...events.values()].find((item) => item.clientRequestId === abbreviateDiagnosticValue(input.clientRequestId ?? ""));
+
+          if (event) {
+            event.requestAttempted = true;
+          }
+
+          try {
+            const response = await api.saveStateUpdateWorkflow(...args);
+
+            if (event) {
+              event.httpStatus = 200;
+              event.result = response.results[0]?.result ?? "EMPTY_RESULT";
+            }
+
+            return response;
+          } catch (error) {
+            if (event) {
+              event.httpStatus = error instanceof OpcoApiError ? error.status : null;
+              event.result = error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR";
+            }
+
+            throw error;
+          }
+        },
+      };
+      const result = await syncPendingStateUpdatesOnce({
+        api: diagnosticApi,
+        ownerKey,
+        store: diagnosticStore,
+        token,
+      });
+      const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
+
+      for (const operation of refreshed.operations) {
+        const event = [...events.values()].find((item) => item.clientRequestId === operation.clientRequestId);
+
+        if (event) {
+          event.finalSyncStatus = operation.syncStatus;
+        }
+      }
+
+      setStateUpdateDiagnosticRun({
+        invokedAt: new Date().toISOString(),
+        operationsAttempted: [...events.values()].filter((event) => event.requestAttempted).length,
+        operationsCompleted: result.completed,
+        operationsFailed: result.failed + result.conflicts + result.retriable,
+        operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
+        rows: [...events.values()],
+      });
+      setStateUpdateDiagnostics(refreshed);
+      setStateUpdateDiagnosticsError(null);
+    } catch {
+      setStateUpdateDiagnosticsError("diagnostic sync failed");
+      await refreshStateUpdateDiagnostics();
+    } finally {
+      setIsStateUpdateDiagnosticSyncing(false);
+    }
+  }, [api, definitionCache, ownerKey, refreshStateUpdateDiagnostics, token]);
+
   const syncPendingRecords = useCallback(async () => {
     if (!token || !ownerKey) {
       return;
@@ -199,16 +407,32 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: definitionCache,
         token,
       });
-      await syncPendingStateUpdatesOnce({
+      const selectedStateUpdates = showStateUpdateDiagnostics
+        ? await definitionCache.listPendingStateUpdateOperations(ownerKey)
+        : [];
+      const stateUpdateInvokedAt = new Date().toISOString();
+      const stateUpdateResult = await syncPendingStateUpdatesOnce({
         api,
         ownerKey,
         store: definitionCache,
         token,
       });
+      if (showStateUpdateDiagnostics) {
+        setStateUpdateReconnectDiagnostics((current) => ({
+          ...current,
+          connectivityStatus,
+          operationsAttempted: stateUpdateResult.completed + stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
+          operationsCompleted: stateUpdateResult.completed,
+          operationsFailed: stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
+          operationsSelected: selectedStateUpdates.length,
+          stateUpdateSyncInvokedAt: stateUpdateInvokedAt,
+        }));
+        await refreshStateUpdateDiagnostics();
+      }
     } finally {
       await refreshPendingRecordsCount();
     }
-  }, [api, definitionCache, ownerKey, refreshPendingRecordsCount, token]);
+  }, [api, connectivityStatus, definitionCache, ownerKey, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, token]);
   const reconnectSessionAndRecordsRef = useRef(syncPendingRecords);
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
 
@@ -269,14 +493,30 @@ export function SessionProvider({ children }: PropsWithChildren) {
       store: definitionCache,
       token: nextToken,
     });
-    await syncPendingStateUpdatesOnce({
+    const selectedStateUpdates = showStateUpdateDiagnostics
+      ? await definitionCache.listPendingStateUpdateOperations(nextOwnerKey)
+      : [];
+    const stateUpdateInvokedAt = new Date().toISOString();
+    const stateUpdateResult = await syncPendingStateUpdatesOnce({
       api,
       ownerKey: nextOwnerKey,
       store: definitionCache,
       token: nextToken,
     });
+    if (showStateUpdateDiagnostics) {
+      setStateUpdateReconnectDiagnostics((current) => ({
+        ...current,
+        connectivityStatus,
+        operationsAttempted: stateUpdateResult.completed + stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
+        operationsCompleted: stateUpdateResult.completed,
+        operationsFailed: stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
+        operationsSelected: selectedStateUpdates.length,
+        stateUpdateSyncInvokedAt: stateUpdateInvokedAt,
+      }));
+      await refreshStateUpdateDiagnostics();
+    }
     await refreshPendingRecordsCount();
-  }, [api, definitionCache, refreshPendingRecordsCount, selectedContractIdState, token]);
+  }, [api, connectivityStatus, definitionCache, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, selectedContractIdState, showStateUpdateDiagnostics, token]);
 
   useEffect(() => {
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
@@ -358,12 +598,53 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [refreshPendingRecordsCount]);
 
   useEffect(() => {
+    if (!showStateUpdateDiagnostics) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void refreshStateUpdateDiagnostics();
+    }, 0);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [refreshStateUpdateDiagnostics, showStateUpdateDiagnostics]);
+
+  useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {
       return;
     }
 
+    const wasOffline = previousConnectivityStatusRef.current === "offline";
+    const nextReconnectDiagnostics = wasOffline && connectivityStatus === "online"
+      ? {
+          connectivityStatus,
+          detectedAt: new Date().toISOString(),
+          reconnectDetected: true,
+        }
+      : {
+          connectivityStatus,
+        };
+
+    const diagnosticsTimer = showStateUpdateDiagnostics
+      ? setTimeout(() => {
+        setStateUpdateReconnectDiagnostics((current) => ({
+          ...current,
+          ...nextReconnectDiagnostics,
+        }));
+      }, 0)
+      : null;
+
     reconnectSyncControllerRef.current?.handleConnectivityStatus(connectivityStatus);
-  }, [connectivityStatus, status]);
+    previousConnectivityStatusRef.current = connectivityStatus;
+
+    return () => {
+      if (diagnosticsTimer) {
+        clearTimeout(diagnosticsTimer);
+      }
+    };
+  }, [connectivityStatus, showStateUpdateDiagnostics, status]);
 
   useEffect(() => {
     let isMounted = true;
@@ -500,7 +781,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
           onRetry={retryLocalStorage}
         />
       ) : (
-        children
+        <>
+          {children}
+          {showStateUpdateDiagnostics ? (
+            <StateUpdateDiagnosticsPanel
+              diagnostics={stateUpdateDiagnostics}
+              error={stateUpdateDiagnosticsError}
+              isSyncing={isStateUpdateDiagnosticSyncing}
+              onRefresh={refreshStateUpdateDiagnostics}
+              onSyncNow={runStateUpdateDiagnosticSync}
+              reconnect={stateUpdateReconnectDiagnostics}
+              run={stateUpdateDiagnosticRun}
+            />
+          ) : null}
+        </>
       )}
     </SessionContext.Provider>
   );
@@ -666,6 +960,167 @@ function shouldShowLocalStorageDiagnostics() {
   return new URLSearchParams(window.location.search).get("localStorageDiagnostics") === "1";
 }
 
+function shouldShowStateUpdateDiagnostics() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).get("stateUpdateDiagnostics") === "1";
+}
+
+function StateUpdateDiagnosticsPanel({
+  diagnostics,
+  error,
+  isSyncing,
+  onRefresh,
+  onSyncNow,
+  reconnect,
+  run,
+}: {
+  diagnostics: StateUpdateOutboxDiagnostics | null;
+  error: string | null;
+  isSyncing: boolean;
+  onRefresh(): Promise<void>;
+  onSyncNow(): Promise<void>;
+  reconnect: StateUpdateReconnectDiagnostics;
+  run: StateUpdateDiagnosticRun | null;
+}) {
+  const summary = diagnostics?.summary;
+  const reconnectRows: [string, string | number | boolean | null][] = [
+    ["connectivityStatus", reconnect.connectivityStatus],
+    ["reconnect detected", reconnect.reconnectDetected],
+    ["detectedAt", reconnect.detectedAt ?? "none"],
+    ["stateUpdateSyncInvokedAt", reconnect.stateUpdateSyncInvokedAt ?? "none"],
+    ["operationsSelected", reconnect.operationsSelected],
+    ["operationsAttempted", reconnect.operationsAttempted],
+    ["operationsCompleted", reconnect.operationsCompleted],
+    ["operationsFailed", reconnect.operationsFailed],
+  ];
+  const summaryRows: [string, string | number][] = [
+    ["STATE_UPDATE total local", summary?.stateUpdateTotalLocal ?? "loading"],
+    ["eligibleForAutoSync", summary?.eligibleForAutoSync ?? "loading"],
+    ["syncing", summary?.syncing ?? "loading"],
+    ["failed", summary?.failed ?? "loading"],
+    ["conflict", summary?.conflict ?? "loading"],
+    ["pending_create", summary?.pendingCreate ?? "loading"],
+    ["pending_update", summary?.pendingUpdate ?? "loading"],
+  ];
+
+  return (
+    <View style={diagnosticsPanelStyles.shell}>
+      <ScrollView style={diagnosticsPanelStyles.scroll}>
+        <View style={diagnosticsPanelStyles.header}>
+          <Text style={diagnosticsPanelStyles.title}>STATE_UPDATE diagnostics</Text>
+          <View style={diagnosticsPanelStyles.actions}>
+            <Pressable onPress={onRefresh} style={diagnosticsPanelStyles.button}>
+              <Text style={diagnosticsPanelStyles.buttonText}>Refrescar</Text>
+            </Pressable>
+            <Pressable disabled={isSyncing} onPress={onSyncNow} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
+              <Text style={diagnosticsPanelStyles.buttonText}>{isSyncing ? "Sincronizando" : "Intentar sincronizar ahora"}</Text>
+            </Pressable>
+          </View>
+        </View>
+        {error ? <Text style={diagnosticsPanelStyles.error}>{error}</Text> : null}
+        <DiagnosticsRows rows={summaryRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Reconnect</Text>
+        <DiagnosticsRows rows={reconnectRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Operations</Text>
+        {diagnostics?.operations.length ? diagnostics.operations.map((operation, index) => (
+          <View key={`${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
+            <Text style={diagnosticsPanelStyles.operationTitle}>#{index + 1}</Text>
+            <DiagnosticsRows
+              rows={[
+                ["sync_status", operation.syncStatus],
+                ["operation_type", operation.operationType],
+                ["retryable", operation.retryable],
+                ["appView", operation.appViewFingerprint],
+                ["contract", operation.contractFingerprint],
+                ["subject", operation.subjectFingerprint],
+                ["date", operation.date ?? "none"],
+                ["clientRequestId", operation.clientRequestId],
+                ["retryCount", operation.retryCount],
+                ["lastErrorCode", operation.lastErrorCode ?? "none"],
+                ["lastErrorPhase", operation.lastErrorPhase ?? "none"],
+                ["lastHttpStatus", operation.lastHttpStatus ?? "not stored"],
+                ["lastBackendErrorCode", operation.lastBackendErrorCode ?? "none"],
+                ["updatedAt local", operation.updatedAt],
+                ["payloadSchema", operation.payloadSchema],
+                ["stateValues count", operation.stateValuesCount],
+                ["extraValues count", operation.extraValuesCount],
+                ["AppView actual", operation.appViewResolved],
+                ["workflowKey", operation.config.workflowKey ?? "none"],
+                ["definition kind", operation.config.definitionKind],
+                ["stateFields", operation.config.stateFieldsCount],
+                ["status option", String(operation.config.statusOptionResolved)],
+                ["matching states", operation.config.matchingStateValuesCount],
+                ["missing states", operation.config.missingStateValuesCount],
+                ["source/target", operation.config.sourceTargetConfigured],
+                ["extra fields", operation.config.extraFieldsCount],
+              ]}
+            />
+          </View>
+        )) : <Text style={diagnosticsPanelStyles.empty}>No local STATE_UPDATE operations.</Text>}
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Diagnostic Run</Text>
+        {run ? (
+          <>
+            <DiagnosticsRows
+              rows={[
+                ["invokedAt", run.invokedAt],
+                ["operationsSelected", run.operationsSelected],
+                ["operationsAttempted", run.operationsAttempted],
+                ["operationsCompleted", run.operationsCompleted],
+                ["operationsFailed", run.operationsFailed],
+              ]}
+            />
+            {run.rows.map((row, index) => (
+              <View key={`${row.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
+                <Text style={diagnosticsPanelStyles.operationTitle}>run #{index + 1}</Text>
+                <DiagnosticsRows
+                  rows={[
+                    ["clientRequestId", row.clientRequestId],
+                    ["selectedForSync", row.selectedForSync],
+                    ["requestAttempted", row.requestAttempted],
+                    ["HTTP status", row.httpStatus ?? "none"],
+                    ["result/error", row.result],
+                    ["final sync_status", row.finalSyncStatus],
+                  ]}
+                />
+              </View>
+            ))}
+          </>
+        ) : (
+          <Text style={diagnosticsPanelStyles.empty}>No diagnostic run yet.</Text>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | null][] }) {
+  return (
+    <View style={diagnosticsPanelStyles.rows}>
+      {rows.map(([label, value]) => (
+        <View key={label} style={diagnosticsPanelStyles.row}>
+          <Text style={diagnosticsPanelStyles.label}>{label}</Text>
+          <Text style={diagnosticsPanelStyles.value}>{String(value)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function abbreviateDiagnosticValue(value: string | null) {
+  if (!value) {
+    return "missing";
+  }
+
+  if (value.length <= 12) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 function LocalStorageDiagnostics({
   summary,
   summaryError,
@@ -719,6 +1174,99 @@ function getLocalDatabaseFailurePhase(cause: LocalDatabaseUnavailableCause) {
 
   return "unknown";
 }
+
+const diagnosticsPanelStyles = StyleSheet.create({
+  actions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  button: {
+    backgroundColor: "#135d66",
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  buttonDisabled: {
+    opacity: 0.55,
+  },
+  buttonText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  empty: {
+    color: "#466068",
+    fontSize: 12,
+  },
+  error: {
+    color: "#b42318",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  header: {
+    gap: 8,
+  },
+  label: {
+    color: "#466068",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  operation: {
+    borderColor: "#d0dede",
+    borderRadius: 6,
+    borderWidth: 1,
+    gap: 6,
+    padding: 8,
+  },
+  operationTitle: {
+    color: "#0f3036",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  row: {
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "space-between",
+  },
+  rows: {
+    gap: 4,
+  },
+  scroll: {
+    maxHeight: 520,
+  },
+  sectionTitle: {
+    color: "#0f3036",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 6,
+  },
+  shell: {
+    backgroundColor: "#ffffff",
+    borderColor: "#9fb8b8",
+    borderRadius: 8,
+    borderWidth: 1,
+    bottom: 12,
+    left: 12,
+    maxWidth: 520,
+    padding: 12,
+    position: "absolute",
+    right: 12,
+    zIndex: 50,
+  },
+  title: {
+    color: "#0f3036",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  value: {
+    color: "#0f3036",
+    flexShrink: 1,
+    fontFamily: Platform.OS === "web" ? "monospace" : undefined,
+    fontSize: 11,
+    textAlign: "right",
+  },
+});
 
 const storageStyles = StyleSheet.create({
   body: {

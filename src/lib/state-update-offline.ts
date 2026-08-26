@@ -67,6 +67,50 @@ export type StateUpdateSummary = {
   totalRegistered: number;
 };
 
+export type StateUpdateOutboxDiagnosticsOperation = {
+  appViewFingerprint: string;
+  appViewResolved: boolean;
+  clientRequestId: string;
+  config: {
+    definitionKind: string;
+    extraFieldsCount: number;
+    matchingStateValuesCount: number;
+    missingStateValuesCount: number;
+    sourceTargetConfigured: boolean;
+    stateFieldsCount: number;
+    statusOptionResolved: boolean | "no-state-values";
+    workflowKey: string | null;
+  };
+  contractFingerprint: string;
+  date: string | null;
+  extraValuesCount: number;
+  lastBackendErrorCode: string | null;
+  lastErrorCode: string | null;
+  lastErrorPhase: string | null;
+  lastHttpStatus: number | null;
+  operationType: string;
+  payloadSchema: "current" | "legacy-batch" | "legacy-wire-states" | "unknown";
+  retryable: boolean;
+  retryCount: number;
+  stateValuesCount: number;
+  subjectFingerprint: string;
+  syncStatus: string;
+  updatedAt: string;
+};
+
+export type StateUpdateOutboxDiagnostics = {
+  operations: StateUpdateOutboxDiagnosticsOperation[];
+  summary: {
+    conflict: number;
+    eligibleForAutoSync: number;
+    failed: number;
+    pendingCreate: number;
+    pendingUpdate: number;
+    stateUpdateTotalLocal: number;
+    syncing: number;
+  };
+};
+
 export type StateUpdateScope = {
   appViewId: string;
   contractId: string;
@@ -104,6 +148,7 @@ export type StateUpdateOfflineStore = {
   discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }): Promise<void>;
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
+  getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   listStateUpdateConflicts(input: StateUpdateScope): Promise<CachedStateUpdateRecord[]>;
   listStateUpdateLatest(input: StateUpdateScope & { limit?: number }): Promise<StateUpdateLatestItem[]>;
