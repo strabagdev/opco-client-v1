@@ -7,6 +7,7 @@ import {
   firstBlockingAttendanceResult,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
   shouldSearchAttendancePeople,
@@ -46,6 +47,13 @@ describe("attendance workflow logic", () => {
     const noDefault = statuses.map((status) => ({ ...status, isDefaultCheckIn: false }));
 
     expect(selectDefaultCheckInStatus(noDefault)?.optionId).toBe("absent_option");
+  });
+
+  it("keeps dynamic statuses when a partial attendance refresh returns no options", () => {
+    const merged = mergeAttendanceStatuses(statuses, []);
+
+    expect(merged).toHaveLength(3);
+    expect(selectDefaultCheckInStatus(merged)?.optionId).toBe("present_option");
   });
 
   it("does not search or show roster results for empty search text", () => {

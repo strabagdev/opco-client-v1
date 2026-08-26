@@ -39,10 +39,12 @@ export function getAttendanceStatusLabel(statuses: AttendanceStatusOption[], sta
 
 export function attendanceStateFields(
   statuses: AttendanceStatusOption[],
-  config: Pick<AttendanceWorkflowConfig, "statusFieldId">,
+  config: Pick<AttendanceWorkflowConfig, "defaultCheckInOptionId" | "statusFieldId">,
 ): StateUpdateField[] {
+  const defaultOptionId = config.defaultCheckInOptionId ?? statuses.find((status) => status.isDefaultCheckIn)?.optionId;
+
   return [{
-    defaultOptionId: statuses.find((status) => status.isDefaultCheckIn)?.optionId,
+    defaultOptionId,
     fieldId: config.statusFieldId,
     label: "Estado",
     options: statuses.map((status, index) => ({
@@ -52,6 +54,26 @@ export function attendanceStateFields(
     })),
     required: true,
   }];
+}
+
+export function attendanceStatusesFromStateFields(
+  stateFields: StateUpdateField[],
+  statusFieldId: string,
+  defaultCheckInOptionId?: string,
+): AttendanceStatusOption[] {
+  const statusField = stateFields.find((field) => field.fieldId === statusFieldId) ?? stateFields[0];
+
+  if (!statusField) {
+    return [];
+  }
+
+  const defaultOptionId = defaultCheckInOptionId ?? statusField.defaultOptionId;
+
+  return statusField.options.map((option) => ({
+    isDefaultCheckIn: defaultOptionId ? option.optionId === defaultOptionId : false,
+    label: option.label,
+    optionId: option.optionId,
+  }));
 }
 
 export function stateUpdateItemToAttendanceItem(

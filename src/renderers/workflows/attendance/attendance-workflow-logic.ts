@@ -52,6 +52,10 @@ export function splitStatusButtons(statuses: AttendanceStatusOption[]) {
   };
 }
 
+export function mergeAttendanceStatuses(current: AttendanceStatusOption[], next: AttendanceStatusOption[]) {
+  return next.length > 0 ? next : current;
+}
+
 export function firstBlockingAttendanceResult(results: AttendanceBatchResult[]) {
   return results.find((result) => result.result === "CONFLICT" || result.result === "ERROR") ?? null;
 }

@@ -636,6 +636,55 @@ describe("createOpcoApi", () => {
     expect(result.items[1].attendance).toBeNull();
   });
 
+  it("maps attendance stateFields options when the backend returns the state-update preset shape", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse({
+        data: {
+          appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
+          date: "2026-08-22",
+          items: [
+            {
+              attendance: null,
+              person: { displayName: "Ana Perez", id: "person_1" },
+            },
+          ],
+          latest: [],
+          sourceEntityType: { id: "entity_people", name: "Personas" },
+          stateFields: [
+            {
+              defaultOptionId: "late_option",
+              fieldId: "field_attendance_status",
+              label: "Estado",
+              options: [
+                { label: "Presente", optionId: "present_option" },
+                { label: "Ausente", optionId: "absent_option" },
+                { label: "Atraso", optionId: "late_option" },
+              ],
+              required: true,
+            },
+          ],
+          statuses: [],
+          summary: { totalRegistered: 0 },
+          targetEntityType: { id: "entity_attendance", name: "Asistencias" },
+        },
+        ok: true,
+      }),
+    });
+
+    const result = await api.getAttendanceWorkflow("token_123", "contract_1", "view_attendance", {
+      date: "2026-08-22",
+    });
+
+    expect(result.statuses).toEqual([
+      { isDefaultCheckIn: false, label: "Presente", optionId: "present_option" },
+      { isDefaultCheckIn: false, label: "Ausente", optionId: "absent_option" },
+      { isDefaultCheckIn: true, label: "Atraso", optionId: "late_option" },
+    ]);
+    expect(result.statuses).toHaveLength(3);
+  });
+
   it("saves one attendance entry with statusOptionId", async () => {
     const requests: RequestInit[] = [];
     const urls: string[] = [];

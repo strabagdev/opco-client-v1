@@ -72,6 +72,7 @@ export type RecordsAppViewConfig = {
 
 export type AttendanceWorkflowConfig = {
   dateFieldId: string;
+  defaultCheckInOptionId?: string;
   observationFieldId?: string;
   personFieldId: string;
   sourceEntityTypeId: string;
@@ -929,6 +930,8 @@ function normalizeEntityRecordResponse(response: EntityRecordResponse): EntityRe
 }
 
 function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceResponse {
+  const normalizedStatuses = normalizeAttendanceStatuses(response);
+
   response.latest.forEach((item) => {
     if (item.updatedAt) {
       assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo registro de asistencia.");
@@ -937,6 +940,7 @@ function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceRe
 
   return {
     ...response,
+    statuses: normalizedStatuses,
     items: response.items.map((item) => {
       if (item.attendance) {
         assertIsoDateTime(item.attendance.updatedAt, "Opco devolvio un updatedAt invalido para la asistencia.");
@@ -945,6 +949,25 @@ function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceRe
       return item;
     }),
   };
+}
+
+function normalizeAttendanceStatuses(response: AttendanceResponse): AttendanceStatusOption[] {
+  if (Array.isArray(response.statuses) && response.statuses.length > 0) {
+    return response.statuses;
+  }
+
+  const stateFields = (response as AttendanceResponse & { stateFields?: StateUpdateField[] }).stateFields;
+  const statusField = stateFields?.[0];
+
+  if (!statusField) {
+    return [];
+  }
+
+  return statusField.options.map((option) => ({
+    isDefaultCheckIn: statusField.defaultOptionId ? option.optionId === statusField.defaultOptionId : false,
+    label: option.label,
+    optionId: option.optionId,
+  }));
 }
 
 function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): AttendanceBatchResponse {

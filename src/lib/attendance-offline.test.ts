@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { attendanceStateFields, stateUpdateItemToAttendanceItem } from "./attendance-offline";
+import { attendanceStateFields, attendanceStatusesFromStateFields, stateUpdateItemToAttendanceItem } from "./attendance-offline";
 
 describe("attendance state-update adapter", () => {
   it("maps attendance statuses to a generic state-update field", () => {
@@ -20,6 +20,31 @@ describe("attendance state-update adapter", () => {
       ],
       required: true,
     }]);
+  });
+
+  it("restores dynamic attendance statuses from cached state-update fields", () => {
+    const statuses = attendanceStatusesFromStateFields(
+      [{
+        defaultOptionId: "status_present",
+        fieldId: "field_status",
+        label: "Estado",
+        options: [
+          { label: "Presente", optionId: "status_present" },
+          { label: "Ausente", optionId: "status_absent" },
+          { label: "Atraso", optionId: "status_late" },
+        ],
+        required: true,
+      }],
+      "field_status",
+      "status_late",
+    );
+
+    expect(statuses).toEqual([
+      { isDefaultCheckIn: false, label: "Presente", optionId: "status_present" },
+      { isDefaultCheckIn: false, label: "Ausente", optionId: "status_absent" },
+      { isDefaultCheckIn: true, label: "Atraso", optionId: "status_late" },
+    ]);
+    expect(statuses).toHaveLength(3);
   });
 
   it("maps generic state-update items back to the attendance UI shape", () => {

@@ -13,6 +13,7 @@ import {
 import { AppIcon } from "@/components/app-icon";
 import {
   attendanceStateFields,
+  attendanceStatusesFromStateFields,
   CachedAttendanceRecord,
   getAttendanceStatusLabel,
   stateUpdateConflictToAttendanceRecord,
@@ -39,6 +40,7 @@ import {
   formatDisplayDate,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   shouldSearchAttendancePeople,
   shiftLocalDate,
@@ -82,7 +84,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     statuses: AttendanceStatusOption[];
     summary: { totalRegistered: number };
   }) => {
-    setStatuses(response.statuses);
+    setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
+
     setLatest(response.latest);
     setTotalRegistered(response.summary.totalRegistered);
   }, []);
@@ -309,6 +312,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             setStatuses(prepared.definition.statuses);
           }
 
+          if (prepared?.definition.kind === "state-update") {
+            setStatuses(attendanceStatusesFromStateFields(
+              prepared.definition.stateFields,
+              appView.config.statusFieldId,
+              appView.config.defaultCheckInOptionId,
+            ));
+          }
+
           if (!prepared || prepared.status !== "ready" || !sourceDefinition || cachedPeople.pagination.total === 0) {
             setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
           } else {
@@ -357,7 +368,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     };
   }, [
     api,
+    appView.config.defaultCheckInOptionId,
     appView.config.sourceEntityTypeId,
+    appView.config.statusFieldId,
     appView.id,
     applyDayState,
     cacheAttendanceOnlineResponse,

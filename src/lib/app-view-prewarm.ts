@@ -6,7 +6,6 @@ import {
 } from "./app-view-definitions-cache";
 import {
   AppView,
-  AttendanceStatusOption,
   AttendanceWorkflowConfig,
   EntityDefinition,
   OpcoApi,
@@ -15,6 +14,7 @@ import {
 } from "./opco-api";
 import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records";
 import { SyncTelemetryStore } from "./sync-telemetry";
+import { attendanceStateFields } from "./attendance-offline";
 
 const PREWARM_CONCURRENCY = 4;
 
@@ -131,13 +131,7 @@ async function prewarmOneAppView({
           historyMode: "update-current",
           kind: "state-update",
           sourceEntityTypeId: response.sourceEntityType.id,
-          stateFields: [{
-            defaultOptionId: response.statuses.find((status) => status.isDefaultCheckIn)?.optionId,
-            fieldId: attendanceConfig.statusFieldId,
-            label: "Estado",
-            options: response.statuses.map(copyAttendanceStatus),
-            required: true,
-          }],
+          stateFields: attendanceStateFields(response.statuses, attendanceConfig),
           subjectFieldId: attendanceConfig.personFieldId,
           targetEntityTypeId: response.targetEntityType.id,
           uniqueness: "subject-date",
@@ -273,13 +267,6 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
   });
 
   await Promise.all(runners);
-}
-
-function copyAttendanceStatus(status: AttendanceStatusOption) {
-  return {
-    label: status.label,
-    optionId: status.optionId,
-  };
 }
 
 function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): PreparedAppViewDefinition {
