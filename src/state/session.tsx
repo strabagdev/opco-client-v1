@@ -1028,13 +1028,24 @@ export function StateUpdateDiagnosticsPanel({
     ["operationsFailed", reconnect.operationsFailed],
   ];
   const summaryRows: [string, string | number][] = [
+    ["consistency", diagnostics?.consistency ?? "loading"],
     ["STATE_UPDATE total local", summary?.stateUpdateTotalLocal ?? "loading"],
+    ["workflow local records", summary?.localTotal ?? "loading"],
+    ["attendance-derived pending", summary?.attendanceDerivedPendingCount ?? "loading"],
+    ["remote snapshot repairable", summary?.remoteSnapshotRepairable ?? "loading"],
+    ["orphaned local change", summary?.orphanedLocalChange ?? "loading"],
     ["eligibleForAutoSync", summary?.eligibleForAutoSync ?? "loading"],
     ["syncing", summary?.syncing ?? "loading"],
     ["failed", summary?.failed ?? "loading"],
     ["conflict", summary?.conflict ?? "loading"],
     ["pending_create", summary?.pendingCreate ?? "loading"],
     ["pending_update", summary?.pendingUpdate ?? "loading"],
+    ["local synced", summary?.localSynced ?? "loading"],
+    ["local syncing", summary?.localSyncing ?? "loading"],
+    ["local failed", summary?.localFailed ?? "loading"],
+    ["local conflict", summary?.localConflict ?? "loading"],
+    ["local pending_create", summary?.localPendingCreate ?? "loading"],
+    ["local pending_update", summary?.localPendingUpdate ?? "loading"],
   ];
 
   return (
@@ -1103,6 +1114,32 @@ export function StateUpdateDiagnosticsPanel({
             />
           </View>
         )) : <Text style={diagnosticsPanelStyles.empty}>No local STATE_UPDATE operations.</Text>}
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Workflow Local Records</Text>
+        {!diagnostics ? (
+          <Text style={diagnosticsPanelStyles.empty}>Loading local records...</Text>
+        ) : diagnostics.localRecords.length ? diagnostics.localRecords.map((record, index) => (
+          <View key={`${record.localRecordFingerprint}:${index}`} style={diagnosticsPanelStyles.operation}>
+            <Text style={diagnosticsPanelStyles.operationTitle}>local #{index + 1}</Text>
+            <DiagnosticsRows
+              rows={[
+                ["sync_status", record.syncStatus],
+                ["has pending op", record.hasPendingOperation],
+                ["appView", record.appViewFingerprint],
+                ["contract", record.contractFingerprint],
+                ["subject", record.subjectFingerprint],
+                ["date", record.date ?? "none"],
+                ["local record", record.localRecordFingerprint],
+                ["remote/server exists", record.remoteRecordExists],
+                ["recoveryState", record.recoveryState],
+                ["stateValues count", record.stateValuesCount],
+                ["lastErrorCode", record.lastErrorCode ?? "none"],
+                ["AppView actual", record.appViewResolved],
+                ["workflowKey", record.workflowKey ?? "none"],
+                ["updatedAt local", record.updatedAt],
+              ]}
+            />
+          </View>
+        )) : <Text style={diagnosticsPanelStyles.empty}>No workflow local records.</Text>}
         <Text style={diagnosticsPanelStyles.sectionTitle}>Diagnostic Run</Text>
         {run ? (
           <>

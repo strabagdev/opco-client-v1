@@ -100,17 +100,46 @@ export type StateUpdateOutboxDiagnosticsOperation = {
   updatedAt: string;
 };
 
+export type StateUpdateLocalRecordDiagnostics = {
+  appViewFingerprint: string;
+  appViewResolved: boolean;
+  contractFingerprint: string;
+  date: string | null;
+  hasPendingOperation: boolean;
+  lastErrorCode: string | null;
+  localRecordFingerprint: string;
+  remoteRecordExists: boolean;
+  recoveryState: "OK" | "PENDING_WITH_OUTBOX" | "REMOTE_SNAPSHOT_REPAIRABLE" | "ORPHANED_LOCAL_CHANGE";
+  stateValuesCount: number;
+  subjectFingerprint: string;
+  syncStatus: string;
+  updatedAt: string;
+  workflowKey: string | null;
+};
+
 export type StateUpdateOutboxDiagnostics = {
+  localRecords: StateUpdateLocalRecordDiagnostics[];
   operations: StateUpdateOutboxDiagnosticsOperation[];
   summary: {
+    attendanceDerivedPendingCount: number;
     conflict: number;
     eligibleForAutoSync: number;
     failed: number;
+    localConflict: number;
+    localFailed: number;
+    localPendingCreate: number;
+    localPendingUpdate: number;
+    localSynced: number;
+    localSyncing: number;
+    localTotal: number;
+    orphanedLocalChange: number;
+    remoteSnapshotRepairable: number;
     pendingCreate: number;
     pendingUpdate: number;
     stateUpdateTotalLocal: number;
     syncing: number;
   };
+  consistency: "OK" | "MISMATCH";
 };
 
 export type StateUpdateScope = {

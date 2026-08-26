@@ -362,6 +362,233 @@ describe("local database singleton", () => {
     expect(db.runAsync.mock.calls.some((call) => call.includes("state_update_pending_1"))).toBe(false);
   });
 
+  it("reports a mismatch when Attendance has local pending state records but the STATE_UPDATE outbox is empty", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("app_view_definitions")) {
+        return [];
+      }
+
+      if (sql.includes("FROM entity_records") && sql.includes("pending_operations.id AS pending_operation_id")) {
+        return [
+          stateUpdateLocalDiagnosticsRow({
+            local_id: "state_update_local_record_1",
+            pending_operation_id: null,
+            remote_updated_at: "2026-08-26T11:00:00.000Z",
+            server_id: "attendance_remote_1",
+            sync_status: "pending_update",
+          }),
+          stateUpdateLocalDiagnosticsRow({
+            local_id: "state_update_local_record_2",
+            pending_operation_id: null,
+            sync_status: "pending_create",
+          }),
+          stateUpdateLocalDiagnosticsRow({
+            local_id: "state_update_local_record_3",
+            pending_operation_id: null,
+            sync_status: "synced",
+          }),
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const diagnostics = await store.getStateUpdateOutboxDiagnostics("org_1:user_1");
+
+    expect(diagnostics.consistency).toBe("MISMATCH");
+    expect(diagnostics.summary).toMatchObject({
+      attendanceDerivedPendingCount: 2,
+      localPendingCreate: 1,
+      localPendingUpdate: 1,
+      localSynced: 1,
+      localTotal: 3,
+      orphanedLocalChange: 1,
+      remoteSnapshotRepairable: 1,
+      stateUpdateTotalLocal: 0,
+    });
+    expect(diagnostics.localRecords[0]).toMatchObject({
+      hasPendingOperation: false,
+      recoveryState: "REMOTE_SNAPSHOT_REPAIRABLE",
+      remoteRecordExists: true,
+      syncStatus: "pending_update",
+      workflowKey: "attendance",
+    });
+    expect(diagnostics.localRecords[1]).toMatchObject({
+      hasPendingOperation: false,
+      recoveryState: "ORPHANED_LOCAL_CHANGE",
+      remoteRecordExists: false,
+      syncStatus: "pending_create",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("person_real_1");
+  });
+
+  it("repairs an orphaned local STATE_UPDATE record when the remote snapshot contains the completed state", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_attendance_2026_08_26_person_real_1",
+          sync_status: "pending_update",
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return { total: 0 };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-26",
+      items: [{
+        current: {
+          recordId: "attendance_remote_1",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+          updatedAt: "2026-08-26T11:00:00.000Z",
+        },
+        subject: { displayName: "Persona segura", id: "person_real_1" },
+      }],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("sync_status = 'synced'"),
+      expect.stringMatching(/^state_update_/),
+      "attendance_remote_1",
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "Persona segura",
+      expect.any(String),
+      "2026-08-26T11:00:00.000Z",
+      expect.any(String),
+    );
+  });
+
+  it("does not overwrite a local STATE_UPDATE record that still has a pending operation", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_attendance_2026_08_26_person_real_1",
+          sync_status: "pending_update",
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return { total: 1 };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-26",
+      items: [{
+        current: {
+          recordId: "attendance_remote_1",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+          updatedAt: "2026-08-26T11:00:00.000Z",
+        },
+        subject: { displayName: "Persona segura", id: "person_real_1" },
+      }],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("INSERT INTO entity_records"))).toBe(false);
+  });
+
+  it("classifies a real local STATE_UPDATE pending row with outbox as protected instead of orphaned", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("app_view_definitions")) {
+        return [];
+      }
+
+      if (sql.includes("FROM entity_records") && sql.includes("pending_operations.id AS pending_operation_id")) {
+        return [
+          stateUpdateLocalDiagnosticsRow({
+            local_id: "state_update_local_record_1",
+            pending_operation_id: "state_update_pending_1",
+            sync_status: "pending_update",
+          }),
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const diagnostics = await store.getStateUpdateOutboxDiagnostics("org_1:user_1");
+
+    expect(diagnostics.localRecords[0]).toMatchObject({
+      hasPendingOperation: true,
+      recoveryState: "PENDING_WITH_OUTBOX",
+      syncStatus: "pending_update",
+    });
+    expect(diagnostics.summary).toMatchObject({
+      orphanedLocalChange: 0,
+      remoteSnapshotRepairable: 0,
+    });
+  });
+
+  it("marks the associated local STATE_UPDATE record as synced when a pending operation completes", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    const store = getLocalDatabase();
+
+    await store.completeStateUpdateOperation({
+      attempts: 1,
+      clientRequestId: "client-request-id-current-1",
+      contractId: "contract_real_1",
+      createdAt: "2026-08-26T10:00:00.000Z",
+      entityTypeId: "attendance",
+      id: "state_update_pending_1",
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      localRecordId: "state_update_local_record_1",
+      operation: "STATE_UPDATE",
+      ownerKey: "org_1:user_1",
+      payload: {
+        appViewId: "attendance_view_real_1",
+        clientRequestId: "client-request-id-current-1",
+        date: "2026-08-26",
+        historyMode: "update-current",
+        stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+        subjectDisplayName: "Persona segura",
+        subjectRecordId: "person_real_1",
+        uniqueness: "subject-date",
+      },
+      serverRecordId: null,
+      updatedAt: "2026-08-26T10:01:00.000Z",
+    }, {
+      recordId: "attendance_remote_1",
+      result: "CREATED",
+      subjectRecordId: "person_real_1",
+    });
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `DELETE FROM pending_operations WHERE id = ? AND operation = ?`,
+      "state_update_pending_1",
+      "STATE_UPDATE",
+    );
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("sync_status = 'synced'"),
+      "attendance_remote_1",
+      "Persona segura",
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      "state_update_local_record_1",
+    );
+  });
+
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {
     const store = getLocalDatabase();
     const records = Array.from({ length: 388 }, (_, index) => remoteRecord(`persona_${index + 1}`));
@@ -655,6 +882,74 @@ function stateUpdateDiagnosticsRow(overrides: Record<string, unknown>) {
     record_sync_status: "syncing",
     server_record_id: null,
     updated_at: "2026-08-26T10:02:00.000Z",
+    ...overrides,
+  };
+}
+
+function stateUpdateLocalDiagnosticsRow(overrides: Record<string, unknown>) {
+  return {
+    cached_at: "2026-08-26T10:01:00.000Z",
+    conflict_remote_display_name: null,
+    conflict_remote_updated_at: null,
+    conflict_remote_values_json: null,
+    contract_id: "contract_real_1",
+    definition_json: JSON.stringify({
+      appView: {
+        config: { workflowKey: "attendance" },
+        id: "attendance_view_real_1",
+        icon: null,
+        name: "Attendance",
+        slug: "attendance",
+        sortOrder: 1,
+        type: "WORKFLOW",
+      },
+      kind: "state-update",
+    }),
+    definition_status: "ready",
+    definition_workflow_key: "attendance",
+    display_name: "Persona segura",
+    entity_type_id: "attendance",
+    local_id: "state_update_local_record_1",
+    owner_key: "org_real:user_real",
+    pending_operation_id: null,
+    remote_updated_at: null,
+    server_id: null,
+    sync_error_code: null,
+    sync_error_message: null,
+    sync_status: "pending_update",
+    values_json: JSON.stringify({
+      appViewId: "attendance_view_real_1",
+      date: "2026-08-26",
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectRecordId: "person_real_1",
+    }),
+    ...overrides,
+  };
+}
+
+function stateUpdateEntityRecordRow(overrides: Record<string, unknown>) {
+  return {
+    cached_at: "2026-08-26T10:01:00.000Z",
+    conflict_remote_display_name: null,
+    conflict_remote_updated_at: null,
+    conflict_remote_values_json: null,
+    contract_id: "contract_real_1",
+    display_name: "Persona segura",
+    entity_type_id: "attendance",
+    local_id: "state_update_attendance_2026_08_26_person_real_1",
+    owner_key: "org_1:user_1",
+    remote_updated_at: null,
+    server_id: null,
+    sync_error_code: null,
+    sync_error_message: null,
+    sync_status: "pending_update",
+    values_json: JSON.stringify({
+      appViewId: "attendance_view_real_1",
+      date: "2026-08-26",
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectDisplayName: "Persona segura",
+      subjectRecordId: "person_real_1",
+    }),
     ...overrides,
   };
 }

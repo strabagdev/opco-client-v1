@@ -5,6 +5,7 @@ import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } fro
 import {
   buildOfflineStateValues,
   createStateUpdateLocalRecordId,
+  StateUpdateLocalRecordDiagnostics,
   normalizeStateUpdateRecord,
   OfflineStateUpdatePayload,
   OfflineStateUpdateValues,
@@ -1874,7 +1875,7 @@ async function upsertStateUpdateSnapshot({ appViewId, contractId, date, items, o
       recordId: localRecordId,
     });
 
-    if (existing && existing.syncStatus !== "synced") {
+    if (existing && existing.syncStatus !== "synced" && await hasStateUpdatePendingOperation(db, ownerKey, existing.localId)) {
       continue;
     }
 
@@ -2109,19 +2110,85 @@ async function getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateU
     STATE_UPDATE_OPERATION,
   );
   const operations = rows.map(mapStateUpdateOutboxDiagnosticsRow);
+  const localRows = await db.getAllAsync<StateUpdateLocalRecordDiagnosticsRow>(
+    `
+      SELECT
+        entity_records.*,
+        pending_operations.id AS pending_operation_id,
+        app_view_definitions.definition_json AS definition_json,
+        app_view_definitions.status AS definition_status,
+        app_view_definitions.workflow_key AS definition_workflow_key
+      FROM entity_records
+      LEFT JOIN pending_operations ON pending_operations.owner_key = entity_records.owner_key
+        AND pending_operations.local_record_id = entity_records.local_id
+        AND pending_operations.operation = ?
+      LEFT JOIN app_view_definitions ON app_view_definitions.owner_key = entity_records.owner_key
+        AND app_view_definitions.contract_id = entity_records.contract_id
+        AND app_view_definitions.app_view_id = json_extract(entity_records.values_json, '$.appViewId')
+      WHERE entity_records.owner_key = ?
+        AND json_extract(entity_records.values_json, '$.appViewId') IS NOT NULL
+        AND (
+          app_view_definitions.definition_json IS NULL
+          OR app_view_definitions.workflow_key IN ('attendance', 'state-update')
+          OR json_extract(app_view_definitions.definition_json, '$.kind') = 'state-update'
+        )
+      ORDER BY entity_records.cached_at DESC
+    `,
+    STATE_UPDATE_OPERATION,
+    ownerKey,
+  );
+  const localRecords = localRows.map(mapStateUpdateLocalRecordDiagnosticsRow);
+  const localCount = (status: RecordSyncStatus) => localRecords.filter((record) => record.syncStatus === status).length;
+  const attendanceDerivedPendingCount = localRecords.filter((record) =>
+    record.workflowKey === "attendance" &&
+    (record.syncStatus === "pending_create" ||
+      record.syncStatus === "pending_update" ||
+      record.syncStatus === "syncing" ||
+      record.syncStatus === "failed" ||
+      record.syncStatus === "conflict")
+  ).length;
+  const orphanedLocalChange = localRecords.filter((record) => record.recoveryState === "ORPHANED_LOCAL_CHANGE").length;
+  const remoteSnapshotRepairable = localRecords.filter((record) => record.recoveryState === "REMOTE_SNAPSHOT_REPAIRABLE").length;
 
   return {
+    consistency: operations.length === 0 && attendanceDerivedPendingCount > 0 ? "MISMATCH" : "OK",
+    localRecords,
     operations,
     summary: {
+      attendanceDerivedPendingCount,
       conflict: operations.filter((operation) => operation.syncStatus === "conflict").length,
       eligibleForAutoSync: operations.filter((operation) => operation.retryable).length,
       failed: operations.filter((operation) => operation.syncStatus === "failed").length,
+      localConflict: localCount("conflict"),
+      localFailed: localCount("failed"),
+      localPendingCreate: localCount("pending_create"),
+      localPendingUpdate: localCount("pending_update"),
+      localSynced: localCount("synced"),
+      localSyncing: localCount("syncing"),
+      localTotal: localRecords.length,
+      orphanedLocalChange,
+      remoteSnapshotRepairable,
       pendingCreate: operations.filter((operation) => operation.syncStatus === "pending_create").length,
       pendingUpdate: operations.filter((operation) => operation.syncStatus === "pending_update").length,
       stateUpdateTotalLocal: operations.length,
       syncing: operations.filter((operation) => operation.syncStatus === "syncing").length,
     },
   };
+}
+
+async function hasStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, ownerKey: string, localRecordId: string) {
+  const row = await db.getFirstAsync<{ total: number }>(
+    `
+      SELECT COUNT(*) AS total
+      FROM pending_operations
+      WHERE owner_key = ? AND local_record_id = ? AND operation = ?
+    `,
+    ownerKey,
+    localRecordId,
+    STATE_UPDATE_OPERATION,
+  );
+
+  return Boolean(row?.total);
 }
 
 async function markStateUpdateOperationSyncing(operationId: string) {
@@ -2917,6 +2984,13 @@ type StateUpdateOutboxDiagnosticsRow = PendingOperationRow & {
   record_sync_status: RecordSyncStatus | null;
 };
 
+type StateUpdateLocalRecordDiagnosticsRow = EntityRecordRow & {
+  definition_json: string | null;
+  definition_status: AppViewDefinitionStatus | null;
+  definition_workflow_key: string | null;
+  pending_operation_id: string | null;
+};
+
 type AppViewDefinitionRow = {
   app_view_id: string;
   app_view_type: AppView["type"];
@@ -3060,6 +3134,54 @@ function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow
     syncStatus,
     updatedAt: row.updated_at ?? row.record_cached_at ?? "unknown",
   };
+}
+
+function mapStateUpdateLocalRecordDiagnosticsRow(row: StateUpdateLocalRecordDiagnosticsRow): StateUpdateLocalRecordDiagnostics {
+  const values = parseJsonObject(row.values_json);
+  const definition = row.definition_json ? parseJsonObject(row.definition_json) as PreparedAppViewDefinition | null : null;
+  const stateValues = getDiagnosticStateValues(values);
+  const remoteRecordExists = Boolean(row.server_id || row.remote_updated_at);
+
+  return {
+    appViewFingerprint: fingerprintDiagnosticValue(getDiagnosticAppViewId(values)),
+    appViewResolved: Boolean(definition),
+    contractFingerprint: fingerprintDiagnosticValue(row.contract_id),
+    date: getDiagnosticDate(values),
+    hasPendingOperation: Boolean(row.pending_operation_id),
+    lastErrorCode: row.sync_error_code,
+    localRecordFingerprint: fingerprintDiagnosticValue(row.local_id),
+    remoteRecordExists,
+    recoveryState: getStateUpdateLocalRecordRecoveryState({
+      hasPendingOperation: Boolean(row.pending_operation_id),
+      remoteRecordExists,
+      syncStatus: row.sync_status,
+    }),
+    stateValuesCount: stateValues.length,
+    subjectFingerprint: fingerprintDiagnosticValue(getDiagnosticSubjectRecordId(values)),
+    syncStatus: row.sync_status,
+    updatedAt: row.cached_at,
+    workflowKey: row.definition_workflow_key ?? getDiagnosticWorkflowKey(definition),
+  };
+}
+
+function getStateUpdateLocalRecordRecoveryState({
+  hasPendingOperation,
+  remoteRecordExists,
+  syncStatus,
+}: {
+  hasPendingOperation: boolean;
+  remoteRecordExists: boolean;
+  syncStatus: string;
+}): StateUpdateLocalRecordDiagnostics["recoveryState"] {
+  if (syncStatus !== "pending_create" && syncStatus !== "pending_update" && syncStatus !== "syncing") {
+    return "OK";
+  }
+
+  if (hasPendingOperation) {
+    return "PENDING_WITH_OUTBOX";
+  }
+
+  return remoteRecordExists ? "REMOTE_SNAPSHOT_REPAIRABLE" : "ORPHANED_LOCAL_CHANGE";
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
