@@ -149,17 +149,63 @@ describe("state-update sync engine", () => {
     expect(store.retried[0].clientRequestId).toBe("request_original");
   });
 
+  it("completes a timed out operation when remote reconciliation confirms the requested state", async () => {
+    store.operations = [operation()];
+    const api = {
+      getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentStateValues: [
+          { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+          { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+        ],
+      })),
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw timeoutError();
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 1, retriable: 0 });
+    expect(api.getStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", {
+      date: "2026-08-25",
+      subjectRecordId: "equipment_1",
+    });
+    expect(store.completed[0]).toMatchObject({
+      operation: { clientRequestId: "request_original" },
+      result: { recordId: "event_1", result: "UNCHANGED", subjectRecordId: "equipment_1" },
+    });
+    expect(store.retried).toHaveLength(0);
+    expect(store.operations).toHaveLength(0);
+    expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastPushCompletedAt).toBe("now");
+  });
+
+  it("keeps a timed out operation retryable when remote reconciliation cannot confirm the write", async () => {
+    store.operations = [operation()];
+    const api = {
+      getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentStateValues: [
+          { fieldId: "field_operational_status", label: "Detenido", optionId: "stopped" },
+          { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+        ],
+      })),
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw timeoutError();
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 0, retriable: 1 });
+    expect(store.completed).toHaveLength(0);
+    expect(store.retried[0].clientRequestId).toBe("request_original");
+    expect(store.operations).toHaveLength(1);
+  });
+
   it("keeps timeout retries idempotent when the backend write completed before the response was lost", async () => {
     store.operations = [operation()];
     const api = {
       saveStateUpdateWorkflow: vi.fn()
-        .mockRejectedValueOnce(new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", {
-          abortControllerTriggered: true,
-          requestDurationMs: 12000,
-          requestStartedAt: "2026-08-26T12:00:00.000Z",
-          responseStarted: false,
-          timeoutMs: 12000,
-        }))
+        .mockRejectedValueOnce(timeoutError())
         .mockResolvedValueOnce({
           appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
           date: "2026-08-25",
@@ -338,6 +384,49 @@ function operation(overrides: Partial<PendingOperation> = {}): PendingOperation 
     serverRecordId: "event_1",
     updatedAt: "2026-08-25T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function timeoutError() {
+  return new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", {
+    abortControllerTriggered: true,
+    fetchResolvedAt: null,
+    requestCompletedAt: "2026-08-26T12:00:12.000Z",
+    requestDurationMs: 12000,
+    requestStartedAt: "2026-08-26T12:00:00.000Z",
+    responseBodyStartedAt: null,
+    responseParsedAt: null,
+    responseStarted: false,
+    timeoutMs: 12000,
+  });
+}
+
+function stateUpdateWorkflowResponse({
+  currentStateValues,
+}: {
+  currentStateValues: { fieldId: string; label: string | null; optionId: string | null }[];
+}) {
+  return {
+    appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
+    date: "2026-08-25",
+    dateFieldId: "field_date",
+    extraFields: [],
+    historyMode: "update-current" as const,
+    items: [{
+      current: {
+        recordId: "event_1",
+        stateValues: currentStateValues,
+        updatedAt: "2026-08-26T12:00:11.000Z",
+      },
+      subject: { displayName: "Excavadora 1", id: "equipment_1" },
+    }],
+    latest: [],
+    sourceEntityType: { id: "entity_equipment", name: "Equipos" },
+    stateFields: [],
+    subjectFieldId: "field_equipment",
+    summary: { totalRegistered: 1 },
+    targetEntityType: { id: "entity_equipment_events", name: "Eventos" },
+    uniqueness: "subject-date" as const,
   };
 }
 

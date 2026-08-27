@@ -550,8 +550,12 @@ export class OpcoApiError extends Error {
 
 export type OpcoNetworkDiagnostics = {
   abortControllerTriggered: boolean;
+  fetchResolvedAt: string | null;
+  requestCompletedAt: string;
   requestDurationMs: number;
   requestStartedAt: string;
+  responseBodyStartedAt: string | null;
+  responseParsedAt: string | null;
   responseStarted: boolean;
   timeoutMs: number;
 };
@@ -623,7 +627,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   async function request<T>(path: string, init: RequestInit = {}) {
     let response: Response;
     let abortControllerTriggered = false;
+    let fetchResolvedAt: Date | null = null;
     let responseStarted = false;
+    let responseBodyStartedAt: Date | null = null;
+    let responseParsedAt: Date | null = null;
     const requestStartedAt = new Date();
     const requestStartedMs = Date.now();
     const controller = new AbortController();
@@ -643,14 +650,18 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         },
       });
       responseStarted = true;
+      fetchResolvedAt = new Date();
     } catch (error) {
-      const diagnostics = {
+      const diagnostics = requestDiagnostics({
         abortControllerTriggered,
-        requestDurationMs: Date.now() - requestStartedMs,
-        requestStartedAt: requestStartedAt.toISOString(),
+        fetchResolvedAt,
+        requestStartedAt,
+        requestStartedMs,
+        responseBodyStartedAt,
+        responseParsedAt,
         responseStarted,
         timeoutMs,
-      };
+      });
 
       if (isAbortError(error)) {
         throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", diagnostics);
@@ -661,7 +672,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       clearTimeout(timeoutId);
     }
 
+    responseBodyStartedAt = new Date();
     const body = await response.json().catch(() => null);
+    responseParsedAt = new Date();
 
     return parseApiEnvelope<T>(body, response.status);
   }
@@ -1111,6 +1124,38 @@ function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
       .filter((value): value is { fieldId: string; optionId: string } => typeof value.optionId === "string" && value.optionId.trim().length > 0)
       .map((value) => [value.fieldId, value.optionId]),
   );
+}
+
+function requestDiagnostics({
+  abortControllerTriggered,
+  fetchResolvedAt,
+  requestStartedAt,
+  requestStartedMs,
+  responseBodyStartedAt,
+  responseParsedAt,
+  responseStarted,
+  timeoutMs,
+}: {
+  abortControllerTriggered: boolean;
+  fetchResolvedAt: Date | null;
+  requestStartedAt: Date;
+  requestStartedMs: number;
+  responseBodyStartedAt: Date | null;
+  responseParsedAt: Date | null;
+  responseStarted: boolean;
+  timeoutMs: number;
+}): OpcoNetworkDiagnostics {
+  return {
+    abortControllerTriggered,
+    fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
+    requestCompletedAt: new Date().toISOString(),
+    requestDurationMs: Date.now() - requestStartedMs,
+    requestStartedAt: requestStartedAt.toISOString(),
+    responseBodyStartedAt: responseBodyStartedAt?.toISOString() ?? null,
+    responseParsedAt: responseParsedAt?.toISOString() ?? null,
+    responseStarted,
+    timeoutMs,
+  };
 }
 
 function normalizeEntityRecord(record: EntityRecord): EntityRecord {

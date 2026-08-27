@@ -1,6 +1,6 @@
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
-import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
+import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult, StateUpdateCurrentFieldValue, StateUpdateItem } from "../lib/opco-api";
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
@@ -27,7 +27,7 @@ export type StateUpdateSyncResult = {
 let syncPromise: Promise<StateUpdateSyncResult> | null = null;
 
 export function syncPendingStateUpdatesOnce(params: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow">;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   token: string;
@@ -47,7 +47,7 @@ async function runSync({
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow">;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   token: string;
@@ -121,6 +121,21 @@ async function runSync({
     } catch (error) {
       const classification = classifyStateUpdateSyncError(error);
 
+      if (classification.action === "retry" && error instanceof OpcoNetworkError) {
+        const reconciled = await completeOperationIfRemoteStateMatches({
+          api,
+          operation,
+          payload,
+          store,
+          token,
+        });
+
+        if (reconciled) {
+          result.completed += 1;
+          continue;
+        }
+      }
+
       scopesWithErrors.add(stateUpdateScopeKey(payload, operation.contractId));
       await markStateUpdateSyncError(
         store,
@@ -151,6 +166,89 @@ async function runSync({
   ));
 
   return result;
+}
+
+async function completeOperationIfRemoteStateMatches({
+  api,
+  operation,
+  payload,
+  store,
+  token,
+}: {
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+  operation: PendingOperation;
+  payload: OfflineStateUpdatePayload;
+  store: StateUpdateSyncStore;
+  token: string;
+}) {
+  if (!api.getStateUpdateWorkflow) {
+    return false;
+  }
+
+  try {
+    const response = await api.getStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
+      date: payload.date,
+      subjectRecordId: payload.subjectRecordId,
+    });
+    const item = response.items.find((candidate) => candidate.subject.id === payload.subjectRecordId);
+
+    if (!item?.current || !stateUpdateItemMatchesPayload(item, payload)) {
+      return false;
+    }
+
+    await store.completeStateUpdateOperation(operation, {
+      recordId: item.current.recordId,
+      result: "UNCHANGED",
+      subjectRecordId: payload.subjectRecordId,
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stateUpdateItemMatchesPayload(item: StateUpdateItem, payload: OfflineStateUpdatePayload) {
+  if (!item.current) {
+    return false;
+  }
+
+  if (payload.stateValues.length === 0) {
+    return false;
+  }
+
+  const remoteStateValues = normalizeRemoteStateValues(item.current);
+
+  return payload.stateValues.every((requested) =>
+    remoteStateValues.some((remote) =>
+      remote.fieldId === requested.fieldId &&
+      remote.optionId === requested.optionId,
+    ),
+  );
+}
+
+function normalizeRemoteStateValues(current: NonNullable<StateUpdateItem["current"]>): StateUpdateCurrentFieldValue[] {
+  if (Array.isArray(current.stateValues)) {
+    return current.stateValues;
+  }
+
+  const states = (current as unknown as { states?: unknown }).states;
+
+  if (!states || typeof states !== "object" || Array.isArray(states)) {
+    return [];
+  }
+
+  return Object.entries(states).map(([fieldId, rawValue]) => {
+    const value = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+      ? rawValue as { label?: unknown; optionId?: unknown }
+      : {};
+
+    return {
+      fieldId,
+      label: typeof value.label === "string" ? value.label : null,
+      optionId: typeof value.optionId === "string" ? value.optionId : null,
+    };
+  });
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {

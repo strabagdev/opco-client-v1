@@ -95,13 +95,17 @@ export type StateUpdateDiagnosticRun = {
   rows: {
     clientRequestId: string;
     endpoint: string;
+    fetchResolvedAt: string | null;
     finalSyncStatus: string;
     httpStatus: number | null;
     requestAbortControllerTriggered: boolean | null;
+    requestCompletedAt: string | null;
     requestAttempted: boolean;
     requestDurationMs: number | null;
     requestStartedAt: string | null;
     requestTimeoutMs: number | null;
+    responseBodyStartedAt: string | null;
+    responseParsedAt: string | null;
     responseStarted: boolean | null;
     result: string;
     selectedForSync: boolean;
@@ -278,13 +282,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
       events.set(operation.clientRequestId, {
         clientRequestId: operation.clientRequestId,
         endpoint: "none",
+        fetchResolvedAt: null,
         finalSyncStatus: operation.syncStatus,
         httpStatus: null,
         requestAbortControllerTriggered: null,
+        requestCompletedAt: null,
         requestAttempted: false,
         requestDurationMs: null,
         requestStartedAt: null,
         requestTimeoutMs: null,
+        responseBodyStartedAt: null,
+        responseParsedAt: null,
         responseStarted: null,
         result: "not-selected",
         selectedForSync: false,
@@ -302,13 +310,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
             events.set(abbreviateDiagnosticValue(operation.clientRequestId), {
               clientRequestId: abbreviateDiagnosticValue(operation.clientRequestId),
               endpoint: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+              fetchResolvedAt: null,
               finalSyncStatus: "unknown",
               httpStatus: null,
               requestAbortControllerTriggered: null,
+              requestCompletedAt: null,
               requestAttempted: false,
               requestDurationMs: null,
               requestStartedAt: null,
               requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+              responseBodyStartedAt: null,
+              responseParsedAt: null,
               responseStarted: null,
               result: "selected",
               selectedForSync: true,
@@ -377,6 +389,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
             if (event) {
               event.httpStatus = 200;
               event.requestAbortControllerTriggered = false;
+              event.requestCompletedAt = new Date().toISOString();
               event.requestDurationMs = Date.now() - requestStartedMs;
               event.result = response.results[0]?.result ?? "EMPTY_RESULT";
               event.responseStarted = true;
@@ -386,10 +399,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
           } catch (error) {
             if (event) {
               event.httpStatus = error instanceof OpcoApiError ? error.status : null;
+              event.fetchResolvedAt = error instanceof OpcoNetworkError ? error.diagnostics?.fetchResolvedAt ?? null : event.fetchResolvedAt;
               event.requestAbortControllerTriggered = error instanceof OpcoNetworkError ? error.diagnostics?.abortControllerTriggered ?? null : false;
+              event.requestCompletedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestCompletedAt ?? new Date().toISOString() : new Date().toISOString();
               event.requestDurationMs = error instanceof OpcoNetworkError ? error.diagnostics?.requestDurationMs ?? Date.now() - requestStartedMs : Date.now() - requestStartedMs;
               event.requestStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestStartedAt ?? event.requestStartedAt : event.requestStartedAt;
               event.requestTimeoutMs = error instanceof OpcoNetworkError ? error.diagnostics?.timeoutMs ?? event.requestTimeoutMs : event.requestTimeoutMs;
+              event.responseBodyStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseBodyStartedAt ?? null : event.responseBodyStartedAt;
+              event.responseParsedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseParsedAt ?? null : event.responseParsedAt;
               event.result = error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR";
               event.responseStarted = error instanceof OpcoNetworkError ? error.diagnostics?.responseStarted ?? false : true;
             }
@@ -1238,6 +1255,10 @@ export function StateUpdateDiagnosticsPanel({
                     ["requestAttempted", row.requestAttempted],
                     ["endpoint", row.endpoint],
                     ["requestStartedAt", row.requestStartedAt ?? "none"],
+                    ["fetchResolvedAt", row.fetchResolvedAt ?? "none"],
+                    ["responseBodyStartedAt", row.responseBodyStartedAt ?? "none"],
+                    ["responseParsedAt", row.responseParsedAt ?? "none"],
+                    ["requestCompletedAt", row.requestCompletedAt ?? "none"],
                     ["timeoutMs", row.requestTimeoutMs ?? "none"],
                     ["requestDurationMs", row.requestDurationMs ?? "none"],
                     ["AbortController triggered", row.requestAbortControllerTriggered ?? "unknown"],
