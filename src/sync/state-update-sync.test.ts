@@ -149,6 +149,37 @@ describe("state-update sync engine", () => {
     expect(store.retried[0].clientRequestId).toBe("request_original");
   });
 
+  it("keeps timeout retries idempotent when the backend write completed before the response was lost", async () => {
+    store.operations = [operation()];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn()
+        .mockRejectedValueOnce(new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", {
+          abortControllerTriggered: true,
+          requestDurationMs: 12000,
+          requestStartedAt: "2026-08-26T12:00:00.000Z",
+          responseStarted: false,
+          timeoutMs: 12000,
+        }))
+        .mockResolvedValueOnce({
+          appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
+          date: "2026-08-25",
+          results: [{ recordId: "event_1", result: "UNCHANGED" as const, subjectRecordId: "equipment_1" }],
+        }),
+    };
+
+    const first = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const second = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(first).toMatchObject({ completed: 0, retriable: 1 });
+    expect(second).toMatchObject({ completed: 1, retriable: 0 });
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledTimes(2);
+    expect(api.saveStateUpdateWorkflow.mock.calls.map((call) => call[3].clientRequestId)).toEqual([
+      "request_original",
+      "request_original",
+    ]);
+    expect(store.operations).toHaveLength(0);
+  });
+
   it("marks ERROR results as failed without deleting the operation", async () => {
     store.operations = [operation()];
     const api = {

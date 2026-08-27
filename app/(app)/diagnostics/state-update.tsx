@@ -8,7 +8,7 @@ import {
   summarizeAttendanceGetResponse,
 } from "@/diagnostics/state-update-route-logic";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
-import { AppView, OpcoApiError } from "@/lib/opco-api";
+import { AppView, DEFAULT_REQUEST_TIMEOUT_MS, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
 import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
 import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import {
@@ -87,9 +87,15 @@ export default function StateUpdateDiagnosticsRoute() {
     for (const operation of beforeRun.operations) {
       events.set(operation.clientRequestId, {
         clientRequestId: operation.clientRequestId,
+        endpoint: "none",
         finalSyncStatus: operation.syncStatus,
         httpStatus: null,
+        requestAbortControllerTriggered: null,
         requestAttempted: false,
+        requestDurationMs: null,
+        requestStartedAt: null,
+        requestTimeoutMs: null,
+        responseStarted: null,
         result: "not-selected",
         selectedForSync: false,
       });
@@ -105,9 +111,15 @@ export default function StateUpdateDiagnosticsRoute() {
           for (const operation of operations) {
             events.set(abbreviateDiagnosticValue(operation.clientRequestId), {
               clientRequestId: abbreviateDiagnosticValue(operation.clientRequestId),
+              endpoint: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
               finalSyncStatus: "unknown",
               httpStatus: null,
+              requestAbortControllerTriggered: null,
               requestAttempted: false,
+              requestDurationMs: null,
+              requestStartedAt: null,
+              requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+              responseStarted: null,
               result: "selected",
               selectedForSync: true,
             });
@@ -162,22 +174,34 @@ export default function StateUpdateDiagnosticsRoute() {
           const event = [...events.values()].find((item) => item.clientRequestId === abbreviateDiagnosticValue(input.clientRequestId ?? ""));
 
           if (event) {
+            event.endpoint = "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update";
             event.requestAttempted = true;
+            event.requestStartedAt = new Date().toISOString();
+            event.requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
           }
+          const requestStartedMs = Date.now();
 
           try {
             const response = await api.saveStateUpdateWorkflow(...args);
 
             if (event) {
               event.httpStatus = 200;
+              event.requestAbortControllerTriggered = false;
+              event.requestDurationMs = Date.now() - requestStartedMs;
               event.result = response.results[0]?.result ?? "EMPTY_RESULT";
+              event.responseStarted = true;
             }
 
             return response;
           } catch (error) {
             if (event) {
               event.httpStatus = error instanceof OpcoApiError ? error.status : null;
+              event.requestAbortControllerTriggered = error instanceof OpcoNetworkError ? error.diagnostics?.abortControllerTriggered ?? null : false;
+              event.requestDurationMs = error instanceof OpcoNetworkError ? error.diagnostics?.requestDurationMs ?? Date.now() - requestStartedMs : Date.now() - requestStartedMs;
+              event.requestStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestStartedAt ?? event.requestStartedAt : event.requestStartedAt;
+              event.requestTimeoutMs = error instanceof OpcoNetworkError ? error.diagnostics?.timeoutMs ?? event.requestTimeoutMs : event.requestTimeoutMs;
               event.result = error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR";
+              event.responseStarted = error instanceof OpcoNetworkError ? error.diagnostics?.responseStarted ?? false : true;
             }
 
             throw error;

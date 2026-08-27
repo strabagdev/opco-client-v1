@@ -476,6 +476,13 @@ describe("createOpcoApi", () => {
 
     await vi.advanceTimersByTimeAsync(10);
     await expectation;
+    await expect(request).rejects.toMatchObject({
+      diagnostics: {
+        abortControllerTriggered: true,
+        responseStarted: false,
+        timeoutMs: 10,
+      },
+    });
   });
 
   it("parses paginated entity records and sends search query params", async () => {

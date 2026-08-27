@@ -548,8 +548,19 @@ export class OpcoApiError extends Error {
   }
 }
 
+export type OpcoNetworkDiagnostics = {
+  abortControllerTriggered: boolean;
+  requestDurationMs: number;
+  requestStartedAt: string;
+  responseStarted: boolean;
+  timeoutMs: number;
+};
+
 export class OpcoNetworkError extends Error {
-  constructor(message = "No fue posible conectar con Opco.") {
+  constructor(
+    message = "No fue posible conectar con Opco.",
+    public readonly diagnostics?: OpcoNetworkDiagnostics,
+  ) {
     super(message);
     this.name = "OpcoNetworkError";
   }
@@ -570,7 +581,7 @@ type ApiClientOptions = {
 
 type PlatformOS = "web" | "ios" | "android" | "macos" | "windows" | string;
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 const NATIVE_CLIENT_PLATFORM_HEADER = "native";
 const TOKEN_EXPIRED_CODE = "TOKEN_EXPIRED";
 const TOKEN_INVALID_CODE = "TOKEN_INVALID";
@@ -611,8 +622,15 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
   async function request<T>(path: string, init: RequestInit = {}) {
     let response: Response;
+    let abortControllerTriggered = false;
+    let responseStarted = false;
+    const requestStartedAt = new Date();
+    const requestStartedMs = Date.now();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const timeoutId = setTimeout(() => {
+      abortControllerTriggered = true;
+      controller.abort();
+    }, timeoutMs);
 
     try {
       response = await fetcher(`${apiUrl}${path}`, {
@@ -624,12 +642,21 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           ...init.headers,
         },
       });
+      responseStarted = true;
     } catch (error) {
+      const diagnostics = {
+        abortControllerTriggered,
+        requestDurationMs: Date.now() - requestStartedMs,
+        requestStartedAt: requestStartedAt.toISOString(),
+        responseStarted,
+        timeoutMs,
+      };
+
       if (isAbortError(error)) {
-        throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.");
+        throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", diagnostics);
       }
 
-      throw new OpcoNetworkError();
+      throw new OpcoNetworkError("No fue posible conectar con Opco.", diagnostics);
     } finally {
       clearTimeout(timeoutId);
     }
