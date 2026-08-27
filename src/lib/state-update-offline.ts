@@ -291,7 +291,12 @@ export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
 };
 
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
+  complete?: boolean;
   items: StateUpdateItem[];
+};
+
+export type StateUpdateSnapshotReconcileResult = {
+  staleSyncedRemoved: number;
 };
 
 export type StateUpdateOfflineStore = {
@@ -311,7 +316,7 @@ export type StateUpdateOfflineStore = {
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
   setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;
-  upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<void>;
+  upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult>;
 };
 
 export function workflowTelemetryScopeId(appViewId: string) {

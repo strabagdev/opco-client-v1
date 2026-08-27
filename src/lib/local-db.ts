@@ -16,6 +16,7 @@ import {
   StateUpdateOutboxDiagnostics,
   StateUpdateOfflineStore,
   StateUpdateScope,
+  StateUpdateSnapshotReconcileResult,
   stateUpdateRecordToItem,
   UpsertStateUpdateSnapshotInput,
 } from "./state-update-offline";
@@ -1858,107 +1859,173 @@ async function searchStateUpdateSubjects({
   return results;
 }
 
-async function upsertStateUpdateSnapshot({ appViewId, contractId, date, items, ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput) {
+async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date, items, ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
+  let staleSyncedRemoved = 0;
 
-  for (const item of items) {
-    if (!item.current) {
-      continue;
-    }
+  await db.withTransactionAsync(async () => {
+    const currentItems = items.filter((item) => item.current);
 
-    const localRecordId = createStateUpdateLocalRecordId({
-      appViewId,
-      date,
-      historyMode: "update-current",
-      subjectRecordId: item.subject.id,
-      uniqueness: date ? "subject-date" : "subject",
-    });
-    const existing = await getCachedRecord({
-      contractId,
-      entityTypeId: targetEntityTypeId,
-      ownerKey,
-      recordId: localRecordId,
-    });
-
-    if (existing && existing.syncStatus !== "synced") {
-      const pendingOperation = await getStateUpdatePendingOperation(db, ownerKey, existing.localId);
-
-      if (pendingOperation) {
-        const payload = pendingOperation.payload as OfflineStateUpdatePayload;
-
-        if (!stateUpdateSnapshotMatchesPendingPayload(item, payload)) {
-          continue;
-        }
-
-        await completeStateUpdateOperation(pendingOperation, {
-          recordId: item.current.recordId,
-          result: "UNCHANGED",
-          subjectRecordId: payload.subjectRecordId,
-        });
-        await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
-          completedAt: cachedAt,
-          ownerKey,
-        });
+    for (const item of currentItems) {
+      if (!item.current) {
         continue;
       }
+
+      const localRecordId = createStateUpdateLocalRecordId({
+        appViewId,
+        date,
+        historyMode: "update-current",
+        subjectRecordId: item.subject.id,
+        uniqueness: date ? "subject-date" : "subject",
+      });
+      const existing = await getCachedRecord({
+        contractId,
+        entityTypeId: targetEntityTypeId,
+        ownerKey,
+        recordId: localRecordId,
+      });
+
+      if (existing && existing.syncStatus !== "synced") {
+        const pendingOperation = await getStateUpdatePendingOperation(db, ownerKey, existing.localId);
+
+        if (pendingOperation) {
+          const payload = pendingOperation.payload as OfflineStateUpdatePayload;
+
+          if (!stateUpdateSnapshotMatchesPendingPayload(item, payload)) {
+            continue;
+          }
+
+          await completeStateUpdateOperation(pendingOperation, {
+            recordId: item.current.recordId,
+            result: "UNCHANGED",
+            subjectRecordId: payload.subjectRecordId,
+          });
+          await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
+            completedAt: cachedAt,
+            ownerKey,
+          });
+          continue;
+        }
+      }
+
+      const values: OfflineStateUpdateValues = {
+        appViewId,
+        date,
+        expectedUpdatedAt: item.current.updatedAt,
+        extraValues: item.current.extraValues,
+        stateValues: item.current.stateValues,
+        subjectDisplayName: item.subject.displayName,
+        subjectRecordId: item.subject.id,
+      };
+
+      await db.runAsync(
+        `
+          INSERT INTO entity_records (
+            local_id,
+            server_id,
+            owner_key,
+            contract_id,
+            entity_type_id,
+            display_name,
+            values_json,
+            remote_updated_at,
+            cached_at,
+            sync_status,
+            sync_error_code,
+            sync_error_message,
+            conflict_remote_values_json,
+            conflict_remote_display_name,
+            conflict_remote_updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', NULL, NULL, NULL, NULL, NULL)
+          ON CONFLICT(local_id)
+          DO UPDATE SET
+            server_id = excluded.server_id,
+            display_name = excluded.display_name,
+            values_json = excluded.values_json,
+            remote_updated_at = excluded.remote_updated_at,
+            cached_at = excluded.cached_at,
+            sync_status = 'synced',
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        `,
+        localRecordId,
+        item.current.recordId,
+        ownerKey,
+        contractId,
+        targetEntityTypeId,
+        item.subject.displayName,
+        JSON.stringify(values),
+        item.current.updatedAt,
+        cachedAt,
+      );
     }
 
-    const values: OfflineStateUpdateValues = {
-      appViewId,
-      date,
-      expectedUpdatedAt: item.current.updatedAt,
-      extraValues: item.current.extraValues,
-      stateValues: item.current.stateValues,
-      subjectDisplayName: item.subject.displayName,
-      subjectRecordId: item.subject.id,
-    };
+    if (complete) {
+      staleSyncedRemoved = await deleteStaleSyncedStateUpdateRecords({
+        appViewId,
+        contractId,
+        date,
+        db,
+        items: currentItems,
+        ownerKey,
+        targetEntityTypeId,
+      });
+    }
+  });
 
-    await db.runAsync(
-      `
-        INSERT INTO entity_records (
-          local_id,
-          server_id,
-          owner_key,
-          contract_id,
-          entity_type_id,
-          display_name,
-          values_json,
-          remote_updated_at,
-          cached_at,
-          sync_status,
-          sync_error_code,
-          sync_error_message,
-          conflict_remote_values_json,
-          conflict_remote_display_name,
-          conflict_remote_updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', NULL, NULL, NULL, NULL, NULL)
-        ON CONFLICT(local_id)
-        DO UPDATE SET
-          server_id = excluded.server_id,
-          display_name = excluded.display_name,
-          values_json = excluded.values_json,
-          remote_updated_at = excluded.remote_updated_at,
-          cached_at = excluded.cached_at,
-          sync_status = 'synced',
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      `,
-      localRecordId,
-      item.current.recordId,
-      ownerKey,
-      contractId,
-      targetEntityTypeId,
-      item.subject.displayName,
-      JSON.stringify(values),
-      item.current.updatedAt,
-      cachedAt,
-    );
-  }
+  return { staleSyncedRemoved };
+}
+
+async function deleteStaleSyncedStateUpdateRecords({
+  appViewId,
+  contractId,
+  date,
+  db,
+  items,
+  ownerKey,
+  targetEntityTypeId,
+}: StateUpdateScope & { db: SQLite.SQLiteDatabase; items: StateUpdateItem[] }) {
+  const currentItems = items.filter((item) => item.current);
+  const remoteRecordIds = currentItems.map((item) => item.current?.recordId).filter((recordId): recordId is string => Boolean(recordId));
+  const localRecordIds = currentItems.map((item) => createStateUpdateLocalRecordId({
+    appViewId,
+    date,
+    historyMode: "update-current",
+    subjectRecordId: item.subject.id,
+    uniqueness: date ? "subject-date" : "subject",
+  }));
+  const keepLocalPlaceholders = localRecordIds.map(() => "?").join(", ");
+  const keepRemotePlaceholders = remoteRecordIds.map(() => "?").join(", ");
+  const keepLocalClause = localRecordIds.length > 0 ? `AND local_id NOT IN (${keepLocalPlaceholders})` : "";
+  const keepRemoteClause = remoteRecordIds.length > 0 ? `AND (server_id IS NULL OR server_id NOT IN (${keepRemotePlaceholders}))` : "";
+  const result = await db.runAsync(
+    `
+      DELETE FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND sync_status = 'synced'
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        ${keepLocalClause}
+        ${keepRemoteClause}
+    `,
+    ownerKey,
+    contractId,
+    targetEntityTypeId,
+    appViewId,
+    date ?? null,
+    date ?? null,
+    ...localRecordIds,
+    ...remoteRecordIds,
+  );
+
+  return result && typeof result === "object" && "changes" in result && typeof result.changes === "number" ? result.changes : 0;
 }
 
 async function getStateUpdateSummary(input: StateUpdateScope): Promise<import("./state-update-offline").StateUpdateSummary> {

@@ -1,6 +1,8 @@
 import { AttendanceBatchResult, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
 
 export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
+// Mirrors the backend Attendance latest take=10 contract used to infer full-day snapshots.
+export const ATTENDANCE_LATEST_LIMIT = 10;
 
 export function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
@@ -66,6 +68,10 @@ export function hasSuccessfulAttendanceResult(results: AttendanceBatchResult[]) 
     result.result === "UNCHANGED" ||
     result.result === "UPDATED"
   ));
+}
+
+export function isAttendanceRemoteSnapshotComplete(response: Pick<AttendanceResponse, "latest" | "summary">, latestLimit = ATTENDANCE_LATEST_LIMIT) {
+  return response.summary.totalRegistered <= latestLimit && response.latest.length === response.summary.totalRegistered;
 }
 
 export function attendanceResponseToStateUpdateItems(

@@ -41,6 +41,7 @@ import {
   formatDisplayDate,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  isAttendanceRemoteSnapshotComplete,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   shouldSearchAttendancePeople,
@@ -170,7 +171,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return unresolvedCount;
   }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
-  const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse) => {
+  const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse, options: { complete?: boolean } = {}) => {
     if (!ownerKey || !selectedContractId) {
       return;
     }
@@ -190,6 +191,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     await definitionCache.upsertStateUpdateSnapshot({
       appViewId: appView.id,
       contractId: selectedContractId,
+      complete: options.complete === true,
       date: response.date,
       items: attendanceResponseToStateUpdateItems(response, appView.config),
       ownerKey,
@@ -197,8 +199,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     });
   }, [api, appView.config, appView.id, definitionCache, ownerKey, selectedContractId, token]);
 
-  const cacheAttendanceOnlineResponseInBackground = useCallback((response: AttendanceResponse) => {
-    void cacheAttendanceOnlineResponse(response).catch(() => undefined);
+  const cacheAttendanceOnlineResponseInBackground = useCallback((response: AttendanceResponse, options: { complete?: boolean } = {}) => {
+    void cacheAttendanceOnlineResponse(response, options).catch(() => undefined);
   }, [cacheAttendanceOnlineResponse]);
 
   const applyDayState = useCallback(async (response: AttendanceResponse) => {
@@ -236,7 +238,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       await applyDayState(response);
-      cacheAttendanceOnlineResponseInBackground(response);
+      await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
       setItems([]);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -247,7 +249,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setIsLoading(false);
       }
     }
-  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponseInBackground, date, isContractBootstrapPending, selectedContractId, status, token]);
+  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, date, isContractBootstrapPending, selectedContractId, status, token]);
 
   const refreshAfterStateUpdateSync = useCallback(async () => {
     if (!ownerKey || !selectedContractId) {
@@ -269,7 +271,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       await applyDayState(response);
-      cacheAttendanceOnlineResponseInBackground(response);
+      await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
       setError(null);
     } catch {
       if (requestId === requestSequenceRef.current) {
@@ -284,7 +286,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     api,
     appView.id,
     applyDayState,
-    cacheAttendanceOnlineResponseInBackground,
+    cacheAttendanceOnlineResponse,
     date,
     isOnline,
     ownerKey,
@@ -350,7 +352,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       await applyDayState(response);
-      cacheAttendanceOnlineResponseInBackground(response);
+      cacheAttendanceOnlineResponseInBackground(response, { complete: false });
       setItems(response.items);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -440,7 +442,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         }
 
         await applyDayState(response);
-        cacheAttendanceOnlineResponseInBackground(response);
+        await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
         setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
@@ -465,7 +467,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.statusFieldId,
     appView.id,
     applyDayState,
-    cacheAttendanceOnlineResponseInBackground,
+    cacheAttendanceOnlineResponse,
     connectivityStatus,
     date,
     definitionCache,

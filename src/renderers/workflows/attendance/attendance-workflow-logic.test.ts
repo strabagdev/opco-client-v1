@@ -8,6 +8,7 @@ import {
   firstBlockingAttendanceResult,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  isAttendanceRemoteSnapshotComplete,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
@@ -86,6 +87,35 @@ describe("attendance workflow logic", () => {
     expect(firstBlockingAttendanceResult([
       { code: "INVALID", message: "Persona invalida.", personRecordId: "person_3", result: "ERROR" },
     ])).toMatchObject({ result: "ERROR" });
+  });
+
+  it("treats Attendance latest as complete only when it covers the registered total within the backend limit", () => {
+    expect(isAttendanceRemoteSnapshotComplete({
+      latest: [{ attendanceRecordId: "attendance_1", person: { displayName: "Persona 1", id: "person_1" }, statusLabel: "Presente", statusOptionId: "present_option" }],
+      summary: { totalRegistered: 1 },
+    })).toBe(true);
+    expect(isAttendanceRemoteSnapshotComplete({
+      latest: Array.from({ length: 10 }, (_, index) => ({
+        attendanceRecordId: `attendance_${index + 1}`,
+        person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
+        statusLabel: "Presente",
+        statusOptionId: "present_option",
+      })),
+      summary: { totalRegistered: 10 },
+    })).toBe(true);
+    expect(isAttendanceRemoteSnapshotComplete({
+      latest: Array.from({ length: 10 }, (_, index) => ({
+        attendanceRecordId: `attendance_${index + 1}`,
+        person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
+        statusLabel: "Presente",
+        statusOptionId: "present_option",
+      })),
+      summary: { totalRegistered: 25 },
+    })).toBe(false);
+    expect(isAttendanceRemoteSnapshotComplete({
+      latest: [],
+      summary: { totalRegistered: 0 },
+    })).toBe(true);
   });
 
   it("hydrates state-update cache from three latest records when initial Attendance load has no searched items", () => {

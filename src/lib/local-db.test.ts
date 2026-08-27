@@ -544,6 +544,128 @@ describe("local database singleton", () => {
     );
   });
 
+  it("removes stale synced STATE_UPDATE cache rows only after a complete remote snapshot", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records") || sql.includes("FROM pending_operations")) {
+        return null;
+      }
+
+      return null;
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("DELETE FROM entity_records")) {
+        return { changes: 6 };
+      }
+
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    const result = await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      complete: true,
+      contractId: "contract_real_1",
+      date: "2026-08-27",
+      items: [{
+        current: {
+          recordId: "attendance_remote_keep",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+          updatedAt: "2026-08-27T11:00:00.000Z",
+        },
+        subject: { displayName: "Persona segura", id: "person_keep" },
+      }],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    const deleteCall = db.runAsync.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("DELETE FROM entity_records"),
+    );
+
+    expect(result.staleSyncedRemoved).toBe(6);
+    expect(deleteCall?.[0]).toContain("sync_status = 'synced'");
+    expect(deleteCall?.[0]).toContain("json_extract(values_json, '$.appViewId') = ?");
+    expect(deleteCall?.[0]).toContain("json_extract(values_json, '$.date') = ?");
+    expect(deleteCall?.[0]).toContain("local_id NOT IN (?)");
+    expect(deleteCall?.[0]).toContain("server_id NOT IN (?)");
+    expect(deleteCall).toEqual([
+      expect.any(String),
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "attendance_view_real_1",
+      "2026-08-27",
+      "2026-08-27",
+      "state_update_attendance_view_real_1_2026-08-27_person_keep",
+      "attendance_remote_keep",
+    ]);
+  });
+
+  it("does not remove stale STATE_UPDATE cache rows when the remote snapshot is partial", async () => {
+    db.getFirstAsync.mockResolvedValue(null);
+    const store = getLocalDatabase();
+
+    const result = await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      complete: false,
+      contractId: "contract_real_1",
+      date: "2026-08-27",
+      items: [{
+        current: {
+          recordId: "attendance_remote_1",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+          updatedAt: "2026-08-27T11:00:00.000Z",
+        },
+        subject: { displayName: "Persona 1", id: "person_1" },
+      }],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(result.staleSyncedRemoved).toBe(0);
+    expect(db.runAsync.mock.calls.some(([sql]) =>
+      typeof sql === "string" && sql.includes("DELETE FROM entity_records"),
+    )).toBe(false);
+  });
+
+  it("can clear synced STATE_UPDATE cache for an empty complete day while preserving unresolved statuses", async () => {
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("DELETE FROM entity_records")) {
+        return { changes: 7 };
+      }
+
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    const result = await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      complete: true,
+      contractId: "contract_real_1",
+      date: "2026-08-27",
+      items: [],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    const deleteCall = db.runAsync.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("DELETE FROM entity_records"),
+    );
+
+    expect(result.staleSyncedRemoved).toBe(7);
+    expect(deleteCall?.[0]).toContain("sync_status = 'synced'");
+    expect(deleteCall?.[0]).not.toContain("NOT IN");
+    expect(deleteCall).toEqual([
+      expect.any(String),
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "attendance_view_real_1",
+      "2026-08-27",
+      "2026-08-27",
+    ]);
+  });
+
   it("does not overwrite a local STATE_UPDATE record when a pending operation does not match the remote snapshot", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
