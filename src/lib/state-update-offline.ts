@@ -7,6 +7,7 @@ import {
   StateUpdateLatestItem,
 } from "./opco-api";
 import { CachedEntityRecord, PendingOperation } from "./offline-records";
+import { ConnectivityStatus } from "./connectivity";
 
 export const STATE_UPDATE_OPERATION = "STATE_UPDATE";
 
@@ -142,6 +143,49 @@ export type StateUpdateOutboxDiagnostics = {
   consistency: "OK" | "MISMATCH";
 };
 
+export type StateUpdateSyncTrigger =
+  | "reconnect"
+  | "unknown-to-online"
+  | "manual-retry"
+  | "startup-with-pending"
+  | "foreground/resume"
+  | "other";
+
+export type StateUpdateSyncTelemetryResult =
+  | "failed"
+  | "noop"
+  | "partial_failure"
+  | "reconciled_success"
+  | "success";
+
+export type StateUpdateLastReconnectTelemetry = {
+  detected: boolean;
+  detectedAt: string | null;
+  previousConnectivityStatus: ConnectivityStatus | null;
+  resultingConnectivityStatus: ConnectivityStatus | null;
+};
+
+export type StateUpdateLastSyncTelemetry = {
+  completedAt: string | null;
+  operationsAttempted: number;
+  operationsCompleted: number;
+  operationsFailed: number;
+  operationsSelected: number;
+  reconciledAfterTimeout: boolean;
+  result: StateUpdateSyncTelemetryResult;
+  startedAt: string;
+  trigger: StateUpdateSyncTrigger;
+};
+
+export type StateUpdateSyncDiagnosticsTelemetry = {
+  currentConnectivity: {
+    status: ConnectivityStatus;
+    updatedAt: string | null;
+  };
+  lastReconnect: StateUpdateLastReconnectTelemetry;
+  lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
+};
+
 export type StateUpdateScope = {
   appViewId: string;
   contractId: string;
@@ -180,6 +224,7 @@ export type StateUpdateOfflineStore = {
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
   getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
+  getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   listStateUpdateConflicts(input: StateUpdateScope): Promise<CachedStateUpdateRecord[]>;
   listStateUpdateLatest(input: StateUpdateScope & { limit?: number }): Promise<StateUpdateLatestItem[]>;
@@ -188,6 +233,7 @@ export type StateUpdateOfflineStore = {
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
+  setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;
   upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<void>;
 };

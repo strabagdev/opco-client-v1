@@ -166,6 +166,9 @@ describe("state-update sync engine", () => {
     const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
 
     expect(result).toMatchObject({ completed: 1, retriable: 0 });
+    expect(result.operationsAttempted).toBe(1);
+    expect(result.operationsSelected).toBe(1);
+    expect(result.reconciledAfterTimeout).toBe(true);
     expect(api.getStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", {
       date: "2026-08-25",
       subjectRecordId: "equipment_1",
@@ -196,6 +199,7 @@ describe("state-update sync engine", () => {
     const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
 
     expect(result).toMatchObject({ completed: 0, retriable: 1 });
+    expect(result.reconciledAfterTimeout).toBe(false);
     expect(store.completed).toHaveLength(0);
     expect(store.retried[0].clientRequestId).toBe("request_original");
     expect(store.operations).toHaveLength(1);

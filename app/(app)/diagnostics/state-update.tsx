@@ -25,6 +25,7 @@ export default function StateUpdateDiagnosticsRoute() {
     definitionCache,
     localDatabaseStorageState,
     ownerKey,
+    recordStateUpdateSyncRun,
     selectedContractId,
     stateUpdateReconnectDiagnostics,
     status,
@@ -227,6 +228,7 @@ export default function StateUpdateDiagnosticsRoute() {
         store: diagnosticStore,
         token,
       });
+      const completedAt = new Date().toISOString();
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
 
       for (const operation of refreshed.operations) {
@@ -238,12 +240,20 @@ export default function StateUpdateDiagnosticsRoute() {
       }
 
       setRun({
-        invokedAt: new Date().toISOString(),
+        invokedAt: completedAt,
         operationsAttempted: [...events.values()].filter((event) => event.requestAttempted).length,
         operationsCompleted: result.completed,
         operationsFailed: result.failed + result.conflicts + result.retriable,
         operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
         rows: [...events.values()],
+      });
+      await recordStateUpdateSyncRun({
+        completedAt,
+        ownerKey: routeState.ownerKey,
+        operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
+        result,
+        startedAt: completedAt,
+        trigger: "manual-retry",
       });
       setDiagnostics(refreshed);
       setError(null);
@@ -253,7 +263,7 @@ export default function StateUpdateDiagnosticsRoute() {
     } finally {
       setIsSyncing(false);
     }
-  }, [api, definitionCache, refresh, routeState, token]);
+  }, [api, definitionCache, recordStateUpdateSyncRun, refresh, routeState, token]);
 
   const retryFailed = useCallback(async (manualRetryToken?: string | null) => {
     if (!routeState.ready || !token) {

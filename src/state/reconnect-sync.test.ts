@@ -24,6 +24,11 @@ describe("reconnect sync controller", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(runSync).toHaveBeenCalledOnce();
+    expect(runSync).toHaveBeenCalledWith({
+      previousConnectivityStatus: "offline",
+      resultingConnectivityStatus: "online",
+      trigger: "reconnect",
+    });
     expect(onSynced).toHaveBeenCalledOnce();
   });
 
@@ -54,6 +59,11 @@ describe("reconnect sync controller", () => {
 
     expect(shouldSync).toHaveBeenCalledOnce();
     expect(runSync).toHaveBeenCalledOnce();
+    expect(runSync).toHaveBeenCalledWith({
+      previousConnectivityStatus: "unknown",
+      resultingConnectivityStatus: "online",
+      trigger: "unknown-to-online",
+    });
   });
 
   it("does not run startup online sync when there is no pending work", async () => {

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { readConnectivityStatus } from "./connectivity";
+import NetInfo from "@react-native-community/netinfo";
+
+import { getCurrentConnectivityStatus, readConnectivityStatus } from "./connectivity";
 
 vi.mock("@react-native-community/netinfo", () => ({
   default: {
     addEventListener: vi.fn(),
+    fetch: vi.fn(),
   },
 }));
 
@@ -27,5 +30,14 @@ describe("readConnectivityStatus", () => {
 
   it("keeps a completely unknown signal as unknown", () => {
     expect(readConnectivityStatus({ isConnected: null, isInternetReachable: null })).toBe("unknown");
+  });
+
+  it("hydrates current connectivity from NetInfo when mounted code asks for the current state", async () => {
+    vi.mocked(NetInfo.fetch).mockResolvedValue({
+      isConnected: true,
+      isInternetReachable: null,
+    } as Awaited<ReturnType<typeof NetInfo.fetch>>);
+
+    await expect(getCurrentConnectivityStatus()).resolves.toBe("online");
   });
 });

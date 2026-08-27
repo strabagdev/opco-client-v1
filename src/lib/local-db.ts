@@ -12,6 +12,7 @@ import {
   SaveStateUpdateLocallyInput,
   SearchStateUpdateSubjectsInput,
   STATE_UPDATE_OPERATION,
+  StateUpdateSyncDiagnosticsTelemetry,
   StateUpdateOutboxDiagnostics,
   StateUpdateOfflineStore,
   StateUpdateScope,
@@ -60,6 +61,7 @@ import { StateUpdateSyncStore } from "../sync/state-update-sync";
 const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "8";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
+const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 
@@ -107,6 +109,7 @@ export function getLocalDatabase(): LocalDatabase {
     getRecordCacheStatusCounts,
     getStateUpdateSummary,
     getStateUpdateOutboxDiagnostics,
+    getStateUpdateSyncDiagnosticsTelemetry,
     getSyncTelemetry,
     getEntityDefinition,
     listStateUpdateConflicts,
@@ -137,6 +140,7 @@ export function getLocalDatabase(): LocalDatabase {
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
     setSelectedContractId,
+    setStateUpdateSyncDiagnosticsTelemetry,
     updateLocalRecord,
     upsertAppViews,
     upsertAppViewDefinition,
@@ -3519,6 +3523,30 @@ async function getSelectedContractId(ownerKey?: string | null) {
   return null;
 }
 
+async function getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    stateUpdateSyncDiagnosticsKey(ownerKey),
+  );
+
+  if (!row?.value) {
+    return null;
+  }
+
+  return parseStateUpdateSyncDiagnosticsTelemetry(row.value);
+}
+
+async function setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    stateUpdateSyncDiagnosticsKey(ownerKey),
+    JSON.stringify(telemetry),
+  );
+}
+
 async function setSelectedContractId(contractId: string | null, ownerKey?: string | null) {
   const db = await getDatabase();
   const key = ownerKey ? `${SELECTED_CONTRACT_ID_KEY}:${ownerKey}` : SELECTED_CONTRACT_ID_KEY;
@@ -3538,4 +3566,87 @@ async function setSelectedContractId(contractId: string | null, ownerKey?: strin
     key,
     contractId,
   );
+}
+
+function stateUpdateSyncDiagnosticsKey(ownerKey: string) {
+  return `${STATE_UPDATE_SYNC_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
+}
+
+function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyncDiagnosticsTelemetry | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<StateUpdateSyncDiagnosticsTelemetry>;
+
+    if (!parsed.currentConnectivity || !parsed.lastReconnect) {
+      return null;
+    }
+
+    return {
+      currentConnectivity: {
+        status: normalizeConnectivityStatus(parsed.currentConnectivity.status),
+        updatedAt: typeof parsed.currentConnectivity.updatedAt === "string" ? parsed.currentConnectivity.updatedAt : null,
+      },
+      lastReconnect: {
+        detected: parsed.lastReconnect.detected === true,
+        detectedAt: typeof parsed.lastReconnect.detectedAt === "string" ? parsed.lastReconnect.detectedAt : null,
+        previousConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.previousConnectivityStatus),
+        resultingConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.resultingConnectivityStatus),
+      },
+      lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLastStateUpdateSyncTelemetry(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"]> | null | undefined,
+): StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"] {
+  if (!telemetry || typeof telemetry.startedAt !== "string") {
+    return null;
+  }
+
+  return {
+    completedAt: typeof telemetry.completedAt === "string" ? telemetry.completedAt : null,
+    operationsAttempted: normalizeDiagnosticCount(telemetry.operationsAttempted),
+    operationsCompleted: normalizeDiagnosticCount(telemetry.operationsCompleted),
+    operationsFailed: normalizeDiagnosticCount(telemetry.operationsFailed),
+    operationsSelected: normalizeDiagnosticCount(telemetry.operationsSelected),
+    reconciledAfterTimeout: telemetry.reconciledAfterTimeout === true,
+    result: normalizeStateUpdateSyncTelemetryResult(telemetry.result),
+    startedAt: telemetry.startedAt,
+    trigger: normalizeStateUpdateSyncTrigger(telemetry.trigger),
+  };
+}
+
+function normalizeDiagnosticCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function normalizeConnectivityStatus(value: unknown): StateUpdateSyncDiagnosticsTelemetry["currentConnectivity"]["status"] {
+  return value === "online" || value === "offline" || value === "unknown" ? value : "unknown";
+}
+
+function normalizeNullableConnectivityStatus(value: unknown) {
+  return value === "online" || value === "offline" || value === "unknown" ? value : null;
+}
+
+function normalizeStateUpdateSyncTelemetryResult(value: unknown) {
+  return value === "failed" ||
+    value === "noop" ||
+    value === "partial_failure" ||
+    value === "reconciled_success" ||
+    value === "success"
+    ? value
+    : "failed";
+}
+
+function normalizeStateUpdateSyncTrigger(value: unknown) {
+  return value === "reconnect" ||
+    value === "unknown-to-online" ||
+    value === "manual-retry" ||
+    value === "startup-with-pending" ||
+    value === "foreground/resume" ||
+    value === "other"
+    ? value
+    : "other";
 }

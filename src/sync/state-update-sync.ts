@@ -21,6 +21,9 @@ export type StateUpdateSyncResult = {
   completed: number;
   conflicts: number;
   failed: number;
+  operationsAttempted: number;
+  operationsSelected: number;
+  reconciledAfterTimeout: boolean;
   retriable: number;
 };
 
@@ -59,6 +62,9 @@ async function runSync({
     completed: 0,
     conflicts: 0,
     failed: 0,
+    operationsAttempted: 0,
+    operationsSelected: operations.filter((operation) => operation.operation === STATE_UPDATE_OPERATION).length,
+    reconciledAfterTimeout: false,
     retriable: 0,
   };
 
@@ -81,6 +87,7 @@ async function runSync({
       }
 
       await store.markStateUpdateOperationSyncing(operation.id);
+      result.operationsAttempted += 1;
 
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
         clientRequestId: operation.clientRequestId,
@@ -132,6 +139,7 @@ async function runSync({
 
         if (reconciled) {
           result.completed += 1;
+          result.reconciledAfterTimeout = true;
           continue;
         }
       }

@@ -15,12 +15,29 @@ export function useConnectivityStatus() {
   const [status, setStatus] = useState<ConnectivityStatus>(getInitialConnectivityStatus);
 
   useEffect(() => {
-    return NetInfo.addEventListener((state) => {
+    let isMounted = true;
+
+    void getCurrentConnectivityStatus().then((nextStatus) => {
+      if (isMounted) {
+        setStatus(nextStatus);
+      }
+    }).catch(() => undefined);
+
+    const unsubscribe = NetInfo.addEventListener((state) => {
       setStatus(readConnectivityStatus(state));
     });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   return status;
+}
+
+export async function getCurrentConnectivityStatus(): Promise<ConnectivityStatus> {
+  return readConnectivityStatus(await NetInfo.fetch());
 }
 
 export function readConnectivityStatus(state: Pick<NetInfoState, "isConnected" | "isInternetReachable">): ConnectivityStatus {

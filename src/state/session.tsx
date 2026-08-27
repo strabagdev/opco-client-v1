@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
@@ -34,7 +34,12 @@ import { RecordsSyncSummary } from "@/lib/offline-records";
 import { ContextResponse, createOpcoApi, DEFAULT_REQUEST_TIMEOUT_MS, MeResponse, OpcoApi, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
-import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
+import {
+  StateUpdateOutboxDiagnostics,
+  StateUpdateSyncDiagnosticsTelemetry,
+  StateUpdateSyncTelemetryResult,
+  StateUpdateSyncTrigger,
+} from "@/lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { shouldEmitStateUpdateRefresh } from "@/state/state-update-refresh";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
@@ -54,6 +59,14 @@ type SessionContextValue = {
   localStorageRecoveryNotice: string | null;
   recordsReconnectRefreshKey: number;
   recordsSyncSummary: RecordsSyncSummary;
+  recordStateUpdateSyncRun(input: {
+    completedAt?: string;
+    ownerKey?: string;
+    operationsSelected: number;
+    result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
+    startedAt: string;
+    trigger: StateUpdateSyncTrigger;
+  }): Promise<void>;
   refreshRecordsSyncSummary(): Promise<void>;
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
@@ -76,14 +89,9 @@ const emptyRecordsSyncSummary: RecordsSyncSummary = {
 };
 
 export type StateUpdateReconnectDiagnostics = {
-  connectivityStatus: string;
-  detectedAt: string | null;
-  operationsAttempted: number;
-  operationsCompleted: number;
-  operationsFailed: number;
-  operationsSelected: number;
-  reconnectDetected: boolean;
-  stateUpdateSyncInvokedAt: string | null;
+  currentConnectivity: StateUpdateSyncDiagnosticsTelemetry["currentConnectivity"];
+  lastReconnect: StateUpdateSyncDiagnosticsTelemetry["lastReconnect"];
+  lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
 };
 
 export type StateUpdateDiagnosticRun = {
@@ -113,14 +121,17 @@ export type StateUpdateDiagnosticRun = {
 };
 
 const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnostics = {
-  connectivityStatus: "unknown",
-  detectedAt: null,
-  operationsAttempted: 0,
-  operationsCompleted: 0,
-  operationsFailed: 0,
-  operationsSelected: 0,
-  reconnectDetected: false,
-  stateUpdateSyncInvokedAt: null,
+  currentConnectivity: {
+    status: "unknown",
+    updatedAt: null,
+  },
+  lastReconnect: {
+    detected: false,
+    detectedAt: null,
+    previousConnectivityStatus: null,
+    resultingConnectivityStatus: null,
+  },
+  lastStateUpdateSync: null,
 };
 
 export function SessionProvider({ children }: PropsWithChildren) {
@@ -146,7 +157,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [stateUpdateReconnectDiagnostics, setStateUpdateReconnectDiagnostics] =
     useState<StateUpdateReconnectDiagnostics>(emptyStateUpdateReconnectDiagnostics);
   const connectivityStatus = useConnectivityStatus();
-  const previousConnectivityStatusRef = useRef(connectivityStatus);
   const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
   const ownerKey = me && context ? buildOwnerKey(me, context) : null;
   const api = useMemo(
@@ -268,6 +278,76 @@ export function SessionProvider({ children }: PropsWithChildren) {
       setStateUpdateDiagnosticsError("diagnostics unavailable");
     }
   }, [definitionCache, ownerKey, showStateUpdateDiagnostics]);
+
+  const persistStateUpdateReconnectDiagnostics = useCallback(async (
+    updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,
+  ) => {
+    if (!ownerKey) {
+      return;
+    }
+
+    setStateUpdateReconnectDiagnostics((current) => {
+      const next = updater(current);
+
+      void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next).catch(() => undefined);
+
+      return next;
+    });
+  }, [definitionCache, ownerKey]);
+
+  const recordStateUpdateSyncRun = useCallback(async ({
+    completedAt = new Date().toISOString(),
+    ownerKey: runOwnerKey,
+    operationsSelected,
+    result,
+    startedAt,
+    trigger,
+  }: {
+    completedAt?: string;
+    ownerKey?: string;
+    operationsSelected: number;
+    result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
+    startedAt: string;
+    trigger: StateUpdateSyncTrigger;
+  }) => {
+    const telemetryOwnerKey = runOwnerKey ?? ownerKey;
+
+    if (!telemetryOwnerKey) {
+      return;
+    }
+
+    const operationsFailed = result.conflicts + result.failed + result.retriable;
+    const lastStateUpdateSync = {
+      completedAt,
+      operationsAttempted: result.operationsAttempted,
+      operationsCompleted: result.completed,
+      operationsFailed,
+      operationsSelected,
+      reconciledAfterTimeout: result.reconciledAfterTimeout,
+      result: resolveStateUpdateSyncTelemetryResult({
+        operationsFailed,
+        operationsSelected,
+        reconciledAfterTimeout: result.reconciledAfterTimeout,
+      }),
+      startedAt,
+      trigger,
+    };
+
+    setStateUpdateReconnectDiagnostics((current) => {
+      const next = {
+        ...current,
+        currentConnectivity: {
+          status: connectivityStatus,
+          updatedAt: completedAt,
+        },
+        lastStateUpdateSync,
+      };
+
+      void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next).catch(() => undefined);
+
+      return next;
+    });
+  }, [connectivityStatus, definitionCache, ownerKey]);
 
   const runStateUpdateDiagnosticSync = useCallback(async () => {
     if (!token || !ownerKey) {
@@ -422,6 +502,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         token,
       });
       const selectedOperations = [...events.values()].filter((event) => event.selectedForSync).length;
+      const completedAt = new Date().toISOString();
 
       if (shouldEmitStateUpdateRefresh({ result, selectedOperations })) {
         setStateUpdateReconnectRefreshKey((key) => key + 1);
@@ -437,12 +518,19 @@ export function SessionProvider({ children }: PropsWithChildren) {
       }
 
       setStateUpdateDiagnosticRun({
-        invokedAt: new Date().toISOString(),
+        invokedAt: completedAt,
         operationsAttempted: [...events.values()].filter((event) => event.requestAttempted).length,
         operationsCompleted: result.completed,
         operationsFailed: result.failed + result.conflicts + result.retriable,
         operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
         rows: [...events.values()],
+      });
+      await recordStateUpdateSyncRun({
+        completedAt,
+        operationsSelected: selectedOperations,
+        result,
+        startedAt: completedAt,
+        trigger: "manual-retry",
       });
       setStateUpdateDiagnostics(refreshed);
       setStateUpdateDiagnosticsError(null);
@@ -452,7 +540,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     } finally {
       setIsStateUpdateDiagnosticSyncing(false);
     }
-  }, [api, definitionCache, ownerKey, refreshStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, refreshStateUpdateDiagnostics, token]);
 
   const retryFailedStateUpdateDiagnostics = useCallback(async (manualRetryToken?: string | null) => {
     if (!token || !ownerKey) {
@@ -478,7 +566,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
   }, [definitionCache, ownerKey, refreshStateUpdateDiagnostics, runStateUpdateDiagnosticSync, token]);
 
-  const syncPendingRecords = useCallback(async () => {
+  const syncPendingRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "manual-retry") => {
     if (!token || !ownerKey) {
       return;
     }
@@ -501,27 +589,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
       if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
         setStateUpdateReconnectRefreshKey((key) => key + 1);
       }
+      await recordStateUpdateSyncRun({
+        completedAt: new Date().toISOString(),
+        operationsSelected: selectedStateUpdates.length,
+        result: stateUpdateResult,
+        startedAt: stateUpdateInvokedAt,
+        trigger,
+      });
       if (showStateUpdateDiagnostics) {
-        setStateUpdateReconnectDiagnostics((current) => ({
-          ...current,
-          connectivityStatus,
-          operationsAttempted: stateUpdateResult.completed + stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
-          operationsCompleted: stateUpdateResult.completed,
-          operationsFailed: stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
-          operationsSelected: selectedStateUpdates.length,
-          stateUpdateSyncInvokedAt: stateUpdateInvokedAt,
-        }));
         await refreshStateUpdateDiagnostics();
       }
     } finally {
       await refreshPendingRecordsCount();
     }
-  }, [api, connectivityStatus, definitionCache, ownerKey, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, token]);
   const reconnectSessionAndRecordsRef = useRef(syncPendingRecords);
   const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
+  const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
 
-  const reconnectSessionAndRecords = useCallback(async () => {
+  const reconnectSessionAndRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "reconnect") => {
     if (!token) {
       return;
     }
@@ -591,20 +678,19 @@ export function SessionProvider({ children }: PropsWithChildren) {
     if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
       setStateUpdateReconnectRefreshKey((key) => key + 1);
     }
+    await recordStateUpdateSyncRun({
+      completedAt: new Date().toISOString(),
+      ownerKey: nextOwnerKey,
+      operationsSelected: selectedStateUpdates.length,
+      result: stateUpdateResult,
+      startedAt: stateUpdateInvokedAt,
+      trigger,
+    });
     if (showStateUpdateDiagnostics) {
-      setStateUpdateReconnectDiagnostics((current) => ({
-        ...current,
-        connectivityStatus,
-        operationsAttempted: stateUpdateResult.completed + stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
-        operationsCompleted: stateUpdateResult.completed,
-        operationsFailed: stateUpdateResult.conflicts + stateUpdateResult.failed + stateUpdateResult.retriable,
-        operationsSelected: selectedStateUpdates.length,
-        stateUpdateSyncInvokedAt: stateUpdateInvokedAt,
-      }));
       await refreshStateUpdateDiagnostics();
     }
     await refreshPendingRecordsCount();
-  }, [api, connectivityStatus, definitionCache, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, selectedContractIdState, showStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, recordStateUpdateSyncRun, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, selectedContractIdState, showStateUpdateDiagnostics, token]);
 
   useEffect(() => {
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
@@ -628,12 +714,88 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [hasReconnectPendingWork]);
 
   useEffect(() => {
+    if (status !== "authenticated" && status !== "offline") {
+      return;
+    }
+
+    let previousAppState = AppState.currentState;
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      const resumed = previousAppState !== "active" && nextAppState === "active";
+
+      previousAppState = nextAppState;
+
+      if (!resumed || connectivityStatus !== "online" || foregroundResumeSyncPromiseRef.current) {
+        return;
+      }
+
+      foregroundResumeSyncPromiseRef.current = reconnectShouldSyncRef.current()
+        .then((shouldSync) => {
+          if (!shouldSync) {
+            return undefined;
+          }
+
+          return reconnectSessionAndRecordsRef.current("foreground/resume");
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          foregroundResumeSyncPromiseRef.current = null;
+        });
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [connectivityStatus, status]);
+
+  useEffect(() => {
+    if (!ownerKey) {
+      const timer = setTimeout(() => {
+        setStateUpdateReconnectDiagnostics(emptyStateUpdateReconnectDiagnostics);
+      }, 0);
+
+      return () => {
+        clearTimeout(timer);
+      };
+    }
+
+    let isMounted = true;
+
+    definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey)
+      .then((telemetry) => {
+        if (isMounted && telemetry) {
+          setStateUpdateReconnectDiagnostics(telemetry);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [definitionCache, ownerKey]);
+
+  useEffect(() => {
     const controller = createReconnectSyncController({
       onSynced() {
         setRecordsReconnectRefreshKey((key) => key + 1);
       },
-      runSync() {
-        return reconnectSessionAndRecordsRef.current();
+      async runSync({ previousConnectivityStatus, resultingConnectivityStatus, trigger }) {
+        const detectedAt = new Date().toISOString();
+
+        await persistStateUpdateReconnectDiagnostics((current) => ({
+          ...current,
+          currentConnectivity: {
+            status: resultingConnectivityStatus,
+            updatedAt: detectedAt,
+          },
+          lastReconnect: {
+            detected: trigger === "reconnect",
+            detectedAt,
+            previousConnectivityStatus,
+            resultingConnectivityStatus,
+          },
+        }));
+
+        return reconnectSessionAndRecordsRef.current(trigger);
       },
       shouldSync() {
         return reconnectShouldSyncRef.current();
@@ -646,7 +808,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       controller.dispose();
       reconnectSyncControllerRef.current = null;
     };
-  }, []);
+  }, [persistStateUpdateReconnectDiagnostics]);
 
   useEffect(() => {
     let isMounted = true;
@@ -724,35 +886,23 @@ export function SessionProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    const wasDisconnectedOrUnknown = previousConnectivityStatusRef.current !== "online";
-    const nextReconnectDiagnostics = wasDisconnectedOrUnknown && connectivityStatus === "online"
-      ? {
-          connectivityStatus,
-          detectedAt: new Date().toISOString(),
-          reconnectDetected: true,
-        }
-      : {
-          connectivityStatus,
-        };
-
-    const diagnosticsTimer = showStateUpdateDiagnostics
-      ? setTimeout(() => {
-        setStateUpdateReconnectDiagnostics((current) => ({
-          ...current,
-          ...nextReconnectDiagnostics,
-        }));
-      }, 0)
-      : null;
+    const updatedAt = new Date().toISOString();
+    const timer = setTimeout(() => {
+      void persistStateUpdateReconnectDiagnostics((current) => ({
+        ...current,
+        currentConnectivity: {
+          status: connectivityStatus,
+          updatedAt,
+        },
+      }));
+    }, 0);
 
     reconnectSyncControllerRef.current?.handleConnectivityStatus(connectivityStatus);
-    previousConnectivityStatusRef.current = connectivityStatus;
 
     return () => {
-      if (diagnosticsTimer) {
-        clearTimeout(diagnosticsTimer);
-      }
+      clearTimeout(timer);
     };
-  }, [connectivityStatus, showStateUpdateDiagnostics, status]);
+  }, [connectivityStatus, persistStateUpdateReconnectDiagnostics, status]);
 
   useEffect(() => {
     let isMounted = true;
@@ -804,17 +954,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
       token: loginResponse.accessToken,
     })
       .then(async () => {
-        const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
-        const stateUpdateResult = await syncPendingStateUpdatesOnce({
-          api,
-          ownerKey: nextOwnerKey,
-          store: definitionCache,
-          token: loginResponse.accessToken,
+      const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
+      const stateUpdateInvokedAt = new Date().toISOString();
+      const stateUpdateResult = await syncPendingStateUpdatesOnce({
+        api,
+        ownerKey: nextOwnerKey,
+        store: definitionCache,
+        token: loginResponse.accessToken,
         });
 
         if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
           setStateUpdateReconnectRefreshKey((key) => key + 1);
         }
+        await recordStateUpdateSyncRun({
+          completedAt: new Date().toISOString(),
+          ownerKey: nextOwnerKey,
+          operationsSelected: selectedStateUpdates.length,
+          result: stateUpdateResult,
+          startedAt: stateUpdateInvokedAt,
+          trigger: "startup-with-pending",
+        });
       })
       .finally(refreshPendingRecordsCount);
   }
@@ -881,6 +1040,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         localStorageRecoveryNotice,
         recordsReconnectRefreshKey,
         recordsSyncSummary,
+        recordStateUpdateSyncRun,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
@@ -1088,6 +1248,26 @@ function shouldShowStateUpdateDiagnostics() {
   return new URLSearchParams(window.location.search).get("stateUpdateDiagnostics") === "1";
 }
 
+function resolveStateUpdateSyncTelemetryResult({
+  operationsFailed,
+  operationsSelected,
+  reconciledAfterTimeout,
+}: {
+  operationsFailed: number;
+  operationsSelected: number;
+  reconciledAfterTimeout: boolean;
+}): StateUpdateSyncTelemetryResult {
+  if (operationsSelected === 0) {
+    return "noop";
+  }
+
+  if (operationsFailed > 0) {
+    return operationsFailed === operationsSelected ? "failed" : "partial_failure";
+  }
+
+  return reconciledAfterTimeout ? "reconciled_success" : "success";
+}
+
 export function StateUpdateDiagnosticsPanel({
   diagnostics,
   error,
@@ -1110,15 +1290,36 @@ export function StateUpdateDiagnosticsPanel({
   variant?: "embedded" | "overlay";
 }) {
   const summary = diagnostics?.summary;
-  const reconnectRows: [string, string | number | boolean | null][] = [
-    ["connectivityStatus", reconnect.connectivityStatus],
-    ["reconnect detected", reconnect.reconnectDetected],
-    ["detectedAt", reconnect.detectedAt ?? "none"],
-    ["stateUpdateSyncInvokedAt", reconnect.stateUpdateSyncInvokedAt ?? "none"],
-    ["operationsSelected", reconnect.operationsSelected],
-    ["operationsAttempted", reconnect.operationsAttempted],
-    ["operationsCompleted", reconnect.operationsCompleted],
-    ["operationsFailed", reconnect.operationsFailed],
+  const currentConnectivityRows: [string, string | number | boolean | null][] = [
+    ["status", reconnect.currentConnectivity.status],
+    ["updatedAt", reconnect.currentConnectivity.updatedAt ?? "none"],
+  ];
+  const lastReconnectRows: [string, string | number | boolean | null][] = [
+    ["detected", reconnect.lastReconnect.detected],
+    ["detectedAt", reconnect.lastReconnect.detectedAt ?? "none"],
+    ["from", reconnect.lastReconnect.previousConnectivityStatus ?? "none"],
+    ["to", reconnect.lastReconnect.resultingConnectivityStatus ?? "none"],
+  ];
+  const lastStateUpdateSyncRows: [string, string | number | boolean | null][] = reconnect.lastStateUpdateSync ? [
+    ["trigger", reconnect.lastStateUpdateSync.trigger],
+    ["startedAt", reconnect.lastStateUpdateSync.startedAt],
+    ["completedAt", reconnect.lastStateUpdateSync.completedAt ?? "none"],
+    ["operationsSelected", reconnect.lastStateUpdateSync.operationsSelected],
+    ["operationsAttempted", reconnect.lastStateUpdateSync.operationsAttempted],
+    ["operationsCompleted", reconnect.lastStateUpdateSync.operationsCompleted],
+    ["operationsFailed", reconnect.lastStateUpdateSync.operationsFailed],
+    ["reconciledAfterTimeout", reconnect.lastStateUpdateSync.reconciledAfterTimeout],
+    ["result", reconnect.lastStateUpdateSync.result],
+  ] : [
+    ["trigger", "none"],
+    ["startedAt", "none"],
+    ["completedAt", "none"],
+    ["operationsSelected", 0],
+    ["operationsAttempted", 0],
+    ["operationsCompleted", 0],
+    ["operationsFailed", 0],
+    ["reconciledAfterTimeout", false],
+    ["result", "none"],
   ];
   const summaryRows: [string, string | number][] = [
     ["consistency", diagnostics?.consistency ?? "loading"],
@@ -1162,8 +1363,12 @@ export function StateUpdateDiagnosticsPanel({
         </View>
         {error ? <Text style={diagnosticsPanelStyles.error}>{error}</Text> : null}
         <DiagnosticsRows rows={summaryRows} />
-        <Text style={diagnosticsPanelStyles.sectionTitle}>Reconnect</Text>
-        <DiagnosticsRows rows={reconnectRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Current connectivity</Text>
+        <DiagnosticsRows rows={currentConnectivityRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Last reconnect</Text>
+        <DiagnosticsRows rows={lastReconnectRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Last STATE_UPDATE sync</Text>
+        <DiagnosticsRows rows={lastStateUpdateSyncRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Operations</Text>
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading operations...</Text>

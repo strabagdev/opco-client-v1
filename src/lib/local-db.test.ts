@@ -137,6 +137,79 @@ describe("local database singleton", () => {
     });
   });
 
+  it("persists the last STATE_UPDATE diagnostics telemetry without raw owner ids in the metadata key", async () => {
+    const store = getLocalDatabase();
+
+    await store.setStateUpdateSyncDiagnosticsTelemetry("org_1:user_1", {
+      currentConnectivity: {
+        status: "online",
+        updatedAt: "2026-08-27T10:00:00.000Z",
+      },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-27T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-27T10:00:02.000Z",
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: true,
+        result: "reconciled_success",
+        startedAt: "2026-08-27T10:00:00.000Z",
+        trigger: "reconnect",
+      },
+    });
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+      expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
+      expect.stringContaining('"result":"reconciled_success"'),
+    );
+    expect(db.runAsync.mock.calls.some((call) => call[1] === "state_update_sync_diagnostics:org_1:user_1")).toBe(false);
+  });
+
+  it("hydrates persisted STATE_UPDATE diagnostics telemetry from app_metadata", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-27T10:00:03.000Z" },
+            lastReconnect: {
+              detected: false,
+              detectedAt: "2026-08-27T10:00:00.000Z",
+              previousConnectivityStatus: "unknown",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateSync: {
+              completedAt: "2026-08-27T10:00:02.000Z",
+              operationsAttempted: 1,
+              operationsCompleted: 1,
+              operationsFailed: 0,
+              operationsSelected: 1,
+              reconciledAfterTimeout: false,
+              result: "success",
+              startedAt: "2026-08-27T10:00:00.000Z",
+              trigger: "unknown-to-online",
+            },
+          }),
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1")).resolves.toMatchObject({
+      currentConnectivity: { status: "online" },
+      lastReconnect: { detected: false, previousConnectivityStatus: "unknown", resultingConnectivityStatus: "online" },
+      lastStateUpdateSync: { operationsCompleted: 1, result: "success", trigger: "unknown-to-online" },
+    });
+  });
+
   it("shares the same SQLite singleton when UI reads and reconnect sync reads run together", async () => {
     const store = getLocalDatabase();
 

@@ -1,4 +1,5 @@
 import { ConnectivityStatus } from "@/lib/connectivity";
+import { StateUpdateSyncTrigger } from "@/lib/state-update-offline";
 
 export type ReconnectSyncController = {
   dispose(): void;
@@ -10,7 +11,11 @@ type TimerId = ReturnType<typeof setTimeout>;
 type ReconnectSyncControllerOptions = {
   debounceMs?: number;
   onSynced?: () => void;
-  runSync(): Promise<void>;
+  runSync(input: {
+    previousConnectivityStatus: ConnectivityStatus;
+    resultingConnectivityStatus: ConnectivityStatus;
+    trigger: StateUpdateSyncTrigger;
+  }): Promise<void>;
   shouldSync?: () => boolean | Promise<boolean>;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
@@ -39,7 +44,11 @@ export function createReconnectSyncController({
     timer = null;
   }
 
-  async function runOnce() {
+  async function runOnce(input: {
+    previousConnectivityStatus: ConnectivityStatus;
+    resultingConnectivityStatus: ConnectivityStatus;
+    trigger: StateUpdateSyncTrigger;
+  }) {
     timer = null;
 
     if (isSyncing) {
@@ -59,7 +68,7 @@ export function createReconnectSyncController({
     isSyncing = true;
 
     try {
-      await runSync();
+      await runSync(input);
       onSynced?.();
     } catch {
       // The sync engine owns failure state. A later offline -> online transition should retry.
@@ -68,10 +77,14 @@ export function createReconnectSyncController({
     }
   }
 
-  function schedule() {
+  function schedule(input: {
+    previousConnectivityStatus: ConnectivityStatus;
+    resultingConnectivityStatus: ConnectivityStatus;
+    trigger: StateUpdateSyncTrigger;
+  }) {
     clearPendingTimer();
     timer = setTimer(() => {
-      void runOnce();
+      void runOnce(input);
     }, debounceMs);
   }
 
@@ -80,6 +93,7 @@ export function createReconnectSyncController({
       clearPendingTimer();
     },
     handleConnectivityStatus(status) {
+      const priorStatus = previousStatus;
       const wasOffline = previousStatus === "offline";
       const wasUnknown = previousStatus === "unknown";
 
@@ -91,7 +105,11 @@ export function createReconnectSyncController({
       }
 
       if (wasOffline || wasUnknown) {
-        schedule();
+        schedule({
+          previousConnectivityStatus: priorStatus,
+          resultingConnectivityStatus: status,
+          trigger: wasOffline ? "reconnect" : "unknown-to-online",
+        });
       }
     },
   };
