@@ -21,7 +21,11 @@ describe("readConnectivityStatus", () => {
     expect(readConnectivityStatus({ isConnected: true, isInternetReachable: true })).toBe("online");
   });
 
-  it("does not treat connected with unknown reachability as online", () => {
-    expect(readConnectivityStatus({ isConnected: true, isInternetReachable: null })).toBe("unknown");
+  it("treats connected with unknown reachability as online", () => {
+    expect(readConnectivityStatus({ isConnected: true, isInternetReachable: null })).toBe("online");
+  });
+
+  it("keeps a completely unknown signal as unknown", () => {
+    expect(readConnectivityStatus({ isConnected: null, isInternetReachable: null })).toBe("unknown");
   });
 });

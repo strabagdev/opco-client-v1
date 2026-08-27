@@ -462,6 +462,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
   }, [api, connectivityStatus, definitionCache, ownerKey, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, token]);
   const reconnectSessionAndRecordsRef = useRef(syncPendingRecords);
+  const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
 
   const reconnectSessionAndRecords = useCallback(async () => {
@@ -552,6 +553,23 @@ export function SessionProvider({ children }: PropsWithChildren) {
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
   }, [reconnectSessionAndRecords]);
 
+  const hasReconnectPendingWork = useCallback(async () => {
+    if (!ownerKey) {
+      return false;
+    }
+
+    const [recordsCount, stateUpdateOperations] = await Promise.all([
+      definitionCache.countPendingOperations(ownerKey),
+      definitionCache.listPendingStateUpdateOperations(ownerKey),
+    ]);
+
+    return recordsCount > 0 || stateUpdateOperations.length > 0;
+  }, [definitionCache, ownerKey]);
+
+  useEffect(() => {
+    reconnectShouldSyncRef.current = hasReconnectPendingWork;
+  }, [hasReconnectPendingWork]);
+
   useEffect(() => {
     const controller = createReconnectSyncController({
       onSynced() {
@@ -559,6 +577,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       },
       runSync() {
         return reconnectSessionAndRecordsRef.current();
+      },
+      shouldSync() {
+        return reconnectShouldSyncRef.current();
       },
     });
 
@@ -646,8 +667,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    const wasOffline = previousConnectivityStatusRef.current === "offline";
-    const nextReconnectDiagnostics = wasOffline && connectivityStatus === "online"
+    const wasDisconnectedOrUnknown = previousConnectivityStatusRef.current !== "online";
+    const nextReconnectDiagnostics = wasDisconnectedOrUnknown && connectivityStatus === "online"
       ? {
           connectivityStatus,
           detectedAt: new Date().toISOString(),

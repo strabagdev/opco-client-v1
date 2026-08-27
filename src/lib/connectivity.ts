@@ -28,7 +28,7 @@ export function readConnectivityStatus(state: Pick<NetInfoState, "isConnected" |
     return "offline";
   }
 
-  if (state.isInternetReachable === true) {
+  if (state.isConnected === true) {
     return "online";
   }
 

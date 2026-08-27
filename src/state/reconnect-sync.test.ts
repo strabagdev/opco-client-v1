@@ -32,10 +32,56 @@ describe("reconnect sync controller", () => {
     const controller = createReconnectSyncController({ debounceMs: 100, runSync });
 
     controller.handleConnectivityStatus("online");
+    await vi.advanceTimersByTimeAsync(100);
+    runSync.mockClear();
+
+    controller.handleConnectivityStatus("online");
+    controller.handleConnectivityStatus("online");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runSync).not.toHaveBeenCalled();
+  });
+
+  it("runs sync once when unknown connectivity becomes confirmed online with pending work", async () => {
+    const runSync = vi.fn(async () => undefined);
+    const shouldSync = vi.fn(async () => true);
+    const controller = createReconnectSyncController({ debounceMs: 100, runSync, shouldSync });
+
+    controller.handleConnectivityStatus("unknown");
     controller.handleConnectivityStatus("online");
 
     await vi.advanceTimersByTimeAsync(100);
 
+    expect(shouldSync).toHaveBeenCalledOnce();
+    expect(runSync).toHaveBeenCalledOnce();
+  });
+
+  it("does not run startup online sync when there is no pending work", async () => {
+    const runSync = vi.fn(async () => undefined);
+    const shouldSync = vi.fn(async () => false);
+    const controller = createReconnectSyncController({ debounceMs: 100, runSync, shouldSync });
+
+    controller.handleConnectivityStatus("online");
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(shouldSync).toHaveBeenCalledOnce();
+    expect(runSync).not.toHaveBeenCalled();
+  });
+
+  it("does not run sync when pending work cannot be confirmed", async () => {
+    const runSync = vi.fn(async () => undefined);
+    const shouldSync = vi.fn(async () => {
+      throw new Error("sqlite unavailable");
+    });
+    const controller = createReconnectSyncController({ debounceMs: 100, runSync, shouldSync });
+
+    controller.handleConnectivityStatus("unknown");
+    controller.handleConnectivityStatus("online");
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(shouldSync).toHaveBeenCalledOnce();
     expect(runSync).not.toHaveBeenCalled();
   });
 

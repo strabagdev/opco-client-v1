@@ -11,6 +11,7 @@ type ReconnectSyncControllerOptions = {
   debounceMs?: number;
   onSynced?: () => void;
   runSync(): Promise<void>;
+  shouldSync?: () => boolean | Promise<boolean>;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
 };
@@ -22,6 +23,7 @@ export function createReconnectSyncController({
   debounceMs = DEFAULT_RECONNECT_SYNC_DEBOUNCE_MS,
   onSynced,
   runSync,
+  shouldSync,
   setTimer = setTimeout,
 }: ReconnectSyncControllerOptions): ReconnectSyncController {
   let previousStatus: ConnectivityStatus = "unknown";
@@ -42,6 +44,16 @@ export function createReconnectSyncController({
 
     if (isSyncing) {
       return;
+    }
+
+    if (shouldSync) {
+      try {
+        if (!(await shouldSync())) {
+          return;
+        }
+      } catch {
+        return;
+      }
     }
 
     isSyncing = true;
@@ -69,6 +81,7 @@ export function createReconnectSyncController({
     },
     handleConnectivityStatus(status) {
       const wasOffline = previousStatus === "offline";
+      const wasUnknown = previousStatus === "unknown";
 
       previousStatus = status;
 
@@ -77,7 +90,7 @@ export function createReconnectSyncController({
         return;
       }
 
-      if (wasOffline) {
+      if (wasOffline || wasUnknown) {
         schedule();
       }
     },
