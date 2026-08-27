@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createStateUpdateLocalRecordId } from "./state-update-offline";
+import {
+  createStateUpdateLocalRecordId,
+  mergeStateUpdateSyncDiagnosticsTelemetry,
+  resolveStateUpdateSyncTelemetryResult,
+} from "./state-update-offline";
 
 describe("state-update offline identity", () => {
   it("consolidates update-current by appView, subject, and date when uniqueness is subject-date", () => {
@@ -75,5 +79,64 @@ describe("state-update offline identity", () => {
     });
 
     expect(second).not.toBe(first);
+  });
+});
+
+describe("state-update sync diagnostics telemetry", () => {
+  it("classifies timeout reconciliation as reconciled_success", () => {
+    expect(resolveStateUpdateSyncTelemetryResult({
+      operationsFailed: 0,
+      operationsSelected: 1,
+      reconciledAfterTimeout: true,
+    })).toBe("reconciled_success");
+  });
+
+  it("does not replace the last meaningful sync run with a later noop", () => {
+    const current = {
+      currentConnectivity: {
+        status: "online" as const,
+        updatedAt: "2026-08-27T10:00:00.000Z",
+      },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-27T10:00:00.000Z",
+        previousConnectivityStatus: "offline" as const,
+        resultingConnectivityStatus: "online" as const,
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-27T10:00:12.000Z",
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: true,
+        result: "reconciled_success" as const,
+        startedAt: "2026-08-27T10:00:00.000Z",
+        trigger: "reconnect" as const,
+      },
+    };
+
+    expect(mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-27T10:01:00.000Z",
+      current,
+      currentConnectivityStatus: "online",
+      operationsAttempted: 0,
+      operationsCompleted: 0,
+      operationsFailed: 0,
+      operationsSelected: 0,
+      reconciledAfterTimeout: false,
+      startedAt: "2026-08-27T10:01:00.000Z",
+      trigger: "foreground/resume",
+    })).toMatchObject({
+      currentConnectivity: {
+        updatedAt: "2026-08-27T10:01:00.000Z",
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-27T10:00:12.000Z",
+        operationsSelected: 1,
+        result: "reconciled_success",
+        trigger: "reconnect",
+      },
+    });
   });
 });

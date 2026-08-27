@@ -35,15 +35,15 @@ import { ContextResponse, createOpcoApi, DEFAULT_REQUEST_TIMEOUT_MS, MeResponse,
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import {
+  mergeStateUpdateSyncDiagnosticsTelemetry,
   StateUpdateOutboxDiagnostics,
   StateUpdateSyncDiagnosticsTelemetry,
-  StateUpdateSyncTelemetryResult,
   StateUpdateSyncTrigger,
 } from "@/lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { shouldEmitStateUpdateRefresh } from "@/state/state-update-refresh";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
-import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
+import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -76,6 +76,18 @@ type SessionContextValue = {
   signOut(): Promise<void>;
   status: SessionStatus;
   syncPendingRecords(): Promise<void>;
+  syncPendingStateUpdatesWithTelemetry(input: {
+    api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+    ownerKey?: string;
+    store?: StateUpdateSyncStore;
+    token?: string;
+    trigger: StateUpdateSyncTrigger;
+  }): Promise<{
+    completedAt: string;
+    operationsSelected: number;
+    result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
+    startedAt: string;
+  } | null>;
   token: string | null;
 };
 
@@ -317,37 +329,71 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     const operationsFailed = result.conflicts + result.failed + result.retriable;
-    const lastStateUpdateSync = {
+    const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey);
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
       completedAt,
+      current: persisted ?? stateUpdateReconnectDiagnostics,
+      currentConnectivityStatus: connectivityStatus,
       operationsAttempted: result.operationsAttempted,
       operationsCompleted: result.completed,
       operationsFailed,
       operationsSelected,
       reconciledAfterTimeout: result.reconciledAfterTimeout,
-      result: resolveStateUpdateSyncTelemetryResult({
-        operationsFailed,
-        operationsSelected,
-        reconciledAfterTimeout: result.reconciledAfterTimeout,
-      }),
       startedAt,
       trigger,
-    };
-
-    setStateUpdateReconnectDiagnostics((current) => {
-      const next = {
-        ...current,
-        currentConnectivity: {
-          status: connectivityStatus,
-          updatedAt: completedAt,
-        },
-        lastStateUpdateSync,
-      };
-
-      void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next).catch(() => undefined);
-
-      return next;
     });
-  }, [connectivityStatus, definitionCache, ownerKey]);
+
+    setStateUpdateReconnectDiagnostics(next);
+    await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next);
+  }, [connectivityStatus, definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+
+  const syncPendingStateUpdatesWithTelemetry = useCallback(async ({
+    api: stateUpdateApi = api,
+    ownerKey: runOwnerKey = ownerKey ?? undefined,
+    store = definitionCache,
+    token: runToken = token ?? undefined,
+    trigger,
+  }: {
+    api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+    ownerKey?: string;
+    store?: StateUpdateSyncStore;
+    token?: string;
+    trigger: StateUpdateSyncTrigger;
+  }) => {
+    if (!runOwnerKey || !runToken) {
+      return null;
+    }
+
+    const selectedStateUpdates = await store.listPendingStateUpdateOperations(runOwnerKey);
+    const startedAt = new Date().toISOString();
+    const result = await syncPendingStateUpdatesOnce({
+      api: stateUpdateApi,
+      ownerKey: runOwnerKey,
+      store,
+      token: runToken,
+    });
+    const completedAt = new Date().toISOString();
+    const operationsSelected = selectedStateUpdates.length;
+
+    if (shouldEmitStateUpdateRefresh({ result, selectedOperations: operationsSelected })) {
+      setStateUpdateReconnectRefreshKey((key) => key + 1);
+    }
+    await recordStateUpdateSyncRun({
+      completedAt,
+      ownerKey: runOwnerKey,
+      operationsSelected,
+      result,
+      startedAt,
+      trigger,
+    });
+
+    return {
+      completedAt,
+      operationsSelected,
+      result,
+      startedAt,
+    };
+  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, token]);
 
   const runStateUpdateDiagnosticSync = useCallback(async () => {
     if (!token || !ownerKey) {
@@ -495,18 +541,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
           }
         },
       };
-      const result = await syncPendingStateUpdatesOnce({
+      const runResult = await syncPendingStateUpdatesWithTelemetry({
         api: diagnosticApi,
         ownerKey,
         store: diagnosticStore,
         token,
+        trigger: "manual-retry",
       });
-      const selectedOperations = [...events.values()].filter((event) => event.selectedForSync).length;
-      const completedAt = new Date().toISOString();
 
-      if (shouldEmitStateUpdateRefresh({ result, selectedOperations })) {
-        setStateUpdateReconnectRefreshKey((key) => key + 1);
+      if (!runResult) {
+        setStateUpdateDiagnosticsError("session unavailable");
+        return;
       }
+
+      const { completedAt, result } = runResult;
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
 
       for (const operation of refreshed.operations) {
@@ -525,13 +573,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
         operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
         rows: [...events.values()],
       });
-      await recordStateUpdateSyncRun({
-        completedAt,
-        operationsSelected: selectedOperations,
-        result,
-        startedAt: completedAt,
-        trigger: "manual-retry",
-      });
       setStateUpdateDiagnostics(refreshed);
       setStateUpdateDiagnosticsError(null);
     } catch {
@@ -540,7 +581,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     } finally {
       setIsStateUpdateDiagnosticSyncing(false);
     }
-  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, refreshStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, ownerKey, refreshStateUpdateDiagnostics, syncPendingStateUpdatesWithTelemetry, token]);
 
   const retryFailedStateUpdateDiagnostics = useCallback(async (manualRetryToken?: string | null) => {
     if (!token || !ownerKey) {
@@ -578,22 +619,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: definitionCache,
         token,
       });
-      const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(ownerKey);
-      const stateUpdateInvokedAt = new Date().toISOString();
-      const stateUpdateResult = await syncPendingStateUpdatesOnce({
-        api,
-        ownerKey,
-        store: definitionCache,
-        token,
-      });
-      if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
-        setStateUpdateReconnectRefreshKey((key) => key + 1);
-      }
-      await recordStateUpdateSyncRun({
-        completedAt: new Date().toISOString(),
-        operationsSelected: selectedStateUpdates.length,
-        result: stateUpdateResult,
-        startedAt: stateUpdateInvokedAt,
+      await syncPendingStateUpdatesWithTelemetry({
         trigger,
       });
       if (showStateUpdateDiagnostics) {
@@ -602,7 +628,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     } finally {
       await refreshPendingRecordsCount();
     }
-  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, ownerKey, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, showStateUpdateDiagnostics, syncPendingStateUpdatesWithTelemetry, token]);
   const reconnectSessionAndRecordsRef = useRef(syncPendingRecords);
   const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
@@ -667,30 +693,16 @@ export function SessionProvider({ children }: PropsWithChildren) {
       store: definitionCache,
       token: nextToken,
     });
-    const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
-    const stateUpdateInvokedAt = new Date().toISOString();
-    const stateUpdateResult = await syncPendingStateUpdatesOnce({
-      api,
+    await syncPendingStateUpdatesWithTelemetry({
       ownerKey: nextOwnerKey,
-      store: definitionCache,
       token: nextToken,
-    });
-    if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
-      setStateUpdateReconnectRefreshKey((key) => key + 1);
-    }
-    await recordStateUpdateSyncRun({
-      completedAt: new Date().toISOString(),
-      ownerKey: nextOwnerKey,
-      operationsSelected: selectedStateUpdates.length,
-      result: stateUpdateResult,
-      startedAt: stateUpdateInvokedAt,
       trigger,
     });
     if (showStateUpdateDiagnostics) {
       await refreshStateUpdateDiagnostics();
     }
     await refreshPendingRecordsCount();
-  }, [api, definitionCache, recordStateUpdateSyncRun, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, selectedContractIdState, showStateUpdateDiagnostics, token]);
+  }, [api, definitionCache, refreshPendingRecordsCount, refreshStateUpdateDiagnostics, selectedContractIdState, showStateUpdateDiagnostics, syncPendingStateUpdatesWithTelemetry, token]);
 
   useEffect(() => {
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
@@ -954,26 +966,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
       token: loginResponse.accessToken,
     })
       .then(async () => {
-      const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
-      const stateUpdateInvokedAt = new Date().toISOString();
-      const stateUpdateResult = await syncPendingStateUpdatesOnce({
-        api,
+      await syncPendingStateUpdatesWithTelemetry({
         ownerKey: nextOwnerKey,
-        store: definitionCache,
         token: loginResponse.accessToken,
-        });
-
-        if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
-          setStateUpdateReconnectRefreshKey((key) => key + 1);
-        }
-        await recordStateUpdateSyncRun({
-          completedAt: new Date().toISOString(),
-          ownerKey: nextOwnerKey,
-          operationsSelected: selectedStateUpdates.length,
-          result: stateUpdateResult,
-          startedAt: stateUpdateInvokedAt,
-          trigger: "startup-with-pending",
-        });
+        trigger: "startup-with-pending",
+      });
       })
       .finally(refreshPendingRecordsCount);
   }
@@ -1050,6 +1047,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         signOut,
         status,
         syncPendingRecords,
+        syncPendingStateUpdatesWithTelemetry,
         token,
       }}
     >
@@ -1246,26 +1244,6 @@ function shouldShowStateUpdateDiagnostics() {
   }
 
   return new URLSearchParams(window.location.search).get("stateUpdateDiagnostics") === "1";
-}
-
-function resolveStateUpdateSyncTelemetryResult({
-  operationsFailed,
-  operationsSelected,
-  reconciledAfterTimeout,
-}: {
-  operationsFailed: number;
-  operationsSelected: number;
-  reconciledAfterTimeout: boolean;
-}): StateUpdateSyncTelemetryResult {
-  if (operationsSelected === 0) {
-    return "noop";
-  }
-
-  if (operationsFailed > 0) {
-    return operationsFailed === operationsSelected ? "failed" : "partial_failure";
-  }
-
-  return reconciledAfterTimeout ? "reconciled_success" : "success";
 }
 
 export function StateUpdateDiagnosticsPanel({

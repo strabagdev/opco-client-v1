@@ -10,7 +10,6 @@ import {
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { AppView, DEFAULT_REQUEST_TIMEOUT_MS, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
 import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
-import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import {
   abbreviateDiagnosticValue,
   StateUpdateDiagnosticRun,
@@ -25,10 +24,10 @@ export default function StateUpdateDiagnosticsRoute() {
     definitionCache,
     localDatabaseStorageState,
     ownerKey,
-    recordStateUpdateSyncRun,
     selectedContractId,
     stateUpdateReconnectDiagnostics,
     status,
+    syncPendingStateUpdatesWithTelemetry,
     token,
   } = useSession();
   const routeState = useMemo(
@@ -222,13 +221,20 @@ export default function StateUpdateDiagnosticsRoute() {
           }
         },
       };
-      const result = await syncPendingStateUpdatesOnce({
+      const runResult = await syncPendingStateUpdatesWithTelemetry({
         api: diagnosticApi,
         ownerKey: routeState.ownerKey,
         store: diagnosticStore,
         token,
+        trigger: "manual-retry",
       });
-      const completedAt = new Date().toISOString();
+
+      if (!runResult) {
+        setError("session unavailable");
+        return;
+      }
+
+      const { completedAt, result } = runResult;
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
 
       for (const operation of refreshed.operations) {
@@ -247,14 +253,6 @@ export default function StateUpdateDiagnosticsRoute() {
         operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
         rows: [...events.values()],
       });
-      await recordStateUpdateSyncRun({
-        completedAt,
-        ownerKey: routeState.ownerKey,
-        operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
-        result,
-        startedAt: completedAt,
-        trigger: "manual-retry",
-      });
       setDiagnostics(refreshed);
       setError(null);
     } catch {
@@ -263,7 +261,7 @@ export default function StateUpdateDiagnosticsRoute() {
     } finally {
       setIsSyncing(false);
     }
-  }, [api, definitionCache, recordStateUpdateSyncRun, refresh, routeState, token]);
+  }, [api, definitionCache, refresh, routeState, syncPendingStateUpdatesWithTelemetry, token]);
 
   const retryFailed = useCallback(async (manualRetryToken?: string | null) => {
     if (!routeState.ready || !token) {

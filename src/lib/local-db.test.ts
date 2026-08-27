@@ -544,7 +544,7 @@ describe("local database singleton", () => {
     );
   });
 
-  it("does not overwrite a local STATE_UPDATE record that still has a pending operation", async () => {
+  it("does not overwrite a local STATE_UPDATE record when a pending operation does not match the remote snapshot", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
         return stateUpdateEntityRecordRow({
@@ -554,7 +554,18 @@ describe("local database singleton", () => {
       }
 
       if (sql.includes("FROM pending_operations")) {
-        return { total: 1 };
+        return stateUpdatePendingOperationRow({
+          payload_json: JSON.stringify({
+            appViewId: "attendance_view_real_1",
+            clientRequestId: "client_request_timeout_1",
+            date: "2026-08-26",
+            historyMode: "update-current",
+            stateValues: [{ fieldId: "status_field", label: "Ausente", optionId: "absent_option" }],
+            subjectDisplayName: "Persona segura",
+            subjectRecordId: "person_real_1",
+            uniqueness: "subject-date",
+          }),
+        });
       }
 
       return null;
@@ -578,6 +589,100 @@ describe("local database singleton", () => {
     });
 
     expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("INSERT INTO entity_records"))).toBe(false);
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("DELETE FROM pending_operations"))).toBe(false);
+  });
+
+  it("completes a pending STATE_UPDATE and marks telemetry reconciled when a later remote snapshot confirms the write", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_attendance_2026_08_26_person_real_1",
+          sync_error_code: "OpcoNetworkError",
+          sync_error_message: "La solicitud a Opco agoto el tiempo de espera.",
+          sync_status: "pending_update",
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return stateUpdatePendingOperationRow({
+          payload_json: JSON.stringify({
+            appViewId: "attendance_view_real_1",
+            clientRequestId: "client_request_timeout_1",
+            date: "2026-08-26",
+            historyMode: "update-current",
+            stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+            subjectDisplayName: "Persona segura",
+            subjectRecordId: "person_real_1",
+            uniqueness: "subject-date",
+          }),
+        });
+      }
+
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-27T10:00:00.000Z" },
+            lastReconnect: {
+              detected: true,
+              detectedAt: "2026-08-27T10:00:00.000Z",
+              previousConnectivityStatus: "offline",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateSync: {
+              completedAt: "2026-08-27T10:00:12.000Z",
+              operationsAttempted: 1,
+              operationsCompleted: 0,
+              operationsFailed: 1,
+              operationsSelected: 1,
+              reconciledAfterTimeout: false,
+              result: "failed",
+              startedAt: "2026-08-27T10:00:00.000Z",
+              trigger: "reconnect",
+            },
+          }),
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-26",
+      items: [{
+        current: {
+          recordId: "attendance_remote_1",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+          updatedAt: "2026-08-26T11:00:00.000Z",
+        },
+        subject: { displayName: "Persona segura", id: "person_real_1" },
+      }],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `DELETE FROM pending_operations WHERE id = ? AND operation = ?`,
+      "state_update_local_1",
+      "STATE_UPDATE",
+    );
+    expect(db.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining("sync_status = 'synced'"),
+      "attendance_remote_1",
+      "Persona segura",
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      "state_update_attendance_2026_08_26_person_real_1",
+    );
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+      expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
+      expect.stringContaining('"result":"reconciled_success"'),
+    );
+    expect(db.runAsync.mock.calls.some((call) => String(call[2]).includes("La solicitud a Opco"))).toBe(false);
   });
 
   it("classifies a real local STATE_UPDATE pending row with outbox as protected instead of orphaned", async () => {
@@ -1148,6 +1253,35 @@ function stateUpdateEntityRecordRow(overrides: Record<string, unknown>) {
       subjectDisplayName: "Persona segura",
       subjectRecordId: "person_real_1",
     }),
+    ...overrides,
+  };
+}
+
+function stateUpdatePendingOperationRow(overrides: Record<string, unknown>) {
+  return {
+    attempts: 1,
+    client_request_id: "client_request_timeout_1",
+    contract_id: "contract_real_1",
+    created_at: "2026-08-27T10:00:00.000Z",
+    entity_type_id: "attendance",
+    id: "state_update_local_1",
+    last_error_code: "OpcoNetworkError",
+    last_error_message: "La solicitud a Opco agoto el tiempo de espera.",
+    local_record_id: "state_update_attendance_2026_08_26_person_real_1",
+    operation: "STATE_UPDATE",
+    owner_key: "org_1:user_1",
+    payload_json: JSON.stringify({
+      appViewId: "attendance_view_real_1",
+      clientRequestId: "client_request_timeout_1",
+      date: "2026-08-26",
+      historyMode: "update-current",
+      stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+      subjectDisplayName: "Persona segura",
+      subjectRecordId: "person_real_1",
+      uniqueness: "subject-date",
+    }),
+    server_record_id: null,
+    updated_at: "2026-08-27T10:00:12.000Z",
     ...overrides,
   };
 }

@@ -46,7 +46,7 @@ import {
   RecordsSyncSummary,
   fingerprintRecordsScope,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -1881,8 +1881,27 @@ async function upsertStateUpdateSnapshot({ appViewId, contractId, date, items, o
       recordId: localRecordId,
     });
 
-    if (existing && existing.syncStatus !== "synced" && await hasStateUpdatePendingOperation(db, ownerKey, existing.localId)) {
-      continue;
+    if (existing && existing.syncStatus !== "synced") {
+      const pendingOperation = await getStateUpdatePendingOperation(db, ownerKey, existing.localId);
+
+      if (pendingOperation) {
+        const payload = pendingOperation.payload as OfflineStateUpdatePayload;
+
+        if (!stateUpdateSnapshotMatchesPendingPayload(item, payload)) {
+          continue;
+        }
+
+        await completeStateUpdateOperation(pendingOperation, {
+          recordId: item.current.recordId,
+          result: "UNCHANGED",
+          subjectRecordId: payload.subjectRecordId,
+        });
+        await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
+          completedAt: cachedAt,
+          ownerKey,
+        });
+        continue;
+      }
     }
 
     const values: OfflineStateUpdateValues = {
@@ -2182,19 +2201,20 @@ async function getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateU
   };
 }
 
-async function hasStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, ownerKey: string, localRecordId: string) {
-  const row = await db.getFirstAsync<{ total: number }>(
+async function getStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, ownerKey: string, localRecordId: string) {
+  const row = await db.getFirstAsync<PendingOperationRow>(
     `
-      SELECT COUNT(*) AS total
+      SELECT *
       FROM pending_operations
       WHERE owner_key = ? AND local_record_id = ? AND operation = ?
+      LIMIT 1
     `,
     ownerKey,
     localRecordId,
     STATE_UPDATE_OPERATION,
   );
 
-  return Boolean(row?.total);
+  return row?.id ? mapPendingOperationRow(row) : null;
 }
 
 async function markStateUpdateOperationSyncing(operationId: string) {
@@ -3596,6 +3616,63 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
   } catch {
     return null;
   }
+}
+
+async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
+  completedAt,
+  ownerKey,
+}: {
+  completedAt: string;
+  ownerKey: string;
+}) {
+  const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
+  const previousRun = current?.lastStateUpdateSync;
+  const previousSelected = previousRun?.operationsSelected ?? 1;
+  const previousAttempted = previousRun?.operationsAttempted ?? 1;
+
+  await setStateUpdateSyncDiagnosticsTelemetry(ownerKey, {
+    currentConnectivity: current?.currentConnectivity ?? {
+      status: "unknown",
+      updatedAt: completedAt,
+    },
+    lastReconnect: current?.lastReconnect ?? {
+      detected: false,
+      detectedAt: null,
+      previousConnectivityStatus: null,
+      resultingConnectivityStatus: null,
+    },
+    lastStateUpdateSync: {
+      completedAt,
+      operationsAttempted: Math.max(previousAttempted, 1),
+      operationsCompleted: Math.max(previousRun?.operationsCompleted ?? 0, 1),
+      operationsFailed: 0,
+      operationsSelected: Math.max(previousSelected, 1),
+      reconciledAfterTimeout: true,
+      result: "reconciled_success",
+      startedAt: previousRun?.startedAt ?? completedAt,
+      trigger: previousRun?.trigger ?? "other",
+    },
+  });
+}
+
+function stateUpdateSnapshotMatchesPendingPayload(
+  item: StateUpdateItem,
+  payload: OfflineStateUpdatePayload,
+) {
+  if (!item.current || item.subject.id !== payload.subjectRecordId) {
+    return false;
+  }
+
+  if (payload.stateValues.length === 0) {
+    return false;
+  }
+
+  return payload.stateValues.every((requested) =>
+    item.current?.stateValues.some((remote) =>
+      remote.fieldId === requested.fieldId &&
+      remote.optionId === requested.optionId,
+    ),
+  );
 }
 
 function normalizeLastStateUpdateSyncTelemetry(

@@ -186,6 +186,82 @@ export type StateUpdateSyncDiagnosticsTelemetry = {
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
 };
 
+export function resolveStateUpdateSyncTelemetryResult({
+  operationsFailed,
+  operationsSelected,
+  reconciledAfterTimeout,
+}: {
+  operationsFailed: number;
+  operationsSelected: number;
+  reconciledAfterTimeout: boolean;
+}): StateUpdateSyncTelemetryResult {
+  if (operationsSelected === 0) {
+    return "noop";
+  }
+
+  if (operationsFailed > 0) {
+    return operationsFailed === operationsSelected ? "failed" : "partial_failure";
+  }
+
+  return reconciledAfterTimeout ? "reconciled_success" : "success";
+}
+
+export function mergeStateUpdateSyncDiagnosticsTelemetry({
+  completedAt,
+  current,
+  currentConnectivityStatus,
+  operationsAttempted,
+  operationsCompleted,
+  operationsFailed,
+  operationsSelected,
+  reconciledAfterTimeout,
+  startedAt,
+  trigger,
+}: {
+  completedAt: string;
+  current: StateUpdateSyncDiagnosticsTelemetry;
+  currentConnectivityStatus: ConnectivityStatus;
+  operationsAttempted: number;
+  operationsCompleted: number;
+  operationsFailed: number;
+  operationsSelected: number;
+  reconciledAfterTimeout: boolean;
+  startedAt: string;
+  trigger: StateUpdateSyncTrigger;
+}): StateUpdateSyncDiagnosticsTelemetry {
+  const currentConnectivity = {
+    status: currentConnectivityStatus,
+    updatedAt: completedAt,
+  };
+
+  if (operationsSelected === 0 && current.lastStateUpdateSync) {
+    return {
+      ...current,
+      currentConnectivity,
+    };
+  }
+
+  return {
+    ...current,
+    currentConnectivity,
+    lastStateUpdateSync: {
+      completedAt,
+      operationsAttempted,
+      operationsCompleted,
+      operationsFailed,
+      operationsSelected,
+      reconciledAfterTimeout,
+      result: resolveStateUpdateSyncTelemetryResult({
+        operationsFailed,
+        operationsSelected,
+        reconciledAfterTimeout,
+      }),
+      startedAt,
+      trigger,
+    },
+  };
+}
+
 export type StateUpdateScope = {
   appViewId: string;
   contractId: string;

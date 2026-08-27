@@ -138,6 +138,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setTotalRegistered(summary.totalRegistered);
     setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+    return summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
   }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
   const refreshLocalSyncIndicators = useCallback(async () => {
@@ -162,8 +163,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }),
     ]);
 
-    setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
+    const unresolvedCount = summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
+
+    setPendingCount(unresolvedCount);
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+    return unresolvedCount;
   }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
   const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse) => {
@@ -266,9 +270,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       await applyDayState(response);
       cacheAttendanceOnlineResponseInBackground(response);
+      setError(null);
     } catch {
       if (requestId === requestSequenceRef.current) {
-        await refreshLocalDayState();
+        const unresolvedCount = await refreshLocalDayState();
+
+        if (unresolvedCount === 0) {
+          setError(null);
+        }
       }
     }
   }, [
