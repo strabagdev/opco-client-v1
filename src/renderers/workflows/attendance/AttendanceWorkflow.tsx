@@ -49,13 +49,25 @@ import {
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
+import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   personName: string;
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
-  const { api, context, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } = useSession();
+  const {
+    api,
+    context,
+    definitionCache,
+    ownerKey,
+    refreshRecordsSyncSummary,
+    selectedContractId,
+    stateUpdateReconnectRefreshKey,
+    status,
+    syncPendingRecords,
+    token,
+  } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -75,6 +87,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const requestSequenceRef = useRef(0);
+  const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
@@ -231,6 +244,60 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
     }
   }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponseInBackground, date, isContractBootstrapPending, selectedContractId, status, token]);
+
+  const refreshAfterStateUpdateSync = useCallback(async () => {
+    if (!ownerKey || !selectedContractId) {
+      return;
+    }
+
+    if (!isOnline || !token) {
+      await refreshLocalDayState();
+      return;
+    }
+
+    const requestId = ++requestSequenceRef.current;
+
+    try {
+      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
+
+      if (requestId !== requestSequenceRef.current) {
+        return;
+      }
+
+      await applyDayState(response);
+      cacheAttendanceOnlineResponseInBackground(response);
+    } catch {
+      if (requestId === requestSequenceRef.current) {
+        await refreshLocalDayState();
+      }
+    }
+  }, [
+    api,
+    appView.id,
+    applyDayState,
+    cacheAttendanceOnlineResponseInBackground,
+    date,
+    isOnline,
+    ownerKey,
+    refreshLocalDayState,
+    selectedContractId,
+    token,
+  ]);
+
+  useEffect(() => {
+    const previousKey = stateUpdateRefreshKeyRef.current;
+
+    stateUpdateRefreshKeyRef.current = stateUpdateReconnectRefreshKey;
+
+    if (!shouldHandleStateUpdateRefresh({
+      currentKey: stateUpdateReconnectRefreshKey,
+      previousKey,
+    })) {
+      return;
+    }
+
+    void refreshAfterStateUpdateSync();
+  }, [refreshAfterStateUpdateSync, stateUpdateReconnectRefreshKey]);
 
   const searchPeople = useCallback(async (search: string) => {
     if (!selectedContractId || !ownerKey) {

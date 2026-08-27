@@ -49,6 +49,7 @@ import {
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
+import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 
 type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
   subjectName: string;
@@ -57,7 +58,7 @@ type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
 type StateValues = Record<string, string>;
 
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
-  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, token } = useSession();
+  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, stateUpdateReconnectRefreshKey, token } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -74,6 +75,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const requestSequenceRef = useRef(0);
+  const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
 
   const hasDate = Boolean(response?.dateFieldId ?? appView.config.dateFieldId);
@@ -240,6 +242,30 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     return () => clearTimeout(timeoutId);
   }, [loadWorkflow]);
+
+  useEffect(() => {
+    const previousKey = stateUpdateRefreshKeyRef.current;
+
+    stateUpdateRefreshKeyRef.current = stateUpdateReconnectRefreshKey;
+
+    if (!shouldHandleStateUpdateRefresh({
+      currentKey: stateUpdateReconnectRefreshKey,
+      previousKey,
+    })) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      if (shouldSearchStateUpdateSubjects(searchText)) {
+        void loadWorkflow({ search: normalizeStateUpdateSearch(searchText) });
+        return;
+      }
+
+      void loadWorkflow();
+    }, 0);
+
+    return () => clearTimeout(timeoutId);
+  }, [loadWorkflow, searchText, stateUpdateReconnectRefreshKey]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {

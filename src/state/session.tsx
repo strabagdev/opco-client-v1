@@ -36,6 +36,7 @@ import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
+import { shouldEmitStateUpdateRefresh } from "@/state/state-update-refresh";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
 import { syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
@@ -57,6 +58,7 @@ type SessionContextValue = {
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
+  stateUpdateReconnectRefreshKey: number;
   stateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnostics;
   signOut(): Promise<void>;
   status: SessionStatus;
@@ -130,6 +132,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
+  const [stateUpdateReconnectRefreshKey, setStateUpdateReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
   const [stateUpdateDiagnostics, setStateUpdateDiagnostics] = useState<StateUpdateOutboxDiagnostics | null>(null);
@@ -401,6 +404,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: diagnosticStore,
         token,
       });
+      const selectedOperations = [...events.values()].filter((event) => event.selectedForSync).length;
+
+      if (shouldEmitStateUpdateRefresh({ result, selectedOperations })) {
+        setStateUpdateReconnectRefreshKey((key) => key + 1);
+      }
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
 
       for (const operation of refreshed.operations) {
@@ -465,9 +473,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: definitionCache,
         token,
       });
-      const selectedStateUpdates = showStateUpdateDiagnostics
-        ? await definitionCache.listPendingStateUpdateOperations(ownerKey)
-        : [];
+      const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(ownerKey);
       const stateUpdateInvokedAt = new Date().toISOString();
       const stateUpdateResult = await syncPendingStateUpdatesOnce({
         api,
@@ -475,6 +481,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
         store: definitionCache,
         token,
       });
+      if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
+        setStateUpdateReconnectRefreshKey((key) => key + 1);
+      }
       if (showStateUpdateDiagnostics) {
         setStateUpdateReconnectDiagnostics((current) => ({
           ...current,
@@ -554,9 +563,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       store: definitionCache,
       token: nextToken,
     });
-    const selectedStateUpdates = showStateUpdateDiagnostics
-      ? await definitionCache.listPendingStateUpdateOperations(nextOwnerKey)
-      : [];
+    const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
     const stateUpdateInvokedAt = new Date().toISOString();
     const stateUpdateResult = await syncPendingStateUpdatesOnce({
       api,
@@ -564,6 +571,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       store: definitionCache,
       token: nextToken,
     });
+    if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
+      setStateUpdateReconnectRefreshKey((key) => key + 1);
+    }
     if (showStateUpdateDiagnostics) {
       setStateUpdateReconnectDiagnostics((current) => ({
         ...current,
@@ -776,12 +786,19 @@ export function SessionProvider({ children }: PropsWithChildren) {
       store: definitionCache,
       token: loginResponse.accessToken,
     })
-      .then(() => syncPendingStateUpdatesOnce({
-        api,
-        ownerKey: nextOwnerKey,
-        store: definitionCache,
-        token: loginResponse.accessToken,
-      }))
+      .then(async () => {
+        const selectedStateUpdates = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
+        const stateUpdateResult = await syncPendingStateUpdatesOnce({
+          api,
+          ownerKey: nextOwnerKey,
+          store: definitionCache,
+          token: loginResponse.accessToken,
+        });
+
+        if (shouldEmitStateUpdateRefresh({ result: stateUpdateResult, selectedOperations: selectedStateUpdates.length })) {
+          setStateUpdateReconnectRefreshKey((key) => key + 1);
+        }
+      })
       .finally(refreshPendingRecordsCount);
   }
 
@@ -851,6 +868,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
         signIn,
+        stateUpdateReconnectRefreshKey,
         stateUpdateReconnectDiagnostics,
         signOut,
         status,
