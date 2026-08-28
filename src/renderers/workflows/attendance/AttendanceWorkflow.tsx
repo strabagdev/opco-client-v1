@@ -52,6 +52,10 @@ import {
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
+import {
+  hideStateUpdateTimeoutAfterConfirmedSync,
+  resolveStateUpdateOperationFeedback,
+} from "../state-update/state-update-operation-feedback";
 
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   personName: string;
@@ -65,6 +69,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     ownerKey,
     refreshRecordsSyncSummary,
     selectedContractId,
+    stateUpdateReconnectDiagnostics,
     stateUpdateReconnectRefreshKey,
     status,
     syncPendingRecords,
@@ -95,6 +100,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
+  const visibleError = hideStateUpdateTimeoutAfterConfirmedSync({
+    error,
+    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    pendingCount,
+  }) ? null : error;
+  const operationFeedback = resolveStateUpdateOperationFeedback({
+    connectivityStatus,
+    hasConflict: Boolean(conflict || localConflicts.length > 0),
+    isSaving,
+    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    pendingCount,
+    successMessage,
+    visibleError,
+  });
 
   const applyAttendanceResponse = useCallback((response: {
     latest: AttendanceLatestItem[];
@@ -742,11 +761,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {connectivityStatus !== "online" ? (
         <Text style={styles.offline}>Sin conexion. Los registros se guardan en este dispositivo.</Text>
       ) : null}
+      {operationFeedback.message ? (
+        <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
+          {operationFeedback.message}
+        </Text>
+      ) : null}
       {pendingCount > 0 ? (
         <Text style={styles.offline}>{pendingCount} registros por sincronizar</Text>
       ) : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
 
       {localConflicts.length > 0 ? (
         <View style={styles.latestBlock}>

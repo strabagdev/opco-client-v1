@@ -84,6 +84,43 @@ describe("pending work sync orchestration", () => {
     expect(syncStateUpdates).toHaveBeenCalledOnce();
   });
 
+  it("returns the STATE_UPDATE telemetry wrapper result from global pending work sync", async () => {
+    const stateUpdateRun = {
+      completedAt: "2026-08-28T12:00:01.000Z",
+      operationsSelected: 1,
+      result: {
+        completed: 1,
+        conflicts: 0,
+        failed: 0,
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        retriable: 0,
+        timeoutOccurred: false,
+      },
+      startedAt: "2026-08-28T12:00:00.000Z",
+    };
+    const syncStateUpdates = vi.fn(async () => stateUpdateRun);
+
+    const result = await syncPendingWork({
+      api: emptyRecordsApi(),
+      ownerKey: "org_1:user_1",
+      recordsStore: new EmptyRecordsStore([]),
+      syncStateUpdates,
+      token: "token_1",
+      trigger: "unknown-to-online",
+    });
+
+    expect(result.stateUpdate).toBe(stateUpdateRun);
+    expect(syncStateUpdates).toHaveBeenCalledWith({
+      ownerKey: "org_1:user_1",
+      store: undefined,
+      token: "token_1",
+      trigger: "unknown-to-online",
+    });
+  });
+
 
   it("keeps repeated triggers delegated to engine single-flight instead of adding another queue", async () => {
     const order: string[] = [];

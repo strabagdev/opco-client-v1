@@ -51,6 +51,10 @@ import {
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
+import {
+  hideStateUpdateTimeoutAfterConfirmedSync,
+  resolveStateUpdateOperationFeedback,
+} from "./state-update-operation-feedback";
 
 type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
   subjectName: string;
@@ -59,7 +63,16 @@ type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
 type StateValues = Record<string, string>;
 
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
-  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, stateUpdateReconnectRefreshKey, token } = useSession();
+  const {
+    api,
+    definitionCache,
+    ownerKey,
+    refreshRecordsSyncSummary,
+    selectedContractId,
+    stateUpdateReconnectDiagnostics,
+    stateUpdateReconnectRefreshKey,
+    token,
+  } = useSession();
   const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
@@ -84,6 +97,26 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const submitLabel = response?.historyMode === "update-current" ? "Actualizar estado" : "Registrar cambio";
   const latest = response?.latest ?? [];
   const totalRegistered = readTotalRegistered(response);
+  const unresolvedCount = response
+    ? readSummaryCount(response, "pendingCount") +
+      readSummaryCount(response, "failedCount") +
+      readSummaryCount(response, "conflictCount") +
+      readSummaryCount(response, "syncingCount")
+    : 0;
+  const visibleError = hideStateUpdateTimeoutAfterConfirmedSync({
+    error,
+    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    pendingCount: unresolvedCount,
+  }) ? null : error;
+  const operationFeedback = resolveStateUpdateOperationFeedback({
+    connectivityStatus,
+    hasConflict: Boolean(conflict || readSummaryCount(response, "conflictCount") > 0),
+    isSaving,
+    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    pendingCount: unresolvedCount,
+    successMessage,
+    visibleError,
+  });
   const extraDefinition = useMemo<EntityDefinition | null>(() => {
     if (!response) {
       return null;
@@ -467,8 +500,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       ) : null}
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
+      {operationFeedback.message ? (
+        <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
+          {operationFeedback.message}
+        </Text>
+      ) : null}
 
       <View style={styles.searchBlock}>
         <TextInput
@@ -622,6 +658,12 @@ function readTotalRegistered(response: StateUpdateResponse | null) {
   const value = response?.summary?.totalRegistered;
 
   return typeof value === "number" ? value : null;
+}
+
+function readSummaryCount(response: StateUpdateResponse | null, key: string) {
+  const value = response?.summary?.[key];
+
+  return typeof value === "number" ? value : 0;
 }
 
 function LatestList({ latest, response }: { latest: StateUpdateLatestItem[]; response: StateUpdateResponse | null }) {
@@ -923,6 +965,11 @@ const styles = StyleSheet.create({
   },
   optionTextSelected: {
     color: "#ffffff",
+  },
+  offline: {
+    color: "#5b4a00",
+    fontWeight: "700",
+    lineHeight: 20,
   },
   panelName: {
     color: "#0f3036",

@@ -154,6 +154,19 @@ describe("local database singleton", () => {
       },
       lastStateUpdateSync: {
         completedAt: "2026-08-27T10:00:02.000Z",
+        lastRequestDiagnostics: {
+          abortControllerTriggered: true,
+          fetchResolvedAt: null,
+          httpStatus: null,
+          pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+          requestCompletedAt: "2026-08-27T10:00:12.000Z",
+          requestDurationMs: 12000,
+          requestStartedAt: "2026-08-27T10:00:00.000Z",
+          responseBodyStartedAt: null,
+          responseParsedAt: null,
+          responseStarted: false,
+          timeoutMs: 12000,
+        },
         operationsAttempted: 1,
         operationsCompleted: 1,
         operationsFailed: 0,
@@ -161,6 +174,7 @@ describe("local database singleton", () => {
         reconciledAfterTimeout: true,
         result: "reconciled_success",
         startedAt: "2026-08-27T10:00:00.000Z",
+        timeoutOccurred: true,
         trigger: "reconnect",
       },
     });
@@ -187,6 +201,19 @@ describe("local database singleton", () => {
             },
             lastStateUpdateSync: {
               completedAt: "2026-08-27T10:00:02.000Z",
+              lastRequestDiagnostics: {
+                abortControllerTriggered: false,
+                fetchResolvedAt: "2026-08-27T10:00:01.000Z",
+                httpStatus: 200,
+                pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+                requestCompletedAt: "2026-08-27T10:00:02.000Z",
+                requestDurationMs: 2000,
+                requestStartedAt: "2026-08-27T10:00:00.000Z",
+                responseBodyStartedAt: "2026-08-27T10:00:01.000Z",
+                responseParsedAt: "2026-08-27T10:00:02.000Z",
+                responseStarted: true,
+                timeoutMs: 12000,
+              },
               operationsAttempted: 1,
               operationsCompleted: 1,
               operationsFailed: 0,
@@ -194,6 +221,7 @@ describe("local database singleton", () => {
               reconciledAfterTimeout: false,
               result: "success",
               startedAt: "2026-08-27T10:00:00.000Z",
+              timeoutOccurred: false,
               trigger: "unknown-to-online",
             },
           }),
@@ -207,7 +235,13 @@ describe("local database singleton", () => {
     await expect(store.getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1")).resolves.toMatchObject({
       currentConnectivity: { status: "online" },
       lastReconnect: { detected: false, previousConnectivityStatus: "unknown", resultingConnectivityStatus: "online" },
-      lastStateUpdateSync: { operationsCompleted: 1, result: "success", trigger: "unknown-to-online" },
+      lastStateUpdateSync: {
+        lastRequestDiagnostics: { httpStatus: 200, requestDurationMs: 2000 },
+        operationsCompleted: 1,
+        result: "success",
+        timeoutOccurred: false,
+        trigger: "unknown-to-online",
+      },
     });
   });
 

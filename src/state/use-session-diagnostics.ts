@@ -163,12 +163,14 @@ export function useSessionDiagnostics({
       completedAt,
       current: persisted ?? stateUpdateReconnectDiagnostics,
       currentConnectivityStatus: connectivityStatus,
+      lastRequestDiagnostics: result.lastRequestDiagnostics,
       operationsAttempted: result.operationsAttempted,
       operationsCompleted: result.completed,
       operationsFailed,
       operationsSelected,
       reconciledAfterTimeout: result.reconciledAfterTimeout,
       startedAt,
+      timeoutOccurred: result.timeoutOccurred,
       trigger,
     });
 

@@ -8,21 +8,21 @@ import {
 describe("state update refresh signal", () => {
   it("emits after a successful state update sync so open workflows can refresh", () => {
     expect(shouldEmitStateUpdateRefresh({
-      result: { completed: 1, conflicts: 0, failed: 0, operationsAttempted: 1, operationsSelected: 1, reconciledAfterTimeout: false, retriable: 0 },
+      result: { completed: 1, conflicts: 0, failed: 0, lastRequestDiagnostics: null, operationsAttempted: 1, operationsSelected: 1, reconciledAfterTimeout: false, retriable: 0, timeoutOccurred: false },
       selectedOperations: 1,
     })).toBe(true);
   });
 
   it("emits after partial failure so counts and latest state are re-read", () => {
     expect(shouldEmitStateUpdateRefresh({
-      result: { completed: 2, conflicts: 0, failed: 1, operationsAttempted: 3, operationsSelected: 3, reconciledAfterTimeout: false, retriable: 0 },
+      result: { completed: 2, conflicts: 0, failed: 1, lastRequestDiagnostics: null, operationsAttempted: 3, operationsSelected: 3, reconciledAfterTimeout: false, retriable: 0, timeoutOccurred: false },
       selectedOperations: 3,
     })).toBe(true);
   });
 
   it("does not emit when reconnect found no state update work", () => {
     expect(shouldEmitStateUpdateRefresh({
-      result: { completed: 0, conflicts: 0, failed: 0, operationsAttempted: 0, operationsSelected: 0, reconciledAfterTimeout: false, retriable: 0 },
+      result: { completed: 0, conflicts: 0, failed: 0, lastRequestDiagnostics: null, operationsAttempted: 0, operationsSelected: 0, reconciledAfterTimeout: false, retriable: 0, timeoutOccurred: false },
       selectedOperations: 0,
     })).toBe(false);
   });

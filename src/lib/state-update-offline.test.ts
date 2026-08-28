@@ -219,6 +219,19 @@ describe("state-update sync diagnostics telemetry", () => {
       },
       lastStateUpdateSync: {
         completedAt: "2026-08-27T10:00:12.000Z",
+        lastRequestDiagnostics: {
+          abortControllerTriggered: true,
+          fetchResolvedAt: null,
+          httpStatus: null,
+          pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+          requestCompletedAt: "2026-08-27T10:00:12.000Z",
+          requestDurationMs: 12000,
+          requestStartedAt: "2026-08-27T10:00:00.000Z",
+          responseBodyStartedAt: null,
+          responseParsedAt: null,
+          responseStarted: false,
+          timeoutMs: 12000,
+        },
         operationsAttempted: 1,
         operationsCompleted: 1,
         operationsFailed: 0,
@@ -226,6 +239,7 @@ describe("state-update sync diagnostics telemetry", () => {
         reconciledAfterTimeout: true,
         result: "reconciled_success" as const,
         startedAt: "2026-08-27T10:00:00.000Z",
+        timeoutOccurred: true,
         trigger: "reconnect" as const,
       },
     };
@@ -249,8 +263,55 @@ describe("state-update sync diagnostics telemetry", () => {
         completedAt: "2026-08-27T10:00:12.000Z",
         operationsSelected: 1,
         result: "reconciled_success",
+        timeoutOccurred: true,
         trigger: "reconnect",
       },
+    });
+  });
+
+  it("persists request diagnostics for a timeout that later reconciles successfully", () => {
+    expect(mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-27T10:00:13.000Z",
+      current: {
+        currentConnectivity: { status: "online", updatedAt: null },
+        lastReconnect: {
+          detected: true,
+          detectedAt: "2026-08-27T10:00:00.000Z",
+          previousConnectivityStatus: "offline",
+          resultingConnectivityStatus: "online",
+        },
+        lastStateUpdateSync: null,
+      },
+      currentConnectivityStatus: "online",
+      lastRequestDiagnostics: {
+        abortControllerTriggered: true,
+        fetchResolvedAt: null,
+        httpStatus: null,
+        pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+        requestCompletedAt: "2026-08-27T10:00:12.000Z",
+        requestDurationMs: 12000,
+        requestStartedAt: "2026-08-27T10:00:00.000Z",
+        responseBodyStartedAt: null,
+        responseParsedAt: null,
+        responseStarted: false,
+        timeoutMs: 12000,
+      },
+      operationsAttempted: 1,
+      operationsCompleted: 1,
+      operationsFailed: 0,
+      operationsSelected: 1,
+      reconciledAfterTimeout: true,
+      startedAt: "2026-08-27T10:00:00.000Z",
+      timeoutOccurred: true,
+      trigger: "reconnect",
+    }).lastStateUpdateSync).toMatchObject({
+      lastRequestDiagnostics: {
+        abortControllerTriggered: true,
+        requestDurationMs: 12000,
+      },
+      reconciledAfterTimeout: true,
+      result: "reconciled_success",
+      timeoutOccurred: true,
     });
   });
 });

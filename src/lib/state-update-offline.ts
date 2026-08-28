@@ -1,5 +1,6 @@
 import {
   EntityRecordValue,
+  OpcoNetworkDiagnostics,
   StateUpdateBatchResult,
   StateUpdateCurrentFieldValue,
   StateUpdateField,
@@ -169,8 +170,24 @@ export type StateUpdateLastReconnectTelemetry = {
   resultingConnectivityStatus: ConnectivityStatus | null;
 };
 
+export type StateUpdateRequestDiagnostics = Pick<
+  OpcoNetworkDiagnostics,
+  | "abortControllerTriggered"
+  | "fetchResolvedAt"
+  | "httpStatus"
+  | "pathTemplate"
+  | "requestCompletedAt"
+  | "requestDurationMs"
+  | "requestStartedAt"
+  | "responseBodyStartedAt"
+  | "responseParsedAt"
+  | "responseStarted"
+  | "timeoutMs"
+>;
+
 export type StateUpdateLastSyncTelemetry = {
   completedAt: string | null;
+  lastRequestDiagnostics: StateUpdateRequestDiagnostics | null;
   operationsAttempted: number;
   operationsCompleted: number;
   operationsFailed: number;
@@ -178,6 +195,7 @@ export type StateUpdateLastSyncTelemetry = {
   reconciledAfterTimeout: boolean;
   result: StateUpdateSyncTelemetryResult;
   startedAt: string;
+  timeoutOccurred: boolean;
   trigger: StateUpdateSyncTrigger;
 };
 
@@ -219,18 +237,22 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
   operationsFailed,
   operationsSelected,
   reconciledAfterTimeout,
+  lastRequestDiagnostics = null,
   startedAt,
+  timeoutOccurred = false,
   trigger,
 }: {
   completedAt: string;
   current: StateUpdateSyncDiagnosticsTelemetry;
   currentConnectivityStatus: ConnectivityStatus;
+  lastRequestDiagnostics?: StateUpdateRequestDiagnostics | null;
   operationsAttempted: number;
   operationsCompleted: number;
   operationsFailed: number;
   operationsSelected: number;
   reconciledAfterTimeout: boolean;
   startedAt: string;
+  timeoutOccurred?: boolean;
   trigger: StateUpdateSyncTrigger;
 }): StateUpdateSyncDiagnosticsTelemetry {
   const currentConnectivity = {
@@ -250,6 +272,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
     currentConnectivity,
     lastStateUpdateSync: {
       completedAt,
+      lastRequestDiagnostics,
       operationsAttempted,
       operationsCompleted,
       operationsFailed,
@@ -261,8 +284,31 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
         reconciledAfterTimeout,
       }),
       startedAt,
+      timeoutOccurred,
       trigger,
     },
+  };
+}
+
+export function stateUpdateRequestDiagnosticsFromNetwork(
+  diagnostics: OpcoNetworkDiagnostics | null | undefined,
+): StateUpdateRequestDiagnostics | null {
+  if (!diagnostics) {
+    return null;
+  }
+
+  return {
+    abortControllerTriggered: diagnostics.abortControllerTriggered,
+    fetchResolvedAt: diagnostics.fetchResolvedAt,
+    httpStatus: diagnostics.httpStatus,
+    pathTemplate: diagnostics.pathTemplate,
+    requestCompletedAt: diagnostics.requestCompletedAt,
+    requestDurationMs: diagnostics.requestDurationMs,
+    requestStartedAt: diagnostics.requestStartedAt,
+    responseBodyStartedAt: diagnostics.responseBodyStartedAt,
+    responseParsedAt: diagnostics.responseParsedAt,
+    responseStarted: diagnostics.responseStarted,
+    timeoutMs: diagnostics.timeoutMs,
   };
 }
 

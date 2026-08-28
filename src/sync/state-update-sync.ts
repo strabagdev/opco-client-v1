@@ -4,6 +4,7 @@ import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from 
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
+  stateUpdateRequestDiagnosticsFromNetwork,
   stateUpdateRemoteItemMatchesPayload,
   workflowTelemetryScopeId,
 } from "../lib/state-update-offline";
@@ -22,10 +23,12 @@ export type StateUpdateSyncResult = {
   completed: number;
   conflicts: number;
   failed: number;
+  lastRequestDiagnostics: ReturnType<typeof stateUpdateRequestDiagnosticsFromNetwork>;
   operationsAttempted: number;
   operationsSelected: number;
   reconciledAfterTimeout: boolean;
   retriable: number;
+  timeoutOccurred: boolean;
 };
 
 let syncPromise: Promise<StateUpdateSyncResult> | null = null;
@@ -63,10 +66,12 @@ async function runSync({
     completed: 0,
     conflicts: 0,
     failed: 0,
+    lastRequestDiagnostics: null,
     operationsAttempted: 0,
     operationsSelected: operations.filter((operation) => operation.operation === STATE_UPDATE_OPERATION).length,
     reconciledAfterTimeout: false,
     retriable: 0,
+    timeoutOccurred: false,
   };
 
   await Promise.all(scopes.map((scope) =>
@@ -128,6 +133,14 @@ async function runSync({
       result.completed += 1;
     } catch (error) {
       const classification = classifyStateUpdateSyncError(error);
+      const requestDiagnostics = error instanceof OpcoNetworkError
+        ? stateUpdateRequestDiagnosticsFromNetwork(error.diagnostics)
+        : null;
+
+      if (requestDiagnostics) {
+        result.lastRequestDiagnostics = requestDiagnostics;
+        result.timeoutOccurred = requestDiagnostics.abortControllerTriggered === true;
+      }
 
       if (shouldAttemptRemoteStateUpdateReconcile(error, classification, payload)) {
         const reconciled = await completeOperationIfRemoteStateMatches({

@@ -3884,6 +3884,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
     },
     lastStateUpdateSync: {
       completedAt,
+      lastRequestDiagnostics: previousRun?.lastRequestDiagnostics ?? null,
       operationsAttempted: Math.max(previousAttempted, 1),
       operationsCompleted: Math.max(previousRun?.operationsCompleted ?? 0, 1),
       operationsFailed: 0,
@@ -3891,6 +3892,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       reconciledAfterTimeout: true,
       result: "reconciled_success",
       startedAt: previousRun?.startedAt ?? completedAt,
+      timeoutOccurred: previousRun?.timeoutOccurred ?? (previousRun?.reconciledAfterTimeout === true),
       trigger: previousRun?.trigger ?? "other",
     },
   });
@@ -3905,6 +3907,7 @@ function normalizeLastStateUpdateSyncTelemetry(
 
   return {
     completedAt: typeof telemetry.completedAt === "string" ? telemetry.completedAt : null,
+    lastRequestDiagnostics: normalizeStateUpdateRequestDiagnostics(telemetry.lastRequestDiagnostics),
     operationsAttempted: normalizeDiagnosticCount(telemetry.operationsAttempted),
     operationsCompleted: normalizeDiagnosticCount(telemetry.operationsCompleted),
     operationsFailed: normalizeDiagnosticCount(telemetry.operationsFailed),
@@ -3912,7 +3915,45 @@ function normalizeLastStateUpdateSyncTelemetry(
     reconciledAfterTimeout: telemetry.reconciledAfterTimeout === true,
     result: normalizeStateUpdateSyncTelemetryResult(telemetry.result),
     startedAt: telemetry.startedAt,
+    timeoutOccurred: telemetry.timeoutOccurred === true || telemetry.reconciledAfterTimeout === true,
     trigger: normalizeStateUpdateSyncTrigger(telemetry.trigger),
+  };
+}
+
+function normalizeStateUpdateRequestDiagnostics(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const diagnostics = value as Record<string, unknown>;
+  const requestStartedAt = diagnostics.requestStartedAt;
+  const requestCompletedAt = diagnostics.requestCompletedAt;
+  const requestDurationMs = diagnostics.requestDurationMs;
+  const timeoutMs = diagnostics.timeoutMs;
+  const pathTemplate = diagnostics.pathTemplate;
+
+  if (
+    typeof requestStartedAt !== "string" ||
+    typeof requestCompletedAt !== "string" ||
+    typeof requestDurationMs !== "number" ||
+    typeof timeoutMs !== "number" ||
+    typeof pathTemplate !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    abortControllerTriggered: diagnostics.abortControllerTriggered === true,
+    fetchResolvedAt: typeof diagnostics.fetchResolvedAt === "string" ? diagnostics.fetchResolvedAt : null,
+    httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : null,
+    pathTemplate,
+    requestCompletedAt,
+    requestDurationMs,
+    requestStartedAt,
+    responseBodyStartedAt: typeof diagnostics.responseBodyStartedAt === "string" ? diagnostics.responseBodyStartedAt : null,
+    responseParsedAt: typeof diagnostics.responseParsedAt === "string" ? diagnostics.responseParsedAt : null,
+    responseStarted: diagnostics.responseStarted === true,
+    timeoutMs,
   };
 }
 
