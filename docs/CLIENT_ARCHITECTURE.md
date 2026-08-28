@@ -36,8 +36,8 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 | 4. Workflow adapters | `AttendanceWorkflow`, `StateUpdateWorkflow`, `attendance-offline.ts`, workflow logic helpers. | Attendance is an adapter/preset over `STATE_UPDATE`. |
 | 5. Domain/offline logic | `offline-records.ts`, `state-update-offline.ts`, `record-form.ts`, `entity-record-display.ts`. | Pure-ish rules for cache, forms, identity, conflicts, exact intent. |
 | 6. Persistence/cache | `local-db.ts`, `local-db-recovery.ts`, `token-storage.ts`, `session-persistence.ts`. | SQLite singleton, schema migrations, local storage. |
-| 7. Sync/orchestration | `pending-work-sync.ts`, `records-sync.ts`, `state-update-sync.ts`, `reconnect-sync.ts`, `state-update-refresh.ts`, `SessionProvider`. | Pending-work facade owns engine order; lifecycle triggers remain in `SessionProvider`; each engine is single-flight. |
-| 8. Connectivity/lifecycle | `connectivity.ts`, `SessionProvider`, `AppState`, service worker helpers. | Connectivity is a signal, not proof of write success. |
+| 7. Sync/orchestration | `pending-work-sync.ts`, `records-sync.ts`, `state-update-sync.ts`, `reconnect-sync.ts`, `state-update-refresh.ts`, `use-pending-work-lifecycle.ts`, `SessionProvider`. | Pending-work facade owns engine order; lifecycle trigger details live in a small hook; SessionProvider composes it; each engine is single-flight. |
+| 8. Connectivity/lifecycle | `connectivity.ts`, `use-pending-work-lifecycle.ts`, `SessionProvider`, `AppState`, service worker helpers. | Connectivity is a signal, not proof of write success. |
 | 9. API boundary | `opco-api.ts`, `config.ts`. | Envelope parsing, bearer auth, refresh, timeout, error taxonomy. |
 | 10. Operational Core | External repo `/api/v1`. | Online authority, idempotency, audit, validation. |
 
@@ -50,10 +50,13 @@ flowchart TD
   UI --> Registry[Renderer registry]
   SessionProvider --> TokenStorage[Token storage]
   SessionProvider --> Connectivity
-  SessionProvider --> Reconnect[Reconnect controller]
+  SessionProvider --> PendingLifecycle[Pending work lifecycle hook]
+  PendingLifecycle --> Reconnect[Reconnect controller]
   SessionProvider --> RecordsSync[RECORDS sync]
   SessionProvider --> StateUpdateSync[STATE_UPDATE sync]
-  SessionProvider --> Diagnostics
+  SessionProvider --> SessionDiagnostics[Session diagnostics hook]
+  SessionProvider --> LocalRecovery[Local database recovery hook]
+  SessionDiagnostics --> Diagnostics
   AppViews --> AppViewCache[AppView caches]
   AppViews --> API[API client]
   Registry --> RecordsRuntime[RECORDS runtime]
@@ -77,7 +80,7 @@ flowchart TD
 | Subsystem | Responsibility | Main files | Input | Output | Owned state | Dependencies | Source of truth | Errors |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | App bootstrap | Mount Expo Router and session context. | `app/_layout.tsx`, `app/index.tsx`, `src/state/session.tsx`. | JS bundle, local token, SQLite state. | Authenticated/offline/anonymous route tree. | Session status. | Token storage, API, SQLite. | API when online, cached snapshot offline. | AUTH, NETWORK, SQLITE, STORAGE. |
-| SessionProvider | Central app state and orchestration. | `src/state/session.tsx`. | Token, context, connectivity, selected contract, pending state. | Context value, refresh keys, recovery UI, diagnostics. | Token state, `me`, `context`, selected contract, sync summaries. | API, local DB, token storage, reconnect controller. | Mixed: API for auth/context, SQLite for cached context. | AUTH, NETWORK, SQLITE, CONNECTIVITY, UNKNOWN. |
+| SessionProvider | Central session composition. | `src/state/session.tsx`. | Token, context, connectivity, selected contract, pending state. | Context value, refresh keys, recovery UI, diagnostics panel. | Token state, `me`, `context`, selected contract, sync summaries, refresh keys. | API, local DB, token storage, lifecycle/recovery/diagnostics hooks. | Mixed: API for auth/context, SQLite for cached context. | AUTH, NETWORK, SQLITE, CONNECTIVITY, UNKNOWN. |
 | Auth/session | Login, refresh, restore, logout. | `opco-api.ts`, `session-logic.ts`, `token-storage.ts`. | Email/password, stored access token, refresh cookie/token. | Access token, offline session, anonymous state. | Web access token in localStorage; native tokens in SecureStore; ownerKey. | Operational Core auth endpoints. | Operational Core. | INVALID_CREDENTIALS, TOKEN_EXPIRED, refresh errors, NETWORK. |
 | Organization/contract selection | Select current contract from `/context` and persist it. | `contract-selection.ts`, `session-persistence.ts`, `SessionProvider`. | Contracts, persisted contract id. | Active contract id. | `selected_contract_id` in `app_metadata`. | SQLite, context. | Operational Core context online. | missing contract, SQLITE. |
 | AppView loading | Load assigned AppViews by contract with offline fallback. | `app-navigation-cache.ts`, `use-app-view.ts`, `app/(app)/index.tsx`. | `ownerKey`, `contractId`, token. | Sorted AppView list. | `app_views` snapshot. | API, SQLite. | Operational Core online. | NETWORK fallback, API auth/contract errors. |
@@ -90,9 +93,9 @@ flowchart TD
 | Outbox | Durable queue for unresolved writes. | `pending_operations` via `local-db.ts`, `offline-records.ts`, `state-update-offline.ts`. | Local create/update/state-update saves. | Syncable operation rows. | Payload, attempts, last error, clientRequestId. | SQLite, sync engines. | Local intent until server outcome. | retry/fail/conflict states. |
 | RECORDS sync | Push local record CREATE/UPDATE. | `src/sync/records-sync.ts`. | Pending `CREATE`/`UPDATE`. | Synced rows, conflicts, failed/retryable rows. | Single-flight promise; telemetry. | API, SQLite. | Operational Core. | NETWORK, 5xx retry, CONFLICT, 4xx failed, SQLITE. |
 | STATE_UPDATE sync | Push `STATE_UPDATE` operations. | `src/sync/state-update-sync.ts`. | Pending state-update operations. | Completed/conflict/failed/retryable rows. | Single-flight promise; telemetry. | API, SQLite, exact reconcile. | Operational Core. | NETWORK, TIMEOUT, IDEMPOTENCY, CONFLICT, SQLITE. |
-| Connectivity | Online/offline/unknown signal. | `connectivity.ts`, `reconnect-sync.ts`. | NetInfo fetch/listener. | Connectivity state, reconnect triggers. | Controller previous status, timer, isSyncing. | NetInfo, SessionProvider. | Runtime signal only. | CONNECTIVITY unknown, false online assumptions. |
+| Connectivity | Online/offline/unknown signal. | `connectivity.ts`, `reconnect-sync.ts`, `use-pending-work-lifecycle.ts`. | NetInfo fetch/listener. | Connectivity state, reconnect triggers. | Controller previous status, timer, isSyncing. | NetInfo, SessionProvider. | Runtime signal only. | CONNECTIVITY unknown, false online assumptions. |
 | Prewarm | Prepare offline AppView metadata and selected source data. | `app-view-prewarm.ts`. | Assigned AppViews. | Prepared definitions; source records cache for workflows. | Active prewarm map. | API, SQLite. | Operational Core online. | NETWORK preserves ready cache; partial/error status. |
-| Diagnostics | Passive observation plus explicit operator commands. | `state-update-route-logic.ts`, `records/sync-diagnostics.ts`, diagnostics route, `SessionProvider`. | SQLite rows, request wrapper timings, button presses. | Fingerprinted UI diagnostics and manual recovery/sync actions. | `app_metadata` state-update telemetry; UI state. | API wrappers, SQLite. | Passive derived data unless an operator command is pressed. | diagnostics unavailable. |
+| Diagnostics | Passive observation plus explicit operator commands. | `state-update-route-logic.ts`, `records/sync-diagnostics.ts`, `use-session-diagnostics.ts`, diagnostics route, `SessionProvider`. | SQLite rows, request wrapper timings, button presses. | Fingerprinted UI diagnostics and manual recovery/sync actions. | `app_metadata` state-update telemetry; UI state inside diagnostics hook. | API wrappers, SQLite. | Passive derived data unless an operator command is pressed. | diagnostics unavailable. |
 | PWA/service worker | Offline shell and static asset cache. | `pwa.ts`, `generate-service-worker.mjs`, `start-web.mjs`, `public/manifest.json`. | Built `dist`, browser service worker APIs. | Precached shell, navigation fallback, readiness status. | Cache Storage shell cache. | Browser SW, Cache Storage. | Build artifacts. | shell-missing, preparing, unsupported. |
 | Operational Core boundary | External API and authoritative mutation. | `opco-api.ts`, backend docs. | Bearer token, contract/appView/entity ids, payloads. | Envelope data/errors. | None in client. | Network. | Operational Core DB. | HTTP, CONTRACT, AUTH, DB_UNAVAILABLE, envelope errors. |
 
@@ -180,17 +183,18 @@ The browser serves `index.html` from network when available. If navigation fails
 | --- | --- | --- |
 | Auth state and token refresh callbacks | CORE_SESSION | Owns `token`, `me`, `status`, `signIn`, `signOut`. |
 | Contract context and selected contract | CORE_SESSION | Owns `context`, `selectedContractId`, persisted selection. |
-| SQLite recovery screen | ORCHESTRATION | Watches `localDatabaseStorageState` and renders recovery UI. |
+| SQLite recovery controller | EXTRACTED_ORCHESTRATION | `use-local-database-recovery.ts` watches `localDatabaseStorageState`, exposes retry/reset, and keeps reset explicit. |
+| SQLite recovery screen | UI_COMPOSITION | `SessionProvider` still renders the recovery UI when local storage is unavailable. |
 | AppView prewarm kick-off | ORCHESTRATION | Calls `prewarmAssignedAppViewsOnce` after contract/view load. |
-| RECORDS sync trigger | ORCHESTRATION | Calls `syncPendingWork`, which runs RECORDS first. |
-| STATE_UPDATE sync trigger and telemetry wrapper | ORCHESTRATION | Owns `syncPendingStateUpdatesWithTelemetry`. |
-| Reconnect and foreground/resume orchestration | ORCHESTRATION | Owns reconnect controller refs and AppState effect. |
+| RECORDS sync trigger | EXTRACTED_ORCHESTRATION | `use-pending-work-lifecycle.ts` calls `syncPendingWork`, which runs RECORDS first. |
+| STATE_UPDATE sync trigger and telemetry wrapper | EXTRACTED_DIAGNOSTICS | `use-session-diagnostics.ts` owns `syncPendingStateUpdatesWithTelemetry` and telemetry persistence. |
+| Reconnect and foreground/resume orchestration | EXTRACTED_ORCHESTRATION | `use-pending-work-lifecycle.ts` owns reconnect controller refs, AppState effect, pending checks, and stale-run guards. |
 | Refresh keys for mounted renderers | ORCHESTRATION | Owns `recordsReconnectRefreshKey` and `stateUpdateReconnectRefreshKey`. |
 | State-update diagnostics UI overlay | DIAGNOSTICS | Renders diagnostics panel when query flag is set. |
-| Diagnostic API/store wrapping | DIAGNOSTICS | Uses shared diagnostic helpers. |
-| Combined responsibilities in one provider | TECHNICAL_DEBT | The file owns session, sync, recovery, diagnostics, and refresh signals. |
+| Diagnostic API/store wrapping | EXTRACTED_DIAGNOSTICS | `use-session-diagnostics.ts` wires diagnostic store/API and separates observation from commands. |
+| Combined responsibilities in one provider | TECHNICAL_DEBT | The file still owns auth/session, context, selected contract, recovery UI, prewarm kick-off, refresh keys, and public context composition. |
 
-Assessment: `SessionProvider` is a god object in the current code. It is production-useful but is the main architectural concentration point. This does not block production, but it increases regression risk when changing auth, sync, diagnostics, or offline startup.
+Assessment: `SessionProvider` is partially reduced, not fully resolved. The lifecycle sync details, local database recovery controller, and state-update diagnostics wiring are extracted into small hooks with pure guard helpers. `SessionProvider` remains the public composition point and still concentrates auth, context, contract selection, recovery UI, prewarm kick-off, and refresh keys. This no longer carries the same sync/diagnostics/recovery implementation weight, but it remains a P2 concentration point.
 
 ## AppViews
 
@@ -380,16 +384,16 @@ Triggers:
 
 | Trigger | Path | Engines |
 | --- | --- | --- |
-| Sign-in/startup with token | `SessionProvider.signIn` / bootstrap follow-up. | RECORDS then STATE_UPDATE best effort. |
-| Reconnect | `createReconnectSyncController`. | RECORDS then STATE_UPDATE. |
-| Unknown to online | same reconnect controller. | RECORDS then STATE_UPDATE. |
-| Foreground/resume | `AppState` effect. | RECORDS then STATE_UPDATE if pending work exists. |
-| Manual retry/sync | Session context methods and diagnostics UI. | RECORDS then STATE_UPDATE. |
+| Sign-in/startup with token | `SessionProvider.signIn` through `syncPendingWork`. | RECORDS then STATE_UPDATE best effort. |
+| Reconnect | `use-pending-work-lifecycle` plus `createReconnectSyncController`. | RECORDS then STATE_UPDATE. |
+| Unknown to online | same lifecycle hook and reconnect controller. | RECORDS then STATE_UPDATE. |
+| Foreground/resume | `use-pending-work-lifecycle` AppState effect. | RECORDS then STATE_UPDATE if pending work exists. |
+| Manual retry/sync | Session context method returned by `use-pending-work-lifecycle`; diagnostics UI uses explicit commands. | RECORDS then STATE_UPDATE. |
 | AppView refresh | Renderer-level load/refresh. | RECORDS full refresh or workflow GET/cache hydration; not necessarily outbox push. |
 
-Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_UPDATE sync. `SessionProvider` decides when to call it after startup, reconnect, unknown-to-online, foreground/resume, and manual sync. `SessionProvider` still owns auth/session, context refresh, selected contract, lifecycle, recovery UI, diagnostics state, pending-count refresh, and renderer refresh keys.
+Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_UPDATE sync. `SessionProvider` still decides whether session/context exists, but `use-pending-work-lifecycle.ts` owns reconnect, unknown-to-online, foreground/resume, pending checks, manual pending-work callback wiring, and stale-run guards. `SessionProvider` still owns auth/session, context refresh, selected contract, recovery UI, prewarm kick-off, pending-count state, and renderer refresh keys.
 
-Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results.
+Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results. Lifecycle runs compare their starting token/owner/contract scope with the current scope before applying refresh side effects, so logout or contract switch does not apply stale refresh results.
 
 Failure isolation:
 
@@ -735,22 +739,25 @@ sequenceDiagram
 | 17 | SQLite reset is explicit and warns about pending work. | IMPLEMENTED |
 | 18 | RECORDS local create/update intent, remote completion, conflict, and failure transitions are atomic between `entity_records` and `pending_operations`. | IMPLEMENTED |
 | 19 | RECORDS outbox consistency issues are detectable without exposing raw identifiers or silently repairing data. | IMPLEMENTED |
-| 20 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
-| 21 | Pending-work sync order is behind a small facade; `SessionProvider` still concentrates lifecycle/auth/recovery/diagnostics responsibilities. | PARTIAL |
-| 22 | README architecture matches the current workflow implementation. | PARTIAL |
+| 20 | Session lifecycle sync details are extracted from SessionProvider while preserving pending-work order and single-flight engines. | IMPLEMENTED |
+| 21 | Local database recovery controller is extracted; reset remains explicit and local-only. | IMPLEMENTED |
+| 22 | Session diagnostics wiring is extracted; observation remains passive and commands remain explicit. | IMPLEMENTED |
+| 23 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
+| 24 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
+| 25 | README architecture matches the current workflow implementation. | PARTIAL |
 
 ## Known Complexity And Technical Debt
 
 | Area | Issue | Concrete risk | Priority | Recommended action | Blocks production |
 | --- | --- | --- | --- | --- | --- |
-| SessionProvider | Owns auth, context, lifecycle triggers, recovery, refresh keys, diagnostics, and sync telemetry wrapping. | Changes in one concern can regress another. | P2 | Extract lifecycle/diagnostics hooks after current stabilization. | No |
-| Global sync orchestration | Pending engine order now lives in `syncPendingWork`, while trigger decisions and refresh side effects remain in `SessionProvider`. | Easier to test order, but provider still concentrates lifecycle details. | P2 | Keep facade thin; only extract more when duplication reappears. | No |
+| SessionProvider | Owns auth, context, selected contract, recovery UI, refresh keys, prewarm kick-off, and public context composition. Lifecycle/recovery/diagnostics controllers are extracted. | Auth/context/prewarm changes can still affect visible app composition. | P2 | Extract contract/prewarm composition only if concrete duplication or regressions reappear. | No |
+| Global sync orchestration | Pending engine order lives in `syncPendingWork`; lifecycle details live in `use-pending-work-lifecycle`; refresh keys remain in `SessionProvider`. | Refresh-key API still couples renderers to provider state. | P3 | Keep facade thin; only extract refresh signals if consumers grow. | No |
 | State-update conflict UI | Generic extra field diff is not complete. | Users may not see full extra-value differences. | P2 | State Update 1.1 conflict diff/resolution UI. | No |
 | README drift | README still contains older unsupported-workflow statements. | New contributors may trust stale docs. | P3 | Update README to point to this doc and `docs/STATE_UPDATE.md`. | No |
 | Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. | XSS exposure of access token. | P2 | Evaluate BFF/cookie-only access strategy for web. | No |
 | Multi-tab OPFS | Expo SQLite Web may hit `ACCESS_HANDLE_BUSY`. | Second tab can show recovery/busy state. | P2 | Keep UX guidance; consider explicit single-tab lock messaging. | No |
 | AppView data prewarm semantics | Workflow source records are prewarmed, RECORDS data is demand-cached. | Users may assume offline-ready definition means all data exists. | P3 | Keep readiness labels precise. | No |
-| Diagnostics spread | State-update diagnostics are shared but still rendered from provider and route. | UI drift risk. | P3 | Keep shared logic; avoid duplicating wrappers. | No |
+| Diagnostics spread | State-update diagnostics wiring is centralized in `use-session-diagnostics`, but the panel is still rendered from provider and route. | UI drift risk. | P3 | Keep shared logic; avoid duplicating panel behavior. | No |
 | Unsupported BOARD/DASHBOARD | AppView types exist but render unsupported. | Assigned views may not be usable. | P3 | Implement only when product requires. | No |
 | Contract/entity permissions | Backend stage uses contract membership, not granular entity permissions. | AppView visibility is not full data authorization. | P3 | Track backend permission model separately. | No |
 
@@ -797,12 +804,15 @@ sequenceDiagram
 | `sync_telemetry` | SQLite | Sync phase timestamps. | RECORDS/STATE_UPDATE diagnostics. | Medium |
 | `app_metadata` | SQLite | Schema, selected contract, diagnostics telemetry. | SessionProvider/local DB. | Medium |
 | Local DB singleton | Persistence | Open/migrate/recover SQLite. | expo-sqlite. | High |
+| Local DB recovery controller | Recovery | Storage-state subscription, retry/reset callbacks, reset guidance. | SessionProvider, Local DB recovery helpers. | Medium |
 | Recovery screen | UI/recovery | Retry/reset local storage. | Local DB recovery summary. | Medium |
 | Token storage | Persistence/auth | Access/refresh token storage. | API auth. | High |
 | API client | Boundary | Fetch, timeout, refresh, parsing. | Operational Core. | High |
 | Records sync | Sync | CREATE/UPDATE outbox engine. | API, SQLite. | High |
 | State-update sync | Sync | STATE_UPDATE outbox engine. | API, SQLite. | High |
+| Pending-work lifecycle hook | Lifecycle | Reconnect, unknown-to-online, foreground/resume, manual pending-work callback, stale-run guards. | Reconnect controller, syncPendingWork, SessionProvider. | Medium |
 | Reconnect controller | Lifecycle | Debounced offline/unknown to online sync. | Connectivity, SessionProvider. | Medium |
 | PWA service worker | Runtime | Shell cache and navigation fallback. | Browser Cache Storage. | Medium |
+| Session diagnostics hook | Observability | State-update diagnostics state, passive refresh, explicit sync/retry commands, reconnect telemetry. | SessionProvider, diagnostics route logic, SQLite. | Medium |
 | State-update diagnostics | Observability | Outbox/reconnect/request inspection. | SQLite, API wrappers. | Medium |
 | Operational Core API | Backend | Source of truth and idempotency. | PostgreSQL/Prisma backend. | High |
