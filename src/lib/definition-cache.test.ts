@@ -149,6 +149,18 @@ describe("getEntityDefinitionWithCache", () => {
     });
   });
 
+  it("scopes cached entity definitions by contract and entity type because definitions are contract metadata", async () => {
+    const cache = createMemoryCache();
+
+    await cache.upsertEntityDefinition("contract_1", "entity_1", entityDefinitionFixture, "2026-08-14T10:00:00.000Z");
+
+    await expect(cache.getEntityDefinition("contract_1", "entity_1")).resolves.toMatchObject({
+      definition: entityDefinitionFixture,
+    });
+    await expect(cache.getEntityDefinition("contract_2", "entity_1")).resolves.toBeNull();
+    await expect(cache.getEntityDefinition("contract_1", "entity_2")).resolves.toBeNull();
+  });
+
   it("throws the API error when API and cache both fail", async () => {
     const apiError = new Error("network");
 

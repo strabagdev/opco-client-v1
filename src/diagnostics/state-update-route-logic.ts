@@ -33,6 +33,13 @@ export type StateUpdateDiagnosticsRouteState =
       selectedContractId: string;
     };
 
+export type StateUpdateDiagnosticsObservationPlan = {
+  autoAttendanceGet: false;
+  autoMutationRequest: false;
+  autoSync: false;
+  readOutbox: boolean;
+};
+
 export function getStateUpdateDiagnosticsRouteState({
   localDatabaseStorageState,
   ownerKey,
@@ -81,6 +88,17 @@ export function getStateUpdateDiagnosticsRouteState({
     ownerKey,
     ready: true,
     selectedContractId,
+  };
+}
+
+export function getStateUpdateDiagnosticsObservationPlan(
+  routeState: StateUpdateDiagnosticsRouteState,
+): StateUpdateDiagnosticsObservationPlan {
+  return {
+    autoAttendanceGet: false,
+    autoMutationRequest: false,
+    autoSync: false,
+    readOutbox: routeState.ready,
   };
 }
 

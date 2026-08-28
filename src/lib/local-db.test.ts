@@ -1086,6 +1086,49 @@ describe("local database singleton", () => {
     expect(localIds).not.toContain("persona_1");
   });
 
+  it("keeps the same server_id isolated across owner, contract, and entity scopes", async () => {
+    const store = getLocalDatabase();
+
+    await store.upsertRemoteRecords({
+      contractId: "contract_1",
+      entityTypeId: "personas",
+      ownerKey: "org_1:user_1",
+      records: [remoteRecord("shared_server_record")],
+    });
+    await store.upsertRemoteRecords({
+      contractId: "contract_1",
+      entityTypeId: "personas",
+      ownerKey: "org_1:user_2",
+      records: [remoteRecord("shared_server_record")],
+    });
+    await store.upsertRemoteRecords({
+      contractId: "contract_2",
+      entityTypeId: "personas",
+      ownerKey: "org_1:user_1",
+      records: [remoteRecord("shared_server_record")],
+    });
+    await store.upsertRemoteRecords({
+      contractId: "contract_1",
+      entityTypeId: "equipos",
+      ownerKey: "org_1:user_1",
+      records: [remoteRecord("shared_server_record")],
+    });
+
+    const recordInserts = db.runAsync.mock.calls.filter(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO entity_records"),
+    );
+    const localIds = recordInserts.map(([, localId]) => String(localId));
+
+    expect(recordInserts).toHaveLength(4);
+    expect(new Set(localIds).size).toBe(4);
+    expect(recordInserts.map((call) => call.slice(1, 6))).toEqual([
+      [expect.stringMatching(/^remote_/), "shared_server_record", "org_1:user_1", "contract_1", "personas"],
+      [expect.stringMatching(/^remote_/), "shared_server_record", "org_1:user_2", "contract_1", "personas"],
+      [expect.stringMatching(/^remote_/), "shared_server_record", "org_1:user_1", "contract_2", "personas"],
+      [expect.stringMatching(/^remote_/), "shared_server_record", "org_1:user_1", "contract_1", "equipos"],
+    ]);
+  });
+
   it("preserves an existing current-scope local id when refreshing a known remote record", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {

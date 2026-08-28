@@ -47,7 +47,7 @@ import {
 } from "@/lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "@/state/reconnect-sync";
 import { shouldEmitStateUpdateRefresh } from "@/state/state-update-refresh";
-import { syncPendingRecordsOnce } from "@/sync/records-sync";
+import { syncPendingWork } from "@/sync/pending-work-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
 
@@ -487,13 +487,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     try {
-      await syncPendingRecordsOnce({
+      await syncPendingWork({
         api,
         ownerKey,
-        store: definitionCache,
+        recordsStore: definitionCache,
+        syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
         token,
-      });
-      await syncPendingStateUpdatesWithTelemetry({
         trigger,
       });
       if (showStateUpdateDiagnostics) {
@@ -561,14 +560,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
       }
     }
 
-    await syncPendingRecordsOnce({
+    await syncPendingWork({
       api,
       ownerKey: nextOwnerKey,
-      store: definitionCache,
-      token: nextToken,
-    });
-    await syncPendingStateUpdatesWithTelemetry({
-      ownerKey: nextOwnerKey,
+      recordsStore: definitionCache,
+      syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
       token: nextToken,
       trigger,
     });
@@ -833,19 +829,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setContext(nextContext);
     setSelectedContractIdState(nextContractId);
     setStatus("authenticated");
-    void syncPendingRecordsOnce({
+    void syncPendingWork({
       api,
       ownerKey: nextOwnerKey,
-      store: definitionCache,
+      recordsStore: definitionCache,
+      syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
       token: loginResponse.accessToken,
+      trigger: "startup-with-pending",
     })
-      .then(async () => {
-      await syncPendingStateUpdatesWithTelemetry({
-        ownerKey: nextOwnerKey,
-        token: loginResponse.accessToken,
-        trigger: "startup-with-pending",
-      });
-      })
       .finally(refreshPendingRecordsCount);
   }
 

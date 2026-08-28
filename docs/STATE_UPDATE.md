@@ -148,7 +148,7 @@ Offline `STATE_UPDATE` save is atomic: the local `entity_records` snapshot and t
 
 ## Orchestration
 
-All automatic state-update sync execution goes through `syncPendingStateUpdatesWithTelemetry()` in `SessionProvider`, which wraps the internal engine `syncPendingStateUpdatesOnce()`.
+All automatic state-update sync execution goes through `syncPendingStateUpdatesWithTelemetry()` in `SessionProvider`, which wraps the internal engine `syncPendingStateUpdatesOnce()`. Combined pending-work runs use `syncPendingWork()` to keep the global engine order as RECORDS first, then STATE_UPDATE; lifecycle decisions still belong to `SessionProvider`.
 
 Current triggers:
 
@@ -339,7 +339,7 @@ Diagnostics distinguish:
 - consistency;
 - recovery state.
 
-Telemetry is persisted, fingerprinted, avoids PII, and must not change runtime behavior. Diagnostic event construction for manual state-update sync is shared between `SessionProvider` and `app/(app)/diagnostics/state-update.tsx`.
+Telemetry is persisted, fingerprinted, avoids PII, and diagnostic observation must not change runtime behavior. Explicit operator commands from diagnostics, such as manual retry or sync now, may invoke the existing sync/recovery commands after a user action. Diagnostic event construction for manual state-update sync is shared between `SessionProvider` and `app/(app)/diagnostics/state-update.tsx`.
 
 ## Recovery Invariants
 
@@ -367,8 +367,8 @@ Telemetry is persisted, fingerprinted, avoids PII, and must not change runtime b
 | 10 | Snapshot reconciliation never overwrites unresolved intent. | IMPLEMENTED |
 | 11 | Reconcile compares states plus extras. | IMPLEMENTED |
 | 12 | `remote_updated_at` comes from the backend. | IMPLEMENTED |
-| 13 | All sync uses one orchestrator. | IMPLEMENTED |
-| 14 | Diagnostics do not alter behavior. | IMPLEMENTED |
+| 13 | Combined pending-work sync uses one engine-order facade; state-update sync uses one telemetry wrapper. | IMPLEMENTED |
+| 14 | Diagnostic observation is passive; explicit operator commands may invoke existing recovery/sync commands. | IMPLEMENTED |
 | 15 | Attendance is an adapter, not an engine. | IMPLEMENTED |
 
 ## State Update 1.0 Readiness

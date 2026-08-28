@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
 import { OpcoApi, OpcoApiError } from "../lib/opco-api";
+import { StateUpdateOutboxDiagnostics } from "../lib/state-update-offline";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 import {
   createStateUpdateDiagnosticApi,
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
+  getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
   summarizeAttendanceGetResponse,
 } from "./state-update-route-logic";
@@ -77,6 +79,22 @@ describe("state update diagnostics route readiness", () => {
       reason: "session",
     });
   });
+
+  it("treats mounted diagnostics as passive observation without sync or mutation requests", () => {
+    const state = getStateUpdateDiagnosticsRouteState({
+      localDatabaseStorageState: readyStorage(),
+      ownerKey: "org_1:user_1",
+      selectedContractId: "contract_1",
+      status: "authenticated",
+    });
+
+    expect(getStateUpdateDiagnosticsObservationPlan(state)).toEqual({
+      autoAttendanceGet: false,
+      autoMutationRequest: false,
+      autoSync: false,
+      readOutbox: true,
+    });
+  });
 });
 
 describe("attendance GET diagnostics", () => {
@@ -130,6 +148,32 @@ describe("attendance GET diagnostics", () => {
 });
 
 describe("state update diagnostic sync instrumentation", () => {
+  it("keeps observation helpers passive until an explicit operator sync invokes the wrapped API", async () => {
+    const events = createStateUpdateDiagnosticEvents({
+      consistency: "OK",
+      localRecords: [],
+      operations: [],
+      summary: emptyStateUpdateDiagnosticsSummary(),
+    });
+    const baseApi: Pick<OpcoApi, "saveStateUpdateWorkflow"> = {
+      saveStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: "view_1", name: "Workflow", slug: "workflow" },
+        results: [],
+      })),
+    };
+    const api = createStateUpdateDiagnosticApi(baseApi, events);
+
+    expect(baseApi.saveStateUpdateWorkflow).not.toHaveBeenCalled();
+
+    await api.saveStateUpdateWorkflow("token", "contract_1", "view_1", {
+      clientRequestId: "request_1",
+      stateValues: [],
+      subjectRecordId: "subject_1",
+    });
+
+    expect(baseApi.saveStateUpdateWorkflow).toHaveBeenCalledOnce();
+  });
+
   it("captures selected operations and idempotency API failures without exposing full request IDs", async () => {
     const events = createStateUpdateDiagnosticEvents({
       consistency: "OK",
@@ -245,6 +289,28 @@ function readyStorage() {
     retryable: false,
     status: "ready" as const,
   } as const;
+}
+
+function emptyStateUpdateDiagnosticsSummary(): StateUpdateOutboxDiagnostics["summary"] {
+  return {
+    attendanceDerivedPendingCount: 0,
+    conflict: 0,
+    eligibleForAutoSync: 0,
+    failed: 0,
+    localConflict: 0,
+    localFailed: 0,
+    localPendingCreate: 0,
+    localPendingUpdate: 0,
+    localSynced: 0,
+    localSyncing: 0,
+    localTotal: 0,
+    orphanedLocalChange: 0,
+    pendingCreate: 0,
+    pendingUpdate: 0,
+    remoteSnapshotRepairable: 0,
+    stateUpdateTotalLocal: 0,
+    syncing: 0,
+  };
 }
 
 function attendanceResponse({

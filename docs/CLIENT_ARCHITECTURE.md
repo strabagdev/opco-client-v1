@@ -36,7 +36,7 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 | 4. Workflow adapters | `AttendanceWorkflow`, `StateUpdateWorkflow`, `attendance-offline.ts`, workflow logic helpers. | Attendance is an adapter/preset over `STATE_UPDATE`. |
 | 5. Domain/offline logic | `offline-records.ts`, `state-update-offline.ts`, `record-form.ts`, `entity-record-display.ts`. | Pure-ish rules for cache, forms, identity, conflicts, exact intent. |
 | 6. Persistence/cache | `local-db.ts`, `local-db-recovery.ts`, `token-storage.ts`, `session-persistence.ts`. | SQLite singleton, schema migrations, local storage. |
-| 7. Sync/orchestration | `records-sync.ts`, `state-update-sync.ts`, `reconnect-sync.ts`, `state-update-refresh.ts`, `SessionProvider`. | Two engines, coordinated by `SessionProvider`; each engine is single-flight. |
+| 7. Sync/orchestration | `pending-work-sync.ts`, `records-sync.ts`, `state-update-sync.ts`, `reconnect-sync.ts`, `state-update-refresh.ts`, `SessionProvider`. | Pending-work facade owns engine order; lifecycle triggers remain in `SessionProvider`; each engine is single-flight. |
 | 8. Connectivity/lifecycle | `connectivity.ts`, `SessionProvider`, `AppState`, service worker helpers. | Connectivity is a signal, not proof of write success. |
 | 9. API boundary | `opco-api.ts`, `config.ts`. | Envelope parsing, bearer auth, refresh, timeout, error taxonomy. |
 | 10. Operational Core | External repo `/api/v1`. | Online authority, idempotency, audit, validation. |
@@ -92,7 +92,7 @@ flowchart TD
 | STATE_UPDATE sync | Push `STATE_UPDATE` operations. | `src/sync/state-update-sync.ts`. | Pending state-update operations. | Completed/conflict/failed/retryable rows. | Single-flight promise; telemetry. | API, SQLite, exact reconcile. | Operational Core. | NETWORK, TIMEOUT, IDEMPOTENCY, CONFLICT, SQLITE. |
 | Connectivity | Online/offline/unknown signal. | `connectivity.ts`, `reconnect-sync.ts`. | NetInfo fetch/listener. | Connectivity state, reconnect triggers. | Controller previous status, timer, isSyncing. | NetInfo, SessionProvider. | Runtime signal only. | CONNECTIVITY unknown, false online assumptions. |
 | Prewarm | Prepare offline AppView metadata and selected source data. | `app-view-prewarm.ts`. | Assigned AppViews. | Prepared definitions; source records cache for workflows. | Active prewarm map. | API, SQLite. | Operational Core online. | NETWORK preserves ready cache; partial/error status. |
-| Diagnostics | Passive inspection of sync/recovery. | `state-update-route-logic.ts`, `records/sync-diagnostics.ts`, diagnostics route, `SessionProvider`. | SQLite rows, request wrapper timings. | Fingerprinted UI diagnostics. | `app_metadata` state-update telemetry; UI state. | API wrappers, SQLite. | Passive derived data. | diagnostics unavailable. |
+| Diagnostics | Passive observation plus explicit operator commands. | `state-update-route-logic.ts`, `records/sync-diagnostics.ts`, diagnostics route, `SessionProvider`. | SQLite rows, request wrapper timings, button presses. | Fingerprinted UI diagnostics and manual recovery/sync actions. | `app_metadata` state-update telemetry; UI state. | API wrappers, SQLite. | Passive derived data unless an operator command is pressed. | diagnostics unavailable. |
 | PWA/service worker | Offline shell and static asset cache. | `pwa.ts`, `generate-service-worker.mjs`, `start-web.mjs`, `public/manifest.json`. | Built `dist`, browser service worker APIs. | Precached shell, navigation fallback, readiness status. | Cache Storage shell cache. | Browser SW, Cache Storage. | Build artifacts. | shell-missing, preparing, unsupported. |
 | Operational Core boundary | External API and authoritative mutation. | `opco-api.ts`, backend docs. | Bearer token, contract/appView/entity ids, payloads. | Envelope data/errors. | None in client. | Network. | Operational Core DB. | HTTP, CONTRACT, AUTH, DB_UNAVAILABLE, envelope errors. |
 
@@ -182,7 +182,7 @@ The browser serves `index.html` from network when available. If navigation fails
 | Contract context and selected contract | CORE_SESSION | Owns `context`, `selectedContractId`, persisted selection. |
 | SQLite recovery screen | ORCHESTRATION | Watches `localDatabaseStorageState` and renders recovery UI. |
 | AppView prewarm kick-off | ORCHESTRATION | Calls `prewarmAssignedAppViewsOnce` after contract/view load. |
-| RECORDS sync trigger | ORCHESTRATION | Calls `syncPendingRecordsOnce`. |
+| RECORDS sync trigger | ORCHESTRATION | Calls `syncPendingWork`, which runs RECORDS first. |
 | STATE_UPDATE sync trigger and telemetry wrapper | ORCHESTRATION | Owns `syncPendingStateUpdatesWithTelemetry`. |
 | Reconnect and foreground/resume orchestration | ORCHESTRATION | Owns reconnect controller refs and AppState effect. |
 | Refresh keys for mounted renderers | ORCHESTRATION | Owns `recordsReconnectRefreshKey` and `stateUpdateReconnectRefreshKey`. |
@@ -282,7 +282,7 @@ Local database: `opco-client.db`. Current schema version in code: `8`.
 | `context_snapshot` | CACHE DATA | Cached `/me` and `/context` for offline startup. | SessionProvider/local DB. | Cache of Operational Core context. | `owner_key`. | Upserted after successful auth/context; read on offline restore. |
 | `app_views` | CACHE DATA | Assigned AppViews for a contract. | AppView navigation cache. | Cache of `/views`. | `owner_key + contract_id`. | Upserted online; read offline; cleared on logout navigation cache clear. |
 | `app_view_definitions` | CACHE DATA / METADATA | Prepared renderer/workflow metadata and readiness status. | Prewarm and renderers. | Cache of API definitions/workflow metadata. | `owner_key + contract_id + app_view_id`. | Reconciled against assigned AppViews; ready cache preserved on network prewarm failure. |
-| `entity_definitions` | CACHE DATA | Entity field definitions. | Definition cache/prewarm. | Cache of Operational Core entity definition. | `contract_id + entity_type_id`. | Upserted online; used offline. |
+| `entity_definitions` | METADATA | Contract-wide entity field definitions. | Definition cache/prewarm. | Cache of Operational Core entity definition. | `contract_id + entity_type_id`. | Upserted online; used offline; not owner-keyed while backend definitions are contract-wide metadata. |
 | `entity_records` | CACHE DATA / UNSYNCED INTENT | Renderable record snapshots, local workflow snapshots, conflict snapshots, remote version. | RECORDS and STATE_UPDATE runtimes. | Cache plus local intent until resolved. | `owner_key + contract_id + entity_type_id`; state-update values also include appView/date/subject. | Remote upsert, local create/update, sync completion, conflict/failure, scoped reconcile. |
 | `pending_operations` | UNSYNCED INTENT | Shared outbox for `CREATE`, `UPDATE`, `STATE_UPDATE`. | Offline record/state-update logic. | Local unresolved command. | `owner_key`, operation row references contract/entity/local record. | Created by local writes, selected by sync, deleted on completion, retained/marked for failure/conflict. |
 | `sync_telemetry` | TELEMETRY | Sync phases and timestamps. | Sync engines and renderers. | Passive local telemetry. | `owner_key + contract_id + entity_type_id`; state-update uses `workflow:<appViewId>`. | Updated during sync/refresh/reconcile; failure should not change business behavior. |
@@ -305,9 +305,24 @@ Categories:
 | `entityTypeId` | Dynamic record entity scope. For state-update telemetry, `workflow:<appViewId>` is used as a telemetry key. |
 | `appViewId` | Experience scope and workflow config identity. |
 
-Remote records use scoped local identity because the same `server_id` or local row shape must never collide across local owner, contract, entity, AppView, or date scopes. The current SQLite unique index for remote records includes `owner_key + contract_id + entity_type_id + server_id`.
+Remote entity record identity is `ownerKey + contractId + entityTypeId + serverId` in the local cache. Operational Core record IDs are stable remote record IDs; the client still scopes them by owner, contract, and entity type so shared devices, contract switching, or future non-global IDs cannot collide locally. `AppViewId` and date are not part of remote record identity: the same remote record may be visible through two AppViews, two dates, or two workflow snapshots without requiring two `entity_records` rows.
 
-Historical incident, architecture-only: earlier local identity assumptions allowed Attendance-derived rows to be interpreted in the wrong local scope. The current invariant is that a remote record never collides across local scopes.
+Workflow intent identity is separate. State-update `update-current` local rows are scoped by workflow semantics such as `appViewId`, `subjectRecordId`, date, uniqueness, and history mode. Those rows represent unresolved or cached workflow intent, not the generic remote record identity used by `RECORDS`.
+
+Historical incident, architecture-only: earlier local identity assumptions allowed Attendance-derived rows to be interpreted in the wrong local workflow scope. The current invariant is that remote record identity and workflow intent identity are not mixed.
+
+## Entity Definitions Scope
+
+Operational Core exposes entity definitions through `GET /api/v1/contracts/:contractId/entities/:entityTypeId` after contract membership authorization. The response is an active contract entity schema: entity metadata, active fields, active options, relation config, display config, and validation config. It does not include records or related record values.
+
+Current backend semantics make definitions contract-wide metadata:
+
+- ADMIN and MEMBER users in the same contract receive the same definition after contract access is accepted.
+- Field definitions, options, relation config, and display config are not user-specific.
+- AppView assignment controls which renderer/experience a user sees; it does not change the entity definition payload.
+- A user can only reuse a cached definition after the app has an owner-scoped session/context and an assigned AppView or workflow definition that points to that contract/entity.
+
+Therefore `entity_definitions` intentionally uses `contract_id + entity_type_id`, while `app_views`, `app_view_definitions`, `entity_records`, and pending work remain owner-scoped. If Operational Core later adds per-user field visibility or per-AppView definition shaping, this becomes an isolation bug and requires an owner- or AppView-scoped cache migration before enabling that backend behavior.
 
 ## Outbox
 
@@ -354,7 +369,9 @@ Triggers:
 | Manual retry/sync | Session context methods and diagnostics UI. | RECORDS then STATE_UPDATE. |
 | AppView refresh | Renderer-level load/refresh. | RECORDS full refresh or workflow GET/cache hydration; not necessarily outbox push. |
 
-Ordering inside `SessionProvider` is normally RECORDS sync first, then STATE_UPDATE sync. Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. There is no separate global orchestrator module; coordination is distributed in `SessionProvider`.
+Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_UPDATE sync. `SessionProvider` decides when to call it after startup, reconnect, unknown-to-online, foreground/resume, and manual sync. `SessionProvider` still owns auth/session, context refresh, selected contract, lifecycle, recovery UI, diagnostics state, pending-count refresh, and renderer refresh keys.
+
+Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results.
 
 Failure isolation:
 
@@ -493,7 +510,8 @@ Error groups:
 | STATE_UPDATE writes | Operational Core state-update engine. | Local state-update snapshot. | `STATE_UPDATE`. | Exact remote confirmation can complete; conflicts/idempotency errors stay explicit. |
 | Attendance | Operational Core Attendance/state-update backend. | Shared state-update cache plus source Personas cache. | `STATE_UPDATE`. | Attendance adapter maps to generic state-update semantics. |
 | Sync telemetry | Local observation. | `sync_telemetry`, `app_metadata`. | None. | Passive; must not affect business result. |
-| Diagnostics | Derived from local rows and request wrappers. | Local telemetry/diagnostic query. | None. | Passive and fingerprinted. |
+| Diagnostics observation | Derived from local rows and request wrappers. | Local telemetry/diagnostic query. | None. | Passive and fingerprinted. |
+| Diagnostic operator actions | Existing retry/sync/reset commands after explicit user action. | Local state plus Operational Core for sync. | Existing outbox/recovery command. | May mutate local state or call mutation APIs only after the button/confirmation. |
 | PWA assets | Current deployed build. | Service worker shell cache. | None. | New build cache replaces old shell cache; never deletes SQLite. |
 
 ## Refresh And Invalidation
@@ -513,7 +531,7 @@ Parallel mechanisms exist: renderer-level manual refresh and SessionProvider rec
 
 ## Diagnostics
 
-| Diagnostic | Source | Persistence | Scope | UI | Passive |
+| Diagnostic | Source | Persistence | Scope | UI | Observation passive |
 | --- | --- | --- | --- | --- | --- |
 | RECORDS sync diagnostics | `sync_telemetry`, refresh diagnostics. | SQLite `sync_telemetry`. | `ownerKey + contractId + entityTypeId`. | RECORDS renderer with diagnostics flag. | Yes. |
 | STATE_UPDATE outbox diagnostics | `pending_operations`, `entity_records`, definitions. | Mostly query-derived; reconnect telemetry in `app_metadata`. | `ownerKey`, workflow scopes. | Overlay and `/diagnostics/state-update`. | Yes. |
@@ -521,6 +539,10 @@ Parallel mechanisms exist: renderer-level manual refresh and SessionProvider rec
 | Connectivity diagnostics | NetInfo and persisted state-update reconnect telemetry. | `app_metadata` for state-update telemetry. | ownerKey where available. | State-update diagnostics panel. | Yes. |
 | API request timing | `OpcoNetworkError.diagnostics` and diagnostic wrappers. | UI run state only unless merged into diagnostics telemetry. | Request/run. | State-update diagnostics. | Yes. |
 | PWA shell diagnostics | Service worker message and cache status. | Browser Cache Storage; UI snapshot derived. | Browser/PWA context. | Home diagnostics/readiness helpers. | Yes. |
+
+Observation means opening, mounting, or refreshing a diagnostics view. Observation may read SQLite, local telemetry, connectivity state, service-worker readiness, and non-sensitive request timing already produced by prior runs. It must not start sync, change pending rows, reset SQLite, alter business cache, or create mutation requests.
+
+Operator actions are separate from observation. Buttons such as manual retry, sync now, and confirmed SQLite reset may mutate local state or call existing sync/recovery commands, but only after explicit user action. Attendance GET diagnostics is also an explicit read action from the diagnostics route; it is not fired automatically on mount.
 
 ## Error Taxonomy
 
@@ -680,28 +702,28 @@ sequenceDiagram
 | 3 | Pending local intent is not deleted by remote absence. | IMPLEMENTED |
 | 4 | Partial/search response is not an authoritative snapshot. | IMPLEMENTED |
 | 5 | Destructive reconcile can only use a complete successful remote snapshot. | IMPLEMENTED |
-| 6 | Local scope includes owner and contract for cached operational data. | IMPLEMENTED |
-| 7 | Remote record local identity cannot collide across local scopes. | IMPLEMENTED |
+| 6 | Local scope includes owner and contract for cached operational data and unresolved intent. | IMPLEMENTED |
+| 7 | Remote EntityRecord identity is `ownerKey + contractId + entityTypeId + serverId`; AppView/date belong to workflow intent, not remote record identity. | IMPLEMENTED |
 | 8 | Service worker does not manage business data. | IMPLEMENTED |
 | 9 | Connectivity does not prove backend write success or failure. | IMPLEMENTED |
 | 10 | RECORDS and STATE_UPDATE sync engines are single-flight. | IMPLEMENTED |
 | 11 | Sync orchestration is coordinated before refresh where pending work exists. | IMPLEMENTED |
 | 12 | AppView definition prewarm and data cache are separate concepts. | IMPLEMENTED |
-| 13 | Diagnostics are passive and should not change runtime behavior. | IMPLEMENTED |
+| 13 | Diagnostic observation is passive; explicit operator commands may invoke existing recovery/sync commands. | IMPLEMENTED |
 | 14 | `remote_updated_at` comes from the backend for confirmed remote versions. | IMPLEMENTED |
 | 15 | State-update `clientRequestId` represents immutable intent. | IMPLEMENTED |
 | 16 | Attendance is a workflow adapter, not a separate engine. | IMPLEMENTED |
 | 17 | SQLite reset is explicit and warns about pending work. | IMPLEMENTED |
 | 18 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
-| 19 | There is one clearly separated global sync orchestrator module. | GAP |
+| 19 | Pending-work sync order is behind a small facade; `SessionProvider` still concentrates lifecycle/auth/recovery/diagnostics responsibilities. | PARTIAL |
 | 20 | README architecture matches the current workflow implementation. | PARTIAL |
 
 ## Known Complexity And Technical Debt
 
 | Area | Issue | Concrete risk | Priority | Recommended action | Blocks production |
 | --- | --- | --- | --- | --- | --- |
-| SessionProvider | Owns auth, context, sync orchestration, recovery, refresh keys, diagnostics. | Changes in one concern can regress another. | P2 | Extract orchestration/diagnostics hooks after current stabilization. | No |
-| Global sync orchestration | Coordination lives in SessionProvider, while engines are separate single-flight modules. | Harder to reason about ordering and failure isolation globally. | P2 | Introduce explicit orchestrator facade with same behavior. | No |
+| SessionProvider | Owns auth, context, lifecycle triggers, recovery, refresh keys, diagnostics, and sync telemetry wrapping. | Changes in one concern can regress another. | P2 | Extract lifecycle/diagnostics hooks after current stabilization. | No |
+| Global sync orchestration | Pending engine order now lives in `syncPendingWork`, while trigger decisions and refresh side effects remain in `SessionProvider`. | Easier to test order, but provider still concentrates lifecycle details. | P2 | Keep facade thin; only extract more when duplication reappears. | No |
 | State-update conflict UI | Generic extra field diff is not complete. | Users may not see full extra-value differences. | P2 | State Update 1.1 conflict diff/resolution UI. | No |
 | README drift | README still contains older unsupported-workflow statements. | New contributors may trust stale docs. | P3 | Update README to point to this doc and `docs/STATE_UPDATE.md`. | No |
 | Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. | XSS exposure of access token. | P2 | Evaluate BFF/cookie-only access strategy for web. | No |
@@ -730,7 +752,7 @@ sequenceDiagram
 | API Client | Boundary | Authenticated `/api/v1` requests. | Operational Core. | High |
 | Operational Core | Backend | Online source of truth. | API Client. | High |
 | PWA Shell | Runtime | Offline static shell. | Browser, UI. | Medium |
-| Diagnostics | Observability | Passive state and timing visibility. | SessionProvider, SQLite, API wrappers. | Medium |
+| Diagnostics | Observability and explicit operator actions. | Passive state/timing visibility; buttons can invoke existing sync/recovery commands. | SessionProvider, SQLite, API wrappers. | Medium |
 
 ### Technical Nodes
 

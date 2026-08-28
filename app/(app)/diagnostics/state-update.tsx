@@ -231,16 +231,6 @@ export default function StateUpdateDiagnosticsRoute() {
     };
   }, [definitionCache, routeState]);
 
-  useEffect(() => {
-    if (!routeState.ready) {
-      return;
-    }
-
-    queueMicrotask(() => {
-      void refreshAttendanceDiagnostics();
-    });
-  }, [refreshAttendanceDiagnostics, routeState.ready]);
-
   if (!routeState.ready) {
     return (
       <View style={styles.loading}>

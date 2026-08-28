@@ -66,6 +66,21 @@ describe("state-update offline identity", () => {
     expect(second).not.toBe(first);
   });
 
+  it("keeps workflow intent identity separate from remote entity record local identity", () => {
+    const intentLocalId = createStateUpdateLocalRecordId({
+      appViewId: "view_attendance",
+      date: "2026-08-27",
+      historyMode: "update-current",
+      subjectRecordId: "person_server_1",
+      uniqueness: "subject-date",
+    });
+
+    expect(intentLocalId).toBe("state_update_view_attendance_2026-08-27_person_server_1");
+    expect(intentLocalId).not.toMatch(/^remote_/);
+    expect(intentLocalId).not.toContain("contract_1");
+    expect(intentLocalId).not.toContain("entity_attendance");
+  });
+
   it("does not consolidate append events for the same subject and date", () => {
     const first = createStateUpdateLocalRecordId({
       appViewId: "view_equipment_state",
