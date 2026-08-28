@@ -8,6 +8,7 @@ type StateUpdateSyncRun = {
   operationsSelected: number;
   result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
   startedAt: string;
+  syncRunId: string;
 } | null;
 
 type SyncPendingWorkInput = {
@@ -18,6 +19,7 @@ type SyncPendingWorkInput = {
   syncStateUpdates(input: {
     ownerKey: string;
     store?: StateUpdateSyncStore;
+    syncRunId: string;
     token: string;
     trigger: StateUpdateSyncTrigger;
   }): Promise<StateUpdateSyncRun>;
@@ -39,6 +41,7 @@ export async function syncPendingWork({
   token,
   trigger,
 }: SyncPendingWorkInput): Promise<SyncPendingWorkResult> {
+  const syncRunId = createSyncRunId();
   const records = await syncPendingRecordsOnce({
     api,
     ownerKey,
@@ -48,6 +51,7 @@ export async function syncPendingWork({
   const stateUpdate = await syncStateUpdates({
     ownerKey,
     store: stateUpdateStore,
+    syncRunId,
     token,
     trigger,
   });
@@ -56,4 +60,8 @@ export async function syncPendingWork({
     records,
     stateUpdate,
   };
+}
+
+export function createSyncRunId() {
+  return `sync_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

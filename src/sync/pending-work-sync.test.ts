@@ -29,6 +29,7 @@ describe("pending work sync orchestration", () => {
       expect(syncStateUpdates).toHaveBeenCalledWith({
         ownerKey: "org_1:user_1",
         store: undefined,
+        syncRunId: expect.stringMatching(/^sync_/),
         token: "token_1",
         trigger,
       });
@@ -85,7 +86,7 @@ describe("pending work sync orchestration", () => {
   });
 
   it("returns the STATE_UPDATE telemetry wrapper result from global pending work sync", async () => {
-    const stateUpdateRun = {
+    const syncStateUpdates = vi.fn(async (input: { syncRunId: string }) => ({
       completedAt: "2026-08-28T12:00:01.000Z",
       operationsSelected: 1,
       result: {
@@ -100,8 +101,8 @@ describe("pending work sync orchestration", () => {
         timeoutOccurred: false,
       },
       startedAt: "2026-08-28T12:00:00.000Z",
-    };
-    const syncStateUpdates = vi.fn(async () => stateUpdateRun);
+      syncRunId: input.syncRunId,
+    }));
 
     const result = await syncPendingWork({
       api: emptyRecordsApi(),
@@ -112,10 +113,11 @@ describe("pending work sync orchestration", () => {
       trigger: "unknown-to-online",
     });
 
-    expect(result.stateUpdate).toBe(stateUpdateRun);
+    expect(result.stateUpdate?.syncRunId).toMatch(/^sync_/);
     expect(syncStateUpdates).toHaveBeenCalledWith({
       ownerKey: "org_1:user_1",
       store: undefined,
+      syncRunId: expect.stringMatching(/^sync_/),
       token: "token_1",
       trigger: "unknown-to-online",
     });

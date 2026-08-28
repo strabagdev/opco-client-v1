@@ -83,6 +83,7 @@ type SessionContextValue = {
     api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
     ownerKey?: string;
     store?: StateUpdateSyncStore;
+    syncRunId?: string;
     token?: string;
     trigger: StateUpdateSyncTrigger;
   }): Promise<{
@@ -90,6 +91,7 @@ type SessionContextValue = {
     operationsSelected: number;
     result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
     startedAt: string;
+    syncRunId: string;
   } | null>;
   token: string | null;
 };
@@ -658,6 +660,7 @@ export function StateUpdateDiagnosticsPanel({
   ];
   const lastStateUpdateSyncRows: [string, string | number | boolean | null][] = reconnect.lastStateUpdateSync ? [
     ["trigger", reconnect.lastStateUpdateSync.trigger],
+    ["syncRunId", reconnect.lastStateUpdateSync.syncRunId ?? "none"],
     ["startedAt", reconnect.lastStateUpdateSync.startedAt],
     ["completedAt", reconnect.lastStateUpdateSync.completedAt ?? "none"],
     ["operationsSelected", reconnect.lastStateUpdateSync.operationsSelected],
@@ -678,6 +681,7 @@ export function StateUpdateDiagnosticsPanel({
     ["result", reconnect.lastStateUpdateSync.result],
   ] : [
     ["trigger", "none"],
+    ["syncRunId", "none"],
     ["startedAt", "none"],
     ["completedAt", "none"],
     ["operationsSelected", 0],

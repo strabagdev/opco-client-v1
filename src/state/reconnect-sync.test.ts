@@ -68,14 +68,41 @@ describe("reconnect sync controller", () => {
 
   it("does not run startup online sync when there is no pending work", async () => {
     const runSync = vi.fn(async () => undefined);
+    const onDetected = vi.fn();
     const shouldSync = vi.fn(async () => false);
-    const controller = createReconnectSyncController({ debounceMs: 100, runSync, shouldSync });
+    const controller = createReconnectSyncController({ debounceMs: 100, onDetected, runSync, shouldSync });
 
     controller.handleConnectivityStatus("online");
+
+    expect(onDetected).toHaveBeenCalledWith({
+      previousConnectivityStatus: "unknown",
+      resultingConnectivityStatus: "online",
+      trigger: "unknown-to-online",
+    });
 
     await vi.advanceTimersByTimeAsync(100);
 
     expect(shouldSync).toHaveBeenCalledOnce();
+    expect(runSync).not.toHaveBeenCalled();
+  });
+
+  it("records an offline to online reconnect detection before checking pending work", async () => {
+    const runSync = vi.fn(async () => undefined);
+    const onDetected = vi.fn();
+    const shouldSync = vi.fn(async () => false);
+    const controller = createReconnectSyncController({ debounceMs: 100, onDetected, runSync, shouldSync });
+
+    controller.handleConnectivityStatus("offline");
+    controller.handleConnectivityStatus("online");
+
+    expect(onDetected).toHaveBeenCalledWith({
+      previousConnectivityStatus: "offline",
+      resultingConnectivityStatus: "online",
+      trigger: "reconnect",
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
     expect(runSync).not.toHaveBeenCalled();
   });
 

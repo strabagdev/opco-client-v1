@@ -15,6 +15,7 @@ import {
   StateUpdateSyncTrigger,
 } from "../lib/state-update-offline";
 import { shouldEmitStateUpdateRefresh } from "./state-update-refresh";
+import { createSyncRunId } from "../sync/pending-work-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 
 export type StateUpdateReconnectDiagnostics = {
@@ -67,6 +68,7 @@ type SyncPendingStateUpdatesWithTelemetry = (input: {
   api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey?: string;
   store?: StateUpdateSyncStore;
+  syncRunId?: string;
   token?: string;
   trigger: StateUpdateSyncTrigger;
 }) => Promise<{
@@ -74,6 +76,7 @@ type SyncPendingStateUpdatesWithTelemetry = (input: {
   operationsSelected: number;
   result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
   startedAt: string;
+  syncRunId: string;
 } | null>;
 
 type UseSessionDiagnosticsInput = {
@@ -142,6 +145,7 @@ export function useSessionDiagnostics({
     operationsSelected,
     result,
     startedAt,
+    syncRunId,
     trigger,
   }: {
     completedAt?: string;
@@ -149,6 +153,7 @@ export function useSessionDiagnostics({
     operationsSelected: number;
     result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
     startedAt: string;
+    syncRunId?: string | null;
     trigger: StateUpdateSyncTrigger;
   }) => {
     const telemetryOwnerKey = runOwnerKey ?? ownerKey;
@@ -170,6 +175,7 @@ export function useSessionDiagnostics({
       operationsSelected,
       reconciledAfterTimeout: result.reconciledAfterTimeout,
       startedAt,
+      syncRunId,
       timeoutOccurred: result.timeoutOccurred,
       trigger,
     });
@@ -182,6 +188,7 @@ export function useSessionDiagnostics({
     api: stateUpdateApi = api,
     ownerKey: runOwnerKey = ownerKey ?? undefined,
     store = definitionCache,
+    syncRunId = createSyncRunId(),
     token: runToken = token ?? undefined,
     trigger,
   }: Parameters<SyncPendingStateUpdatesWithTelemetry>[0]) => {
@@ -209,6 +216,7 @@ export function useSessionDiagnostics({
       operationsSelected,
       result,
       startedAt,
+      syncRunId,
       trigger,
     });
 
@@ -217,6 +225,7 @@ export function useSessionDiagnostics({
       operationsSelected,
       result,
       startedAt,
+      syncRunId,
     };
   }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, setStateUpdateReconnectRefreshKey, token]);
 

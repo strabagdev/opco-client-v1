@@ -195,6 +195,7 @@ export type StateUpdateLastSyncTelemetry = {
   reconciledAfterTimeout: boolean;
   result: StateUpdateSyncTelemetryResult;
   startedAt: string;
+  syncRunId: string | null;
   timeoutOccurred: boolean;
   trigger: StateUpdateSyncTrigger;
 };
@@ -239,6 +240,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
   reconciledAfterTimeout,
   lastRequestDiagnostics = null,
   startedAt,
+  syncRunId = null,
   timeoutOccurred = false,
   trigger,
 }: {
@@ -252,6 +254,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
   operationsSelected: number;
   reconciledAfterTimeout: boolean;
   startedAt: string;
+  syncRunId?: string | null;
   timeoutOccurred?: boolean;
   trigger: StateUpdateSyncTrigger;
 }): StateUpdateSyncDiagnosticsTelemetry {
@@ -284,6 +287,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
         reconciledAfterTimeout,
       }),
       startedAt,
+      syncRunId,
       timeoutOccurred,
       trigger,
     },

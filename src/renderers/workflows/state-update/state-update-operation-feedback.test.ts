@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
+  stateUpdateRefreshErrorMessage,
 } from "./state-update-operation-feedback";
-import { StateUpdateLastSyncTelemetry } from "@/lib/state-update-offline";
+import { OpcoNetworkError } from "../../../lib/opco-api";
+import type { StateUpdateLastSyncTelemetry } from "../../../lib/state-update-offline";
 
 describe("state update operation feedback", () => {
   it("shows offline saved feedback for unresolved local intent while offline", () => {
@@ -107,6 +110,60 @@ describe("state update operation feedback", () => {
       pendingCount: 0,
     })).toBe(false);
   });
+
+  it("identifies a GET refresh timeout without treating it as a write failure", () => {
+    const error = timeoutError("GET", "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance");
+
+    expect(stateUpdateRefreshErrorMessage(error)).toBe("No se pudo actualizar la vista. Intenta actualizar nuevamente.");
+    expect(createStateUpdateVisibleErrorDiagnostics({
+      error,
+      operation: "refresh",
+      syncRunId: "sync_abc123",
+    })).toMatchObject({
+      errorCode: "OpcoNetworkError",
+      method: "GET",
+      operation: "refresh",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+      syncRunId: "sync_abc123",
+      timeoutOccurred: true,
+    });
+  });
+
+  it("keeps write success independent from a later GET refresh timeout", () => {
+    const writeFeedback = resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastSync: {
+        ...lastSync(),
+        operationsCompleted: 1,
+        result: "success",
+      },
+      pendingCount: 0,
+      successMessage: "Cambio registrado.",
+    });
+
+    expect(writeFeedback).toMatchObject({
+      message: "Cambio registrado.",
+      phase: "SUCCESS",
+    });
+    expect(stateUpdateRefreshErrorMessage(
+      timeoutError("GET", "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance"),
+    )).toBe("No se pudo actualizar la vista. Intenta actualizar nuevamente.");
+  });
+
+  it("does not create STATE_UPDATE sync telemetry semantics for a plain GET attendance timeout", () => {
+    const diagnostics = createStateUpdateVisibleErrorDiagnostics({
+      error: timeoutError("GET", "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance"),
+      operation: "load-day",
+    });
+
+    expect(diagnostics).toMatchObject({
+      method: "GET",
+      operation: "load-day",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+      syncRunId: null,
+      timeoutOccurred: true,
+    });
+  });
 });
 
 function lastSync(): StateUpdateLastSyncTelemetry {
@@ -120,7 +177,25 @@ function lastSync(): StateUpdateLastSyncTelemetry {
     reconciledAfterTimeout: false,
     result: "success",
     startedAt: "2026-08-28T12:00:00.000Z",
+    syncRunId: "sync_abc123",
     timeoutOccurred: false,
     trigger: "reconnect",
   };
+}
+
+function timeoutError(method: string, pathTemplate: string) {
+  return new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", {
+    abortControllerTriggered: true,
+    fetchResolvedAt: null,
+    httpStatus: null,
+    method,
+    pathTemplate,
+    requestCompletedAt: "2026-08-28T12:00:12.000Z",
+    requestDurationMs: 12000,
+    requestStartedAt: "2026-08-28T12:00:00.000Z",
+    responseBodyStartedAt: null,
+    responseParsedAt: null,
+    responseStarted: false,
+    timeoutMs: 12000,
+  });
 }

@@ -52,8 +52,13 @@ import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import {
+  createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
+  shouldShowStateUpdateVisibleErrorDiagnostics,
+  stateUpdateRefreshErrorMessage,
+  StateUpdateVisibleErrorDiagnostics,
+  StateUpdateVisibleErrorOperation,
 } from "./state-update-operation-feedback";
 
 type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
@@ -84,13 +89,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [extraErrors, setExtraErrors] = useState<RecordFormErrors>({});
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
+    useState<StateUpdateVisibleErrorDiagnostics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const requestSequenceRef = useRef(0);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
+  const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
 
   const hasDate = Boolean(response?.dateFieldId ?? appView.config.dateFieldId);
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
@@ -225,7 +234,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
   }, [appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId]);
 
-  const loadWorkflow = useCallback(async (query: { search?: string; subjectRecordId?: string } = {}) => {
+  const loadWorkflow = useCallback(async (query: { operation?: StateUpdateVisibleErrorOperation; search?: string; subjectRecordId?: string } = {}) => {
     if (!token || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
       setIsLoading(false);
@@ -234,6 +243,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     const requestId = ++requestSequenceRef.current;
     const hasSearch = Boolean(query.search);
+    const operation = query.operation ?? (hasSearch ? "search" : query.subjectRecordId ? "source-load" : "load-workflow");
 
     if (hasSearch) {
       setIsSearching(true);
@@ -241,7 +251,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setIsLoading(true);
     }
 
-    setError(null);
+    if (operation === "refresh") {
+      setRefreshError(null);
+    } else {
+      setError(null);
+      setRefreshError(null);
+    }
 
     try {
       if (!isOnline) {
@@ -261,6 +276,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       setResponse(nextResponse);
       setItems(nextResponse.items);
+      setRefreshError(null);
+      setVisibleErrorDiagnostics(null);
       if (ownerKey) {
         await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
@@ -273,7 +290,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
-        setError(nextError instanceof Error ? nextError.message : "No fue posible cargar el workflow.");
+        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+          error: nextError,
+          operation,
+          syncRunId: stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ?? null,
+        }));
+
+        if (operation === "refresh") {
+          setRefreshError(stateUpdateRefreshErrorMessage(nextError));
+        } else {
+          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar el workflow.");
+        }
       }
     } finally {
       if (requestId === requestSequenceRef.current) {
@@ -281,7 +308,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         setIsSearching(false);
       }
     }
-  }, [api, appView.id, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, selectedContractId, token]);
+  }, [api, appView.id, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, selectedContractId, stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId, token]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -305,11 +332,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     const timeoutId = setTimeout(() => {
       if (shouldSearchStateUpdateSubjects(searchText)) {
-        void loadWorkflow({ search: normalizeStateUpdateSearch(searchText) });
+        void loadWorkflow({ operation: "refresh", search: normalizeStateUpdateSearch(searchText) });
         return;
       }
 
-      void loadWorkflow();
+      void loadWorkflow({ operation: "refresh" });
     }, 0);
 
     return () => clearTimeout(timeoutId);
@@ -323,7 +350,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         return;
       }
 
-      void loadWorkflow({ search: normalizeStateUpdateSearch(searchText) });
+      void loadWorkflow({ operation: "search", search: normalizeStateUpdateSearch(searchText) });
     }, STATE_UPDATE_SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
@@ -343,12 +370,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setSelectedItem(item);
     setConflict(null);
     setError(null);
+    setRefreshError(null);
     setSuccessMessage(null);
     setStateValues(initialStateValues(response, item));
     setExtraValues(extraDefinition ? buildInitialFormValues(extraDefinition, item.current?.extraValues) : {});
     setExtraErrors({});
 
-    await loadWorkflow({ subjectRecordId: item.subject.id });
+    await loadWorkflow({ operation: "source-load", subjectRecordId: item.subject.id });
   }
 
   function setExtraValue(key: string, value: string | boolean | string[]) {
@@ -392,6 +420,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     setIsSaving(true);
     setError(null);
+    setRefreshError(null);
     setSuccessMessage(null);
 
     try {
@@ -418,7 +447,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         });
         setSuccessMessage("Guardado en este dispositivo.");
         clearSubjectFlow();
-        await loadWorkflow();
+        await loadWorkflow({ operation: "load-workflow" });
         await refreshRecordsSyncSummary();
         return;
       }
@@ -447,10 +476,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       if (hasSuccessfulStateUpdateResult(result.results)) {
         setSuccessMessage(stateUpdateSuccessLabel(result.results[0], "Estado actualizado.", "Cambio registrado."));
         clearSubjectFlow();
-        await loadWorkflow();
+        await loadWorkflow({ operation: "refresh" });
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible guardar el cambio.");
+      setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        error: nextError,
+        operation: "save",
+      }));
     } finally {
       setIsSaving(false);
     }
@@ -503,6 +536,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       {operationFeedback.message ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}
+        </Text>
+      ) : null}
+      {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
+      {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (
+        <Text style={styles.diagnostic}>
+          Visible UI error source: {visibleErrorDiagnostics.operation} {visibleErrorDiagnostics.method ?? "unknown"} {visibleErrorDiagnostics.pathTemplate ?? "unknown"} timeout={String(visibleErrorDiagnostics.timeoutOccurred)} status={visibleErrorDiagnostics.httpStatus ?? "none"} durationMs={visibleErrorDiagnostics.durationMs ?? "none"} run={visibleErrorDiagnostics.syncRunId ?? "none"} code={visibleErrorDiagnostics.errorCode}
         </Text>
       ) : null}
 
@@ -812,6 +851,12 @@ const styles = StyleSheet.create({
   dateLabel: {
     color: "#0f3036",
     fontWeight: "800",
+  },
+  diagnostic: {
+    color: "#587078",
+    fontFamily: "monospace",
+    fontSize: 12,
+    lineHeight: 16,
   },
   disabledButton: {
     opacity: 0.55,

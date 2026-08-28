@@ -594,7 +594,7 @@ Parallel mechanisms exist: renderer-level manual refresh and SessionProvider rec
 | STATE_UPDATE outbox diagnostics | `pending_operations`, `entity_records`, definitions. | Mostly query-derived; reconnect telemetry in `app_metadata`. | `ownerKey`, workflow scopes. | Overlay and `/diagnostics/state-update`. | Yes. |
 | SQLite recovery diagnostics | Recovery summary over local statuses. | Query-derived. | Local DB. | Recovery screen with diagnostics flag/dev. | Yes. |
 | Connectivity diagnostics | NetInfo and persisted state-update reconnect telemetry. | `app_metadata` for state-update telemetry. | ownerKey where available. | State-update diagnostics panel. | Yes. |
-| API request timing | `OpcoNetworkError.diagnostics` and diagnostic wrappers. | Manual diagnostic run state; sanitized last meaningful STATE_UPDATE sync timing in `app_metadata` when available. | Request/run. | State-update diagnostics. | Yes. |
+| API request timing | `OpcoNetworkError.diagnostics` and diagnostic wrappers. | Manual diagnostic run state; sanitized last meaningful STATE_UPDATE sync timing in `app_metadata` when available. | Request/run and local `syncRunId`. | State-update diagnostics and flagged workflow visible-error diagnostics. | Yes. |
 | PWA shell diagnostics | Service worker message and cache status. | Browser Cache Storage; UI snapshot derived. | Browser/PWA context. | Home diagnostics/readiness helpers. | Yes. |
 
 Observation means opening, mounting, or refreshing a diagnostics view. Observation may read SQLite, local telemetry, connectivity state, service-worker readiness, and non-sensitive request timing already produced by prior runs. It must not start sync, change pending rows, reset SQLite, alter business cache, or create mutation requests.

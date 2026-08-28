@@ -239,6 +239,7 @@ describe("state-update sync diagnostics telemetry", () => {
         reconciledAfterTimeout: true,
         result: "reconciled_success" as const,
         startedAt: "2026-08-27T10:00:00.000Z",
+        syncRunId: "sync_reconnect_1",
         timeoutOccurred: true,
         trigger: "reconnect" as const,
       },
@@ -263,6 +264,7 @@ describe("state-update sync diagnostics telemetry", () => {
         completedAt: "2026-08-27T10:00:12.000Z",
         operationsSelected: 1,
         result: "reconciled_success",
+        syncRunId: "sync_reconnect_1",
         timeoutOccurred: true,
         trigger: "reconnect",
       },
@@ -302,6 +304,7 @@ describe("state-update sync diagnostics telemetry", () => {
       operationsSelected: 1,
       reconciledAfterTimeout: true,
       startedAt: "2026-08-27T10:00:00.000Z",
+      syncRunId: "sync_reconnect_2",
       timeoutOccurred: true,
       trigger: "reconnect",
     }).lastStateUpdateSync).toMatchObject({
@@ -311,6 +314,7 @@ describe("state-update sync diagnostics telemetry", () => {
       },
       reconciledAfterTimeout: true,
       result: "reconciled_success",
+      syncRunId: "sync_reconnect_2",
       timeoutOccurred: true,
     });
   });

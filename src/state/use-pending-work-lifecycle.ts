@@ -26,6 +26,7 @@ type SyncPendingStateUpdatesWithTelemetry = (input: {
   api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey?: string;
   store?: StateUpdateSyncStore;
+  syncRunId?: string;
   token?: string;
   trigger: StateUpdateSyncTrigger;
 }) => Promise<{
@@ -33,6 +34,7 @@ type SyncPendingStateUpdatesWithTelemetry = (input: {
   operationsSelected: number;
   result: Awaited<ReturnType<typeof syncPendingStateUpdatesOnce>>;
   startedAt: string;
+  syncRunId: string;
 } | null>;
 
 type UsePendingWorkLifecycleInput = {
@@ -310,13 +312,10 @@ export function usePendingWorkLifecycle({
 
   useEffect(() => {
     const controller = createReconnectSyncController({
-      onSynced() {
-        setRecordsReconnectRefreshKey((key) => key + 1);
-      },
-      async runSync({ previousConnectivityStatus, resultingConnectivityStatus, trigger }) {
+      onDetected({ previousConnectivityStatus, resultingConnectivityStatus, trigger }) {
         const detectedAt = new Date().toISOString();
 
-        await persistStateUpdateReconnectDiagnostics((current) => ({
+        void persistStateUpdateReconnectDiagnostics((current) => ({
           ...current,
           currentConnectivity: {
             status: resultingConnectivityStatus,
@@ -329,7 +328,11 @@ export function usePendingWorkLifecycle({
             resultingConnectivityStatus,
           },
         }));
-
+      },
+      onSynced() {
+        setRecordsReconnectRefreshKey((key) => key + 1);
+      },
+      runSync({ trigger }) {
         return reconnectSessionAndRecordsRef.current(trigger);
       },
       shouldSync() {

@@ -10,6 +10,11 @@ type TimerId = ReturnType<typeof setTimeout>;
 
 type ReconnectSyncControllerOptions = {
   debounceMs?: number;
+  onDetected?(input: {
+    previousConnectivityStatus: ConnectivityStatus;
+    resultingConnectivityStatus: ConnectivityStatus;
+    trigger: StateUpdateSyncTrigger;
+  }): void;
   onSynced?: () => void;
   runSync(input: {
     previousConnectivityStatus: ConnectivityStatus;
@@ -26,6 +31,7 @@ const DEFAULT_RECONNECT_SYNC_DEBOUNCE_MS = 300;
 export function createReconnectSyncController({
   clearTimer = clearTimeout,
   debounceMs = DEFAULT_RECONNECT_SYNC_DEBOUNCE_MS,
+  onDetected,
   onSynced,
   runSync,
   shouldSync,
@@ -105,11 +111,14 @@ export function createReconnectSyncController({
       }
 
       if (wasOffline || wasUnknown) {
-        schedule({
+        const input = {
           previousConnectivityStatus: priorStatus,
           resultingConnectivityStatus: status,
           trigger: wasOffline ? "reconnect" : "unknown-to-online",
-        });
+        } as const;
+
+        onDetected?.(input);
+        schedule(input);
       }
     },
   };

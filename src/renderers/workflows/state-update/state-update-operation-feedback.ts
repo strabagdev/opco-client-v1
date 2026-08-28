@@ -1,5 +1,6 @@
-import type { ConnectivityStatus } from "@/lib/connectivity";
-import type { StateUpdateLastSyncTelemetry } from "@/lib/state-update-offline";
+import type { ConnectivityStatus } from "../../../lib/connectivity";
+import { OpcoApiError, OpcoNetworkError } from "../../../lib/opco-api";
+import type { StateUpdateLastSyncTelemetry } from "../../../lib/state-update-offline";
 
 export type StateUpdateOperationFeedbackPhase =
   | "CONFIRMING"
@@ -14,6 +15,27 @@ export type StateUpdateOperationFeedbackPhase =
 export type StateUpdateOperationFeedback = {
   message: string | null;
   phase: StateUpdateOperationFeedbackPhase;
+};
+
+export type StateUpdateVisibleErrorOperation =
+  | "load-day"
+  | "load-workflow"
+  | "refresh"
+  | "save"
+  | "search"
+  | "source-load"
+  | "sync";
+
+export type StateUpdateVisibleErrorDiagnostics = {
+  durationMs: number | null;
+  errorCode: string;
+  httpStatus: number | null;
+  method: string | null;
+  operation: StateUpdateVisibleErrorOperation;
+  pathTemplate: string | null;
+  startedAt: string | null;
+  syncRunId: string | null;
+  timeoutOccurred: boolean;
 };
 
 const TIMEOUT_ERROR_TEXT = "agoto el tiempo de espera";
@@ -92,4 +114,44 @@ export function hideStateUpdateTimeoutAfterConfirmedSync({
 
 function normalizeTimeoutError(error: string) {
   return error.normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(TIMEOUT_ERROR_TEXT);
+}
+
+export function createStateUpdateVisibleErrorDiagnostics({
+  error,
+  operation,
+  syncRunId = null,
+}: {
+  error: unknown;
+  operation: StateUpdateVisibleErrorOperation;
+  syncRunId?: string | null;
+}): StateUpdateVisibleErrorDiagnostics {
+  const diagnostics = error instanceof OpcoNetworkError ? error.diagnostics : undefined;
+
+  return {
+    durationMs: diagnostics?.requestDurationMs ?? null,
+    errorCode: error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR",
+    httpStatus: error instanceof OpcoApiError ? error.status : diagnostics?.httpStatus ?? null,
+    method: diagnostics?.method ?? null,
+    operation,
+    pathTemplate: diagnostics?.pathTemplate ?? null,
+    startedAt: diagnostics?.requestStartedAt ?? null,
+    syncRunId,
+    timeoutOccurred: diagnostics?.abortControllerTriggered === true,
+  };
+}
+
+export function stateUpdateRefreshErrorMessage(error: unknown) {
+  if (error instanceof OpcoNetworkError && error.diagnostics?.abortControllerTriggered) {
+    return "No se pudo actualizar la vista. Intenta actualizar nuevamente.";
+  }
+
+  return error instanceof Error ? error.message : "No se pudo actualizar la vista. Intenta actualizar nuevamente.";
+}
+
+export function shouldShowStateUpdateVisibleErrorDiagnostics() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).get("stateUpdateDiagnostics") === "1";
 }

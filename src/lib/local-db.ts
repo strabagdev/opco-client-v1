@@ -3892,6 +3892,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       reconciledAfterTimeout: true,
       result: "reconciled_success",
       startedAt: previousRun?.startedAt ?? completedAt,
+      syncRunId: previousRun?.syncRunId ?? null,
       timeoutOccurred: previousRun?.timeoutOccurred ?? (previousRun?.reconciledAfterTimeout === true),
       trigger: previousRun?.trigger ?? "other",
     },
@@ -3915,6 +3916,7 @@ function normalizeLastStateUpdateSyncTelemetry(
     reconciledAfterTimeout: telemetry.reconciledAfterTimeout === true,
     result: normalizeStateUpdateSyncTelemetryResult(telemetry.result),
     startedAt: telemetry.startedAt,
+    syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
     timeoutOccurred: telemetry.timeoutOccurred === true || telemetry.reconciledAfterTimeout === true,
     trigger: normalizeStateUpdateSyncTrigger(telemetry.trigger),
   };
