@@ -898,6 +898,21 @@ class MemoryRecordStore implements OfflineRecordStore {
     };
   }
 
+  async getRecordOutboxConsistency(input: Parameters<OfflineRecordStore["getRecordOutboxConsistency"]>[0]) {
+    const scopeFingerprint = fingerprintRecordsScope(input);
+
+    return {
+      issueCounts: {
+        INCONSISTENT_COMPLETION: 0,
+        ORPHANED_LOCAL_INTENT: 0,
+        ORPHANED_OUTBOX: 0,
+      },
+      issues: [],
+      ok: true,
+      scope: scopeFingerprint,
+    };
+  }
+
   async listProblemRecords(input: Parameters<OfflineRecordStore["listProblemRecords"]>[0]) {
     return [...this.records.values()].filter((item) =>
       this.recordMatches(item, input.ownerKey, input.contractId, input.entityTypeId) &&

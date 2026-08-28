@@ -100,11 +100,35 @@ export type RecordsRefreshDiagnostics = {
   writeScope?: RecordsScopeFingerprint;
 };
 
+export type RecordOutboxConsistencyIssueCode =
+  | "ORPHANED_LOCAL_INTENT"
+  | "ORPHANED_OUTBOX"
+  | "INCONSISTENT_COMPLETION";
+
+export type RecordOutboxConsistencyIssue = {
+  code: RecordOutboxConsistencyIssueCode;
+  contract: string;
+  entity: string;
+  localRecord: string;
+  operation: "CREATE" | "UPDATE" | "none";
+  operationId: string | null;
+  owner: string;
+  syncStatus: RecordSyncStatus | "missing-record";
+};
+
+export type RecordOutboxConsistency = {
+  ok: boolean;
+  issueCounts: Record<RecordOutboxConsistencyIssueCode, number>;
+  issues: RecordOutboxConsistencyIssue[];
+  scope: RecordsScopeFingerprint;
+};
+
 export type OfflineRecordStore = {
   countPendingOperations(ownerKey: string): Promise<number>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
   getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;
   getRecordCacheStatusCounts(input: BaseScopedInput): Promise<RecordCacheStatusCounts>;
+  getRecordOutboxConsistency(input: BaseScopedInput): Promise<RecordOutboxConsistency>;
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;

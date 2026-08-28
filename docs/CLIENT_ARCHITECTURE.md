@@ -253,12 +253,23 @@ Rules:
 - Remote records are upserted under a scoped local identity to prevent cross-owner/contract/entity collisions.
 - Local statuses are `synced`, `pending_create`, `pending_update`, `syncing`, `failed`, and `conflict`.
 - `pending_create`, `pending_update`, `syncing`, `failed`, and `conflict` are not deleted because a remote partial response does not include them.
+- Local RECORDS create/update writes are atomic: the `entity_records` snapshot and matching `pending_operations` row are written in the same SQLite transaction. The UI must not report local save success before that transaction commits.
+- Remote RECORDS completion is atomic: `server_id`, backend `remote_updated_at`, `sync_status`, duplicate remote-row cleanup, and pending operation cleanup commit together or roll back together.
+- RECORDS conflict and definitive failure markers update the record and outbox coherently in one SQLite transaction.
 
 Conflict model:
 
 - UPDATE sync performs preflight `GET record`.
 - If remote `updatedAt` differs from local `remote_updated_at`, it marks conflict before PATCH.
 - Old cache without `remote_updated_at` is treated as conflict rather than patching blindly.
+
+Recovery model:
+
+- `syncing` is not irreversible. If a `CREATE` or `UPDATE` outbox row exists, a later sync trigger may select it again according to the normal retry policy.
+- Active local intent with no outbox is `ORPHANED_LOCAL_INTENT`. The client must not invent the missing payload or silently mark it synced.
+- A `CREATE` or `UPDATE` outbox row with no matching `entity_records` row is `ORPHANED_OUTBOX`. The client must not invent a record snapshot or silently delete the operation.
+- A `synced` record with an active `CREATE` or `UPDATE` outbox row is `INCONSISTENT_COMPLETION`. The client must not perform a hidden mutation to reconcile it.
+- `getRecordOutboxConsistency()` reports these states with fingerprinted owner/contract/entity/local/operation identifiers for diagnostics and operator support.
 
 ## STATE_UPDATE Engine
 
@@ -355,6 +366,13 @@ Manual intervention:
 - Definitive API/validation failures.
 - `IDEMPOTENCY_KEY_REUSED`.
 - `IDEMPOTENCY_RESULT_UNAVAILABLE` when exact remote reconcile cannot safely prove success.
+
+RECORDS outbox integrity:
+
+- `CREATE` and `UPDATE` local saves commit their renderable `entity_records` snapshot and durable outbox row in one SQLite transaction.
+- Completion commits remote identity/version updates and outbox cleanup in one SQLite transaction.
+- Conflict, retryable failure, and definitive failure state transitions commit the outbox error metadata and record status together.
+- Crash leftovers are observable through `getRecordOutboxConsistency()` and RECORDS diagnostics. Detection is read-only and sanitized; recovery requires normal sync retry or explicit operator/product handling.
 
 ## Global Sync Orchestration
 
@@ -534,6 +552,7 @@ Parallel mechanisms exist: renderer-level manual refresh and SessionProvider rec
 | Diagnostic | Source | Persistence | Scope | UI | Observation passive |
 | --- | --- | --- | --- | --- | --- |
 | RECORDS sync diagnostics | `sync_telemetry`, refresh diagnostics. | SQLite `sync_telemetry`. | `ownerKey + contractId + entityTypeId`. | RECORDS renderer with diagnostics flag. | Yes. |
+| RECORDS outbox consistency | `pending_operations`, `entity_records`. | Query-derived. | `ownerKey + contractId + entityTypeId`. | RECORDS renderer with diagnostics flag. | Yes. |
 | STATE_UPDATE outbox diagnostics | `pending_operations`, `entity_records`, definitions. | Mostly query-derived; reconnect telemetry in `app_metadata`. | `ownerKey`, workflow scopes. | Overlay and `/diagnostics/state-update`. | Yes. |
 | SQLite recovery diagnostics | Recovery summary over local statuses. | Query-derived. | Local DB. | Recovery screen with diagnostics flag/dev. | Yes. |
 | Connectivity diagnostics | NetInfo and persisted state-update reconnect telemetry. | `app_metadata` for state-update telemetry. | ownerKey where available. | State-update diagnostics panel. | Yes. |
@@ -714,9 +733,11 @@ sequenceDiagram
 | 15 | State-update `clientRequestId` represents immutable intent. | IMPLEMENTED |
 | 16 | Attendance is a workflow adapter, not a separate engine. | IMPLEMENTED |
 | 17 | SQLite reset is explicit and warns about pending work. | IMPLEMENTED |
-| 18 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
-| 19 | Pending-work sync order is behind a small facade; `SessionProvider` still concentrates lifecycle/auth/recovery/diagnostics responsibilities. | PARTIAL |
-| 20 | README architecture matches the current workflow implementation. | PARTIAL |
+| 18 | RECORDS local create/update intent, remote completion, conflict, and failure transitions are atomic between `entity_records` and `pending_operations`. | IMPLEMENTED |
+| 19 | RECORDS outbox consistency issues are detectable without exposing raw identifiers or silently repairing data. | IMPLEMENTED |
+| 20 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
+| 21 | Pending-work sync order is behind a small facade; `SessionProvider` still concentrates lifecycle/auth/recovery/diagnostics responsibilities. | PARTIAL |
+| 22 | README architecture matches the current workflow implementation. | PARTIAL |
 
 ## Known Complexity And Technical Debt
 

@@ -141,6 +141,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         error: null,
         isLoading: true,
         local: null,
+        outboxConsistency: null,
         ownerKey,
         page: 1,
         refresh: null,
@@ -187,6 +188,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                   error: null,
                   isLoading: true,
                   local: diagnostics.afterReconcile ?? null,
+                  outboxConsistency: null,
                   ownerKey,
                   page: 1,
                   refresh: diagnostics,
@@ -200,6 +202,19 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               suppressNetworkTelemetry: status === "offline",
               token,
             });
+        let outboxConsistency: RecordsDiagnosticsState["outboxConsistency"] = null;
+
+        if (shouldShowRecordsDiagnostics()) {
+          try {
+            outboxConsistency = await definitionCache.getRecordOutboxConsistency({
+              contractId: selectedContractId,
+              entityTypeId,
+              ownerKey,
+            });
+          } catch {
+            outboxConsistency = null;
+          }
+        }
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
@@ -216,6 +231,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
             error: null,
             isLoading: false,
             local: current?.local ?? null,
+            outboxConsistency,
             ownerKey: current?.ownerKey ?? ownerKey,
             page: recordsResult.pagination.page,
             refresh: current?.refresh ?? null,

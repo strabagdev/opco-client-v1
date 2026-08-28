@@ -47,6 +47,8 @@ import {
   RecordsReconcileDiagnostics,
   RecordSyncStatus,
   RecordsSyncSummary,
+  RecordOutboxConsistency,
+  RecordOutboxConsistencyIssueCode,
   fingerprintRecordsScope,
 } from "./offline-records";
 import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
@@ -110,6 +112,7 @@ export function getLocalDatabase(): LocalDatabase {
     getCachedRecord,
     getRecordsSyncSummary,
     getRecordCacheStatusCounts,
+    getRecordOutboxConsistency,
     getStateUpdateSummary,
     getStateUpdateOutboxDiagnostics,
     getStateUpdateSyncDiagnosticsTelemetry,
@@ -1266,43 +1269,45 @@ async function createLocalRecord({
   const now = new Date().toISOString();
   const displayName = buildLocalDisplayName(values);
 
-  await db.runAsync(
-    `
-      INSERT INTO entity_records (
-        local_id,
-        server_id,
-        owner_key,
-        contract_id,
-        entity_type_id,
-        display_name,
-        values_json,
-        cached_at,
-        sync_status
-      )
-      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'pending_create')
-    `,
-    localId,
-    ownerKey,
-    contractId,
-    entityTypeId,
-    displayName,
-    JSON.stringify(values),
-    now,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        INSERT INTO entity_records (
+          local_id,
+          server_id,
+          owner_key,
+          contract_id,
+          entity_type_id,
+          display_name,
+          values_json,
+          cached_at,
+          sync_status
+        )
+        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'pending_create')
+      `,
+      localId,
+      ownerKey,
+      contractId,
+      entityTypeId,
+      displayName,
+      JSON.stringify(values),
+      now,
+    );
 
-  await upsertPendingOperation({
-    clientRequestId,
-    contractId,
-    entityTypeId,
-    localRecordId: localId,
-    operation: "CREATE",
-    ownerKey,
-    payload: {
+    await upsertPendingOperationInTransaction(db, {
       clientRequestId,
-      values,
-    },
-    serverRecordId: null,
-    timestamp: now,
+      contractId,
+      entityTypeId,
+      localRecordId: localId,
+      operation: "CREATE",
+      ownerKey,
+      payload: {
+        clientRequestId,
+        values,
+      },
+      serverRecordId: null,
+      timestamp: now,
+    });
   });
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: localId });
@@ -1351,50 +1356,53 @@ async function updateLocalRecord({
   );
   const nextStatus: RecordSyncStatus = createOperation ? "pending_create" : "pending_update";
 
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET display_name = ?,
-          values_json = ?,
-          cached_at = ?,
-          sync_status = ?,
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      WHERE local_id = ?
-    `,
-    buildLocalDisplayName(nextValues),
-    JSON.stringify(nextValues),
-    now,
-    nextStatus,
-    existing.localId,
-  );
-
-  if (createOperation) {
+  await db.withTransactionAsync(async () => {
     await db.runAsync(
       `
-        UPDATE pending_operations
-        SET payload_json = ?,
-            updated_at = ?,
-            last_error_code = NULL,
-            last_error_message = NULL
-        WHERE id = ?
+        UPDATE entity_records
+        SET display_name = ?,
+            values_json = ?,
+            cached_at = ?,
+            sync_status = ?,
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
       `,
-      JSON.stringify({
-        clientRequestId: createOperation.client_request_id,
-        values: nextValues,
-      }),
+      buildLocalDisplayName(nextValues),
+      JSON.stringify(nextValues),
       now,
-      createOperation.id,
+      nextStatus,
+      existing.localId,
     );
-  } else {
+
+    if (createOperation) {
+      await db.runAsync(
+        `
+          UPDATE pending_operations
+          SET payload_json = ?,
+              updated_at = ?,
+              last_error_code = NULL,
+              last_error_message = NULL
+          WHERE id = ?
+        `,
+        JSON.stringify({
+          clientRequestId: createOperation.client_request_id,
+          values: nextValues,
+        }),
+        now,
+        createOperation.id,
+      );
+      return;
+    }
+
     if (!existing.serverId) {
       throw new Error("No se puede sincronizar UPDATE sin server_id.");
     }
 
-    await upsertPendingOperation({
+    await upsertPendingOperationInTransaction(db, {
       clientRequestId: createLocalRecordId(),
       contractId,
       entityTypeId,
@@ -1407,7 +1415,7 @@ async function updateLocalRecord({
       serverRecordId: existing.serverId,
       timestamp: now,
     });
-  }
+  });
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -1485,6 +1493,115 @@ async function getRecordsSyncSummary({
     failedCount: count(["failed"]),
     pendingCount: count(["pending_create", "pending_update"]),
     syncingCount: count(["syncing"]),
+  };
+}
+
+async function getRecordOutboxConsistency({
+  contractId,
+  entityTypeId,
+  ownerKey,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+}): Promise<RecordOutboxConsistency> {
+  const db = await getDatabase();
+  const scope = fingerprintRecordsScope({ contractId, entityTypeId, ownerKey });
+  const rows = await db.getAllAsync<{
+    code: RecordOutboxConsistencyIssueCode;
+    local_record_id: string | null;
+    operation: "CREATE" | "UPDATE" | null;
+    operation_id: string | null;
+    sync_status: RecordSyncStatus | null;
+  }>(
+    `
+      SELECT
+        'ORPHANED_LOCAL_INTENT' AS code,
+        entity_records.local_id AS local_record_id,
+        NULL AS operation,
+        NULL AS operation_id,
+        entity_records.sync_status AS sync_status
+      FROM entity_records
+      LEFT JOIN pending_operations ON pending_operations.owner_key = entity_records.owner_key
+        AND pending_operations.contract_id = entity_records.contract_id
+        AND pending_operations.entity_type_id = entity_records.entity_type_id
+        AND pending_operations.local_record_id = entity_records.local_id
+        AND pending_operations.operation IN ('CREATE', 'UPDATE')
+      WHERE entity_records.owner_key = ?
+        AND entity_records.contract_id = ?
+        AND entity_records.entity_type_id = ?
+        AND entity_records.sync_status IN ('pending_create', 'pending_update', 'syncing')
+        AND pending_operations.id IS NULL
+      UNION ALL
+      SELECT
+        'ORPHANED_OUTBOX' AS code,
+        pending_operations.local_record_id AS local_record_id,
+        pending_operations.operation AS operation,
+        pending_operations.id AS operation_id,
+        NULL AS sync_status
+      FROM pending_operations
+      LEFT JOIN entity_records ON entity_records.owner_key = pending_operations.owner_key
+        AND entity_records.contract_id = pending_operations.contract_id
+        AND entity_records.entity_type_id = pending_operations.entity_type_id
+        AND entity_records.local_id = pending_operations.local_record_id
+      WHERE pending_operations.owner_key = ?
+        AND pending_operations.contract_id = ?
+        AND pending_operations.entity_type_id = ?
+        AND pending_operations.operation IN ('CREATE', 'UPDATE')
+        AND entity_records.local_id IS NULL
+      UNION ALL
+      SELECT
+        'INCONSISTENT_COMPLETION' AS code,
+        entity_records.local_id AS local_record_id,
+        pending_operations.operation AS operation,
+        pending_operations.id AS operation_id,
+        entity_records.sync_status AS sync_status
+      FROM entity_records
+      INNER JOIN pending_operations ON pending_operations.owner_key = entity_records.owner_key
+        AND pending_operations.contract_id = entity_records.contract_id
+        AND pending_operations.entity_type_id = entity_records.entity_type_id
+        AND pending_operations.local_record_id = entity_records.local_id
+        AND pending_operations.operation IN ('CREATE', 'UPDATE')
+      WHERE entity_records.owner_key = ?
+        AND entity_records.contract_id = ?
+        AND entity_records.entity_type_id = ?
+        AND entity_records.sync_status = 'synced'
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+    ownerKey,
+    contractId,
+    entityTypeId,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+  const issueCounts: Record<RecordOutboxConsistencyIssueCode, number> = {
+    INCONSISTENT_COMPLETION: 0,
+    ORPHANED_LOCAL_INTENT: 0,
+    ORPHANED_OUTBOX: 0,
+  };
+  const issues: RecordOutboxConsistency["issues"] = rows.map((row) => {
+    issueCounts[row.code] += 1;
+
+    return {
+      code: row.code,
+      contract: scope.contract,
+      entity: scope.entity,
+      localRecord: fingerprintDiagnosticValue(row.local_record_id ?? "missing"),
+      operation: row.operation ?? "none",
+      operationId: row.operation_id ? fingerprintDiagnosticValue(row.operation_id) : null,
+      owner: scope.owner,
+      syncStatus: row.sync_status ?? "missing-record",
+    };
+  });
+
+  return {
+    issueCounts,
+    issues,
+    ok: issues.length === 0,
+    scope,
   };
 }
 
@@ -2142,34 +2259,37 @@ async function listStateUpdateConflicts(input: StateUpdateScope) {
 
 async function markPendingOperationSyncing(operationId: string) {
   const db = await getDatabase();
+  const now = new Date().toISOString();
 
-  await db.runAsync(
-    `
-      UPDATE pending_operations
-      SET attempts = attempts + 1,
-          updated_at = ?,
-          last_error_code = NULL,
-          last_error_message = NULL
-      WHERE id = ?
-    `,
-    new Date().toISOString(),
-    operationId,
-  );
-
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET sync_status = 'syncing',
-          sync_error_code = NULL,
-          sync_error_message = NULL
-      WHERE local_id = (
-        SELECT local_record_id
-        FROM pending_operations
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET attempts = attempts + 1,
+            updated_at = ?,
+            last_error_code = NULL,
+            last_error_message = NULL
         WHERE id = ?
-      )
-    `,
-    operationId,
-  );
+      `,
+      now,
+      operationId,
+    );
+
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET sync_status = 'syncing',
+            sync_error_code = NULL,
+            sync_error_message = NULL
+        WHERE local_id = (
+          SELECT local_record_id
+          FROM pending_operations
+          WHERE id = ?
+        )
+      `,
+      operationId,
+    );
+  });
 }
 
 async function listPendingStateUpdateOperations(ownerKey: string) {
@@ -2336,53 +2456,56 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
   const db = await getDatabase();
   const now = new Date().toISOString();
 
-  await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
-  await db.runAsync(
-    `
-      DELETE FROM entity_records
-      WHERE owner_key = ?
-        AND contract_id = ?
-        AND entity_type_id = ?
-        AND server_id = ?
-        AND local_id <> ?
-    `,
-    operation.ownerKey,
-    operation.contractId,
-    operation.entityTypeId,
-    record.id,
-    operation.localRecordId,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        DELETE FROM entity_records
+        WHERE owner_key = ?
+          AND contract_id = ?
+          AND entity_type_id = ?
+          AND server_id = ?
+          AND local_id <> ?
+      `,
+      operation.ownerKey,
+      operation.contractId,
+      operation.entityTypeId,
+      record.id,
+      operation.localRecordId,
+    );
 
-  const remaining = await db.getFirstAsync<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM pending_operations WHERE local_record_id = ?`,
-    operation.localRecordId,
-  );
-  const nextStatus: RecordSyncStatus = remaining?.total ? "pending_update" : "synced";
+    await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
 
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET server_id = ?,
-          display_name = ?,
-          values_json = ?,
-          remote_updated_at = ?,
-          cached_at = ?,
-          sync_status = ?,
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      WHERE local_id = ?
-    `,
-    record.id,
-    record.displayName,
-    JSON.stringify(record.values),
-    record.updatedAt,
-    now,
-    nextStatus,
-    operation.localRecordId,
-  );
+    const remaining = await db.getFirstAsync<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM pending_operations WHERE local_record_id = ?`,
+      operation.localRecordId,
+    );
+    const nextStatus: RecordSyncStatus = remaining?.total ? "pending_update" : "synced";
+
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET server_id = ?,
+            display_name = ?,
+            values_json = ?,
+            remote_updated_at = ?,
+            cached_at = ?,
+            sync_status = ?,
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
+      `,
+      record.id,
+      record.displayName,
+      JSON.stringify(record.values),
+      record.updatedAt,
+      now,
+      nextStatus,
+      operation.localRecordId,
+    );
+  });
 }
 
 async function completeStateUpdateOperation(
@@ -2446,7 +2569,9 @@ async function completeStateUpdateOperationInTransaction(
 async function retryPendingOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
-  await setOperationError(db, operation, code, message, operation.operation === "CREATE" ? "pending_create" : "pending_update");
+  await db.withTransactionAsync(async () => {
+    await setOperationError(db, operation, code, message, operation.operation === "CREATE" ? "pending_create" : "pending_update");
+  });
 }
 
 async function retryStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
@@ -2520,7 +2645,9 @@ async function retryFailedStateUpdateOperations({
 async function failPendingOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
-  await setOperationError(db, operation, code, message, "failed");
+  await db.withTransactionAsync(async () => {
+    await setOperationError(db, operation, code, message, "failed");
+  });
 }
 
 async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
@@ -2546,25 +2673,28 @@ async function readRecordRemoteUpdatedAt(operation: PendingOperation) {
 
 async function markPendingOperationConflict(operation: PendingOperation, remoteRecord: EntityRecord, code: string, message: string) {
   const db = await getDatabase();
+  const now = new Date().toISOString();
 
-  await db.runAsync(
-    `
-      UPDATE pending_operations
-      SET updated_at = ?,
-          last_error_code = ?,
-          last_error_message = ?
-      WHERE id = ?
-    `,
-    new Date().toISOString(),
-    code,
-    message,
-    operation.id,
-  );
-  await markRecordConflict(db, {
-    localRecordId: operation.localRecordId,
-    remoteRecord,
-    syncErrorCode: code,
-    syncErrorMessage: message,
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET updated_at = ?,
+            last_error_code = ?,
+            last_error_message = ?
+        WHERE id = ?
+      `,
+      now,
+      code,
+      message,
+      operation.id,
+    );
+    await markRecordConflict(db, {
+      localRecordId: operation.localRecordId,
+      remoteRecord,
+      syncErrorCode: code,
+      syncErrorMessage: message,
+    });
   });
 }
 
@@ -2703,30 +2833,32 @@ async function retryFailedRecord({
     ? { clientRequestId: operation.client_request_id, values: existing.values }
     : { values: existing.values };
 
-  await db.runAsync(
-    `
-      UPDATE pending_operations
-      SET payload_json = ?,
-          updated_at = ?,
-          last_error_code = NULL,
-          last_error_message = NULL
-      WHERE id = ?
-    `,
-    JSON.stringify(nextPayload),
-    now,
-    operation.id,
-  );
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET sync_status = ?,
-          sync_error_code = NULL,
-          sync_error_message = NULL
-      WHERE local_id = ?
-    `,
-    nextStatus,
-    existing.localId,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET payload_json = ?,
+            updated_at = ?,
+            last_error_code = NULL,
+            last_error_message = NULL
+        WHERE id = ?
+      `,
+      JSON.stringify(nextPayload),
+      now,
+      operation.id,
+    );
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET sync_status = ?,
+            sync_error_code = NULL,
+            sync_error_message = NULL
+        WHERE local_id = ?
+      `,
+      nextStatus,
+      existing.localId,
+    );
+  });
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -2764,36 +2896,39 @@ async function resolveRecordConflictWithLocal({
   }
 
   const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
+  const now = new Date().toISOString();
 
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET remote_updated_at = ?,
-          sync_status = 'pending_update',
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      WHERE local_id = ?
-    `,
-    remote.record.updatedAt,
-    existing.localId,
-  );
-  await db.runAsync(
-    `
-      UPDATE pending_operations
-      SET payload_json = ?,
-          updated_at = ?,
-          last_error_code = NULL,
-          last_error_message = NULL
-      WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
-    `,
-    JSON.stringify({ values: existing.values }),
-    new Date().toISOString(),
-    ownerKey,
-    existing.localId,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET remote_updated_at = ?,
+            sync_status = 'pending_update',
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
+      `,
+      remote.record.updatedAt,
+      existing.localId,
+    );
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET payload_json = ?,
+            updated_at = ?,
+            last_error_code = NULL,
+            last_error_message = NULL
+        WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
+      `,
+      JSON.stringify({ values: existing.values }),
+      now,
+      ownerKey,
+      existing.localId,
+    );
+  });
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -2831,36 +2966,39 @@ async function resolveRecordConflictWithRemote({
   }
 
   const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
+  const now = new Date().toISOString();
 
-  await db.runAsync(
-    `
-      DELETE FROM pending_operations
-      WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
-    `,
-    ownerKey,
-    existing.localId,
-  );
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET display_name = ?,
-          values_json = ?,
-          remote_updated_at = ?,
-          cached_at = ?,
-          sync_status = 'synced',
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      WHERE local_id = ?
-    `,
-    remote.record.displayName,
-    JSON.stringify(remote.record.values),
-    remote.record.updatedAt,
-    new Date().toISOString(),
-    existing.localId,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        DELETE FROM pending_operations
+        WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
+      `,
+      ownerKey,
+      existing.localId,
+    );
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET display_name = ?,
+            values_json = ?,
+            remote_updated_at = ?,
+            cached_at = ?,
+            sync_status = 'synced',
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
+      `,
+      remote.record.displayName,
+      JSON.stringify(remote.record.values),
+      remote.record.updatedAt,
+      now,
+      existing.localId,
+    );
+  });
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -2871,28 +3009,30 @@ async function resolveRecordConflictWithRemote({
   return record;
 }
 
-async function upsertPendingOperation({
-  clientRequestId,
-  contractId,
-  entityTypeId,
-  localRecordId,
-  operation,
-  ownerKey,
-  payload,
-  serverRecordId,
-  timestamp,
-}: {
-  clientRequestId: string;
-  contractId: string;
-  entityTypeId: string;
-  localRecordId: string;
-  operation: PendingOperation["operation"];
-  ownerKey: string;
-  payload: { clientRequestId?: string; values: Record<string, EntityRecordValue> };
-  serverRecordId: string | null;
-  timestamp: string;
-}) {
-  const db = await getDatabase();
+async function upsertPendingOperationInTransaction(
+  db: SQLite.SQLiteDatabase,
+  {
+    clientRequestId,
+    contractId,
+    entityTypeId,
+    localRecordId,
+    operation,
+    ownerKey,
+    payload,
+    serverRecordId,
+    timestamp,
+  }: {
+    clientRequestId: string;
+    contractId: string;
+    entityTypeId: string;
+    localRecordId: string;
+    operation: PendingOperation["operation"];
+    ownerKey: string;
+    payload: { clientRequestId?: string; values: Record<string, EntityRecordValue> };
+    serverRecordId: string | null;
+    timestamp: string;
+  },
+) {
   const id = `${operation.toLocaleLowerCase("en-US")}_${localRecordId}`;
 
   await db.runAsync(

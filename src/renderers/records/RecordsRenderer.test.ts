@@ -58,6 +58,30 @@ describe("records diagnostics", () => {
         synced: 388,
         total: 388,
       },
+      outboxConsistency: {
+        issueCounts: {
+          INCONSISTENT_COMPLETION: 0,
+          ORPHANED_LOCAL_INTENT: 1,
+          ORPHANED_OUTBOX: 0,
+        },
+        issues: [{
+          code: "ORPHANED_LOCAL_INTENT",
+          contract: "fp_contract",
+          entity: "fp_entity",
+          localRecord: "fp_local",
+          operation: "none",
+          operationId: null,
+          owner: "fp_owner",
+          syncStatus: "pending_update",
+        }],
+        ok: false,
+        scope: {
+          contract: "fp_contract",
+          entity: "fp_entity",
+          owner: "fp_owner",
+          scope: "fp_scope",
+        },
+      },
       ownerKey: "org_sensitive:user_brenda",
       page: 1,
       refresh: {
@@ -97,6 +121,8 @@ describe("records diagnostics", () => {
     expect(rows).toContainEqual(["remoteTotal", "388"]);
     expect(rows).toContainEqual(["pagesFetched", "1:100, 2:100, 3:100, 4:88"]);
     expect(rows).toContainEqual(["local total", "388"]);
+    expect(rows).toContainEqual(["outboxConsistency", "ISSUE"]);
+    expect(rows).toContainEqual(["orphanedLocalIntent", "1"]);
     expect(rows).toContainEqual(["renderer records", "25"]);
     expect(rows).toContainEqual(["search", "empty"]);
     expect(rendered).not.toContain("org_sensitive:user_brenda");

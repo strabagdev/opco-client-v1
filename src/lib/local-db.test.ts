@@ -9,6 +9,7 @@ import {
   resetLocalDatabaseAfterConfirmation,
   retryLocalDatabaseInitialization,
 } from "./local-db";
+import { PendingOperation } from "./offline-records";
 
 const sqliteMock = vi.hoisted(() => ({
   deleteDatabaseAsync: vi.fn(),
@@ -939,6 +940,292 @@ describe("local database singleton", () => {
     expect(saveCalls[1][0]).toContain("INSERT INTO pending_operations");
   });
 
+  it("persists the local RECORDS create snapshot and outbox operation in one SQLite transaction", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: String(params.at(-1)),
+          sync_status: "pending_create",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.createLocalRecord({
+      clientRequestId: "request_1",
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      localId: "local_1",
+      ownerKey: "org_1:user_1",
+      values: { name: "Local" },
+    });
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("INSERT INTO entity_records");
+    expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("does not report RECORDS create success when the outbox insert fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("pending insert failed");
+      throw new Error("pending insert failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO pending_operations")) {
+        throw new Error("pending insert failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.createLocalRecord({
+      clientRequestId: "request_1",
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      localId: "local_1",
+      ownerKey: "org_1:user_1",
+      values: { name: "Local" },
+    })).rejects.toThrow("pending insert failed");
+
+    const saveCalls = db.runAsync.mock.calls.filter(([sql]) =>
+      String(sql).includes("INSERT INTO entity_records") || String(sql).includes("INSERT INTO pending_operations"),
+    );
+
+    expect(saveCalls[0][0]).toContain("INSERT INTO entity_records");
+    expect(saveCalls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("persists the local RECORDS update snapshot and outbox operation in one SQLite transaction", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          remote_updated_at: "2026-08-24T10:00:00.000Z",
+          server_id: "record_1",
+          sync_status: "synced",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.updateLocalRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      recordId: "record_1",
+      values: { status: "local" },
+    });
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE entity_records");
+    expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("does not report RECORDS update success when the outbox write fails inside the transaction", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          server_id: "record_1",
+          sync_status: "synced",
+        });
+      }
+
+      return null;
+    });
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("pending insert failed");
+      throw new Error("pending insert failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO pending_operations")) {
+        throw new Error("pending insert failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.updateLocalRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      recordId: "record_1",
+      values: { status: "local" },
+    })).rejects.toThrow("pending insert failed");
+  });
+
+  it("commits RECORDS remote completion as one transaction", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    const store = getLocalDatabase();
+
+    await store.completePendingOperation(recordsPendingOperation(), remoteRecord("record_1"));
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("DELETE FROM entity_records");
+    expect(db.runAsync.mock.calls[1][0]).toContain("DELETE FROM pending_operations");
+    expect(db.runAsync.mock.calls[2][0]).toContain("UPDATE entity_records");
+    expect(db.runAsync.mock.calls[2][0]).toContain("sync_status = ?");
+  });
+
+  it("does not leave RECORDS completion half-applied when the outbox delete fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("delete failed");
+      throw new Error("delete failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql === "DELETE FROM pending_operations WHERE id = ?") {
+        throw new Error("delete failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.completePendingOperation(recordsPendingOperation(), remoteRecord("record_1"))).rejects.toThrow("delete failed");
+  });
+
+  it("commits RECORDS conflict metadata and outbox error as one transaction", async () => {
+    const store = getLocalDatabase();
+
+    await store.markPendingOperationConflict(
+      recordsPendingOperation(),
+      remoteRecord("record_1"),
+      "REMOTE_VERSION_CHANGED",
+      "changed",
+    );
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE pending_operations");
+    expect(db.runAsync.mock.calls[1][0]).toContain("sync_status = 'conflict'");
+  });
+
+  it("does not leave RECORDS conflict half-applied when the record conflict write fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("conflict failed");
+      throw new Error("conflict failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("sync_status = 'conflict'")) {
+        throw new Error("conflict failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.markPendingOperationConflict(
+      recordsPendingOperation(),
+      remoteRecord("record_1"),
+      "REMOTE_VERSION_CHANGED",
+      "changed",
+    )).rejects.toThrow("conflict failed");
+  });
+
+  it("commits RECORDS definitive failure as one transaction", async () => {
+    const store = getLocalDatabase();
+
+    await store.failPendingOperation(recordsPendingOperation(), "VALIDATION", "invalid");
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE pending_operations");
+    expect(db.runAsync.mock.calls[1][0]).toContain("UPDATE entity_records");
+  });
+
+  it("does not leave RECORDS failure half-applied when the record status write fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("failure write failed");
+      throw new Error("failure write failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE entity_records")) {
+        throw new Error("failure write failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.failPendingOperation(recordsPendingOperation(), "VALIDATION", "invalid")).rejects.toThrow("failure write failed");
+  });
+
+  it("detects RECORDS outbox consistency issues without exposing raw identifiers", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("ORPHANED_LOCAL_INTENT")) {
+        return [
+          {
+            code: "ORPHANED_LOCAL_INTENT",
+            local_record_id: "local_secret_1",
+            operation: null,
+            operation_id: null,
+            sync_status: "pending_update",
+          },
+          {
+            code: "ORPHANED_OUTBOX",
+            local_record_id: "local_secret_2",
+            operation: "CREATE",
+            operation_id: "create_local_secret_2",
+            sync_status: null,
+          },
+          {
+            code: "INCONSISTENT_COMPLETION",
+            local_record_id: "local_secret_3",
+            operation: "UPDATE",
+            operation_id: "update_local_secret_3",
+            sync_status: "synced",
+          },
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const consistency = await store.getRecordOutboxConsistency({
+      contractId: "contract_sensitive",
+      entityTypeId: "entity_sensitive",
+      ownerKey: "org_sensitive:user_sensitive",
+    });
+
+    expect(consistency.ok).toBe(false);
+    expect(consistency.issueCounts).toEqual({
+      INCONSISTENT_COMPLETION: 1,
+      ORPHANED_LOCAL_INTENT: 1,
+      ORPHANED_OUTBOX: 1,
+    });
+    expect(JSON.stringify(consistency)).not.toContain("secret");
+    expect(consistency.issues.map((issue) => issue.code)).toEqual([
+      "ORPHANED_LOCAL_INTENT",
+      "ORPHANED_OUTBOX",
+      "INCONSISTENT_COMPLETION",
+    ]);
+  });
+
   it("creates three persisted STATE_UPDATE intents for three different Attendance people", async () => {
     const savedRows = new Map<string, ReturnType<typeof stateUpdateEntityRecordRow>>();
 
@@ -1346,6 +1633,47 @@ function remoteRecord(id: string) {
     id,
     updatedAt: "2026-08-24T10:00:00.000Z",
     values: { nombre: id },
+  };
+}
+
+function recordsEntityRecordRow(overrides: Record<string, unknown> = {}) {
+  return {
+    cached_at: "2026-08-24T10:00:00.000Z",
+    conflict_remote_display_name: null,
+    conflict_remote_updated_at: null,
+    conflict_remote_values_json: null,
+    contract_id: "contract_1",
+    display_name: "Local",
+    entity_type_id: "entity_1",
+    local_id: "local_1",
+    owner_key: "org_1:user_1",
+    remote_updated_at: null,
+    server_id: null,
+    sync_error_code: null,
+    sync_error_message: null,
+    sync_status: "pending_create",
+    values_json: JSON.stringify({ name: "Local" }),
+    ...overrides,
+  };
+}
+
+function recordsPendingOperation(overrides: Partial<PendingOperation> = {}): PendingOperation {
+  return {
+    attempts: 1,
+    clientRequestId: "request_1",
+    contractId: "contract_1",
+    createdAt: "2026-08-24T10:00:00.000Z",
+    entityTypeId: "entity_1",
+    id: "create_local_1",
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    localRecordId: "local_1",
+    operation: "CREATE",
+    ownerKey: "org_1:user_1",
+    payload: { clientRequestId: "request_1", values: { name: "Local" } },
+    serverRecordId: null,
+    updatedAt: "2026-08-24T10:00:00.000Z",
+    ...overrides,
   };
 }
 

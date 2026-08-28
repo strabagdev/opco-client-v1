@@ -1,5 +1,9 @@
 import { SyncTelemetry } from "@/lib/sync-telemetry";
-import { RecordCacheStatusCounts, RecordsRefreshDiagnostics } from "@/lib/offline-records";
+import {
+  RecordCacheStatusCounts,
+  RecordOutboxConsistency,
+  RecordsRefreshDiagnostics,
+} from "@/lib/offline-records";
 
 export type RecordsSyncDiagnosticsSummary = {
   conflictCount: number;
@@ -40,6 +44,7 @@ export type RecordsDiagnosticsState = {
   error: string | null;
   isLoading: boolean;
   local: RecordCacheStatusCounts | null;
+  outboxConsistency?: RecordOutboxConsistency | null;
   ownerKey: string;
   page: number;
   refresh: RecordsRefreshDiagnostics | null;
@@ -55,6 +60,7 @@ export function getRecordsDiagnosticsRows(diagnostics: RecordsDiagnosticsState |
 
   const refresh = diagnostics.refresh;
   const local = diagnostics.local;
+  const consistency = diagnostics.outboxConsistency;
   const pages = refresh?.pages.map((page) => `${page.page}:${page.count}`).join(", ") ?? "none";
 
   return [
@@ -81,6 +87,10 @@ export function getRecordsDiagnosticsRows(diagnostics: RecordsDiagnosticsState |
     ["local pending_update", String(local?.pendingUpdate ?? "none")],
     ["local failed", String(local?.failed ?? "none")],
     ["local conflict", String(local?.conflict ?? "none")],
+    ["outboxConsistency", consistency ? (consistency.ok ? "OK" : "ISSUE") : "none"],
+    ["orphanedLocalIntent", String(consistency?.issueCounts.ORPHANED_LOCAL_INTENT ?? "none")],
+    ["orphanedOutbox", String(consistency?.issueCounts.ORPHANED_OUTBOX ?? "none")],
+    ["inconsistentCompletion", String(consistency?.issueCounts.INCONSISTENT_COMPLETION ?? "none")],
     ["renderer records", String(diagnostics.rendererRecords)],
     ["rendererCount", String(diagnostics.rendererRecords)],
     ["writeScope", refresh?.writeScope?.scope ?? "none"],
