@@ -1,6 +1,10 @@
 import type { ConnectivityStatus } from "../../../lib/connectivity";
 import { OpcoApiError, OpcoNetworkError } from "../../../lib/opco-api";
-import type { StateUpdateLastSyncTelemetry } from "../../../lib/state-update-offline";
+import type {
+  StateUpdateLastSyncTelemetry,
+  StateUpdateVisibleErrorResolution,
+  StateUpdateVisibleErrorTelemetry,
+} from "../../../lib/state-update-offline";
 
 export type StateUpdateOperationFeedbackPhase =
   | "CONFIRMING"
@@ -26,17 +30,7 @@ export type StateUpdateVisibleErrorOperation =
   | "source-load"
   | "sync";
 
-export type StateUpdateVisibleErrorDiagnostics = {
-  durationMs: number | null;
-  errorCode: string;
-  httpStatus: number | null;
-  method: string | null;
-  operation: StateUpdateVisibleErrorOperation;
-  pathTemplate: string | null;
-  startedAt: string | null;
-  syncRunId: string | null;
-  timeoutOccurred: boolean;
-};
+export type StateUpdateVisibleErrorDiagnostics = StateUpdateVisibleErrorTelemetry;
 
 const TIMEOUT_ERROR_TEXT = "agoto el tiempo de espera";
 
@@ -119,22 +113,26 @@ function normalizeTimeoutError(error: string) {
 export function createStateUpdateVisibleErrorDiagnostics({
   error,
   operation,
+  resolution = "unresolved",
   syncRunId = null,
 }: {
   error: unknown;
   operation: StateUpdateVisibleErrorOperation;
+  resolution?: StateUpdateVisibleErrorResolution;
   syncRunId?: string | null;
 }): StateUpdateVisibleErrorDiagnostics {
   const diagnostics = error instanceof OpcoNetworkError ? error.diagnostics : undefined;
 
   return {
+    clearedAt: null,
     durationMs: diagnostics?.requestDurationMs ?? null,
     errorCode: error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR",
     httpStatus: error instanceof OpcoApiError ? error.status : diagnostics?.httpStatus ?? null,
     method: diagnostics?.method ?? null,
+    occurredAt: diagnostics?.requestStartedAt ?? new Date().toISOString(),
     operation,
     pathTemplate: diagnostics?.pathTemplate ?? null,
-    startedAt: diagnostics?.requestStartedAt ?? null,
+    resolution,
     syncRunId,
     timeoutOccurred: diagnostics?.abortControllerTriggered === true,
   };

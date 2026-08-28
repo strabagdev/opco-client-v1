@@ -18,6 +18,8 @@ import {
   StateUpdateOfflineStore,
   StateUpdateScope,
   StateUpdateSnapshotReconcileResult,
+  StateUpdateVisibleErrorResolution,
+  StateUpdateVisibleErrorTelemetry,
   stateUpdateRemoteItemMatchesPayload,
   stateUpdateRecordToItem,
   UpsertStateUpdateSnapshotInput,
@@ -128,6 +130,7 @@ export function getLocalDatabase(): LocalDatabase {
     listStateUpdateLatest,
     markPendingOperationSyncing,
     markStateUpdateOperationSyncing,
+    recordStateUpdateVisibleErrorEvent,
     markPendingOperationConflict,
     markStateUpdateOperationConflict,
     readRecordRemoteUpdatedAt,
@@ -142,6 +145,7 @@ export function getLocalDatabase(): LocalDatabase {
     retryFailedStateUpdateOperations,
     retryPendingOperation,
     retryStateUpdateOperation,
+    resolveStateUpdateVisibleErrorEvent,
     discardStateUpdateLocalChange,
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
@@ -3808,6 +3812,44 @@ async function setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetr
   );
 }
 
+async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry) {
+  const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
+
+  await setStateUpdateSyncDiagnosticsTelemetry(ownerKey, {
+    currentConnectivity: current?.currentConnectivity ?? {
+      status: "unknown",
+      updatedAt: event.occurredAt,
+    },
+    lastReconnect: current?.lastReconnect ?? {
+      detected: false,
+      detectedAt: null,
+      previousConnectivityStatus: null,
+      resultingConnectivityStatus: null,
+    },
+    lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
+    lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
+    lastVisibleErrorEvent: event,
+  });
+}
+
+async function resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution) {
+  const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
+  const lastVisibleErrorEvent = current?.lastVisibleErrorEvent;
+
+  if (!current || !lastVisibleErrorEvent || lastVisibleErrorEvent.clearedAt) {
+    return;
+  }
+
+  await setStateUpdateSyncDiagnosticsTelemetry(ownerKey, {
+    ...current,
+    lastVisibleErrorEvent: {
+      ...lastVisibleErrorEvent,
+      clearedAt: new Date().toISOString(),
+      resolution,
+    },
+  });
+}
+
 async function setSelectedContractId(contractId: string | null, ownerKey?: string | null) {
   const db = await getDatabase();
   const key = ownerKey ? `${SELECTED_CONTRACT_ID_KEY}:${ownerKey}` : SELECTED_CONTRACT_ID_KEY;
@@ -3852,7 +3894,9 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
         previousConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.previousConnectivityStatus),
         resultingConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.resultingConnectivityStatus),
       },
+      lastStateUpdateActivity: normalizeLastStateUpdateActivityTelemetry(parsed.lastStateUpdateActivity),
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
+      lastVisibleErrorEvent: normalizeLastVisibleErrorEventTelemetry(parsed.lastVisibleErrorEvent),
     };
   } catch {
     return null;
@@ -3868,8 +3912,6 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
 }) {
   const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
   const previousRun = current?.lastStateUpdateSync;
-  const previousSelected = previousRun?.operationsSelected ?? 1;
-  const previousAttempted = previousRun?.operationsAttempted ?? 1;
 
   await setStateUpdateSyncDiagnosticsTelemetry(ownerKey, {
     currentConnectivity: current?.currentConnectivity ?? {
@@ -3882,20 +3924,20 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       previousConnectivityStatus: null,
       resultingConnectivityStatus: null,
     },
-    lastStateUpdateSync: {
+    lastStateUpdateActivity: {
       completedAt,
       lastRequestDiagnostics: previousRun?.lastRequestDiagnostics ?? null,
-      operationsAttempted: Math.max(previousAttempted, 1),
       operationsCompleted: Math.max(previousRun?.operationsCompleted ?? 0, 1),
       operationsFailed: 0,
-      operationsSelected: Math.max(previousSelected, 1),
-      reconciledAfterTimeout: true,
       result: "reconciled_success",
       startedAt: previousRun?.startedAt ?? completedAt,
       syncRunId: previousRun?.syncRunId ?? null,
       timeoutOccurred: previousRun?.timeoutOccurred ?? (previousRun?.reconciledAfterTimeout === true),
-      trigger: previousRun?.trigger ?? "other",
+      trigger: "snapshot_reconciliation",
+      type: "snapshot_reconciliation",
     },
+    lastStateUpdateSync: previousRun ?? null,
+    lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
   });
 }
 
@@ -3919,6 +3961,57 @@ function normalizeLastStateUpdateSyncTelemetry(
     syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
     timeoutOccurred: telemetry.timeoutOccurred === true || telemetry.reconciledAfterTimeout === true,
     trigger: normalizeStateUpdateSyncTrigger(telemetry.trigger),
+  };
+}
+
+function normalizeLastStateUpdateActivityTelemetry(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"]> | null | undefined,
+): StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"] {
+  if (!telemetry || typeof telemetry.startedAt !== "string") {
+    return null;
+  }
+
+  const type = telemetry.type === "snapshot_reconciliation" || telemetry.type === "sync" ? telemetry.type : null;
+
+  if (!type) {
+    return null;
+  }
+
+  return {
+    completedAt: typeof telemetry.completedAt === "string" ? telemetry.completedAt : null,
+    lastRequestDiagnostics: normalizeStateUpdateRequestDiagnostics(telemetry.lastRequestDiagnostics),
+    operationsCompleted: normalizeDiagnosticCount(telemetry.operationsCompleted),
+    operationsFailed: normalizeDiagnosticCount(telemetry.operationsFailed),
+    result: normalizeStateUpdateSyncTelemetryResult(telemetry.result),
+    startedAt: telemetry.startedAt,
+    syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
+    timeoutOccurred: telemetry.timeoutOccurred === true,
+    trigger: telemetry.trigger === "snapshot_reconciliation"
+      ? "snapshot_reconciliation"
+      : normalizeStateUpdateSyncTrigger(telemetry.trigger),
+    type,
+  };
+}
+
+function normalizeLastVisibleErrorEventTelemetry(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"]> | null | undefined,
+): StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"] {
+  if (!telemetry || typeof telemetry.occurredAt !== "string" || typeof telemetry.operation !== "string") {
+    return null;
+  }
+
+  return {
+    clearedAt: typeof telemetry.clearedAt === "string" ? telemetry.clearedAt : null,
+    durationMs: typeof telemetry.durationMs === "number" ? telemetry.durationMs : null,
+    errorCode: typeof telemetry.errorCode === "string" ? telemetry.errorCode : "UNKNOWN_ERROR",
+    httpStatus: typeof telemetry.httpStatus === "number" ? telemetry.httpStatus : null,
+    method: typeof telemetry.method === "string" ? telemetry.method : null,
+    occurredAt: telemetry.occurredAt,
+    operation: telemetry.operation,
+    pathTemplate: typeof telemetry.pathTemplate === "string" ? telemetry.pathTemplate : null,
+    resolution: normalizeStateUpdateVisibleErrorResolution(telemetry.resolution),
+    syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
+    timeoutOccurred: telemetry.timeoutOccurred === true,
   };
 }
 
@@ -3990,4 +4083,13 @@ function normalizeStateUpdateSyncTrigger(value: unknown) {
     value === "other"
     ? value
     : "other";
+}
+
+function normalizeStateUpdateVisibleErrorResolution(value: unknown): StateUpdateVisibleErrorResolution {
+  return value === "cleared_after_success" ||
+    value === "cleared_by_user" ||
+    value === "refresh_failed" ||
+    value === "unresolved"
+    ? value
+    : "unresolved";
 }

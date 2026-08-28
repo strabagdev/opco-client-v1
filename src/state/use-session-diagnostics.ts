@@ -21,7 +21,9 @@ import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state
 export type StateUpdateReconnectDiagnostics = {
   currentConnectivity: StateUpdateSyncDiagnosticsTelemetry["currentConnectivity"];
   lastReconnect: StateUpdateSyncDiagnosticsTelemetry["lastReconnect"];
+  lastStateUpdateActivity: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"];
   lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
+  lastVisibleErrorEvent: StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"];
 };
 
 export type StateUpdateDiagnosticRun = {
@@ -61,8 +63,22 @@ export const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnosti
     previousConnectivityStatus: null,
     resultingConnectivityStatus: null,
   },
+  lastStateUpdateActivity: null,
   lastStateUpdateSync: null,
+  lastVisibleErrorEvent: null,
 };
+
+export function mergeStateUpdateReconnectDiagnosticsForPersistence({
+  current,
+  persisted,
+  updater,
+}: {
+  current: StateUpdateReconnectDiagnostics;
+  persisted: StateUpdateReconnectDiagnostics | null;
+  updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics;
+}) {
+  return updater(persisted ?? current);
+}
 
 type SyncPendingStateUpdatesWithTelemetry = (input: {
   api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
@@ -130,14 +146,20 @@ export function useSessionDiagnostics({
       return;
     }
 
-    setStateUpdateReconnectDiagnostics((current) => {
-      const next = updater(current);
+    try {
+      const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey).catch(() => null);
+      const next = mergeStateUpdateReconnectDiagnosticsForPersistence({
+        current: stateUpdateReconnectDiagnostics,
+        persisted,
+        updater,
+      });
 
-      void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next).catch(() => undefined);
-
-      return next;
-    });
-  }, [definitionCache, ownerKey]);
+      setStateUpdateReconnectDiagnostics(next);
+      await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next);
+    } catch {
+      return;
+    }
+  }, [definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
 
   const recordStateUpdateSyncRun = useCallback(async ({
     completedAt = new Date().toISOString(),

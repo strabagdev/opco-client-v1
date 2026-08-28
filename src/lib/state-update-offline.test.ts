@@ -9,6 +9,7 @@ import {
   stateUpdateRemoteItemMatchesPayload,
   resolveStateUpdateSyncTelemetryResult,
 } from "./state-update-offline";
+import type { StateUpdateSyncDiagnosticsTelemetry } from "./state-update-offline";
 
 describe("state-update offline identity", () => {
   it("consolidates update-current by appView, subject, and date when uniqueness is subject-date", () => {
@@ -206,7 +207,33 @@ describe("state-update sync diagnostics telemetry", () => {
   });
 
   it("does not replace the last meaningful sync run with a later noop", () => {
-    const current = {
+    const lastStateUpdateSync: NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"]> = {
+      completedAt: "2026-08-27T10:00:12.000Z",
+      lastRequestDiagnostics: {
+        abortControllerTriggered: true,
+        fetchResolvedAt: null,
+        httpStatus: null,
+        pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+        requestCompletedAt: "2026-08-27T10:00:12.000Z",
+        requestDurationMs: 12000,
+        requestStartedAt: "2026-08-27T10:00:00.000Z",
+        responseBodyStartedAt: null,
+        responseParsedAt: null,
+        responseStarted: false,
+        timeoutMs: 12000,
+      },
+      operationsAttempted: 1,
+      operationsCompleted: 1,
+      operationsFailed: 0,
+      operationsSelected: 1,
+      reconciledAfterTimeout: true,
+      result: "reconciled_success",
+      startedAt: "2026-08-27T10:00:00.000Z",
+      syncRunId: "sync_reconnect_1",
+      timeoutOccurred: true,
+      trigger: "reconnect",
+    };
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
       currentConnectivity: {
         status: "online" as const,
         updatedAt: "2026-08-27T10:00:00.000Z",
@@ -217,32 +244,20 @@ describe("state-update sync diagnostics telemetry", () => {
         previousConnectivityStatus: "offline" as const,
         resultingConnectivityStatus: "online" as const,
       },
-      lastStateUpdateSync: {
-        completedAt: "2026-08-27T10:00:12.000Z",
-        lastRequestDiagnostics: {
-          abortControllerTriggered: true,
-          fetchResolvedAt: null,
-          httpStatus: null,
-          pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
-          requestCompletedAt: "2026-08-27T10:00:12.000Z",
-          requestDurationMs: 12000,
-          requestStartedAt: "2026-08-27T10:00:00.000Z",
-          responseBodyStartedAt: null,
-          responseParsedAt: null,
-          responseStarted: false,
-          timeoutMs: 12000,
-        },
-        operationsAttempted: 1,
-        operationsCompleted: 1,
-        operationsFailed: 0,
-        operationsSelected: 1,
-        reconciledAfterTimeout: true,
-        result: "reconciled_success" as const,
-        startedAt: "2026-08-27T10:00:00.000Z",
-        syncRunId: "sync_reconnect_1",
-        timeoutOccurred: true,
-        trigger: "reconnect" as const,
+      lastStateUpdateActivity: {
+        completedAt: lastStateUpdateSync.completedAt,
+        lastRequestDiagnostics: lastStateUpdateSync.lastRequestDiagnostics,
+        operationsCompleted: lastStateUpdateSync.operationsCompleted,
+        operationsFailed: lastStateUpdateSync.operationsFailed,
+        result: lastStateUpdateSync.result,
+        startedAt: lastStateUpdateSync.startedAt,
+        syncRunId: lastStateUpdateSync.syncRunId,
+        timeoutOccurred: lastStateUpdateSync.timeoutOccurred,
+        trigger: lastStateUpdateSync.trigger,
+        type: "sync",
       },
+      lastStateUpdateSync,
+      lastVisibleErrorEvent: null,
     };
 
     expect(mergeStateUpdateSyncDiagnosticsTelemetry({
@@ -268,11 +283,16 @@ describe("state-update sync diagnostics telemetry", () => {
         timeoutOccurred: true,
         trigger: "reconnect",
       },
+      lastStateUpdateActivity: {
+        result: "reconciled_success",
+        syncRunId: "sync_reconnect_1",
+        type: "sync",
+      },
     });
   });
 
   it("persists request diagnostics for a timeout that later reconciles successfully", () => {
-    expect(mergeStateUpdateSyncDiagnosticsTelemetry({
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
       completedAt: "2026-08-27T10:00:13.000Z",
       current: {
         currentConnectivity: { status: "online", updatedAt: null },
@@ -282,7 +302,9 @@ describe("state-update sync diagnostics telemetry", () => {
           previousConnectivityStatus: "offline",
           resultingConnectivityStatus: "online",
         },
+        lastStateUpdateActivity: null,
         lastStateUpdateSync: null,
+        lastVisibleErrorEvent: null,
       },
       currentConnectivityStatus: "online",
       lastRequestDiagnostics: {
@@ -307,7 +329,9 @@ describe("state-update sync diagnostics telemetry", () => {
       syncRunId: "sync_reconnect_2",
       timeoutOccurred: true,
       trigger: "reconnect",
-    }).lastStateUpdateSync).toMatchObject({
+    });
+
+    expect(next.lastStateUpdateSync).toMatchObject({
       lastRequestDiagnostics: {
         abortControllerTriggered: true,
         requestDurationMs: 12000,
@@ -317,5 +341,55 @@ describe("state-update sync diagnostics telemetry", () => {
       syncRunId: "sync_reconnect_2",
       timeoutOccurred: true,
     });
+    expect(next.lastStateUpdateActivity).toMatchObject({
+      result: "reconciled_success",
+      syncRunId: "sync_reconnect_2",
+      timeoutOccurred: true,
+      type: "sync",
+    });
+  });
+
+  it("does not replace snapshot reconciliation activity with a later noop sync", () => {
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-27T10:02:00.000Z",
+      current: {
+        currentConnectivity: { status: "online", updatedAt: "2026-08-27T10:01:00.000Z" },
+        lastReconnect: {
+          detected: true,
+          detectedAt: "2026-08-27T10:00:00.000Z",
+          previousConnectivityStatus: "offline",
+          resultingConnectivityStatus: "online",
+        },
+        lastStateUpdateActivity: {
+          completedAt: "2026-08-27T10:01:00.000Z",
+          lastRequestDiagnostics: null,
+          operationsCompleted: 1,
+          operationsFailed: 0,
+          result: "reconciled_success",
+          startedAt: "2026-08-27T10:01:00.000Z",
+          syncRunId: null,
+          timeoutOccurred: false,
+          trigger: "snapshot_reconciliation",
+          type: "snapshot_reconciliation",
+        },
+        lastStateUpdateSync: null,
+        lastVisibleErrorEvent: null,
+      },
+      currentConnectivityStatus: "online",
+      operationsAttempted: 0,
+      operationsCompleted: 0,
+      operationsFailed: 0,
+      operationsSelected: 0,
+      reconciledAfterTimeout: false,
+      startedAt: "2026-08-27T10:02:00.000Z",
+      trigger: "foreground/resume",
+    });
+
+    expect(next.lastStateUpdateActivity).toMatchObject({
+      result: "reconciled_success",
+      trigger: "snapshot_reconciliation",
+      type: "snapshot_reconciliation",
+    });
+    expect(next.lastStateUpdateSync).toBeNull();
   });
 });

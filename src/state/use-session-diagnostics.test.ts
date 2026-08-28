@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { shouldShowStateUpdateDiagnostics } from "./use-session-diagnostics";
+import {
+  emptyStateUpdateReconnectDiagnostics,
+  mergeStateUpdateReconnectDiagnosticsForPersistence,
+  shouldShowStateUpdateDiagnostics,
+} from "./use-session-diagnostics";
 
 describe("session diagnostics controller helpers", () => {
   afterEach(() => {
@@ -25,5 +29,63 @@ describe("session diagnostics controller helpers", () => {
     });
 
     expect(shouldShowStateUpdateDiagnostics()).toBe(false);
+  });
+
+  it("merges connectivity writes over persisted diagnostics instead of empty remount state", () => {
+    const persisted = {
+      currentConnectivity: {
+        status: "offline" as const,
+        updatedAt: "2026-08-28T10:00:00.000Z",
+      },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-28T10:00:00.000Z",
+        previousConnectivityStatus: "offline" as const,
+        resultingConnectivityStatus: "online" as const,
+      },
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-28T10:00:13.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        result: "reconciled_success" as const,
+        startedAt: "2026-08-28T10:00:00.000Z",
+        syncRunId: "sync_reconnect_1",
+        timeoutOccurred: true,
+        trigger: "snapshot_reconciliation" as const,
+        type: "snapshot_reconciliation" as const,
+      },
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: {
+        clearedAt: "2026-08-28T10:00:14.000Z",
+        durationMs: 12000,
+        errorCode: "OpcoNetworkError",
+        httpStatus: null,
+        method: "GET",
+        occurredAt: "2026-08-28T10:00:01.000Z",
+        operation: "refresh",
+        pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+        resolution: "cleared_after_success" as const,
+        syncRunId: "sync_reconnect_1",
+        timeoutOccurred: true,
+      },
+    };
+
+    expect(mergeStateUpdateReconnectDiagnosticsForPersistence({
+      current: emptyStateUpdateReconnectDiagnostics,
+      persisted,
+      updater: (current) => ({
+        ...current,
+        currentConnectivity: {
+          status: "online",
+          updatedAt: "2026-08-28T10:00:15.000Z",
+        },
+      }),
+    })).toMatchObject({
+      currentConnectivity: { status: "online" },
+      lastReconnect: { detected: true },
+      lastStateUpdateActivity: { type: "snapshot_reconciliation", result: "reconciled_success" },
+      lastVisibleErrorEvent: { operation: "refresh", resolution: "cleared_after_success" },
+    });
   });
 });

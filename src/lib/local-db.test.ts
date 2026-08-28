@@ -152,6 +152,7 @@ describe("local database singleton", () => {
         previousConnectivityStatus: "offline",
         resultingConnectivityStatus: "online",
       },
+      lastStateUpdateActivity: null,
       lastStateUpdateSync: {
         completedAt: "2026-08-27T10:00:02.000Z",
         lastRequestDiagnostics: {
@@ -178,6 +179,7 @@ describe("local database singleton", () => {
         timeoutOccurred: true,
         trigger: "reconnect",
       },
+      lastVisibleErrorEvent: null,
     });
 
     expect(db.runAsync).toHaveBeenCalledWith(
@@ -237,6 +239,7 @@ describe("local database singleton", () => {
     await expect(store.getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1")).resolves.toMatchObject({
       currentConnectivity: { status: "online" },
       lastReconnect: { detected: false, previousConnectivityStatus: "unknown", resultingConnectivityStatus: "online" },
+      lastStateUpdateActivity: null,
       lastStateUpdateSync: {
         lastRequestDiagnostics: { httpStatus: 200, requestDurationMs: 2000 },
         operationsCompleted: 1,
@@ -245,7 +248,89 @@ describe("local database singleton", () => {
         timeoutOccurred: false,
         trigger: "unknown-to-online",
       },
+      lastVisibleErrorEvent: null,
     });
+  });
+
+  it("persists the last visible STATE_UPDATE UI error with the same sanitized owner scope", async () => {
+    db.getFirstAsync.mockResolvedValueOnce(null);
+    const store = getLocalDatabase();
+
+    await store.recordStateUpdateVisibleErrorEvent("org_1:user_1", {
+      clearedAt: null,
+      durationMs: 12000,
+      errorCode: "OpcoNetworkError",
+      httpStatus: null,
+      method: "GET",
+      occurredAt: "2026-08-28T11:00:00.000Z",
+      operation: "refresh",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+      resolution: "unresolved",
+      syncRunId: "sync_reconnect_1",
+      timeoutOccurred: true,
+    });
+
+    const write = db.runAsync.mock.calls.find((call) =>
+      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      String(call[1]).startsWith("state_update_sync_diagnostics:"),
+    );
+
+    expect(write?.[1]).toEqual(expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/));
+    expect(write?.[1]).not.toBe("state_update_sync_diagnostics:org_1:user_1");
+    expect(write?.[2]).toEqual(expect.stringContaining('"lastVisibleErrorEvent"'));
+    expect(write?.[2]).toEqual(expect.stringContaining('"operation":"refresh"'));
+    expect(write?.[2]).not.toEqual(expect.stringContaining("org_1:user_1"));
+  });
+
+  it("resolves the last visible STATE_UPDATE UI error without deleting the historical event", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-28T11:00:00.000Z" },
+            lastReconnect: {
+              detected: true,
+              detectedAt: "2026-08-28T11:00:00.000Z",
+              previousConnectivityStatus: "offline",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateActivity: null,
+            lastStateUpdateSync: null,
+            lastVisibleErrorEvent: {
+              clearedAt: null,
+              durationMs: 12000,
+              errorCode: "OpcoNetworkError",
+              httpStatus: null,
+              method: "GET",
+              occurredAt: "2026-08-28T11:00:01.000Z",
+              operation: "refresh",
+              pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+              resolution: "unresolved",
+              syncRunId: "sync_reconnect_1",
+              timeoutOccurred: true,
+            },
+          }),
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.resolveStateUpdateVisibleErrorEvent("org_1:user_1", "cleared_after_success");
+
+    const diagnosticsWrites = db.runAsync.mock.calls.filter((call) =>
+      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      String(call[1]).startsWith("state_update_sync_diagnostics:"),
+    );
+    const telemetry = JSON.parse(String(diagnosticsWrites[diagnosticsWrites.length - 1]?.[2]));
+
+    expect(telemetry.lastVisibleErrorEvent).toMatchObject({
+      operation: "refresh",
+      resolution: "cleared_after_success",
+      timeoutOccurred: true,
+    });
+    expect(telemetry.lastVisibleErrorEvent.clearedAt).toEqual(expect.any(String));
   });
 
   it("shares the same SQLite singleton when UI reads and reconnect sync reads run together", async () => {
@@ -842,6 +927,22 @@ describe("local database singleton", () => {
       expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
       expect.stringContaining('"result":"reconciled_success"'),
     );
+    const diagnosticsWrites = db.runAsync.mock.calls.filter((call) =>
+      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      String(call[1]).startsWith("state_update_sync_diagnostics:"),
+    );
+    const diagnosticsWrite = diagnosticsWrites[diagnosticsWrites.length - 1];
+    const telemetry = JSON.parse(String(diagnosticsWrite?.[2]));
+
+    expect(telemetry.lastStateUpdateActivity).toMatchObject({
+      result: "reconciled_success",
+      trigger: "snapshot_reconciliation",
+      type: "snapshot_reconciliation",
+    });
+    expect(telemetry.lastStateUpdateSync).toMatchObject({
+      result: "failed",
+      trigger: "reconnect",
+    });
     expect(db.runAsync.mock.calls.some((call) => String(call[2]).includes("La solicitud a Opco"))).toBe(false);
   });
 

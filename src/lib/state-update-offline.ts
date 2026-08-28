@@ -200,13 +200,48 @@ export type StateUpdateLastSyncTelemetry = {
   trigger: StateUpdateSyncTrigger;
 };
 
+export type StateUpdateActivityTelemetry = {
+  completedAt: string | null;
+  lastRequestDiagnostics: StateUpdateRequestDiagnostics | null;
+  operationsCompleted: number;
+  operationsFailed: number;
+  result: StateUpdateSyncTelemetryResult;
+  startedAt: string;
+  syncRunId: string | null;
+  timeoutOccurred: boolean;
+  trigger: StateUpdateSyncTrigger | "snapshot_reconciliation";
+  type: "snapshot_reconciliation" | "sync";
+};
+
+export type StateUpdateVisibleErrorResolution =
+  | "cleared_after_success"
+  | "cleared_by_user"
+  | "refresh_failed"
+  | "unresolved";
+
+export type StateUpdateVisibleErrorTelemetry = {
+  clearedAt: string | null;
+  durationMs: number | null;
+  errorCode: string;
+  httpStatus: number | null;
+  method: string | null;
+  occurredAt: string;
+  operation: string;
+  pathTemplate: string | null;
+  resolution: StateUpdateVisibleErrorResolution;
+  syncRunId: string | null;
+  timeoutOccurred: boolean;
+};
+
 export type StateUpdateSyncDiagnosticsTelemetry = {
   currentConnectivity: {
     status: ConnectivityStatus;
     updatedAt: string | null;
   };
   lastReconnect: StateUpdateLastReconnectTelemetry;
+  lastStateUpdateActivity: StateUpdateActivityTelemetry | null;
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
+  lastVisibleErrorEvent: StateUpdateVisibleErrorTelemetry | null;
 };
 
 export function resolveStateUpdateSyncTelemetryResult({
@@ -263,34 +298,48 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
     updatedAt: completedAt,
   };
 
-  if (operationsSelected === 0 && current.lastStateUpdateSync) {
+  if (operationsSelected === 0 && (current.lastStateUpdateSync || current.lastStateUpdateActivity)) {
     return {
       ...current,
       currentConnectivity,
     };
   }
 
-  return {
-    ...current,
-    currentConnectivity,
-    lastStateUpdateSync: {
-      completedAt,
-      lastRequestDiagnostics,
-      operationsAttempted,
-      operationsCompleted,
+  const lastStateUpdateSync = {
+    completedAt,
+    lastRequestDiagnostics,
+    operationsAttempted,
+    operationsCompleted,
+    operationsFailed,
+    operationsSelected,
+    reconciledAfterTimeout,
+    result: resolveStateUpdateSyncTelemetryResult({
       operationsFailed,
       operationsSelected,
       reconciledAfterTimeout,
-      result: resolveStateUpdateSyncTelemetryResult({
-        operationsFailed,
-        operationsSelected,
-        reconciledAfterTimeout,
-      }),
+    }),
+    startedAt,
+    syncRunId,
+    timeoutOccurred,
+    trigger,
+  };
+
+  return {
+    ...current,
+    currentConnectivity,
+    lastStateUpdateActivity: {
+      completedAt,
+      lastRequestDiagnostics,
+      operationsCompleted,
+      operationsFailed,
+      result: lastStateUpdateSync.result,
       startedAt,
       syncRunId,
       timeoutOccurred,
       trigger,
+      type: "sync",
     },
+    lastStateUpdateSync,
   };
 }
 
@@ -368,6 +417,8 @@ export type StateUpdateOfflineStore = {
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
+  recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry): Promise<void>;
+  resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution): Promise<void>;
   setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;
   upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult>;

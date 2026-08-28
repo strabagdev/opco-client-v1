@@ -118,12 +118,15 @@ describe("state update operation feedback", () => {
     expect(createStateUpdateVisibleErrorDiagnostics({
       error,
       operation: "refresh",
+      resolution: "refresh_failed",
       syncRunId: "sync_abc123",
     })).toMatchObject({
       errorCode: "OpcoNetworkError",
       method: "GET",
+      occurredAt: "2026-08-28T12:00:00.000Z",
       operation: "refresh",
       pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+      resolution: "refresh_failed",
       syncRunId: "sync_abc123",
       timeoutOccurred: true,
     });

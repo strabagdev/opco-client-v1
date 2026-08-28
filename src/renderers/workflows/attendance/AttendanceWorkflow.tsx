@@ -59,7 +59,9 @@ import {
   shouldShowStateUpdateVisibleErrorDiagnostics,
   stateUpdateRefreshErrorMessage,
   StateUpdateVisibleErrorDiagnostics,
+  StateUpdateVisibleErrorOperation,
 } from "../state-update/state-update-operation-feedback";
+import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
 
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   personName: string;
@@ -108,6 +110,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
+  const currentStateUpdateSyncRunId =
+    stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
+    stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ??
+    null;
   const visibleError = hideStateUpdateTimeoutAfterConfirmedSync({
     error,
     lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
@@ -245,6 +251,37 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setConflict(null);
   }, []);
 
+  const clearVisibleError = useCallback((resolution: StateUpdateVisibleErrorResolution = "cleared_after_success") => {
+    setVisibleErrorDiagnostics(null);
+
+    if (ownerKey) {
+      void definitionCache.resolveStateUpdateVisibleErrorEvent(ownerKey, resolution).catch(() => undefined);
+    }
+  }, [definitionCache, ownerKey]);
+
+  const recordVisibleError = useCallback(({
+    error: nextError,
+    operation,
+    resolution = "unresolved",
+  }: {
+    error: unknown;
+    operation: StateUpdateVisibleErrorOperation;
+    resolution?: StateUpdateVisibleErrorResolution;
+  }) => {
+    const event = createStateUpdateVisibleErrorDiagnostics({
+      error: nextError,
+      operation,
+      resolution,
+      syncRunId: operation === "refresh" || operation === "sync" ? currentStateUpdateSyncRunId : null,
+    });
+
+    setVisibleErrorDiagnostics(event);
+
+    if (ownerKey) {
+      void definitionCache.recordStateUpdateVisibleErrorEvent(ownerKey, event).catch(() => undefined);
+    }
+  }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
+
   const loadDay = useCallback(async (options: { operation?: "load-day" | "refresh" } = {}) => {
     if (!token || !selectedContractId) {
       setError((status === "authenticated" || status === "offline") && !isContractBootstrapPending ? "Selecciona un contrato antes de abrir asistencia." : null);
@@ -275,7 +312,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       await applyDayState(response);
       await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
       setRefreshError(null);
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       setItems([]);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
@@ -284,17 +321,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         } else {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
         }
-        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        recordVisibleError({
           error: nextError,
           operation,
-        }));
+          resolution: operation === "refresh" ? "refresh_failed" : "unresolved",
+        });
       }
     } finally {
       if (requestId === requestSequenceRef.current) {
         setIsLoading(false);
       }
     }
-  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, date, isContractBootstrapPending, selectedContractId, status, token]);
+  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, clearVisibleError, date, isContractBootstrapPending, recordVisibleError, selectedContractId, status, token]);
 
   const refreshAfterStateUpdateSync = useCallback(async () => {
     if (!ownerKey || !selectedContractId) {
@@ -320,15 +358,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
       setError(null);
       setRefreshError(null);
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
         const unresolvedCount = await refreshLocalDayState();
         setRefreshError(stateUpdateRefreshErrorMessage(nextError));
-        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        recordVisibleError({
           error: nextError,
           operation: "refresh",
-        }));
+          resolution: "refresh_failed",
+        });
 
         if (unresolvedCount === 0) {
           setError(null);
@@ -340,8 +379,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.id,
     applyDayState,
     cacheAttendanceOnlineResponse,
+    clearVisibleError,
     date,
     isOnline,
+    recordVisibleError,
     ownerKey,
     refreshLocalDayState,
     selectedContractId,
@@ -407,15 +448,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       await applyDayState(response);
       cacheAttendanceOnlineResponseInBackground(response, { complete: false });
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       setItems(response.items);
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
         setError(nextError instanceof Error ? nextError.message : "No fue posible buscar personas.");
-        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        recordVisibleError({
           error: nextError,
           operation: "search",
-        }));
+        });
       }
     } finally {
       if (requestId === requestSequenceRef.current) {
@@ -430,10 +471,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.id,
     applyDayState,
     cacheAttendanceOnlineResponseInBackground,
+    clearVisibleError,
     date,
     definitionCache,
     isOnline,
     ownerKey,
+    recordVisibleError,
     refreshLocalDayState,
     selectedContractId,
     token,
@@ -502,15 +545,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
         await applyDayState(response);
         await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
-        setVisibleErrorDiagnostics(null);
+        clearVisibleError();
         setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
-          setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+          recordVisibleError({
             error: nextError,
             operation: "load-day",
-          }));
+          });
         }
       } finally {
         if (isMounted && requestId === requestSequenceRef.current) {
@@ -532,11 +575,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.id,
     applyDayState,
     cacheAttendanceOnlineResponse,
+    clearVisibleError,
     connectivityStatus,
     date,
     definitionCache,
     isContractBootstrapPending,
     ownerKey,
+    recordVisibleError,
     refreshLocalDayState,
     selectedContractId,
     status,
@@ -587,16 +632,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       applyAttendanceResponse(response);
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       setSelectedItem(response.items[0] ?? item);
       setObservation(response.items[0]?.attendance?.observation ?? "");
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
         setError(nextError instanceof Error ? nextError.message : "No fue posible cargar la persona.");
-        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        recordVisibleError({
           error: nextError,
           operation: "source-load",
-        }));
+        });
       }
     }
   }
@@ -660,7 +705,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         clearPersonFlow();
         await refreshLocalDayState();
         await refreshRecordsSyncSummary();
-        setVisibleErrorDiagnostics(null);
+        clearVisibleError();
         setSuccessMessage("Guardado en este dispositivo.");
         return;
       }
@@ -695,15 +740,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         clearPersonFlow();
         await loadDay({ operation: "refresh" });
         await refreshRecordsSyncSummary();
-        setVisibleErrorDiagnostics(null);
+        clearVisibleError();
         setSuccessMessage(message);
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.");
-      setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+      recordVisibleError({
         error: nextError,
         operation: "save",
-      }));
+      });
     } finally {
       setIsSaving(false);
     }
@@ -749,14 +794,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       await refreshLocalDayState();
       await refreshRecordsSyncSummary();
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       setSuccessMessage(isOnline ? "Cambio enviado a Opco." : "Guardado en este dispositivo.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
-      setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+      recordVisibleError({
         error: nextError,
         operation: "sync",
-      }));
+      });
     } finally {
       setIsSaving(false);
     }
@@ -782,14 +827,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       });
       await refreshLocalDayState();
       await refreshRecordsSyncSummary();
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       setSuccessMessage("Se uso el estado de Opco.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
-      setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+      recordVisibleError({
         error: nextError,
         operation: "sync",
-      }));
+      });
     } finally {
       setIsSaving(false);
     }

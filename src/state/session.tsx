@@ -701,6 +701,70 @@ export function StateUpdateDiagnosticsPanel({
     ["pathTemplate", "none"],
     ["result", "none"],
   ];
+  const lastStateUpdateActivityRows: [string, string | number | boolean | null][] = reconnect.lastStateUpdateActivity ? [
+    ["type", reconnect.lastStateUpdateActivity.type],
+    ["trigger", reconnect.lastStateUpdateActivity.trigger],
+    ["syncRunId", reconnect.lastStateUpdateActivity.syncRunId ?? "none"],
+    ["startedAt", reconnect.lastStateUpdateActivity.startedAt],
+    ["completedAt", reconnect.lastStateUpdateActivity.completedAt ?? "none"],
+    ["operationsCompleted", reconnect.lastStateUpdateActivity.operationsCompleted],
+    ["operationsFailed", reconnect.lastStateUpdateActivity.operationsFailed],
+    ["timeoutOccurred", reconnect.lastStateUpdateActivity.timeoutOccurred],
+    ["requestStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestStartedAt ?? "none"],
+    ["fetchResolvedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.fetchResolvedAt ?? "none"],
+    ["responseBodyStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseBodyStartedAt ?? "none"],
+    ["responseParsedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseParsedAt ?? "none"],
+    ["requestDurationMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestDurationMs ?? "none"],
+    ["timeoutMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.timeoutMs ?? "none"],
+    ["abortControllerTriggered", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.abortControllerTriggered ?? "none"],
+    ["httpStatus", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.httpStatus ?? "none"],
+    ["pathTemplate", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.pathTemplate ?? "none"],
+    ["result", reconnect.lastStateUpdateActivity.result],
+  ] : [
+    ["type", "none"],
+    ["trigger", "none"],
+    ["syncRunId", "none"],
+    ["startedAt", "none"],
+    ["completedAt", "none"],
+    ["operationsCompleted", 0],
+    ["operationsFailed", 0],
+    ["timeoutOccurred", false],
+    ["requestStartedAt", "none"],
+    ["fetchResolvedAt", "none"],
+    ["responseBodyStartedAt", "none"],
+    ["responseParsedAt", "none"],
+    ["requestDurationMs", "none"],
+    ["timeoutMs", "none"],
+    ["abortControllerTriggered", "none"],
+    ["httpStatus", "none"],
+    ["pathTemplate", "none"],
+    ["result", "none"],
+  ];
+  const lastVisibleErrorRows: [string, string | number | boolean | null][] = reconnect.lastVisibleErrorEvent ? [
+    ["operation", reconnect.lastVisibleErrorEvent.operation],
+    ["method", reconnect.lastVisibleErrorEvent.method ?? "none"],
+    ["pathTemplate", reconnect.lastVisibleErrorEvent.pathTemplate ?? "none"],
+    ["occurredAt", reconnect.lastVisibleErrorEvent.occurredAt],
+    ["clearedAt", reconnect.lastVisibleErrorEvent.clearedAt ?? "none"],
+    ["resolution", reconnect.lastVisibleErrorEvent.resolution],
+    ["timeoutOccurred", reconnect.lastVisibleErrorEvent.timeoutOccurred],
+    ["httpStatus", reconnect.lastVisibleErrorEvent.httpStatus ?? "none"],
+    ["durationMs", reconnect.lastVisibleErrorEvent.durationMs ?? "none"],
+    ["syncRunId", reconnect.lastVisibleErrorEvent.syncRunId ?? "none"],
+    ["errorCode", reconnect.lastVisibleErrorEvent.errorCode],
+  ] : [
+    ["operation", "none"],
+    ["method", "none"],
+    ["pathTemplate", "none"],
+    ["occurredAt", "none"],
+    ["clearedAt", "none"],
+    ["resolution", "none"],
+    ["timeoutOccurred", false],
+    ["httpStatus", "none"],
+    ["durationMs", "none"],
+    ["syncRunId", "none"],
+    ["errorCode", "none"],
+  ];
   const summaryRows: [string, string | number][] = [
     ["consistency", diagnostics?.consistency ?? "loading"],
     ["STATE_UPDATE total local", summary?.stateUpdateTotalLocal ?? "loading"],
@@ -747,8 +811,12 @@ export function StateUpdateDiagnosticsPanel({
         <DiagnosticsRows rows={currentConnectivityRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Last reconnect</Text>
         <DiagnosticsRows rows={lastReconnectRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Last STATE_UPDATE activity</Text>
+        <DiagnosticsRows rows={lastStateUpdateActivityRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Last STATE_UPDATE sync</Text>
         <DiagnosticsRows rows={lastStateUpdateSyncRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Last visible UI error</Text>
+        <DiagnosticsRows rows={lastVisibleErrorRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Operations</Text>
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading operations...</Text>

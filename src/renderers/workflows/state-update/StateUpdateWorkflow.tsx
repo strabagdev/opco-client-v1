@@ -51,6 +51,7 @@ import {
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
+import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
 import {
   createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
@@ -100,6 +101,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
+  const currentStateUpdateSyncRunId =
+    stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
+    stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ??
+    null;
 
   const hasDate = Boolean(response?.dateFieldId ?? appView.config.dateFieldId);
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
@@ -140,6 +145,37 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       slug: response.targetEntityType.id,
     };
   }, [response]);
+
+  const clearVisibleError = useCallback((resolution: StateUpdateVisibleErrorResolution = "cleared_after_success") => {
+    setVisibleErrorDiagnostics(null);
+
+    if (ownerKey) {
+      void definitionCache.resolveStateUpdateVisibleErrorEvent(ownerKey, resolution).catch(() => undefined);
+    }
+  }, [definitionCache, ownerKey]);
+
+  const recordVisibleError = useCallback(({
+    error: nextError,
+    operation,
+    resolution = "unresolved",
+  }: {
+    error: unknown;
+    operation: StateUpdateVisibleErrorOperation;
+    resolution?: StateUpdateVisibleErrorResolution;
+  }) => {
+    const event = createStateUpdateVisibleErrorDiagnostics({
+      error: nextError,
+      operation,
+      resolution,
+      syncRunId: operation === "refresh" || operation === "sync" ? currentStateUpdateSyncRunId : null,
+    });
+
+    setVisibleErrorDiagnostics(event);
+
+    if (ownerKey) {
+      void definitionCache.recordStateUpdateVisibleErrorEvent(ownerKey, event).catch(() => undefined);
+    }
+  }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
 
   const loadOfflineWorkflow = useCallback(async (query: { search?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
@@ -277,7 +313,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setResponse(nextResponse);
       setItems(nextResponse.items);
       setRefreshError(null);
-      setVisibleErrorDiagnostics(null);
+      clearVisibleError();
       if (ownerKey) {
         await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
@@ -290,11 +326,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
     } catch (nextError) {
       if (requestId === requestSequenceRef.current) {
-        setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+        recordVisibleError({
           error: nextError,
           operation,
-          syncRunId: stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ?? null,
-        }));
+          resolution: operation === "refresh" ? "refresh_failed" : "unresolved",
+        });
 
         if (operation === "refresh") {
           setRefreshError(stateUpdateRefreshErrorMessage(nextError));
@@ -308,7 +344,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         setIsSearching(false);
       }
     }
-  }, [api, appView.id, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, selectedContractId, stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId, token]);
+  }, [api, appView.id, clearVisibleError, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, recordVisibleError, selectedContractId, token]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -446,6 +482,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           uniqueness: response.uniqueness,
         });
         setSuccessMessage("Guardado en este dispositivo.");
+        clearVisibleError();
         clearSubjectFlow();
         await loadWorkflow({ operation: "load-workflow" });
         await refreshRecordsSyncSummary();
@@ -475,15 +512,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       if (hasSuccessfulStateUpdateResult(result.results)) {
         setSuccessMessage(stateUpdateSuccessLabel(result.results[0], "Estado actualizado.", "Cambio registrado."));
+        clearVisibleError();
         clearSubjectFlow();
         await loadWorkflow({ operation: "refresh" });
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible guardar el cambio.");
-      setVisibleErrorDiagnostics(createStateUpdateVisibleErrorDiagnostics({
+      recordVisibleError({
         error: nextError,
         operation: "save",
-      }));
+      });
     } finally {
       setIsSaving(false);
     }
