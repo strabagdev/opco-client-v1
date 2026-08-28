@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { copyFile, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const distRoot = join(repoRoot, "dist");
@@ -28,24 +28,34 @@ const precacheExtensions = new Set([
   ".woff2",
 ]);
 
-await copyFile(manifestSource, manifestTarget);
-await Promise.all(iconSources.map((icon) => copyFile(icon.source, icon.target)));
-await ensureManifestLink();
-
-const files = await listPrecacheFiles(distRoot);
-const hash = createHash("sha256");
-
-for (const file of files) {
-  hash.update(file);
-  hash.update(await readFile(join(distRoot, file.replace(/^\//, ""))));
+if (isMainModule()) {
+  await main();
 }
 
-const buildHash = hash.digest("hex").slice(0, 16);
-const precacheUrls = Array.from(new Set(["/", "/index.html", ...files])).sort();
+async function main() {
+  await copyFile(manifestSource, manifestTarget);
+  await Promise.all(iconSources.map((icon) => copyFile(icon.source, icon.target)));
+  await ensureManifestLink();
 
-await writeFile(swPath, serviceWorkerSource({ buildHash, precacheUrls }));
+  const files = await listPrecacheFiles(distRoot);
+  const hash = createHash("sha256");
 
-console.log(`Generated offline app shell service worker ${buildHash} with ${precacheUrls.length} resources.`);
+  for (const file of files) {
+    hash.update(file);
+    hash.update(await readFile(join(distRoot, file.replace(/^\//, ""))));
+  }
+
+  const buildHash = hash.digest("hex").slice(0, 16);
+  const precacheUrls = Array.from(new Set(["/", "/index.html", ...files])).sort();
+
+  await writeFile(swPath, serviceWorkerSource({ buildHash, precacheUrls }));
+
+  console.log(`Generated offline app shell service worker ${buildHash} with ${precacheUrls.length} resources.`);
+}
+
+function isMainModule() {
+  return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+}
 
 async function ensureManifestLink() {
   const html = await readFile(indexPath, "utf8");
@@ -95,7 +105,7 @@ async function listPrecacheFiles(root, prefix = "") {
   return files;
 }
 
-function serviceWorkerSource({
+export function serviceWorkerSource({
   buildHash,
   precacheUrls,
 }) {

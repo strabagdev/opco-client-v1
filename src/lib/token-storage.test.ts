@@ -77,7 +77,7 @@ describe("token storage", () => {
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY);
   });
 
-  it("uses localStorage on web", async () => {
+  it("uses localStorage on web without storing refresh tokens", async () => {
     const secureStore = createSecureStore();
     const webStorage = createWebStorage();
     const storage = createTokenStorage({
@@ -98,9 +98,31 @@ describe("token storage", () => {
     expect(webStorage.setItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "web-token");
     expect(webStorage.setItem).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY, "org_1:user_1");
     expect(webStorage.setItem).not.toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "ignored-refresh-token");
+    expect(webStorage.removeItem).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);
     expect(webStorage.getItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(webStorage.removeItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(secureStore.setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it("clears all web session identity keys including legacy refresh token storage", async () => {
+    const webStorage = createWebStorage();
+    const storage = createTokenStorage({
+      platformOS: "web",
+      secureStore: createSecureStore(),
+      webStorage,
+    });
+
+    await storage.setSession({ accessToken: "access-token-a", refreshToken: "ignored-refresh-token-a" });
+    await storage.setSessionOwnerKey("org_a:user_a");
+    await storage.setSession({ accessToken: "access-token-b", refreshToken: "ignored-refresh-token-b" });
+    await expect(storage.getAccessToken()).resolves.toBe("access-token-b");
+    await storage.clearSession();
+
+    await expect(storage.getAccessToken()).resolves.toBeNull();
+    await expect(storage.getSessionOwnerKey()).resolves.toBeNull();
+    expect(webStorage.removeItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
+    expect(webStorage.removeItem).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);
+    expect(webStorage.removeItem).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY);
   });
 
   it("does not fail on web when localStorage is unavailable", async () => {

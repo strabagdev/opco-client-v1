@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { securityHeaders } from "./web-security-headers.mjs";
 
 const root = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
 const indexHtml = join(root, "index.html");
@@ -73,9 +74,8 @@ async function getExistingFile(filePath) {
 function streamFile(response, filePath) {
   response.writeHead(200, {
     "Cache-Control": getCacheControl(filePath),
-    "Cross-Origin-Embedder-Policy": "credentialless",
-    "Cross-Origin-Opener-Policy": "same-origin",
     "Content-Type": getContentType(filePath),
+    ...securityHeaders(),
     ...getServiceWorkerHeaders(filePath),
   });
   createReadStream(filePath).pipe(response);

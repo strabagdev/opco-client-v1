@@ -39,6 +39,7 @@ export function createTokenStorage({
     return {
       async clearSession() {
         webStorage?.removeItem(TOKEN_STORAGE_KEY);
+        webStorage?.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         webStorage?.removeItem(SESSION_OWNER_KEY_STORAGE_KEY);
       },
       async deleteAccessToken() {
@@ -64,9 +65,11 @@ export function createTokenStorage({
       },
       async setRefreshToken() {
         // Web refresh tokens are intentionally held only in the HttpOnly cookie.
+        webStorage?.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       },
       async setSession({ accessToken }) {
         webStorage?.setItem(TOKEN_STORAGE_KEY, accessToken);
+        webStorage?.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       },
       async setSessionOwnerKey(ownerKey: string) {
         webStorage?.setItem(SESSION_OWNER_KEY_STORAGE_KEY, ownerKey);

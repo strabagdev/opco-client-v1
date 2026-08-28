@@ -26,6 +26,23 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 | Service worker | Offline app shell, static assets, navigation fallback. | API data, SQLite, OPFS writes, sync. |
 | Operational Core `/api/v1` | Authenticated source of truth, AppViews, entity definitions/records, workflows, idempotency. | Client local queue, device storage recovery. |
 
+## Web Security Boundary
+
+Web auth currently keeps the short-lived API access token in `localStorage` so the app can restore an offline-capable session after reload. The API refresh token is not readable by JavaScript on Web; Operational Core stores it in an `HttpOnly; Secure` cookie scoped to `/api/v1/auth` and rotates it server-side. Native keeps both access and refresh tokens in `expo-secure-store`.
+
+This is a deliberate stage tradeoff, not equivalent security to native SecureStore. If attacker-controlled JavaScript executes in the page, it can read the Web access token until it expires. The client therefore relies on a restrictive Content Security Policy to reduce XSS/script injection risk, while keeping cookie-only/BFF access as future architecture work.
+
+Current Web header intent:
+
+- `Content-Security-Policy` is emitted by the static Web server.
+- `script-src` is same-origin plus `wasm-unsafe-eval` for Expo SQLite/WebAssembly; it does not allow `unsafe-eval`.
+- `style-src` still allows `unsafe-inline` because Expo/RN Web emits inline runtime styles and the exported HTML includes an inline reset style.
+- `connect-src` is same-origin plus the configured Operational Core API origin, with `https://web.opco.cl` as the production API origin.
+- `worker-src` is same-origin plus `blob:` for Web/runtime workers.
+- Service worker cache remains shell/assets only and does not cache `/api/*` or `https://web.opco.cl/api/v1/*`.
+
+Security status: CSP hardening is `IMPLEMENTED`; removing browser-readable access tokens is still a `P2` architectural improvement.
+
 ## Layers
 
 | Layer | Real modules | Notes |
@@ -742,9 +759,10 @@ sequenceDiagram
 | 20 | Session lifecycle sync details are extracted from SessionProvider while preserving pending-work order and single-flight engines. | IMPLEMENTED |
 | 21 | Local database recovery controller is extracted; reset remains explicit and local-only. | IMPLEMENTED |
 | 22 | Session diagnostics wiring is extracted; observation remains passive and commands remain explicit. | IMPLEMENTED |
-| 23 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
-| 24 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
-| 25 | README architecture matches the current workflow implementation. | PARTIAL |
+| 23 | Web shell emits restrictive security headers including CSP, COOP, COEP, Referrer-Policy, and MIME-sniffing protection. | IMPLEMENTED |
+| 24 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
+| 25 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
+| 26 | README architecture matches the current workflow implementation. | PARTIAL |
 
 ## Known Complexity And Technical Debt
 
@@ -754,7 +772,7 @@ sequenceDiagram
 | Global sync orchestration | Pending engine order lives in `syncPendingWork`; lifecycle details live in `use-pending-work-lifecycle`; refresh keys remain in `SessionProvider`. | Refresh-key API still couples renderers to provider state. | P3 | Keep facade thin; only extract refresh signals if consumers grow. | No |
 | State-update conflict UI | Generic extra field diff is not complete. | Users may not see full extra-value differences. | P2 | State Update 1.1 conflict diff/resolution UI. | No |
 | README drift | README still contains older unsupported-workflow statements. | New contributors may trust stale docs. | P3 | Update README to point to this doc and `docs/STATE_UPDATE.md`. | No |
-| Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. | XSS exposure of access token. | P2 | Evaluate BFF/cookie-only access strategy for web. | No |
+| Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. CSP now limits executable origins and blocks `unsafe-eval`, but `style-src 'unsafe-inline'` remains required by Expo/RN Web. | XSS exposure of access token if attacker-controlled JavaScript executes in the page. | P2 | Evaluate BFF/cookie-only access strategy for web; remove inline style requirement if Expo/RN Web supports nonced styles later. | No |
 | Multi-tab OPFS | Expo SQLite Web may hit `ACCESS_HANDLE_BUSY`. | Second tab can show recovery/busy state. | P2 | Keep UX guidance; consider explicit single-tab lock messaging. | No |
 | AppView data prewarm semantics | Workflow source records are prewarmed, RECORDS data is demand-cached. | Users may assume offline-ready definition means all data exists. | P3 | Keep readiness labels precise. | No |
 | Diagnostics spread | State-update diagnostics wiring is centralized in `use-session-diagnostics`, but the panel is still rendered from provider and route. | UI drift risk. | P3 | Keep shared logic; avoid duplicating panel behavior. | No |
