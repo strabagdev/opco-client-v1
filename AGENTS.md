@@ -79,6 +79,7 @@
 
 ## Development
 
+- Read `docs/STATE_UPDATE.md` before changing the `STATE_UPDATE` runtime, offline persistence, synchronization, reconciliation, conflicts, workflow adapters, or diagnostics.
 - Do not use Playwright unless explicitly requested.
 - Do not commit or push unless explicitly requested.
 - Do not force push, rebase, or squash unless explicitly requested.
