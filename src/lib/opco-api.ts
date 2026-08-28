@@ -552,6 +552,9 @@ export class OpcoApiError extends Error {
 export type OpcoNetworkDiagnostics = {
   abortControllerTriggered: boolean;
   fetchResolvedAt: string | null;
+  httpStatus: number | null;
+  method: string;
+  pathTemplate: string;
   requestCompletedAt: string;
   requestDurationMs: number;
   requestStartedAt: string;
@@ -578,6 +581,7 @@ type ApiClientOptions = {
   clientId?: string;
   fetcher?: FetchLike;
   onSessionInvalid?: () => void;
+  onRequestDiagnostics?: (diagnostics: OpcoNetworkDiagnostics) => void;
   onSessionRefreshed?: (tokens: RefreshResponse) => void;
   platformOS?: PlatformOS;
   tokenStore?: SessionTokenStore;
@@ -656,6 +660,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       const diagnostics = requestDiagnostics({
         abortControllerTriggered,
         fetchResolvedAt,
+        httpStatus: null,
+        init,
+        path,
         requestStartedAt,
         requestStartedMs,
         responseBodyStartedAt,
@@ -663,6 +670,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         responseStarted,
         timeoutMs,
       });
+      options.onRequestDiagnostics?.(diagnostics);
 
       if (isAbortError(error)) {
         throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", diagnostics);
@@ -676,6 +684,19 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     responseBodyStartedAt = new Date();
     const body = await response.json().catch(() => null);
     responseParsedAt = new Date();
+    options.onRequestDiagnostics?.(requestDiagnostics({
+      abortControllerTriggered,
+      fetchResolvedAt,
+      httpStatus: response.status,
+      init,
+      path,
+      requestStartedAt,
+      requestStartedMs,
+      responseBodyStartedAt,
+      responseParsedAt,
+      responseStarted,
+      timeoutMs,
+    }));
 
     return parseApiEnvelope<T>(body, response.status);
   }
@@ -1131,6 +1152,9 @@ function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
 function requestDiagnostics({
   abortControllerTriggered,
   fetchResolvedAt,
+  httpStatus,
+  init,
+  path,
   requestStartedAt,
   requestStartedMs,
   responseBodyStartedAt,
@@ -1140,6 +1164,9 @@ function requestDiagnostics({
 }: {
   abortControllerTriggered: boolean;
   fetchResolvedAt: Date | null;
+  httpStatus: number | null;
+  init: RequestInit;
+  path: string;
   requestStartedAt: Date;
   requestStartedMs: number;
   responseBodyStartedAt: Date | null;
@@ -1150,6 +1177,9 @@ function requestDiagnostics({
   return {
     abortControllerTriggered,
     fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
+    httpStatus,
+    method: String(init.method ?? "GET").toUpperCase(),
+    pathTemplate: templateApiPath(path),
     requestCompletedAt: new Date().toISOString(),
     requestDurationMs: Date.now() - requestStartedMs,
     requestStartedAt: requestStartedAt.toISOString(),
@@ -1158,6 +1188,39 @@ function requestDiagnostics({
     responseStarted,
     timeoutMs,
   };
+}
+
+function templateApiPath(path: string) {
+  return path
+    .split("?")[0]
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/views\/[^/]+\/workflow\/state-update$/,
+      "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/views\/[^/]+\/workflow\/attendance$/,
+      "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/entities\/[^/]+\/records\/[^/]+$/,
+      "/api/v1/contracts/:contractId/entities/:entityTypeId/records/:recordId",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/entities\/[^/]+\/records$/,
+      "/api/v1/contracts/:contractId/entities/:entityTypeId/records",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/entities\/[^/]+$/,
+      "/api/v1/contracts/:contractId/entities/:entityTypeId",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/views$/,
+      "/api/v1/contracts/:contractId/views",
+    )
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/entities$/,
+      "/api/v1/contracts/:contractId/entities",
+    );
 }
 
 function normalizeEntityRecord(record: EntityRecord): EntityRecord {

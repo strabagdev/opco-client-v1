@@ -458,6 +458,7 @@ describe("createOpcoApi", () => {
 
   it("times out hanging requests as network errors", async () => {
     vi.useFakeTimers();
+    const diagnostics = vi.fn();
 
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
@@ -468,6 +469,7 @@ describe("createOpcoApi", () => {
             reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
           });
         }),
+      onRequestDiagnostics: diagnostics,
       timeoutMs: 10,
     });
 
@@ -479,10 +481,59 @@ describe("createOpcoApi", () => {
     await expect(request).rejects.toMatchObject({
       diagnostics: {
         abortControllerTriggered: true,
+        fetchResolvedAt: null,
+        httpStatus: null,
+        method: "GET",
+        pathTemplate: "/api/v1/me",
         responseStarted: false,
         timeoutMs: 10,
       },
     });
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      abortControllerTriggered: true,
+      fetchResolvedAt: null,
+      httpStatus: null,
+      pathTemplate: "/api/v1/me",
+      responseStarted: false,
+    }));
+  });
+
+  it("reports sanitized request timing diagnostics for successful state-update POSTs", async () => {
+    const diagnostics = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_1", name: "Asistencia", slug: "asistencia" },
+            result: {
+              recordId: "record_1",
+              result: "CREATED",
+              subjectRecordId: "person_1",
+              updatedAt: "2026-08-28T12:00:00.000Z",
+            },
+          },
+          ok: true,
+        }),
+      onRequestDiagnostics: diagnostics,
+    });
+
+    await api.saveStateUpdateWorkflow("token_123", "contract_secret", "view_secret", {
+      clientRequestId: "client_request_secret",
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectRecordId: "person_1",
+    });
+
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      abortControllerTriggered: false,
+      httpStatus: 200,
+      method: "POST",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+      responseStarted: true,
+    }));
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("contract_secret");
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("view_secret");
   });
 
   it("parses paginated entity records and sends search query params", async () => {

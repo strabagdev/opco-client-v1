@@ -498,6 +498,9 @@ function timeoutError() {
   return new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", {
     abortControllerTriggered: true,
     fetchResolvedAt: null,
+    httpStatus: null,
+    method: "POST",
+    pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
     requestCompletedAt: "2026-08-26T12:00:12.000Z",
     requestDurationMs: 12000,
     requestStartedAt: "2026-08-26T12:00:00.000Z",
