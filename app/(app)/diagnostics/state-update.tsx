@@ -4,14 +4,16 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-nati
 
 import {
   AttendanceGetDiagnostics,
+  createStateUpdateDiagnosticApi,
+  createStateUpdateDiagnosticEvents,
+  createStateUpdateDiagnosticStore,
   getStateUpdateDiagnosticsRouteState,
   summarizeAttendanceGetResponse,
 } from "@/diagnostics/state-update-route-logic";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
-import { AppView, DEFAULT_REQUEST_TIMEOUT_MS, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
+import { AppView, OpcoApiError } from "@/lib/opco-api";
 import { StateUpdateOutboxDiagnostics } from "@/lib/state-update-offline";
 import {
-  abbreviateDiagnosticValue,
   StateUpdateDiagnosticRun,
   StateUpdateDiagnosticsPanel,
   useSession,
@@ -81,146 +83,13 @@ export default function StateUpdateDiagnosticsRoute() {
       return;
     }
 
-    const events = new Map<string, StateUpdateDiagnosticRun["rows"][number]>();
     const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
-
-    for (const operation of beforeRun.operations) {
-      events.set(operation.clientRequestId, {
-        clientRequestId: operation.clientRequestId,
-        endpoint: "none",
-        fetchResolvedAt: null,
-        finalSyncStatus: operation.syncStatus,
-        httpStatus: null,
-        requestAbortControllerTriggered: null,
-        requestCompletedAt: null,
-        requestAttempted: false,
-        requestDurationMs: null,
-        requestStartedAt: null,
-        requestTimeoutMs: null,
-        responseBodyStartedAt: null,
-        responseParsedAt: null,
-        responseStarted: null,
-        result: "not-selected",
-        selectedForSync: false,
-      });
-    }
+    const events = createStateUpdateDiagnosticEvents(beforeRun);
 
     setIsSyncing(true);
     try {
-      const diagnosticStore = {
-        ...definitionCache,
-        async listPendingStateUpdateOperations(nextOwnerKey: string) {
-          const operations = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
-
-          for (const operation of operations) {
-            events.set(abbreviateDiagnosticValue(operation.clientRequestId), {
-              clientRequestId: abbreviateDiagnosticValue(operation.clientRequestId),
-              endpoint: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
-              fetchResolvedAt: null,
-              finalSyncStatus: "unknown",
-              httpStatus: null,
-              requestAbortControllerTriggered: null,
-              requestCompletedAt: null,
-              requestAttempted: false,
-              requestDurationMs: null,
-              requestStartedAt: null,
-              requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-              responseBodyStartedAt: null,
-              responseParsedAt: null,
-              responseStarted: null,
-              result: "selected",
-              selectedForSync: true,
-            });
-          }
-
-          return operations;
-        },
-        async completeStateUpdateOperation(...args: Parameters<typeof definitionCache.completeStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "synced";
-            event.result = args[1].result;
-          }
-
-          return definitionCache.completeStateUpdateOperation(...args);
-        },
-        async failStateUpdateOperation(...args: Parameters<typeof definitionCache.failStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "failed";
-            event.result = args[1];
-          }
-
-          return definitionCache.failStateUpdateOperation(...args);
-        },
-        async markStateUpdateOperationConflict(...args: Parameters<typeof definitionCache.markStateUpdateOperationConflict>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "conflict";
-            event.result = "CONFLICT";
-          }
-
-          return definitionCache.markStateUpdateOperationConflict(...args);
-        },
-        async retryStateUpdateOperation(...args: Parameters<typeof definitionCache.retryStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "pending_update";
-            event.result = args[1];
-          }
-
-          return definitionCache.retryStateUpdateOperation(...args);
-        },
-      };
-      const diagnosticApi = {
-        async saveStateUpdateWorkflow(...args: Parameters<typeof api.saveStateUpdateWorkflow>) {
-          const input = args[3];
-          const event = [...events.values()].find((item) => item.clientRequestId === abbreviateDiagnosticValue(input.clientRequestId ?? ""));
-
-          if (event) {
-            event.endpoint = "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update";
-            event.requestAttempted = true;
-            event.requestStartedAt = new Date().toISOString();
-            event.requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
-          }
-          const requestStartedMs = Date.now();
-
-          try {
-            const response = await api.saveStateUpdateWorkflow(...args);
-
-            if (event) {
-              event.httpStatus = 200;
-              event.requestAbortControllerTriggered = false;
-              event.requestCompletedAt = new Date().toISOString();
-              event.requestDurationMs = Date.now() - requestStartedMs;
-              event.result = response.results[0]?.result ?? "EMPTY_RESULT";
-              event.responseStarted = true;
-            }
-
-            return response;
-          } catch (error) {
-            if (event) {
-              event.httpStatus = error instanceof OpcoApiError ? error.status : null;
-              event.fetchResolvedAt = error instanceof OpcoNetworkError ? error.diagnostics?.fetchResolvedAt ?? null : event.fetchResolvedAt;
-              event.requestAbortControllerTriggered = error instanceof OpcoNetworkError ? error.diagnostics?.abortControllerTriggered ?? null : false;
-              event.requestCompletedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestCompletedAt ?? new Date().toISOString() : new Date().toISOString();
-              event.requestDurationMs = error instanceof OpcoNetworkError ? error.diagnostics?.requestDurationMs ?? Date.now() - requestStartedMs : Date.now() - requestStartedMs;
-              event.requestStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestStartedAt ?? event.requestStartedAt : event.requestStartedAt;
-              event.requestTimeoutMs = error instanceof OpcoNetworkError ? error.diagnostics?.timeoutMs ?? event.requestTimeoutMs : event.requestTimeoutMs;
-              event.responseBodyStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseBodyStartedAt ?? null : event.responseBodyStartedAt;
-              event.responseParsedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseParsedAt ?? null : event.responseParsedAt;
-              event.result = error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR";
-              event.responseStarted = error instanceof OpcoNetworkError ? error.diagnostics?.responseStarted ?? false : true;
-            }
-
-            throw error;
-          }
-        },
-      };
+      const diagnosticStore = createStateUpdateDiagnosticStore(definitionCache, events);
+      const diagnosticApi = createStateUpdateDiagnosticApi(api, events);
       const runResult = await syncPendingStateUpdatesWithTelemetry({
         api: diagnosticApi,
         ownerKey: routeState.ownerKey,

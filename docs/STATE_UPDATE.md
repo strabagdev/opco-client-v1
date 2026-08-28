@@ -114,10 +114,10 @@ Current implementation:
 
 - Online saves create a fresh `clientRequestId` for each explicit save action.
 - Offline saves persist the ID in `pending_operations` and preserve it across retries.
-- Repeated offline `update-current` saves for the same subject/date consolidate into the existing pending operation and keep the original `clientRequestId`.
+- Repeated offline `update-current` saves for the same subject/date consolidate into the existing pending operation.
+- If the consolidated payload is the same semantic intention, the existing `clientRequestId` is preserved.
+- If the consolidated payload changes states, extras, overwrite, or expected version, the pending operation keeps one local row but rotates to a new `clientRequestId`.
 - Confirming an online conflict calls a fresh save action and therefore creates a new `clientRequestId`.
-
-IMPLEMENTATION GAP: consolidated offline edits can change the pending payload while retaining the original `clientRequestId`. That is useful for local intent consolidation, but it is not a pure immutable-intention model if the original payload may already have reached the backend.
 
 ## SQLite Persistence
 
@@ -176,11 +176,9 @@ Connectivity is an orchestration signal, not a source of truth about the result 
 
 The API client timeout is `12_000 ms`.
 
-Timeout does not mean write failed. For state-update sync, a timed-out POST may still have been committed by Operational Core. Current sync then attempts remote verification through `getStateUpdateWorkflow({ date, subjectRecordId })`. If the remote item matches the pending payload, the operation is completed locally and telemetry reports `reconciled_success`. If remote confirmation is unavailable or does not match, the pending operation remains unresolved under the retry/failure policy.
+Timeout does not mean write failed. For state-update sync, a timed-out POST may still have been committed by Operational Core. Current sync then attempts remote verification through `getStateUpdateWorkflow({ date, subjectRecordId })`. If the remote item exactly matches the pending payload, the operation is completed locally and telemetry reports `reconciled_success`. If remote confirmation is unavailable or does not match, the pending operation remains unresolved under the retry/failure policy.
 
 The UI should not keep a stale error once later remote verification confirms success.
-
-IMPLEMENTATION GAP: timeout verification is not yet exact for all submitted fields; see Exact Reconciliation.
 
 ## Exact Reconciliation
 
@@ -196,12 +194,14 @@ Backend State Update 1.0 treats an intention as matching only when every submitt
 - `TIME` compares `HH:mm`
 - other values compare their canonical API representation
 
-Current client implementation:
+Current client implementation centralizes exact matching in the state-update offline helper. Timeout recovery, snapshot repair, and local reconciliation use the same semantic comparison:
 
-- `sync/state-update-sync.ts` timeout recovery compares `stateValues` only.
-- `lib/local-db.ts` snapshot repair of pending operations also compares `stateValues` only.
-
-IMPLEMENTATION GAP: exact reconciliation must include `extraValues` with the same omitted/null/type semantics as the backend before relying on it for workflows with extras.
+- requested state fields compare by `fieldId + optionId`;
+- requested extras compare by field key and canonical value;
+- omitted extras are ignored;
+- explicit `null`, `false`, `0`, and `""` are preserved as requested values;
+- relation-like objects compare by target record `id`;
+- labels, display names, and other visual text do not determine equality.
 
 ## UpdatedAt
 
@@ -209,12 +209,11 @@ Operational Core State Update 1.0 returns the real remote `updatedAt`. Client `r
 
 Current implementation:
 
-- Successful remote sync stores server-provided IDs and timestamps when available.
+- Successful remote sync requires server-provided IDs and `updatedAt`.
 - Snapshot hydration stores `item.current.updatedAt`.
-- Attendance latest adaptation falls back from missing `latest.updatedAt` to `response.date`.
-- `stateUpdateRecordToItem()` falls back to `new Date().toISOString()` when a local record lacks any updated timestamp.
-
-IMPLEMENTATION GAP: the fallback paths above are render/cache fallbacks, but they can blur the distinction between a display timestamp and a remote version. They should not be used as optimistic-concurrency versions.
+- Attendance latest adaptation requires `latest.updatedAt`.
+- If a successful state-update response lacks a valid ISO `updatedAt`, the API wrapper raises a controlled contract error instead of inventing a version.
+- `cached_at` remains local cache metadata and is distinct from `remote_updated_at`.
 
 ## Snapshot Reconciliation
 
@@ -282,9 +281,11 @@ Backend idempotency errors:
 - `IDEMPOTENCY_KEY_REUSED`: the same key was used with a different semantic payload. The client must not auto-retry with that same key.
 - `IDEMPOTENCY_RESULT_UNAVAILABLE`: the backend has a historical or incomplete idempotency row without a durable response. The client must not silently generate a new key, especially for append-style commands where that could duplicate records.
 
-Current implementation treats API errors through the generic sync classification: 5xx/network retry, other API errors fail. There is no dedicated UI or recovery policy for these two idempotency codes.
+Current implementation handles these codes explicitly:
 
-IMPLEMENTATION GAP: add explicit client handling for `IDEMPOTENCY_KEY_REUSED` and `IDEMPOTENCY_RESULT_UNAVAILABLE`.
+- `IDEMPOTENCY_KEY_REUSED` fails the local operation for manual recovery and does not auto-retry with a new key.
+- `IDEMPOTENCY_RESULT_UNAVAILABLE` attempts exact remote reconciliation only for `update-current` scopes where a single current record can be verified by `subject + date`. If the remote state and extras match, the operation completes as `reconciled_success`.
+- Append/no-uniqueness operations do not auto-reconcile or rotate keys on `IDEMPOTENCY_RESULT_UNAVAILABLE`, because a GET snapshot cannot prove which append event was committed.
 
 ## Attendance Adapter
 
@@ -300,6 +301,11 @@ Attendance maps to `STATE_UPDATE` like this:
 | history mode | `update-current` |
 
 Attendance may keep UX-specific text, status buttons, and the legacy GET adapter. It must not own separate sync/storage/conflict semantics.
+
+The compatible workflow family is named by `isStateUpdateCompatibleWorkflow()`. Current compatible keys are:
+
+- `state-update`
+- `attendance`
 
 Known compatibility branches that still mention Attendance outside the adapter boundary:
 
@@ -333,9 +339,7 @@ Diagnostics distinguish:
 - consistency;
 - recovery state.
 
-Telemetry is persisted, fingerprinted, avoids PII, and must not change runtime behavior.
-
-IMPLEMENTATION GAP: state-update diagnostics event-building logic is duplicated between `SessionProvider` and `app/(app)/diagnostics/state-update.tsx`.
+Telemetry is persisted, fingerprinted, avoids PII, and must not change runtime behavior. Diagnostic event construction for manual state-update sync is shared between `SessionProvider` and `app/(app)/diagnostics/state-update.tsx`.
 
 ## Recovery Invariants
 
@@ -354,18 +358,33 @@ IMPLEMENTATION GAP: state-update diagnostics event-building logic is duplicated 
 | 1 | Opco is source of truth online. | IMPLEMENTED |
 | 2 | SQLite is cache plus unresolved local intent. | IMPLEMENTED |
 | 3 | Offline save is atomic. | IMPLEMENTED |
-| 4 | `clientRequestId` represents an immutable intention. | IMPLEMENTATION GAP |
+| 4 | `clientRequestId` represents an immutable intention. | IMPLEMENTED |
 | 5 | Retries do not change `clientRequestId`. | IMPLEMENTED |
-| 6 | A modified intention rotates `clientRequestId`. | IMPLEMENTATION GAP |
+| 6 | A modified intention rotates `clientRequestId`. | IMPLEMENTED |
 | 7 | No pending intent is deleted without explicit resolution. | IMPLEMENTED |
 | 8 | A partial snapshot never deletes by absence. | IMPLEMENTED |
 | 9 | A complete snapshot may delete only stale `synced` rows. | IMPLEMENTED |
 | 10 | Snapshot reconciliation never overwrites unresolved intent. | IMPLEMENTED |
-| 11 | Reconcile compares states plus extras. | IMPLEMENTATION GAP |
-| 12 | `remote_updated_at` comes from the backend. | IMPLEMENTATION GAP |
+| 11 | Reconcile compares states plus extras. | IMPLEMENTED |
+| 12 | `remote_updated_at` comes from the backend. | IMPLEMENTED |
 | 13 | All sync uses one orchestrator. | IMPLEMENTED |
 | 14 | Diagnostics do not alter behavior. | IMPLEMENTED |
 | 15 | Attendance is an adapter, not an engine. | IMPLEMENTED |
+
+## State Update 1.0 Readiness
+
+Implemented client-side readiness for State Update 1.0:
+
+- immutable `clientRequestId` semantics for retries vs modified intentions;
+- exact reconciliation across requested states and extras;
+- server-owned `updatedAt` as the only remote version;
+- complete snapshot reconciliation for remote deletions;
+- explicit handling for backend idempotency errors;
+- centralized compatible workflow detection for `state-update` and `attendance`.
+
+Remaining implementation gap:
+
+- conflict UI still does not present a complete generic extra diff equivalent to the backend conflict payload.
 
 ## Architecture Entities For System Diagram
 

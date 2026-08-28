@@ -6,6 +6,7 @@ import {
   StateUpdateHistoryMode,
   StateUpdateUniqueness,
 } from "./opco-api";
+import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 
 export type AppViewDefinitionStatus = "ready" | "partial" | "error";
 
@@ -102,7 +103,7 @@ export function deriveOfflineAvailability({
   }
 
   if (appView.type === "WORKFLOW") {
-    return (appView.config.workflowKey === "attendance" || appView.config.workflowKey === "state-update") && definition?.status === "ready"
+    return isStateUpdateCompatibleWorkflow(appView.config.workflowKey) && definition?.status === "ready"
       ? "ready"
       : "definition-missing";
   }

@@ -15,6 +15,7 @@ import {
 import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records";
 import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
+import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 
 const PREWARM_CONCURRENCY = 4;
 
@@ -104,7 +105,11 @@ async function prewarmOneAppView({
       return;
     }
 
-    if (appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance") {
+    if (
+      appView.type === "WORKFLOW" &&
+      isStateUpdateCompatibleWorkflow(appView.config.workflowKey) &&
+      appView.config.workflowKey === "attendance"
+    ) {
       const attendanceConfig = appView.config as AttendanceWorkflowConfig;
       const response = await api.getAttendanceWorkflow(token, contractId, appView.id, {
         date: formatLocalDateInput(new Date()),
@@ -143,7 +148,11 @@ async function prewarmOneAppView({
       return;
     }
 
-    if (appView.type === "WORKFLOW" && appView.config.workflowKey === "state-update") {
+    if (
+      appView.type === "WORKFLOW" &&
+      isStateUpdateCompatibleWorkflow(appView.config.workflowKey) &&
+      appView.config.workflowKey === "state-update"
+    ) {
       const response = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
         date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
       });

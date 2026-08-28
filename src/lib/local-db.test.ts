@@ -872,6 +872,7 @@ describe("local database singleton", () => {
       recordId: "attendance_remote_1",
       result: "CREATED",
       subjectRecordId: "person_real_1",
+      updatedAt: "2026-08-26T11:30:00.000Z",
     });
 
     expect(db.runAsync).toHaveBeenCalledWith(
@@ -884,7 +885,7 @@ describe("local database singleton", () => {
       "attendance_remote_1",
       "Persona segura",
       expect.any(String),
-      expect.any(String),
+      "2026-08-26T11:30:00.000Z",
       expect.any(String),
       "state_update_local_record_1",
     );
@@ -981,12 +982,23 @@ describe("local database singleton", () => {
     ]);
   });
 
-  it("consolidates repeated Attendance update-current saves for the same person and date", async () => {
+  it("keeps the clientRequestId when repeated Attendance update-current save has the same intention", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM pending_operations")) {
         return stateUpdateDiagnosticsRow({
           client_request_id: "stable-client-request",
           local_record_id: "state_update_view_attendance_2026_08_26_person_a",
+          payload_json: JSON.stringify({
+            appViewId: "view_attendance",
+            clientRequestId: "stable-client-request",
+            date: "2026-08-26",
+            expectedUpdatedAt: null,
+            historyMode: "update-current",
+            stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+            subjectDisplayName: "Persona person_a",
+            subjectRecordId: "person_a",
+            uniqueness: "subject-date",
+          }),
         });
       }
 
@@ -1002,7 +1014,7 @@ describe("local database singleton", () => {
     const store = getLocalDatabase();
 
     await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "present_option"));
-    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "absent_option"));
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "present_option"));
 
     const operationInserts = db.runAsync.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
 
@@ -1010,7 +1022,46 @@ describe("local database singleton", () => {
     expect(new Set(operationInserts.map((call) => call[1])).size).toBe(1);
     expect(operationInserts[0][2]).toBe("stable-client-request");
     expect(operationInserts[1][2]).toBe("stable-client-request");
-    expect(String(operationInserts[1][9])).toContain("absent_option");
+    expect(String(operationInserts[1][9])).toContain("present_option");
+  });
+
+  it("rotates the clientRequestId when consolidated Attendance update-current payload changes", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations")) {
+        return stateUpdateDiagnosticsRow({
+          client_request_id: "stable-client-request",
+          local_record_id: "state_update_view_attendance_2026_08_26_person_a",
+          payload_json: JSON.stringify({
+            appViewId: "view_attendance",
+            clientRequestId: "stable-client-request",
+            date: "2026-08-26",
+            historyMode: "update-current",
+            stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+            subjectDisplayName: "Persona person_a",
+            subjectRecordId: "person_a",
+            uniqueness: "subject-date",
+          }),
+        });
+      }
+
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_view_attendance_2026_08_26_person_a",
+          sync_status: "pending_update",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_a", "absent_option"));
+
+    const operationInserts = db.runAsync.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+
+    expect(operationInserts).toHaveLength(1);
+    expect(operationInserts[0][2]).not.toBe("stable-client-request");
+    expect(String(operationInserts[0][9])).toContain("absent_option");
   });
 
   it("uses scoped local ids for new remote records so legacy rows from another scope cannot steal the current scope", async () => {

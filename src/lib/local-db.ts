@@ -1,14 +1,15 @@
 import * as SQLite from "expo-sqlite";
 
-import { createClientRequestId } from "./client-request-id";
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
 import {
   buildOfflineStateValues,
   createStateUpdateLocalRecordId,
+  isStateUpdateCompatibleWorkflow,
   StateUpdateLocalRecordDiagnostics,
   normalizeStateUpdateRecord,
   OfflineStateUpdatePayload,
   OfflineStateUpdateValues,
+  resolveStateUpdateClientRequestId,
   SaveStateUpdateLocallyInput,
   SearchStateUpdateSubjectsInput,
   STATE_UPDATE_OPERATION,
@@ -17,6 +18,7 @@ import {
   StateUpdateOfflineStore,
   StateUpdateScope,
   StateUpdateSnapshotReconcileResult,
+  stateUpdateRemoteItemMatchesPayload,
   stateUpdateRecordToItem,
   UpsertStateUpdateSnapshotInput,
 } from "./state-update-offline";
@@ -1720,7 +1722,6 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
         STATE_UPDATE_OPERATION,
       )
     : null;
-  const clientRequestId = existingOperation?.client_request_id ?? createClientRequestId();
   const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
   const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
   const values: OfflineStateUpdateValues = {
@@ -1731,6 +1732,31 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
     stateValues,
     subjectDisplayName: input.subjectDisplayName,
     subjectRecordId: input.subjectRecordId,
+  };
+  const nextPayload: OfflineStateUpdatePayload = {
+    appViewId: input.appViewId,
+    clientRequestId: existingOperation?.client_request_id ?? "",
+    date: input.date,
+    expectedUpdatedAt,
+    extraValues: input.extraValues,
+    historyMode: input.historyMode,
+    overwrite: input.overwrite,
+    stateValues,
+    subjectDisplayName: input.subjectDisplayName,
+    subjectRecordId: input.subjectRecordId,
+    uniqueness: input.uniqueness,
+  };
+  const existingPayload = existingOperation
+    ? parsePendingStateUpdatePayload(existingOperation.payload_json)
+    : null;
+  const clientRequestId = resolveStateUpdateClientRequestId({
+    existingClientRequestId: existingOperation?.client_request_id,
+    existingPayload,
+    nextPayload,
+  });
+  const payload: OfflineStateUpdatePayload = {
+    ...nextPayload,
+    clientRequestId,
   };
   const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
 
@@ -1784,19 +1810,7 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
       clientRequestId,
       input,
       localRecordId,
-      payload: {
-        appViewId: input.appViewId,
-        clientRequestId,
-        date: input.date,
-        expectedUpdatedAt,
-        extraValues: input.extraValues,
-        historyMode: input.historyMode,
-        overwrite: input.overwrite,
-        stateValues,
-        subjectDisplayName: input.subjectDisplayName,
-        subjectRecordId: input.subjectRecordId,
-        uniqueness: input.uniqueness,
-      },
+      payload,
       serverRecordId: existingRecord?.serverId ?? null,
       timestamp: now,
     });
@@ -1892,14 +1906,15 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         if (pendingOperation) {
           const payload = pendingOperation.payload as OfflineStateUpdatePayload;
 
-          if (!stateUpdateSnapshotMatchesPendingPayload(item, payload)) {
+          if (!stateUpdateRemoteItemMatchesPayload(item, payload)) {
             continue;
           }
 
-          await completeStateUpdateOperation(pendingOperation, {
+          await completeStateUpdateOperationInTransaction(db, pendingOperation, {
             recordId: item.current.recordId,
             result: "UNCHANGED",
             subjectRecordId: payload.subjectRecordId,
+            updatedAt: item.current.updatedAt,
           });
           await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
             completedAt: cachedAt,
@@ -2095,7 +2110,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { limit?: number 
         label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label,
       })),
       subject: record.subject,
-      updatedAt: record.updatedAt ?? undefined,
+      updatedAt: record.updatedAt ?? row.cached_at,
     };
   });
 }
@@ -2232,7 +2247,7 @@ async function getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateU
   const localRecords = localRows.map(mapStateUpdateLocalRecordDiagnosticsRow);
   const localCount = (status: RecordSyncStatus) => localRecords.filter((record) => record.syncStatus === status).length;
   const attendanceDerivedPendingCount = localRecords.filter((record) =>
-    record.workflowKey === "attendance" &&
+    isStateUpdateCompatibleWorkflow(record.workflowKey) &&
     (record.syncStatus === "pending_create" ||
       record.syncStatus === "pending_update" ||
       record.syncStatus === "syncing" ||
@@ -2375,6 +2390,17 @@ async function completeStateUpdateOperation(
   result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>,
 ) {
   const db = await getDatabase();
+
+  await db.withTransactionAsync(async () => {
+    await completeStateUpdateOperationInTransaction(db, operation, result);
+  });
+}
+
+async function completeStateUpdateOperationInTransaction(
+  db: SQLite.SQLiteDatabase,
+  operation: PendingOperation,
+  result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>,
+) {
   const payload = operation.payload as OfflineStateUpdatePayload;
   const now = new Date().toISOString();
   const values: OfflineStateUpdateValues = {
@@ -2398,7 +2424,7 @@ async function completeStateUpdateOperation(
       SET server_id = COALESCE(?, server_id),
           display_name = ?,
           values_json = ?,
-          remote_updated_at = COALESCE(remote_updated_at, ?),
+          remote_updated_at = ?,
           cached_at = ?,
           sync_status = 'synced',
           sync_error_code = NULL,
@@ -2411,7 +2437,7 @@ async function completeStateUpdateOperation(
     result.recordId,
     payload.subjectDisplayName,
     JSON.stringify(values),
-    now,
+    result.updatedAt,
     now,
     operation.localRecordId,
   );
@@ -2946,7 +2972,7 @@ async function upsertStateUpdatePendingOperation({
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
       ON CONFLICT(id)
       DO UPDATE SET
-        client_request_id = pending_operations.client_request_id,
+        client_request_id = excluded.client_request_id,
         server_record_id = COALESCE(excluded.server_record_id, pending_operations.server_record_id),
         payload_json = excluded.payload_json,
         updated_at = excluded.updated_at,
@@ -3177,6 +3203,14 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
     serverRecordId: row.server_record_id,
     updatedAt: row.updated_at,
   };
+}
+
+function parsePendingStateUpdatePayload(value: string): OfflineStateUpdatePayload | null {
+  try {
+    return JSON.parse(value) as OfflineStateUpdatePayload;
+  } catch {
+    return null;
+  }
 }
 
 function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow): StateUpdateOutboxDiagnostics["operations"][number] {
@@ -3720,26 +3754,6 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       trigger: previousRun?.trigger ?? "other",
     },
   });
-}
-
-function stateUpdateSnapshotMatchesPendingPayload(
-  item: StateUpdateItem,
-  payload: OfflineStateUpdatePayload,
-) {
-  if (!item.current || item.subject.id !== payload.subjectRecordId) {
-    return false;
-  }
-
-  if (payload.stateValues.length === 0) {
-    return false;
-  }
-
-  return payload.stateValues.every((requested) =>
-    item.current?.stateValues.some((remote) =>
-      remote.fieldId === requested.fieldId &&
-      remote.optionId === requested.optionId,
-    ),
-  );
 }
 
 function normalizeLastStateUpdateSyncTelemetry(

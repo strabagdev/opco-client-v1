@@ -91,7 +91,13 @@ describe("attendance workflow logic", () => {
 
   it("treats Attendance latest as complete only when it covers the registered total within the backend limit", () => {
     expect(isAttendanceRemoteSnapshotComplete({
-      latest: [{ attendanceRecordId: "attendance_1", person: { displayName: "Persona 1", id: "person_1" }, statusLabel: "Presente", statusOptionId: "present_option" }],
+      latest: [{
+        attendanceRecordId: "attendance_1",
+        person: { displayName: "Persona 1", id: "person_1" },
+        statusLabel: "Presente",
+        statusOptionId: "present_option",
+        updatedAt: "2026-08-26T10:00:00.000Z",
+      }],
       summary: { totalRegistered: 1 },
     })).toBe(true);
     expect(isAttendanceRemoteSnapshotComplete({
@@ -100,6 +106,7 @@ describe("attendance workflow logic", () => {
         person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
         statusLabel: "Presente",
         statusOptionId: "present_option",
+        updatedAt: "2026-08-26T10:00:00.000Z",
       })),
       summary: { totalRegistered: 10 },
     })).toBe(true);
@@ -108,6 +115,7 @@ describe("attendance workflow logic", () => {
         attendanceRecordId: `attendance_${index + 1}`,
         person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
         statusLabel: "Presente",
+        updatedAt: "2026-08-26T10:00:00.000Z",
         statusOptionId: "present_option",
       })),
       summary: { totalRegistered: 25 },

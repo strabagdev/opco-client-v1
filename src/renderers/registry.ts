@@ -1,6 +1,7 @@
 import { ComponentType, createElement } from "react";
 
 import { AppView, AppViewType, WorkflowAppView } from "@/lib/opco-api";
+import { isStateUpdateCompatibleWorkflow } from "../lib/state-update-offline";
 import { RecordsRenderer } from "@/renderers/records/RecordsRenderer";
 import { AppViewRendererProps } from "@/renderers/types";
 import { UnsupportedRenderer } from "@/renderers/unsupported/UnsupportedRenderer";
@@ -20,6 +21,10 @@ export function resolveAppViewRenderer(type: AppViewType) {
 }
 
 export function resolveWorkflowRenderer(appView: WorkflowAppView) {
+  if (!isStateUpdateCompatibleWorkflow(appView.config.workflowKey)) {
+    return UnsupportedWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
+  }
+
   if (appView.config.workflowKey === "attendance") {
     return AttendanceWorkflow as ComponentType<AppViewRendererProps<WorkflowAppView>>;
   }

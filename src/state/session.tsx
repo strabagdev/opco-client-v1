@@ -15,6 +15,11 @@ import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
 import { selectContractId } from "@/lib/contract-selection";
 import {
+  createStateUpdateDiagnosticApi,
+  createStateUpdateDiagnosticEvents,
+  createStateUpdateDiagnosticStore,
+} from "@/diagnostics/state-update-route-logic";
+import {
   getLocalDatabase,
   getLocalDatabaseRecoverySummary,
   getLocalDatabaseStorageState,
@@ -31,7 +36,7 @@ import {
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
 import { RecordsSyncSummary } from "@/lib/offline-records";
-import { ContextResponse, createOpcoApi, DEFAULT_REQUEST_TIMEOUT_MS, MeResponse, OpcoApi, OpcoApiError, OpcoNetworkError } from "@/lib/opco-api";
+import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import {
@@ -45,6 +50,8 @@ import { shouldEmitStateUpdateRefresh } from "@/state/state-update-refresh";
 import { syncPendingRecordsOnce } from "@/sync/records-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
+
+export { abbreviateDiagnosticValue } from "@/diagnostics/state-update-route-logic";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
@@ -401,146 +408,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    const events = new Map<string, StateUpdateDiagnosticRun["rows"][number]>();
     const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
-
-    for (const operation of beforeRun.operations) {
-      events.set(operation.clientRequestId, {
-        clientRequestId: operation.clientRequestId,
-        endpoint: "none",
-        fetchResolvedAt: null,
-        finalSyncStatus: operation.syncStatus,
-        httpStatus: null,
-        requestAbortControllerTriggered: null,
-        requestCompletedAt: null,
-        requestAttempted: false,
-        requestDurationMs: null,
-        requestStartedAt: null,
-        requestTimeoutMs: null,
-        responseBodyStartedAt: null,
-        responseParsedAt: null,
-        responseStarted: null,
-        result: "not-selected",
-        selectedForSync: false,
-      });
-    }
+    const events = createStateUpdateDiagnosticEvents(beforeRun);
 
     setIsStateUpdateDiagnosticSyncing(true);
     try {
-      const diagnosticStore = {
-        ...definitionCache,
-        async listPendingStateUpdateOperations(nextOwnerKey: string) {
-          const operations = await definitionCache.listPendingStateUpdateOperations(nextOwnerKey);
-
-          for (const operation of operations) {
-            events.set(abbreviateDiagnosticValue(operation.clientRequestId), {
-              clientRequestId: abbreviateDiagnosticValue(operation.clientRequestId),
-              endpoint: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
-              fetchResolvedAt: null,
-              finalSyncStatus: "unknown",
-              httpStatus: null,
-              requestAbortControllerTriggered: null,
-              requestCompletedAt: null,
-              requestAttempted: false,
-              requestDurationMs: null,
-              requestStartedAt: null,
-              requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-              responseBodyStartedAt: null,
-              responseParsedAt: null,
-              responseStarted: null,
-              result: "selected",
-              selectedForSync: true,
-            });
-          }
-
-          return operations;
-        },
-        async completeStateUpdateOperation(...args: Parameters<typeof definitionCache.completeStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "synced";
-            event.result = args[1].result;
-          }
-
-          return definitionCache.completeStateUpdateOperation(...args);
-        },
-        async failStateUpdateOperation(...args: Parameters<typeof definitionCache.failStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "failed";
-            event.result = args[1];
-          }
-
-          return definitionCache.failStateUpdateOperation(...args);
-        },
-        async markStateUpdateOperationConflict(...args: Parameters<typeof definitionCache.markStateUpdateOperationConflict>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "conflict";
-            event.result = "CONFLICT";
-          }
-
-          return definitionCache.markStateUpdateOperationConflict(...args);
-        },
-        async retryStateUpdateOperation(...args: Parameters<typeof definitionCache.retryStateUpdateOperation>) {
-          const event = events.get(abbreviateDiagnosticValue(args[0].clientRequestId));
-
-          if (event) {
-            event.finalSyncStatus = "pending_update";
-            event.result = args[1];
-          }
-
-          return definitionCache.retryStateUpdateOperation(...args);
-        },
-      };
-      const diagnosticApi = {
-        async saveStateUpdateWorkflow(...args: Parameters<typeof api.saveStateUpdateWorkflow>) {
-          const input = args[3];
-          const event = [...events.values()].find((item) => item.clientRequestId === abbreviateDiagnosticValue(input.clientRequestId ?? ""));
-
-          if (event) {
-            event.endpoint = "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update";
-            event.requestAttempted = true;
-            event.requestStartedAt = new Date().toISOString();
-            event.requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
-          }
-          const requestStartedMs = Date.now();
-
-          try {
-            const response = await api.saveStateUpdateWorkflow(...args);
-
-            if (event) {
-              event.httpStatus = 200;
-              event.requestAbortControllerTriggered = false;
-              event.requestCompletedAt = new Date().toISOString();
-              event.requestDurationMs = Date.now() - requestStartedMs;
-              event.result = response.results[0]?.result ?? "EMPTY_RESULT";
-              event.responseStarted = true;
-            }
-
-            return response;
-          } catch (error) {
-            if (event) {
-              event.httpStatus = error instanceof OpcoApiError ? error.status : null;
-              event.fetchResolvedAt = error instanceof OpcoNetworkError ? error.diagnostics?.fetchResolvedAt ?? null : event.fetchResolvedAt;
-              event.requestAbortControllerTriggered = error instanceof OpcoNetworkError ? error.diagnostics?.abortControllerTriggered ?? null : false;
-              event.requestCompletedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestCompletedAt ?? new Date().toISOString() : new Date().toISOString();
-              event.requestDurationMs = error instanceof OpcoNetworkError ? error.diagnostics?.requestDurationMs ?? Date.now() - requestStartedMs : Date.now() - requestStartedMs;
-              event.requestStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.requestStartedAt ?? event.requestStartedAt : event.requestStartedAt;
-              event.requestTimeoutMs = error instanceof OpcoNetworkError ? error.diagnostics?.timeoutMs ?? event.requestTimeoutMs : event.requestTimeoutMs;
-              event.responseBodyStartedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseBodyStartedAt ?? null : event.responseBodyStartedAt;
-              event.responseParsedAt = error instanceof OpcoNetworkError ? error.diagnostics?.responseParsedAt ?? null : event.responseParsedAt;
-              event.result = error instanceof OpcoApiError ? error.code : error instanceof Error ? error.name : "UNKNOWN_ERROR";
-              event.responseStarted = error instanceof OpcoNetworkError ? error.diagnostics?.responseStarted ?? false : true;
-            }
-
-            throw error;
-          }
-        },
-      };
+      const diagnosticStore = createStateUpdateDiagnosticStore(definitionCache, events);
+      const diagnosticApi = createStateUpdateDiagnosticApi(api, events);
       const runResult = await syncPendingStateUpdatesWithTelemetry({
         api: diagnosticApi,
         ownerKey,
@@ -1475,17 +1349,6 @@ function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | 
   );
 }
 
-export function abbreviateDiagnosticValue(value: string | null) {
-  if (!value) {
-    return "missing";
-  }
-
-  if (value.length <= 12) {
-    return value;
-  }
-
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
 
 function LocalStorageDiagnostics({
   summary,

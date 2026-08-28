@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
-import { OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { EntityRecordValue, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { OfflineStateUpdatePayload, STATE_UPDATE_OPERATION } from "../lib/state-update-offline";
 import { SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "../lib/sync-telemetry";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "./state-update-sync";
@@ -36,7 +36,7 @@ describe("state-update sync engine", () => {
     const api = {
       saveStateUpdateWorkflow: vi.fn(async () => ({
         appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
-        results: [{ recordId: "attendance_1", result: "CREATED" as const, subjectRecordId: "person_1" }],
+        results: [{ recordId: "attendance_1", result: "CREATED" as const, subjectRecordId: "person_1", updatedAt: "2026-08-26T12:00:00.000Z" }],
       })),
     };
 
@@ -61,7 +61,7 @@ describe("state-update sync engine", () => {
       saveStateUpdateWorkflow: vi.fn(async () => ({
         appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
         date: "2026-08-25",
-        results: [{ recordId: "event_1", result: "UPDATED" as const, subjectRecordId: "equipment_1" }],
+        results: [{ recordId: "event_1", result: "UPDATED" as const, subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:00.000Z" }],
       })),
     };
 
@@ -93,7 +93,7 @@ describe("state-update sync engine", () => {
     const api = {
       saveStateUpdateWorkflow: vi.fn(async (_token: string, _contractId: string, _appViewId: string, input: { subjectRecordId: string }) => ({
         appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
-        results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId }],
+        results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId, updatedAt: "2026-08-26T12:00:00.000Z" }],
       })),
     };
 
@@ -123,7 +123,7 @@ describe("state-update sync engine", () => {
 
         return {
           appView: { id: "view_attendance", name: "Registro de asistencia", slug: "attendance" },
-          results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId }],
+          results: [{ recordId: `attendance_${input.subjectRecordId}`, result: "CREATED" as const, subjectRecordId: input.subjectRecordId, updatedAt: "2026-08-26T12:00:00.000Z" }],
         };
       }),
     };
@@ -153,6 +153,7 @@ describe("state-update sync engine", () => {
     store.operations = [operation()];
     const api = {
       getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentExtraValues: { motivo: "mantencion", observacion: "Turno AM" },
         currentStateValues: [
           { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
           { fieldId: "field_availability", label: "Disponible", optionId: "available" },
@@ -175,7 +176,7 @@ describe("state-update sync engine", () => {
     });
     expect(store.completed[0]).toMatchObject({
       operation: { clientRequestId: "request_original" },
-      result: { recordId: "event_1", result: "UNCHANGED", subjectRecordId: "equipment_1" },
+      result: { recordId: "event_1", result: "UNCHANGED", subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:11.000Z" },
     });
     expect(store.retried).toHaveLength(0);
     expect(store.operations).toHaveLength(0);
@@ -186,6 +187,7 @@ describe("state-update sync engine", () => {
     store.operations = [operation()];
     const api = {
       getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentExtraValues: { motivo: "mantencion", observacion: "Turno AM" },
         currentStateValues: [
           { fieldId: "field_operational_status", label: "Detenido", optionId: "stopped" },
           { fieldId: "field_availability", label: "Disponible", optionId: "available" },
@@ -205,6 +207,107 @@ describe("state-update sync engine", () => {
     expect(store.operations).toHaveLength(1);
   });
 
+  it("keeps a timed out operation retryable when states match but requested extras differ", async () => {
+    store.operations = [operation()];
+    const api = {
+      getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentExtraValues: { motivo: "mantencion", observacion: "Turno PM" },
+        currentStateValues: [
+          { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+          { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+        ],
+      })),
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw timeoutError();
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 0, retriable: 1 });
+    expect(result.reconciledAfterTimeout).toBe(false);
+    expect(store.completed).toHaveLength(0);
+    expect(store.retried[0].clientRequestId).toBe("request_original");
+    expect(store.operations).toHaveLength(1);
+  });
+
+  it("reconciles RESULT_UNAVAILABLE for update-current only when remote exact intent matches", async () => {
+    store.operations = [operation()];
+    const api = {
+      getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentExtraValues: { motivo: "mantencion", observacion: "Turno AM" },
+        currentStateValues: [
+          { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+          { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+        ],
+      })),
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw new OpcoApiError("Resultado no disponible.", "IDEMPOTENCY_RESULT_UNAVAILABLE", 409);
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ completed: 1, failed: 0 });
+    expect(store.completed[0]).toMatchObject({
+      operation: { clientRequestId: "request_original" },
+      result: { recordId: "event_1", result: "UNCHANGED", updatedAt: "2026-08-26T12:00:11.000Z" },
+    });
+    expect(store.failed).toHaveLength(0);
+  });
+
+  it("does not rotate or retry automatically when idempotency key was reused", async () => {
+    store.operations = [operation()];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw new OpcoApiError("Key reutilizada.", "IDEMPOTENCY_KEY_REUSED", 409);
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ failed: 1, retriable: 0 });
+    expect(store.failed[0]).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REUSED",
+      operation: { clientRequestId: "request_original" },
+    });
+    expect(store.retried).toHaveLength(0);
+    expect(store.operations[0].clientRequestId).toBe("request_original");
+  });
+
+  it("does not invent a new key for append RESULT_UNAVAILABLE", async () => {
+    const appendPayload = operation().payload as OfflineStateUpdatePayload;
+
+    store.operations = [operation({
+      payload: {
+        ...appendPayload,
+        historyMode: "append",
+        uniqueness: "none",
+      },
+    })];
+    const api = {
+      getStateUpdateWorkflow: vi.fn(async () => stateUpdateWorkflowResponse({
+        currentExtraValues: { motivo: "mantencion", observacion: "Turno AM" },
+        currentStateValues: [
+          { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+          { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+        ],
+      })),
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw new OpcoApiError("Resultado no disponible.", "IDEMPOTENCY_RESULT_UNAVAILABLE", 409);
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result).toMatchObject({ failed: 1, retriable: 0 });
+    expect(api.getStateUpdateWorkflow).not.toHaveBeenCalled();
+    expect(store.failed[0]).toMatchObject({
+      code: "IDEMPOTENCY_RESULT_UNAVAILABLE",
+      operation: { clientRequestId: "request_original" },
+    });
+  });
+
   it("keeps timeout retries idempotent when the backend write completed before the response was lost", async () => {
     store.operations = [operation()];
     const api = {
@@ -213,7 +316,7 @@ describe("state-update sync engine", () => {
         .mockResolvedValueOnce({
           appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
           date: "2026-08-25",
-          results: [{ recordId: "event_1", result: "UNCHANGED" as const, subjectRecordId: "equipment_1" }],
+          results: [{ recordId: "event_1", result: "UNCHANGED" as const, subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:00.000Z" }],
         }),
     };
 
@@ -406,8 +509,10 @@ function timeoutError() {
 }
 
 function stateUpdateWorkflowResponse({
+  currentExtraValues,
   currentStateValues,
 }: {
+  currentExtraValues?: Record<string, EntityRecordValue>;
   currentStateValues: { fieldId: string; label: string | null; optionId: string | null }[];
 }) {
   return {
@@ -418,6 +523,7 @@ function stateUpdateWorkflowResponse({
     historyMode: "update-current" as const,
     items: [{
       current: {
+        extraValues: currentExtraValues,
         recordId: "event_1",
         stateValues: currentStateValues,
         updatedAt: "2026-08-26T12:00:11.000Z",

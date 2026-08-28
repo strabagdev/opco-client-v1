@@ -1,9 +1,10 @@
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
-import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult, StateUpdateCurrentFieldValue, StateUpdateItem } from "../lib/opco-api";
+import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
+  stateUpdateRemoteItemMatchesPayload,
   workflowTelemetryScopeId,
 } from "../lib/state-update-offline";
 import { classifySyncTelemetryError, SyncTelemetryStore } from "../lib/sync-telemetry";
@@ -128,7 +129,7 @@ async function runSync({
     } catch (error) {
       const classification = classifyStateUpdateSyncError(error);
 
-      if (classification.action === "retry" && error instanceof OpcoNetworkError) {
+      if (shouldAttemptRemoteStateUpdateReconcile(error, classification, payload)) {
         const reconciled = await completeOperationIfRemoteStateMatches({
           api,
           operation,
@@ -200,7 +201,7 @@ async function completeOperationIfRemoteStateMatches({
     });
     const item = response.items.find((candidate) => candidate.subject.id === payload.subjectRecordId);
 
-    if (!item?.current || !stateUpdateItemMatchesPayload(item, payload)) {
+    if (!item?.current || !stateUpdateRemoteItemMatchesPayload(item, payload)) {
       return false;
     }
 
@@ -208,6 +209,7 @@ async function completeOperationIfRemoteStateMatches({
       recordId: item.current.recordId,
       result: "UNCHANGED",
       subjectRecordId: payload.subjectRecordId,
+      updatedAt: item.current.updatedAt,
     });
 
     return true;
@@ -216,50 +218,36 @@ async function completeOperationIfRemoteStateMatches({
   }
 }
 
-function stateUpdateItemMatchesPayload(item: StateUpdateItem, payload: OfflineStateUpdatePayload) {
-  if (!item.current) {
+function shouldAttemptRemoteStateUpdateReconcile(
+  error: unknown,
+  classification: ReturnType<typeof classifyStateUpdateSyncError>,
+  payload: OfflineStateUpdatePayload,
+) {
+  if (payload.historyMode === "append" || payload.uniqueness === "none") {
     return false;
   }
 
-  if (payload.stateValues.length === 0) {
-    return false;
-  }
-
-  const remoteStateValues = normalizeRemoteStateValues(item.current);
-
-  return payload.stateValues.every((requested) =>
-    remoteStateValues.some((remote) =>
-      remote.fieldId === requested.fieldId &&
-      remote.optionId === requested.optionId,
-    ),
-  );
-}
-
-function normalizeRemoteStateValues(current: NonNullable<StateUpdateItem["current"]>): StateUpdateCurrentFieldValue[] {
-  if (Array.isArray(current.stateValues)) {
-    return current.stateValues;
-  }
-
-  const states = (current as unknown as { states?: unknown }).states;
-
-  if (!states || typeof states !== "object" || Array.isArray(states)) {
-    return [];
-  }
-
-  return Object.entries(states).map(([fieldId, rawValue]) => {
-    const value = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
-      ? rawValue as { label?: unknown; optionId?: unknown }
-      : {};
-
-    return {
-      fieldId,
-      label: typeof value.label === "string" ? value.label : null,
-      optionId: typeof value.optionId === "string" ? value.optionId : null,
-    };
-  });
+  return (classification.action === "retry" && error instanceof OpcoNetworkError) ||
+    (error instanceof OpcoApiError && error.code === "IDEMPOTENCY_RESULT_UNAVAILABLE");
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {
+  if (error instanceof OpcoApiError && error.code === "IDEMPOTENCY_KEY_REUSED") {
+    return {
+      action: "fail",
+      code: error.code,
+      message: "La clave de idempotencia ya fue usada con otra intencion. Requiere revision manual.",
+    };
+  }
+
+  if (error instanceof OpcoApiError && error.code === "IDEMPOTENCY_RESULT_UNAVAILABLE") {
+    return {
+      action: "fail",
+      code: error.code,
+      message: "Opco no pudo reponer el resultado guardado. Requiere recuperacion manual.",
+    };
+  }
+
   if (error instanceof OpcoNetworkError || isLocalDatabaseUnavailableError(error)) {
     return {
       action: "retry",

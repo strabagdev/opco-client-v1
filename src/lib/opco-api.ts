@@ -283,7 +283,7 @@ export type AttendanceLatestItem = {
   };
   statusLabel: string | null;
   statusOptionId: string | null;
-  updatedAt?: string;
+  updatedAt: string;
 };
 
 export type AttendanceResponse = {
@@ -414,7 +414,7 @@ export type StateUpdateLatestItem = {
   recordId: string;
   stateValues?: StateUpdateCurrentFieldValue[];
   subject: StateUpdateSubject;
-  updatedAt?: string;
+  updatedAt: string;
 };
 
 export type StateUpdateSummary = {
@@ -469,6 +469,7 @@ export type StateUpdateBatchResult =
       recordId: string;
       result: "CREATED" | "UNCHANGED" | "UPDATED";
       subjectRecordId: string;
+      updatedAt: string;
     }
   | {
       existing: {
@@ -1000,9 +1001,7 @@ function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceRe
   const normalizedStatuses = normalizeAttendanceStatuses(response);
 
   response.latest.forEach((item) => {
-    if (item.updatedAt) {
-      assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo registro de asistencia.");
-    }
+    assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo registro de asistencia.");
   });
 
   return {
@@ -1049,9 +1048,7 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
 
 function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdateResponse {
   response.latest?.forEach((item) => {
-    if (item.updatedAt) {
-      assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
-    }
+    assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
   });
 
   response.items.forEach((item) => {
@@ -1070,6 +1067,11 @@ function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): St
   results.forEach((result) => {
     if (result.result === "CONFLICT") {
       assertIsoDateTime(result.existing.updatedAt, "Opco devolvio un updatedAt invalido para el conflicto de estado.");
+      return;
+    }
+
+    if (result.result !== "ERROR") {
+      assertIsoDateTime(result.updatedAt, "Opco devolvio un updatedAt invalido para el cambio de estado.");
     }
   });
 

@@ -6,10 +6,14 @@ import {
   StateUpdateItem,
   StateUpdateLatestItem,
 } from "./opco-api";
+import { createClientRequestId } from "./client-request-id";
 import { CachedEntityRecord, PendingOperation } from "./offline-records";
 import { ConnectivityStatus } from "./connectivity";
 
 export const STATE_UPDATE_OPERATION = "STATE_UPDATE";
+export const STATE_UPDATE_COMPATIBLE_WORKFLOW_KEYS = ["state-update", "attendance"] as const;
+
+export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WORKFLOW_KEYS[number];
 
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
@@ -323,6 +327,30 @@ export function workflowTelemetryScopeId(appViewId: string) {
   return `workflow:${appViewId}`;
 }
 
+export function isStateUpdateCompatibleWorkflow(workflowKey: unknown): workflowKey is StateUpdateCompatibleWorkflowKey {
+  return typeof workflowKey === "string" && STATE_UPDATE_COMPATIBLE_WORKFLOW_KEYS.includes(workflowKey as StateUpdateCompatibleWorkflowKey);
+}
+
+export function createStateUpdateClientRequestId() {
+  return createClientRequestId();
+}
+
+export function resolveStateUpdateClientRequestId({
+  existingClientRequestId,
+  existingPayload,
+  nextPayload,
+}: {
+  existingClientRequestId?: string | null;
+  existingPayload?: OfflineStateUpdatePayload | null;
+  nextPayload: OfflineStateUpdatePayload;
+}) {
+  if (existingClientRequestId && existingPayload && stateUpdateIntentsEqual(existingPayload, nextPayload)) {
+    return existingClientRequestId;
+  }
+
+  return createStateUpdateClientRequestId();
+}
+
 export function createStateUpdateLocalRecordId(input: {
   appViewId: string;
   date?: string;
@@ -389,15 +417,163 @@ export function buildOfflineStateValues(
 }
 
 export function stateUpdateRecordToItem(record: CachedStateUpdateRecord): StateUpdateItem {
+  if (!record.updatedAt) {
+    return {
+      current: null,
+      subject: record.subject,
+    };
+  }
+
   return {
     current: {
       extraValues: record.extraValues,
       recordId: record.localRecordId,
       stateValues: record.stateValues,
-      updatedAt: record.updatedAt ?? new Date().toISOString(),
+      updatedAt: record.updatedAt,
     },
     subject: record.subject,
   };
+}
+
+export function stateUpdateRemoteItemMatchesPayload(
+  item: StateUpdateItem,
+  payload: OfflineStateUpdatePayload,
+) {
+  if (!item.current || item.subject.id !== payload.subjectRecordId) {
+    return false;
+  }
+
+  const remoteStateValues = normalizeStateUpdateCurrentStateValues(item.current);
+  const remoteExtraValues = item.current.extraValues ?? {};
+
+  return stateUpdateRequestedStatesMatch(remoteStateValues, payload.stateValues) &&
+    stateUpdateRequestedExtrasMatch(remoteExtraValues, payload.extraValues);
+}
+
+export function stateUpdateIntentsEqual(
+  previous: OfflineStateUpdatePayload,
+  next: OfflineStateUpdatePayload,
+) {
+  return JSON.stringify(normalizeStateUpdateIntent(previous)) === JSON.stringify(normalizeStateUpdateIntent(next));
+}
+
+export function normalizeStateUpdateIntent(payload: OfflineStateUpdatePayload) {
+  return {
+    appViewId: payload.appViewId,
+    date: payload.date ?? null,
+    expectedUpdatedAt: payload.expectedUpdatedAt ?? null,
+    extraValues: normalizeStateUpdateExtraValues(payload.extraValues),
+    historyMode: payload.historyMode,
+    overwrite: payload.overwrite === true,
+    stateValues: normalizeStateUpdateStateValues(payload.stateValues),
+    subjectRecordId: payload.subjectRecordId,
+    uniqueness: payload.uniqueness,
+  };
+}
+
+export function isValidStateUpdateRemoteUpdatedAt(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) {
+    return false;
+  }
+
+  const parsed = Date.parse(value);
+
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function stateUpdateRequestedStatesMatch(
+  remoteStateValues: StateUpdateCurrentFieldValue[],
+  requestedStateValues: OfflineStateUpdatePayload["stateValues"],
+) {
+  return requestedStateValues.every((requested) =>
+    remoteStateValues.some((remote) =>
+      remote.fieldId === requested.fieldId &&
+      remote.optionId === requested.optionId,
+    ),
+  );
+}
+
+function stateUpdateRequestedExtrasMatch(
+  remoteExtraValues: Record<string, EntityRecordValue>,
+  requestedExtraValues?: Record<string, EntityRecordValue>,
+) {
+  if (!requestedExtraValues) {
+    return true;
+  }
+
+  return Object.entries(requestedExtraValues).every(([fieldId, requested]) =>
+    JSON.stringify(normalizeStateUpdateValue(remoteExtraValues[fieldId])) === JSON.stringify(normalizeStateUpdateValue(requested)),
+  );
+}
+
+function normalizeStateUpdateStateValues(stateValues: OfflineStateUpdatePayload["stateValues"]) {
+  return (Array.isArray(stateValues) ? stateValues : [])
+    .map((value) => ({
+      fieldId: value.fieldId,
+      optionId: value.optionId,
+    }))
+    .sort((first, second) => first.fieldId.localeCompare(second.fieldId));
+}
+
+function normalizeStateUpdateExtraValues(extraValues?: Record<string, EntityRecordValue>) {
+  if (!extraValues) {
+    return [];
+  }
+
+  return Object.entries(extraValues)
+    .map(([fieldId, value]) => [fieldId, normalizeStateUpdateValue(value)] as const)
+    .sort(([first], [second]) => first.localeCompare(second));
+}
+
+function normalizeStateUpdateValue(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Number(value) : value;
+  }
+
+  if (typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeStateUpdateValue);
+  }
+
+  if ("id" in value && typeof (value as { id?: unknown }).id === "string") {
+    return { id: (value as { id: string }).id };
+  }
+
+  const normalizedEntries: [string, unknown][] = Object.entries(value as Record<string, unknown>)
+    .map(([key, nested]) => [key, normalizeStateUpdateValue(nested)]);
+
+  return Object.fromEntries(normalizedEntries.sort(([first], [second]) => first.localeCompare(second)));
+}
+
+function normalizeStateUpdateCurrentStateValues(current: NonNullable<StateUpdateItem["current"]>): StateUpdateCurrentFieldValue[] {
+  if (Array.isArray(current.stateValues)) {
+    return current.stateValues;
+  }
+
+  const states = (current as unknown as { states?: unknown }).states;
+
+  if (!states || typeof states !== "object" || Array.isArray(states)) {
+    return [];
+  }
+
+  return Object.entries(states).map(([fieldId, rawValue]) => {
+    const value = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+      ? rawValue as { label?: unknown; optionId?: unknown }
+      : {};
+
+    return {
+      fieldId,
+      label: typeof value.label === "string" ? value.label : null,
+      optionId: typeof value.optionId === "string" ? value.optionId : null,
+    };
+  });
 }
 
 function mapRecordStatusToStateUpdate(syncStatus: CachedEntityRecord["syncStatus"]): StateUpdateSyncStatus {

@@ -112,7 +112,7 @@ export function attendanceResponseToStateUpdateItems(
           label: item.statusLabel,
           optionId: item.statusOptionId,
         }],
-        updatedAt: item.updatedAt ?? response.date,
+        updatedAt: item.updatedAt,
       },
       subject: item.person,
     });

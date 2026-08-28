@@ -795,6 +795,38 @@ describe("createOpcoApi", () => {
     expect(result.summary?.totalRegistered).toBe(1);
   });
 
+  it("rejects state-update latest snapshots without authoritative updatedAt", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            extraFields: [],
+            historyMode: "update-current",
+            items: [],
+            latest: [
+              {
+                recordId: "event_1",
+                stateValues: [{ fieldId: "field_status", label: "Disponible", optionId: "available" }],
+                subject: { displayName: "Equipo 1", id: "asset_1" },
+              },
+            ],
+            sourceEntityType: { id: "assets", name: "Activos" },
+            stateFields: [],
+            subjectFieldId: "field_asset",
+            targetEntityType: { id: "events", name: "Eventos" },
+            uniqueness: "subject-date",
+          },
+          ok: true,
+        }),
+    });
+
+    await expect(api.getStateUpdateWorkflow("token_123", "contract_1", "view_state"))
+      .rejects.toMatchObject({ code: "INVALID_RECORD_UPDATED_AT" });
+  });
+
   it("saves generic state-update entries with multiple state fields and extra values", async () => {
     const requests: RequestInit[] = [];
     const urls: string[] = [];
@@ -808,7 +840,7 @@ describe("createOpcoApi", () => {
         return jsonResponse({
           data: {
             appView: { id: "view_state", name: "Estados", slug: "estados" },
-            result: { recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1" },
+            result: { recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1", updatedAt: "2026-08-22T12:00:00.000Z" },
           },
           ok: true,
         });
@@ -838,7 +870,28 @@ describe("createOpcoApi", () => {
       },
       subjectRecordId: "asset_1",
     });
-    expect(result.results[0]).toMatchObject({ result: "UPDATED" });
+    expect(result.results[0]).toMatchObject({ result: "UPDATED", updatedAt: "2026-08-22T12:00:00.000Z" });
+  });
+
+  it("rejects successful state-update results without authoritative updatedAt", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            result: { recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1" },
+          },
+          ok: true,
+        }),
+    });
+
+    await expect(api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      clientRequestId: "request_1",
+      stateValues: [{ fieldId: "field_operational", optionId: "running" }],
+      subjectRecordId: "asset_1",
+    })).rejects.toMatchObject({ code: "INVALID_RECORD_UPDATED_AT" });
   });
 
   it("normalizes backend state-update conflict differences to generic stateValues", async () => {
