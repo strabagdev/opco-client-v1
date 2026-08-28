@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import {
   attendanceStateFields,
   attendanceStatusesFromStateFields,
@@ -394,13 +395,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         if (ownerKey) {
           const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
           const sourceDefinition = await definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId);
-          const cachedPeople = await definitionCache.listCachedRecords({
+          const sourceTelemetry = await definitionCache.getSyncTelemetry({
             contractId: selectedContractId,
             entityTypeId: appView.config.sourceEntityTypeId,
             ownerKey,
-            page: 1,
-            pageSize: 1,
           });
+          const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
 
           if (prepared?.definition.kind === "attendance") {
             setStatuses(prepared.definition.statuses);
@@ -414,7 +414,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             ));
           }
 
-          if (!prepared || prepared.status !== "ready" || !sourceDefinition || cachedPeople.pagination.total === 0) {
+          if (!prepared || prepared.status !== "ready" || !sourceDefinition || !sourceHydrated) {
             setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
           } else {
             setError(null);

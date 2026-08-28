@@ -445,7 +445,24 @@ Data cache:
 - Attendance prewarm additionally refreshes the source Personas entity because offline search needs local people.
 - Generic state-update prewarm refreshes the source entity records for offline subject search.
 
-An AppView can be available offline as a prepared definition while its data is still missing.
+Definition readiness and data readiness are separate:
+
+- `DEFINITION_READY`: renderer/workflow metadata exists locally and can build the screen.
+- `DATA_READY`: the local data required by that renderer has been successfully hydrated at least once.
+- `OFFLINE_READY`: both definition and required data are ready.
+- `PARTIAL_OFFLINE`: definition exists, but required data has never been authoritatively hydrated.
+
+Home advertises `Disponible sin conexion` only for `OFFLINE_READY`. If only the definition is available, it shows `Configuracion disponible; datos aun no descargados`. If no prepared definition exists, it shows `Requiere conexion para preparar datos`.
+
+Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness.
+
+Readiness scope:
+
+- RECORDS: `ownerKey + contractId + entityTypeId` through sync telemetry; Home resolves it per AppView.
+- STATE_UPDATE: `ownerKey + contractId + sourceEntityTypeId` for subject selection data.
+- Attendance: same STATE_UPDATE source hydration rule; Personas may be loaded empty and still count as known.
+
+An AppView can be available offline as a prepared definition while its data is still missing, but it must not be advertised as fully offline-ready until its renderer data requirement is satisfied.
 
 ## Offline Lifecycle
 
@@ -760,9 +777,10 @@ sequenceDiagram
 | 21 | Local database recovery controller is extracted; reset remains explicit and local-only. | IMPLEMENTED |
 | 22 | Session diagnostics wiring is extracted; observation remains passive and commands remain explicit. | IMPLEMENTED |
 | 23 | Web shell emits restrictive security headers including CSP, COOP, COEP, Referrer-Policy, and MIME-sniffing protection. | IMPLEMENTED |
-| 24 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
-| 25 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
-| 26 | README architecture matches the current workflow implementation. | PARTIAL |
+| 24 | An AppView is advertised as offline-ready only when both its renderer definition and required local data have been successfully hydrated. | IMPLEMENTED |
+| 25 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
+| 26 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
+| 27 | README architecture matches the current workflow implementation. | PARTIAL |
 
 ## Known Complexity And Technical Debt
 
@@ -774,7 +792,7 @@ sequenceDiagram
 | README drift | README still contains older unsupported-workflow statements. | New contributors may trust stale docs. | P3 | Update README to point to this doc and `docs/STATE_UPDATE.md`. | No |
 | Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. CSP now limits executable origins and blocks `unsafe-eval`, but `style-src 'unsafe-inline'` remains required by Expo/RN Web. | XSS exposure of access token if attacker-controlled JavaScript executes in the page. | P2 | Evaluate BFF/cookie-only access strategy for web; remove inline style requirement if Expo/RN Web supports nonced styles later. | No |
 | Multi-tab OPFS | Expo SQLite Web may hit `ACCESS_HANDLE_BUSY`. | Second tab can show recovery/busy state. | P2 | Keep UX guidance; consider explicit single-tab lock messaging. | No |
-| AppView data prewarm semantics | Workflow source records are prewarmed, RECORDS data is demand-cached. | Users may assume offline-ready definition means all data exists. | P3 | Keep readiness labels precise. | No |
+| AppView data prewarm semantics | Workflow source records are prewarmed, RECORDS data is demand-cached, and Home now distinguishes definition readiness from data readiness. | Readiness still means usable known local data, not freshness to the second. | P3 | Keep readiness labels precise as new renderers are added. | No |
 | Diagnostics spread | State-update diagnostics wiring is centralized in `use-session-diagnostics`, but the panel is still rendered from provider and route. | UI drift risk. | P3 | Keep shared logic; avoid duplicating panel behavior. | No |
 | Unsupported BOARD/DASHBOARD | AppView types exist but render unsupported. | Assigned views may not be usable. | P3 | Implement only when product requires. | No |
 | Contract/entity permissions | Backend stage uses contract membership, not granular entity permissions. | AppView visibility is not full data authorization. | P3 | Track backend permission model separately. | No |

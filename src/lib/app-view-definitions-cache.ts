@@ -7,6 +7,7 @@ import {
   StateUpdateUniqueness,
 } from "./opco-api";
 import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
+import { SyncTelemetry } from "./sync-telemetry";
 
 export type AppViewDefinitionStatus = "ready" | "partial" | "error";
 
@@ -85,32 +86,146 @@ export type UpsertAppViewDefinitionInput = {
   workflowKey?: string | null;
 };
 
+export type AppViewOfflineReadinessReason =
+  | "definition-ready-data-ready"
+  | "definition-missing"
+  | "data-never-hydrated"
+  | "unsupported"
+  | "online-only";
+
+export type AppViewOfflineReadiness = {
+  dataReady: boolean;
+  definitionReady: boolean;
+  offlineReady: boolean;
+  reason: AppViewOfflineReadinessReason;
+};
+
 export function getWorkflowKey(appView: AppView) {
   return appView.type === "WORKFLOW" ? String(appView.config.workflowKey ?? "") || null : null;
 }
 
 export function deriveOfflineAvailability({
   appView,
-  cachedRecordsCount = 0,
   definition,
+  recordsTelemetry,
+  sourceTelemetry,
 }: {
   appView: AppView;
-  cachedRecordsCount?: number;
   definition: CachedAppViewDefinition | null;
+  recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
+  sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): OfflineAvailability {
-  if (appView.type === "BOARD" || appView.type === "DASHBOARD") {
+  const readiness = getAppViewOfflineReadiness({
+    appView,
+    definition,
+    recordsTelemetry,
+    sourceTelemetry,
+  });
+
+  if (readiness.offlineReady) {
+    return "ready";
+  }
+
+  if (readiness.reason === "unsupported") {
     return "unsupported";
   }
 
-  if (appView.type === "WORKFLOW") {
-    return isStateUpdateCompatibleWorkflow(appView.config.workflowKey) && definition?.status === "ready"
-      ? "ready"
-      : "definition-missing";
+  if (readiness.reason === "online-only") {
+    return "online-only";
+  }
+
+  if (readiness.definitionReady) {
+    return "data-not-cached";
+  }
+
+  return "definition-missing";
+}
+
+export function getAppViewOfflineReadiness({
+  appView,
+  definition,
+  recordsTelemetry,
+  sourceTelemetry,
+}: {
+  appView: AppView;
+  definition: CachedAppViewDefinition | null;
+  recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
+  sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
+}): AppViewOfflineReadiness {
+  if (appView.type === "BOARD" || appView.type === "DASHBOARD") {
+    return readiness({
+      dataReady: false,
+      definitionReady: false,
+      reason: "unsupported",
+    });
   }
 
   if (!definition || definition.status !== "ready") {
-    return "definition-missing";
+    return readiness({
+      dataReady: false,
+      definitionReady: false,
+      reason: "definition-missing",
+    });
   }
 
-  return cachedRecordsCount > 0 ? "ready" : "data-not-cached";
+  if (appView.type === "RECORDS") {
+    const dataReady = hasSuccessfulHydration(recordsTelemetry);
+
+    return readiness({
+      dataReady,
+      definitionReady: true,
+      reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+    });
+  }
+
+  if (appView.type === "WORKFLOW" && isStateUpdateCompatibleWorkflow(appView.config.workflowKey)) {
+    const prepared = definition.definition;
+
+    if (prepared.kind === "state-update") {
+      const dataReady = hasSuccessfulHydration(sourceTelemetry);
+
+      return readiness({
+        dataReady,
+        definitionReady: true,
+        reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+      });
+    }
+
+    if (prepared.kind === "attendance") {
+      const dataReady = prepared.sourceEntityTypeId ? hasSuccessfulHydration(sourceTelemetry) : false;
+
+      return readiness({
+        dataReady,
+        definitionReady: true,
+        reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+      });
+    }
+  }
+
+  return readiness({
+    dataReady: false,
+    definitionReady: false,
+    reason: "online-only",
+  });
+}
+
+export function hasSuccessfulHydration(telemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null) {
+  return typeof telemetry?.lastFullRefreshCompletedAt === "string" && telemetry.lastFullRefreshCompletedAt.length > 0;
+}
+
+function readiness({
+  dataReady,
+  definitionReady,
+  reason,
+}: {
+  dataReady: boolean;
+  definitionReady: boolean;
+  reason: AppViewOfflineReadinessReason;
+}): AppViewOfflineReadiness {
+  return {
+    dataReady,
+    definitionReady,
+    offlineReady: definitionReady && dataReady,
+    reason,
+  };
 }

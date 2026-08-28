@@ -4,6 +4,7 @@ import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitio
 import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
 import { CachedEntityRecord } from "./offline-records";
 import { EntityDefinition, EntityRecord, OpcoNetworkError } from "./opco-api";
+import { emptySyncTelemetry, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope } from "./sync-telemetry";
 import { appViewsFixture, entityDefinitionFixture } from "../test/fixtures";
 
 describe("app view prewarm", () => {
@@ -112,6 +113,46 @@ describe("app view prewarm", () => {
     expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);
   });
 
+  it("marks an empty Attendance source hydration as a successful full refresh", async () => {
+    const api = {
+      getAttendanceWorkflow: vi.fn(async () => ({
+        appView: { id: "view_workflow", name: "Tomar asistencia", slug: "tomar-asistencia" },
+        date: "2026-08-25",
+        items: [],
+        latest: [],
+        sourceEntityType: { id: "entity_people", name: "Personas" },
+        statuses: [],
+        summary: { totalRegistered: 0 },
+        targetEntityType: { id: "entity_attendance", name: "Asistencias" },
+      })),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(async (_token, _contractId, _entityTypeId, query?: { page?: number; pageSize?: number }) => ({
+        pagination: { page: query?.page ?? 1, pageSize: query?.pageSize ?? 100, total: 0, totalPages: 1 },
+        records: [],
+      })),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[1]],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    await expect(store.getSyncTelemetry({
+      contractId: "contract_1",
+      entityTypeId: "entity_people",
+      ownerKey: "org_1:user_1",
+    })).resolves.toMatchObject({
+      lastFullRefreshCompletedAt: expect.any(String),
+      lastSuccessfulSyncAt: expect.any(String),
+      syncPhase: "idle",
+    });
+  });
+
   it("keeps a previous ready definition when a later prewarm hits a network error", async () => {
     const api = {
       getAttendanceWorkflow: vi.fn(async () => {
@@ -201,6 +242,7 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
   definitions = new Map<string, CachedAppViewDefinition>();
   entityDefinitions = new Map<string, EntityDefinition>();
   records = new Map<string, CachedEntityRecord[]>();
+  telemetry = new Map<string, SyncTelemetry>();
 
   async getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string) {
     return this.definitions.get(`${ownerKey}:${contractId}:${appViewId}`) ?? null;
@@ -298,4 +340,38 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
       syncStatus: "synced",
     })));
   }
+
+  async getSyncTelemetry(scope: SyncTelemetryScope) {
+    return this.telemetry.get(telemetryKey(scope)) ?? null;
+  }
+
+  async markSyncPhase(input: SyncTelemetryScope & { attemptedAt?: string; phase: SyncPhase }) {
+    const current = this.telemetry.get(telemetryKey(input)) ?? emptySyncTelemetry(input);
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastSyncAttemptAt: input.attemptedAt ?? new Date().toISOString(),
+      syncPhase: input.phase,
+    });
+  }
+
+  async markSyncPhaseCompleted(input: SyncTelemetryScope & { completedAt?: string; phase: SyncErrorPhase }) {
+    const current = this.telemetry.get(telemetryKey(input)) ?? emptySyncTelemetry(input);
+    const completedAt = input.completedAt ?? new Date().toISOString();
+
+    this.telemetry.set(telemetryKey(input), {
+      ...current,
+      lastFullRefreshCompletedAt: input.phase === "refreshing" ? completedAt : current.lastFullRefreshCompletedAt,
+      lastReconcileCompletedAt: input.phase === "reconciling" ? completedAt : current.lastReconcileCompletedAt,
+      lastSuccessfulSyncAt: input.phase === "reconciling" ? completedAt : current.lastSuccessfulSyncAt,
+      lastSyncErrorAt: null,
+      lastSyncErrorCode: null,
+      lastSyncErrorPhase: null,
+      syncPhase: "idle",
+    });
+  }
+}
+
+function telemetryKey(scope: SyncTelemetryScope) {
+  return `${scope.ownerKey}:${scope.contractId}:${scope.entityTypeId}`;
 }

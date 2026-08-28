@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { getOfflineAvailabilityText } from "@/lib/app-view-offline-readiness";
 import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
@@ -75,16 +76,32 @@ export default function HomeScreen() {
       try {
         const entries = await Promise.all(nextViews.map(async (appView) => {
           const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
-          const cachedRecordsCount = appView.type === "RECORDS"
-            ? (await definitionCache.listCachedRecords({
+          const recordsTelemetry = appView.type === "RECORDS"
+            ? await definitionCache.getSyncTelemetry({
                 contractId: selectedContractId,
                 entityTypeId: appView.config.entityTypeId,
                 ownerKey,
-                pageSize: 1,
-              })).pagination.total
-            : 0;
+              })
+            : null;
+          const sourceEntityTypeId = definition?.definition.kind === "state-update"
+            ? definition.definition.sourceEntityTypeId
+            : definition?.definition.kind === "attendance"
+              ? definition.definition.sourceEntityTypeId
+              : null;
+          const sourceTelemetry = sourceEntityTypeId
+            ? await definitionCache.getSyncTelemetry({
+                contractId: selectedContractId,
+                entityTypeId: sourceEntityTypeId,
+                ownerKey,
+              })
+            : null;
 
-          return [appView.id, deriveOfflineAvailability({ appView, cachedRecordsCount, definition })] as const;
+          return [appView.id, deriveOfflineAvailability({
+            appView,
+            definition,
+            recordsTelemetry,
+            sourceTelemetry,
+          })] as const;
         }));
 
         if (isMounted) {
@@ -265,22 +282,6 @@ export default function HomeScreen() {
       </View>
     </ScrollView>
   );
-}
-
-function getOfflineAvailabilityText(availability: OfflineAvailability) {
-  switch (availability) {
-    case "ready":
-      return "Disponible sin conexion";
-    case "data-not-cached":
-      return "Datos bajo demanda";
-    case "online-only":
-      return "Requiere conexion";
-    case "unsupported":
-      return "No soportada";
-    case "definition-missing":
-    default:
-      return "Preparando";
-  }
 }
 
 function getOfflineReadinessText(readiness: ReturnType<typeof useOfflineReadiness>["offlineReadiness"]) {

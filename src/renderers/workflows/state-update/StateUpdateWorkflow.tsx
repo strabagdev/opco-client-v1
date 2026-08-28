@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
 import { useConnectivityStatus } from "@/lib/connectivity";
 import {
@@ -113,6 +114,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
+    const sourceTelemetry = await definitionCache.getSyncTelemetry({
+      contractId: selectedContractId,
+      entityTypeId: prepared.definition.sourceEntityTypeId,
+      ownerKey,
+    });
+    const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
+
     const scope = {
       appViewId: appView.id,
       contractId: selectedContractId,
@@ -125,19 +133,24 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       definitionCache.listStateUpdateLatest(scope),
       definitionCache.listStateUpdateConflicts(scope),
     ]);
-    const nextItems = query.search
-      ? await definitionCache.searchStateUpdateSubjects({
+    let nextItems: StateUpdateItem[] = [];
+
+    if (sourceHydrated && query.search) {
+      nextItems = await definitionCache.searchStateUpdateSubjects({
+        ...scope,
+        search: query.search,
+        sourceEntityTypeId: prepared.definition.sourceEntityTypeId,
+      });
+    }
+
+    if (sourceHydrated && query.subjectRecordId) {
+      nextItems = await definitionCache.searchStateUpdateSubjects({
           ...scope,
-          search: query.search,
+          search: "",
           sourceEntityTypeId: prepared.definition.sourceEntityTypeId,
         })
-      : query.subjectRecordId
-        ? await definitionCache.searchStateUpdateSubjects({
-            ...scope,
-            search: "",
-            sourceEntityTypeId: prepared.definition.sourceEntityTypeId,
-          }).then((results) => results.filter((item) => item.subject.id === query.subjectRecordId))
-        : [];
+        .then((results) => results.filter((item) => item.subject.id === query.subjectRecordId));
+    }
 
     setResponse({
       appView: {
@@ -172,7 +185,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     });
     setItems(nextItems);
 
-    if (localConflicts.length > 0) {
+    if (!sourceHydrated) {
+      setError("Abre este workflow con conexion para preparar sus datos sin conexion.");
+    } else if (localConflicts.length > 0) {
       setError(`${localConflicts.length} conflictos por resolver.`);
     }
   }, [appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId]);
