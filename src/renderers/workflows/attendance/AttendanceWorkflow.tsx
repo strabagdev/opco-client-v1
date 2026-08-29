@@ -43,6 +43,7 @@ import {
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
   isAttendanceRemoteSnapshotComplete,
+  mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   shouldSearchAttendancePeople,
@@ -133,14 +134,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     latest: AttendanceLatestItem[];
     statuses: AttendanceStatusOption[];
     summary: { totalRegistered: number };
-  }) => {
+  }, options: { updateLatest?: boolean } = {}) => {
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
 
-    setLatest(response.latest);
+    if (options.updateLatest !== false) {
+      setLatest(response.latest);
+    }
+
     setTotalRegistered(response.summary.totalRegistered);
   }, []);
 
-  const refreshLocalDayState = useCallback(async () => {
+  const refreshLocalDayState = useCallback(async (remoteSnapshot?: {
+    latest: AttendanceLatestItem[];
+    totalRegistered: number;
+  }) => {
     if (!ownerKey || !selectedContractId) {
       return;
     }
@@ -169,8 +176,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }),
     ]);
 
-    setLatest(localLatest.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId)));
-    setTotalRegistered(summary.totalRegistered);
+    const localVisibleLatest = localLatest.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
+    const visibleLatest = mergeAttendanceLatestWithLocalOverlay(remoteSnapshot?.latest ?? [], localVisibleLatest);
+
+    setLatest(visibleLatest);
+    setTotalRegistered(Math.max(summary.totalRegistered, remoteSnapshot?.totalRegistered ?? 0));
     setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
     return summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
@@ -309,8 +319,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      await applyDayState(response);
+      applyAttendanceResponse(response, { updateLatest: false });
       await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+      await refreshLocalDayState({
+        latest: response.latest,
+        totalRegistered: response.summary.totalRegistered,
+      });
       setRefreshError(null);
       clearVisibleError();
       setItems([]);
@@ -332,7 +346,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setIsLoading(false);
       }
     }
-  }, [api, appView.id, applyDayState, cacheAttendanceOnlineResponse, clearVisibleError, date, isContractBootstrapPending, recordVisibleError, selectedContractId, status, token]);
+  }, [api, appView.id, applyAttendanceResponse, cacheAttendanceOnlineResponse, clearVisibleError, date, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
 
   const refreshAfterStateUpdateSync = useCallback(async () => {
     if (!ownerKey || !selectedContractId) {
@@ -354,8 +368,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      await applyDayState(response);
+      applyAttendanceResponse(response, { updateLatest: false });
       await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+      await refreshLocalDayState({
+        latest: response.latest,
+        totalRegistered: response.summary.totalRegistered,
+      });
       setError(null);
       setRefreshError(null);
       clearVisibleError();
@@ -377,7 +395,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [
     api,
     appView.id,
-    applyDayState,
+    applyAttendanceResponse,
     cacheAttendanceOnlineResponse,
     clearVisibleError,
     date,
@@ -543,8 +561,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
         }
 
-        await applyDayState(response);
+        applyAttendanceResponse(response, { updateLatest: false });
         await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+        await refreshLocalDayState({
+          latest: response.latest,
+          totalRegistered: response.summary.totalRegistered,
+        });
         clearVisibleError();
         setItems([]);
       } catch (nextError) {
@@ -573,7 +595,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.sourceEntityTypeId,
     appView.config.statusFieldId,
     appView.id,
-    applyDayState,
+    applyAttendanceResponse,
     cacheAttendanceOnlineResponse,
     clearVisibleError,
     connectivityStatus,

@@ -9,6 +9,7 @@ import {
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
   isAttendanceRemoteSnapshotComplete,
+  mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
@@ -206,5 +207,47 @@ describe("attendance workflow logic", () => {
       recordId: "attendance_latest",
       stateValues: [{ fieldId: "status", label: "Presente", optionId: "present_option" }],
     });
+  });
+
+  it("keeps unresolved local attendance intent visible over a stale remote snapshot", () => {
+    const remoteLatest = Array.from({ length: 4 }, (_, index) => ({
+      attendanceRecordId: `remote_attendance_${index + 1}`,
+      person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
+      statusLabel: "Presente",
+      statusOptionId: "present_option",
+      updatedAt: `2026-08-28T12:0${index}:00.000Z`,
+    }));
+    const pendingLocal = {
+      attendanceRecordId: "state_update_attendance_2026_08_28_person_5",
+      person: { displayName: "Persona 5", id: "person_5" },
+      statusLabel: "Presente (por sincronizar)",
+      statusOptionId: "present_option",
+      updatedAt: "2026-08-28T12:04:00.000Z",
+    };
+
+    expect(mergeAttendanceLatestWithLocalOverlay(remoteLatest, [...remoteLatest, pendingLocal])).toHaveLength(5);
+    expect(mergeAttendanceLatestWithLocalOverlay(remoteLatest, [pendingLocal])).toHaveLength(5);
+  });
+
+  it("dedupes local attendance intent when the remote snapshot confirms it", () => {
+    const remoteLatest = Array.from({ length: 5 }, (_, index) => ({
+      attendanceRecordId: `remote_attendance_${index + 1}`,
+      person: { displayName: `Persona ${index + 1}`, id: `person_${index + 1}` },
+      statusLabel: "Presente",
+      statusOptionId: "present_option",
+      updatedAt: `2026-08-28T12:0${index}:00.000Z`,
+    }));
+    const localConfirmed = {
+      attendanceRecordId: "state_update_attendance_2026_08_28_person_5",
+      person: { displayName: "Persona 5", id: "person_5" },
+      statusLabel: "Presente",
+      statusOptionId: "present_option",
+      updatedAt: "2026-08-28T12:04:00.000Z",
+    };
+
+    const visible = mergeAttendanceLatestWithLocalOverlay(remoteLatest, [localConfirmed]);
+
+    expect(visible).toHaveLength(5);
+    expect(visible.filter((item) => item.person.id === "person_5")).toHaveLength(1);
   });
 });

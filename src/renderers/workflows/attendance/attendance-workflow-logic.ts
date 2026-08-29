@@ -1,4 +1,4 @@
-import { AttendanceBatchResult, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
+import { AttendanceBatchResult, AttendanceLatestItem, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
 
 export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
 // Mirrors the backend Attendance latest take=10 contract used to infer full-day snapshots.
@@ -74,6 +74,23 @@ export function isAttendanceRemoteSnapshotComplete(response: Pick<AttendanceResp
   return response.summary.totalRegistered <= latestLimit && response.latest.length === response.summary.totalRegistered;
 }
 
+export function mergeAttendanceLatestWithLocalOverlay(
+  remoteLatest: AttendanceLatestItem[],
+  localLatest: AttendanceLatestItem[],
+) {
+  const visibleBySubject = new Map<string, AttendanceLatestItem>();
+
+  for (const item of remoteLatest) {
+    visibleBySubject.set(attendanceLatestDedupeKey(item), item);
+  }
+
+  for (const item of localLatest) {
+    visibleBySubject.set(attendanceLatestDedupeKey(item), item);
+  }
+
+  return [...visibleBySubject.values()];
+}
+
 export function attendanceResponseToStateUpdateItems(
   response: AttendanceResponse,
   config: {
@@ -119,4 +136,8 @@ export function attendanceResponseToStateUpdateItems(
   }
 
   return [...items.values()];
+}
+
+function attendanceLatestDedupeKey(item: AttendanceLatestItem) {
+  return item.person.id || item.attendanceRecordId;
 }
