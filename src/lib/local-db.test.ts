@@ -339,6 +339,30 @@ describe("local database singleton", () => {
     expect(write?.[2]).not.toEqual(expect.stringContaining("org_1:user_1"));
   });
 
+  it("persists the last session termination diagnostics without raw owner ids", async () => {
+    db.getFirstAsync.mockResolvedValueOnce(null);
+    const store = getLocalDatabase();
+
+    await store.recordStateUpdateSessionTermination("org_1:user_1", {
+      errorCode: "REFRESH_TOKEN_EXPIRED",
+      reason: "refresh_invalid",
+      requestId: "opco_diag_refresh",
+      source: "AUTH_REFRESH",
+      timestamp: "2026-08-29T10:00:00.000Z",
+    });
+
+    const write = db.runAsync.mock.calls.find((call) =>
+      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      String(call[1]).startsWith("state_update_sync_diagnostics:"),
+    );
+
+    expect(write?.[1]).toEqual(expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/));
+    expect(write?.[2]).toEqual(expect.stringContaining('"lastSessionTermination"'));
+    expect(write?.[2]).toEqual(expect.stringContaining('"source":"AUTH_REFRESH"'));
+    expect(write?.[2]).toEqual(expect.stringContaining('"errorCode":"REFRESH_TOKEN_EXPIRED"'));
+    expect(write?.[2]).not.toEqual(expect.stringContaining("org_1:user_1"));
+  });
+
   it("resolves the last visible STATE_UPDATE UI error without deleting the historical event", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM app_metadata")) {

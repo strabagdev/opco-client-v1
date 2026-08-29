@@ -43,6 +43,20 @@ Current Web header intent:
 
 Security status: CSP hardening is `IMPLEMENTED`; removing browser-readable access tokens is still a `P2` architectural improvement.
 
+## Auth Reconnect Boundary
+
+Readiness and auth are separate boundaries. `GET /api/v1/ready` is a public readiness probe used by reconnect gating; it does not send the bearer token, does not require the refresh cookie, and must not trigger refresh or logout. A successful ready check only means Operational Core is reachable enough to attempt the next authenticated request.
+
+The first authenticated request after reconnect may discover an expired access token. The intended flow is:
+
+```text
+authenticated request -> 401 TOKEN_EXPIRED -> AUTH_REFRESH -> new access token -> retry original request
+```
+
+Only a confirmed invalid session can clear local credentials automatically: revoked/expired/reused/missing refresh token, inactive refresh user/app, or a backend-confirmed `TOKEN_INVALID` on an authenticated request. Network failures, client timeouts, `503`, and `DB_UNAVAILABLE` during refresh are recoverable connectivity/server failures; they must preserve the local session and leave pending work durable for a later retry.
+
+STATE_UPDATE diagnostics persist sanitized auth evidence. `requestHistory` can include `AUTH_REFRESH` entries with method, path template, timing, HTTP status, timeout flag, error code, and local request id. `lastSessionTermination` records the last manual or automatic session termination with reason, source, timestamp, error code, and sanitized request id. It does not persist tokens, cookies, payloads, names, raw owner ids, or form values.
+
 ## Layers
 
 | Layer | Real modules | Notes |
@@ -411,6 +425,8 @@ Triggers:
 Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_UPDATE sync. `SessionProvider` still decides whether session/context exists, but `use-pending-work-lifecycle.ts` owns reconnect, unknown-to-online, foreground/resume, pending checks, manual pending-work callback wiring, and stale-run guards. `SessionProvider` still owns auth/session, context refresh, selected contract, recovery UI, prewarm kick-off, pending-count state, and renderer refresh keys.
 
 Reconnect-like automatic triggers do not treat NetInfo `online` as proof that Operational Core is ready. For reconnect, unknown-to-online, startup-with-pending, and foreground/resume, the lifecycle hook first confirms owner/token/contract scope, checks durable pending work, then runs a short `GET /api/v1/ready` gate before POST sync. The ready probe uses its own `2_500 ms` timeout, at most three attempts, and bounded backoff. If the scope becomes ready after NetInfo already moved to online, the hook performs a one-time catch-up for that scope by re-checking durable pending work; this avoids waiting for a later remount or foreground event.
+
+Mounted workflow renderers must use the `SessionProvider` connectivity value, not independent NetInfo listeners. `SessionProvider` is the canonical runtime connectivity source for UI, lifecycle, and diagnostics. Workflow pending indicators come from durable SQLite/outbox state for the same owner/contract/AppView/date/entity scope. `online + pending` is only `PENDING`; `SYNCING` requires the pending-work engine to be actively running, `RECONNECTING` means the readiness gate is active, and `CONFIRMING` means a write or timeout reconciliation is still being confirmed.
 
 Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results. Lifecycle runs compare their starting token/owner/contract scope with the current scope before applying refresh side effects, so logout or contract switch does not apply stale refresh results.
 

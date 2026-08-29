@@ -19,6 +19,7 @@ import {
   StateUpdateRequestDiagnostics,
   StateUpdateRequestHistoryEvent,
   StateUpdateScope,
+  StateUpdateSessionTerminationTelemetry,
   StateUpdateSnapshotReconcileResult,
   StateUpdateVisibleErrorResolution,
   StateUpdateVisibleErrorTelemetry,
@@ -132,6 +133,7 @@ export function getLocalDatabase(): LocalDatabase {
     listStateUpdateLatest,
     markPendingOperationSyncing,
     markStateUpdateOperationSyncing,
+    recordStateUpdateSessionTermination,
     recordStateUpdateVisibleErrorEvent,
     markPendingOperationConflict,
     markStateUpdateOperationConflict,
@@ -3830,7 +3832,30 @@ async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: State
     },
     lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
+    lastSessionTermination: current?.lastSessionTermination ?? null,
     lastVisibleErrorEvent: event,
+    requestHistory: current?.requestHistory ?? [],
+  });
+}
+
+async function recordStateUpdateSessionTermination(ownerKey: string, event: StateUpdateSessionTerminationTelemetry) {
+  const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
+
+  await setStateUpdateSyncDiagnosticsTelemetry(ownerKey, {
+    currentConnectivity: current?.currentConnectivity ?? {
+      status: "unknown",
+      updatedAt: event.timestamp,
+    },
+    lastReconnect: current?.lastReconnect ?? {
+      detected: false,
+      detectedAt: null,
+      previousConnectivityStatus: null,
+      resultingConnectivityStatus: null,
+    },
+    lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
+    lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
+    lastSessionTermination: event,
+    lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
     requestHistory: current?.requestHistory ?? [],
   });
 }
@@ -3904,6 +3929,7 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
       },
       lastStateUpdateActivity: normalizeLastStateUpdateActivityTelemetry(parsed.lastStateUpdateActivity),
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
+      lastSessionTermination: normalizeStateUpdateSessionTerminationTelemetry(parsed.lastSessionTermination),
       lastVisibleErrorEvent: normalizeLastVisibleErrorEventTelemetry(parsed.lastVisibleErrorEvent),
       requestHistory: normalizeStateUpdateRequestHistory(parsed.requestHistory),
     };
@@ -3946,6 +3972,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       type: "snapshot_reconciliation",
     },
     lastStateUpdateSync: previousRun ?? null,
+    lastSessionTermination: current?.lastSessionTermination ?? null,
     lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
     requestHistory: current?.requestHistory ?? [],
   });
@@ -4032,6 +4059,37 @@ function normalizeLastVisibleErrorEventTelemetry(
   };
 }
 
+function normalizeStateUpdateSessionTerminationTelemetry(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastSessionTermination"]> | null | undefined,
+): StateUpdateSyncDiagnosticsTelemetry["lastSessionTermination"] {
+  if (!telemetry || typeof telemetry.timestamp !== "string" || typeof telemetry.errorCode !== "string") {
+    return null;
+  }
+
+  const reason = telemetry.reason === "refresh_invalid" ||
+    telemetry.reason === "token_invalid" ||
+    telemetry.reason === "user_sign_out"
+    ? telemetry.reason
+    : null;
+  const source = telemetry.source === "AUTH_REFRESH" ||
+    telemetry.source === "AUTHENTICATED_REQUEST" ||
+    telemetry.source === "USER"
+    ? telemetry.source
+    : null;
+
+  if (!reason || !source) {
+    return null;
+  }
+
+  return {
+    errorCode: telemetry.errorCode,
+    reason,
+    requestId: normalizeDiagnosticToken(telemetry.requestId),
+    source,
+    timestamp: telemetry.timestamp,
+  };
+}
+
 function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequestDiagnostics | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -4059,6 +4117,7 @@ function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequ
     diagnosticOperation: normalizeDiagnosticOperation(diagnostics.diagnosticOperation),
     diagnosticRequestId: normalizeDiagnosticToken(diagnostics.diagnosticRequestId) ?? "unknown",
     diagnosticSyncRunId: normalizeDiagnosticToken(diagnostics.diagnosticSyncRunId),
+    errorCode: normalizeDiagnosticToken(diagnostics.errorCode),
     fetchResolvedAt: typeof diagnostics.fetchResolvedAt === "string" ? diagnostics.fetchResolvedAt : null,
     httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : null,
     method: typeof diagnostics.method === "string" ? diagnostics.method : "UNKNOWN",
@@ -4137,6 +4196,7 @@ function normalizeDiagnosticOperation(value: unknown): NonNullable<StateUpdateRe
     value === "PERSON_LOAD" ||
     value === "RECONCILE" ||
     value === "READY_CHECK" ||
+    value === "AUTH_REFRESH" ||
     value === "HEALTH" ||
     value === "OTHER"
     ? value

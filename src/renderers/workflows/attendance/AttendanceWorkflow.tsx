@@ -22,7 +22,6 @@ import {
   stateUpdateLatestToAttendanceLatest,
 } from "@/lib/attendance-offline";
 import { createClientRequestId } from "@/lib/client-request-id";
-import { useConnectivityStatus } from "@/lib/connectivity";
 import { refreshEntityRecordsCache } from "@/lib/offline-records";
 import {
   AttendanceBatchEntry,
@@ -41,12 +40,14 @@ import {
   firstBlockingAttendanceResult,
   formatDisplayDate,
   formatLocalDateInput,
+  formatAttendancePendingText,
   hasSuccessfulAttendanceResult,
   isAttendanceRemoteSnapshotComplete,
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   shouldSearchAttendancePeople,
+  shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
   splitStatusButtons,
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
@@ -71,8 +72,10 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
   const {
     api,
+    connectivityStatus,
     context,
     definitionCache,
+    isPendingWorkSyncing,
     ownerKey,
     refreshRecordsSyncSummary,
     selectedContractId,
@@ -82,7 +85,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     syncPendingRecords,
     token,
   } = useSession();
-  const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
   const [items, setItems] = useState<AttendanceItem[]>([]);
@@ -107,6 +109,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
+  const pendingText = formatAttendancePendingText(pendingCount);
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
@@ -124,6 +127,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     connectivityStatus,
     hasConflict: Boolean(conflict || localConflicts.length > 0),
     isSaving,
+    isSyncing: isPendingWorkSyncing,
     lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,
     lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
     pendingCount,
@@ -422,6 +426,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     void refreshAfterStateUpdateSync();
   }, [refreshAfterStateUpdateSync, stateUpdateReconnectRefreshKey]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      void refreshLocalSyncIndicators();
+    }, 0);
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    refreshLocalSyncIndicators,
+    stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.completedAt,
+    stateUpdateReconnectDiagnostics.lastStateUpdateSync?.completedAt,
+  ]);
 
   const searchPeople = useCallback(async (search: string) => {
     if (!selectedContractId || !ownerKey) {
@@ -896,7 +912,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <Text style={styles.summaryValue}>{totalRegistered}</Text>
       </View>
 
-      {connectivityStatus !== "online" ? (
+      {shouldShowAttendanceOfflineNotice(connectivityStatus) ? (
         <Text style={styles.offline}>Sin conexion. Los registros se guardan en este dispositivo.</Text>
       ) : null}
       {operationFeedback.message ? (
@@ -904,8 +920,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           {operationFeedback.message}
         </Text>
       ) : null}
-      {pendingCount > 0 ? (
-        <Text style={styles.offline}>{pendingCount} registros por sincronizar</Text>
+      {pendingText ? (
+        <Text style={styles.offline}>{pendingText}</Text>
       ) : null}
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
       {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (

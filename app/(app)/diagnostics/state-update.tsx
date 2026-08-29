@@ -382,6 +382,15 @@ function StateUpdateOperationalDiagnostics({
       <Section title="Ultimo request">
         {lastRequest ? <DiagnosticsRows rows={requestRows(lastRequest)} /> : <Text style={styles.empty}>Sin requests STATE_UPDATE/Attendance registrados.</Text>}
       </Section>
+      <Section title="Ultimo cierre de sesion">
+        {reconnect.lastSessionTermination ? <DiagnosticsRows rows={[
+          ["reason", reconnect.lastSessionTermination.reason],
+          ["source", reconnect.lastSessionTermination.source],
+          ["errorCode", reconnect.lastSessionTermination.errorCode],
+          ["timestamp", reconnect.lastSessionTermination.timestamp],
+          ["requestId", reconnect.lastSessionTermination.requestId ?? "none"],
+        ]} /> : <Text style={styles.empty}>Sin cierre de sesion registrado.</Text>}
+      </Section>
       <Section title="Historial de requests">
         {requestHistory.length ? requestHistory.slice().reverse().map((request, index) => (
           <View key={`${request.diagnosticRequestId}:${request.requestStartedAt}:${index}`} style={styles.operation}>
@@ -393,6 +402,7 @@ function StateUpdateOperationalDiagnostics({
               ["durationMs", request.requestDurationMs],
               ["status", request.httpStatus ?? "none"],
               ["timeout", request.abortControllerTriggered],
+              ["errorCode", request.errorCode ?? "none"],
               ["interpretation", request.interpretation],
               ["requestId", request.responseRequestId ?? request.diagnosticRequestId ?? "unknown"],
               ["syncRunId", request.diagnosticSyncRunId ?? "none"],
@@ -503,6 +513,7 @@ function requestRows(request: StateUpdateRequestDiagnostics): [string, string | 
     ["timeoutMs", request.timeoutMs],
     ["abortController", request.abortControllerTriggered],
     ["httpStatus", request.httpStatus ?? "none"],
+    ["errorCode", request.errorCode ?? "none"],
     ["requestId", request.responseRequestId ?? request.diagnosticRequestId ?? "unknown"],
     ["syncRunId", request.diagnosticSyncRunId ?? "none"],
     ["serverTiming", formatServerTiming(request.serverTiming ?? [])],

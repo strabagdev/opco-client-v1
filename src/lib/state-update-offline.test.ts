@@ -406,6 +406,7 @@ describe("state-update sync diagnostics telemetry", () => {
       },
       lastStateUpdateActivity: null,
       lastStateUpdateSync: null,
+      lastSessionTermination: null,
       lastVisibleErrorEvent: null,
       requestHistory: [],
     };
@@ -414,6 +415,7 @@ describe("state-update sync diagnostics telemetry", () => {
       abortControllerTriggered: false,
       diagnosticOperation: "SAVE",
       diagnosticRequestId: "opco_diag_123",
+      errorCode: null,
       fetchResolvedAt: "2026-08-29T10:00:01.000Z",
       httpStatus: 200,
       method: "POST",
@@ -438,6 +440,109 @@ describe("state-update sync diagnostics telemetry", () => {
     expect(JSON.stringify(next)).not.toContain("contract_1");
   });
 
+  it("keeps AUTH_REFRESH diagnostics with error codes in request history", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastSessionTermination: null,
+      lastVisibleErrorEvent: null,
+      requestHistory: [],
+    };
+
+    const next = appendStateUpdateRequestHistory(current, {
+      abortControllerTriggered: false,
+      diagnosticOperation: "AUTH_REFRESH",
+      diagnosticRequestId: "opco_diag_refresh",
+      errorCode: "REFRESH_TOKEN_EXPIRED",
+      fetchResolvedAt: "2026-08-29T10:00:01.000Z",
+      httpStatus: 401,
+      method: "POST",
+      pathTemplate: "/api/v1/auth/refresh",
+      requestCompletedAt: "2026-08-29T10:00:01.500Z",
+      requestDurationMs: 1500,
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: "2026-08-29T10:00:01.000Z",
+      responseParsedAt: "2026-08-29T10:00:01.500Z",
+      responseRequestId: "opco_diag_refresh",
+      responseStarted: true,
+      serverTiming: [],
+      timeoutMs: 12000,
+    });
+
+    expect(next.requestHistory?.[0]).toMatchObject({
+      diagnosticOperation: "AUTH_REFRESH",
+      errorCode: "REFRESH_TOKEN_EXPIRED",
+      interpretation: "http_error",
+      pathTemplate: "/api/v1/auth/refresh",
+    });
+  });
+
+  it("keeps automatic reconnect readiness and save requests in history", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastSessionTermination: null,
+      lastVisibleErrorEvent: null,
+      requestHistory: [],
+    };
+
+    const ready = appendStateUpdateRequestHistory(current, {
+      abortControllerTriggered: false,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticRequestId: "opco_diag_ready",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      errorCode: null,
+      fetchResolvedAt: "2026-08-29T10:00:01.000Z",
+      httpStatus: 200,
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:01.000Z",
+      requestDurationMs: 1000,
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: "2026-08-29T10:00:01.000Z",
+      responseParsedAt: "2026-08-29T10:00:01.000Z",
+      responseStarted: true,
+      serverTiming: [],
+      timeoutMs: 2500,
+    });
+    const saved = appendStateUpdateRequestHistory(ready, {
+      abortControllerTriggered: false,
+      diagnosticOperation: "SAVE",
+      diagnosticRequestId: "opco_diag_save",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      errorCode: null,
+      fetchResolvedAt: "2026-08-29T10:00:02.000Z",
+      httpStatus: 200,
+      method: "POST",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+      requestCompletedAt: "2026-08-29T10:00:02.000Z",
+      requestDurationMs: 1000,
+      requestStartedAt: "2026-08-29T10:00:01.000Z",
+      responseBodyStartedAt: "2026-08-29T10:00:02.000Z",
+      responseParsedAt: "2026-08-29T10:00:02.000Z",
+      responseStarted: true,
+      serverTiming: [],
+      timeoutMs: 12000,
+    });
+
+    expect(saved.requestHistory?.map((request) => request.diagnosticOperation)).toEqual(["READY_CHECK", "SAVE"]);
+    expect(saved.requestHistory?.map((request) => request.diagnosticSyncRunId)).toEqual(["sync_reconnect_1", "sync_reconnect_1"]);
+  });
+
   it("ignores non-workflow request diagnostics and classifies timeout/network cases", () => {
     const current: StateUpdateSyncDiagnosticsTelemetry = {
       currentConnectivity: { status: "online", updatedAt: null },
@@ -449,6 +554,7 @@ describe("state-update sync diagnostics telemetry", () => {
       },
       lastStateUpdateActivity: null,
       lastStateUpdateSync: null,
+      lastSessionTermination: null,
       lastVisibleErrorEvent: null,
     };
     const unrelated = appendStateUpdateRequestHistory(current, {

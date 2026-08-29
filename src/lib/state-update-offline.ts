@@ -1,6 +1,7 @@
 import {
   EntityRecordValue,
   OpcoNetworkDiagnostics,
+  OpcoSessionTerminationDiagnostics,
   StateUpdateBatchResult,
   StateUpdateCurrentFieldValue,
   StateUpdateField,
@@ -175,6 +176,7 @@ export type StateUpdateLastReconnectTelemetry = {
 export type StateUpdateRequestDiagnostics = Pick<
   OpcoNetworkDiagnostics,
   | "abortControllerTriggered"
+  | "errorCode"
   | "fetchResolvedAt"
   | "httpStatus"
   | "pathTemplate"
@@ -255,6 +257,8 @@ export type StateUpdateVisibleErrorTelemetry = {
   timeoutOccurred: boolean;
 };
 
+export type StateUpdateSessionTerminationTelemetry = OpcoSessionTerminationDiagnostics;
+
 export type StateUpdateSyncDiagnosticsTelemetry = {
   currentConnectivity: {
     status: ConnectivityStatus;
@@ -263,6 +267,7 @@ export type StateUpdateSyncDiagnosticsTelemetry = {
   lastReconnect: StateUpdateLastReconnectTelemetry;
   lastStateUpdateActivity: StateUpdateActivityTelemetry | null;
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
+  lastSessionTermination?: StateUpdateSessionTerminationTelemetry | null;
   lastVisibleErrorEvent: StateUpdateVisibleErrorTelemetry | null;
   requestHistory?: StateUpdateRequestHistoryEvent[];
 };
@@ -382,6 +387,7 @@ export function stateUpdateRequestDiagnosticsFromNetwork(
     diagnosticOperation: diagnostics.diagnosticOperation,
     diagnosticRequestId: diagnostics.diagnosticRequestId,
     diagnosticSyncRunId: diagnostics.diagnosticSyncRunId ?? null,
+    errorCode: diagnostics.errorCode ?? null,
     fetchResolvedAt: diagnostics.fetchResolvedAt,
     httpStatus: diagnostics.httpStatus,
     method: diagnostics.method,
@@ -412,6 +418,7 @@ export function appendStateUpdateRequestHistory(
     diagnosticOperation: event.diagnosticOperation ?? "OTHER",
     diagnosticRequestId: event.diagnosticRequestId ?? "unknown",
     diagnosticSyncRunId: event.diagnosticSyncRunId ?? null,
+    errorCode: event.errorCode ?? null,
     interpretation: interpretStateUpdateRequest(event),
     method: event.method ?? "UNKNOWN",
     responseRequestId: event.responseRequestId ?? null,
@@ -450,6 +457,7 @@ export function interpretStateUpdateRequest(event: StateUpdateRequestDiagnostics
 
 export function isStateUpdateDiagnosticPath(pathTemplate: string) {
   return pathTemplate === "/api/v1/health" ||
+    pathTemplate === "/api/v1/auth/refresh" ||
     pathTemplate === "/api/v1/ready" ||
     pathTemplate.endsWith("/workflow/state-update") ||
     pathTemplate.endsWith("/workflow/attendance");
@@ -507,6 +515,7 @@ export type StateUpdateOfflineStore = {
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
+  recordStateUpdateSessionTermination(ownerKey: string, event: StateUpdateSessionTerminationTelemetry): Promise<void>;
   recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry): Promise<void>;
   resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution): Promise<void>;
   setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;

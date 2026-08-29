@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import { buildOwnerKey, loadAppViewsWithCache } from "../lib/app-navigation-cache";
@@ -91,6 +91,7 @@ export function usePendingWorkLifecycle({
   const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const activePendingWorkRunKeyRef = useRef<string | null>(null);
+  const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     ownerKey,
     selectedContractId: selectedContractIdState,
@@ -194,15 +195,20 @@ export function usePendingWorkLifecycle({
         }
       }
 
-      await syncPendingWork({
-        api,
-        ownerKey: runOwnerKey,
-        recordsStore: definitionCache,
-        syncRunId,
-        syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
-        token: runToken,
-        trigger,
-      });
+      setIsPendingWorkSyncing(true);
+      try {
+        await syncPendingWork({
+          api,
+          ownerKey: runOwnerKey,
+          recordsStore: definitionCache,
+          syncRunId,
+          syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
+          token: runToken,
+          trigger,
+        });
+      } finally {
+        setIsPendingWorkSyncing(false);
+      }
     } finally {
       if (activePendingWorkRunKeyRef.current === runKey) {
         activePendingWorkRunKeyRef.current = null;
@@ -516,6 +522,7 @@ export function usePendingWorkLifecycle({
   }, [connectivityStatus, persistStateUpdateReconnectDiagnostics, status]);
 
   return {
+    isPendingWorkSyncing,
     reconnectSessionAndRecords,
     syncPendingRecords,
   };

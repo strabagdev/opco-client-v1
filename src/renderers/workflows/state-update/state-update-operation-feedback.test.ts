@@ -20,9 +20,20 @@ describe("state update operation feedback", () => {
     });
   });
 
-  it("shows syncing feedback for pending work after reconnect", () => {
+  it("shows pending feedback for durable pending work before the sync engine starts", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Pendiente de sincronizacion.",
+      phase: "PENDING",
+    });
+  });
+
+  it("shows syncing feedback only while the sync engine is active", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      isSyncing: true,
       pendingCount: 1,
     })).toMatchObject({
       message: "Sincronizando con Opco...",
@@ -82,6 +93,17 @@ describe("state update operation feedback", () => {
         result: "reconciled_success",
         timeoutOccurred: true,
       },
+      pendingCount: 0,
+    })).toMatchObject({
+      message: null,
+      phase: "IDLE",
+    });
+  });
+
+  it("does not show syncing when no pending work exists", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      isSyncing: true,
       pendingCount: 0,
     })).toMatchObject({
       message: null,

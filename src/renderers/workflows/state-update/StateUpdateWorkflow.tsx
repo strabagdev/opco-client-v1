@@ -13,7 +13,6 @@ import {
 import { AppIcon } from "@/components/app-icon";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
-import { useConnectivityStatus } from "@/lib/connectivity";
 import {
   buildInitialFormValues,
   buildSubmitValues,
@@ -71,7 +70,9 @@ type StateValues = Record<string, string>;
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
   const {
     api,
+    connectivityStatus,
     definitionCache,
+    isPendingWorkSyncing,
     ownerKey,
     refreshRecordsSyncSummary,
     selectedContractId,
@@ -79,7 +80,6 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     stateUpdateReconnectRefreshKey,
     token,
   } = useSession();
-  const connectivityStatus = useConnectivityStatus();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
   const [searchText, setSearchText] = useState("");
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
@@ -126,6 +126,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     connectivityStatus,
     hasConflict: Boolean(conflict || readSummaryCount(response, "conflictCount") > 0),
     isSaving,
+    isSyncing: isPendingWorkSyncing,
     lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,
     lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
     pendingCount: unresolvedCount,

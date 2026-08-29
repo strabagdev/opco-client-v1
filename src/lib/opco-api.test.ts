@@ -194,6 +194,8 @@ describe("createOpcoApi", () => {
   it("refreshes once and retries an expired authenticated request with the new access token", async () => {
     const requests: { authorization: string | null; path: string }[] = [];
     const store = createSessionTokenStore("refresh-token-1");
+    const diagnostics = vi.fn();
+    const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
       clientId: "opco_app_123",
@@ -232,6 +234,8 @@ describe("createOpcoApi", () => {
           ok: true,
         });
       },
+      onRequestDiagnostics: diagnostics,
+      onSessionInvalid,
       platformOS: "android",
       tokenStore: store,
     });
@@ -245,6 +249,14 @@ describe("createOpcoApi", () => {
     ]);
     expect(requests[0].authorization).toBe("Bearer expired-token");
     expect(requests[2].authorization).toBe("Bearer fresh-token");
+    expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      diagnosticOperation: "AUTH_REFRESH",
+      errorCode: null,
+      httpStatus: 200,
+      pathTemplate: "/api/v1/auth/refresh",
+    }));
   });
 
   it("does not refresh forever when the retried request still returns 401", async () => {
@@ -387,11 +399,48 @@ describe("createOpcoApi", () => {
     await expect(api.getMe("expired-token")).rejects.toMatchObject({ code: "REFRESH_TOKEN_REVOKED" });
 
     expect(store.clearSession).toHaveBeenCalledOnce();
-    expect(onSessionInvalid).toHaveBeenCalledOnce();
+    expect(onSessionInvalid).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "REFRESH_TOKEN_REVOKED",
+      requestId: expect.stringMatching(/^opco_diag_/),
+      reason: "refresh_invalid",
+      source: "AUTH_REFRESH",
+    }));
+  });
+
+  it("clears the local session only for a confirmed invalid access token", async () => {
+    const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse(
+        {
+          error: {
+            code: "TOKEN_INVALID",
+            message: "Token invalido.",
+          },
+          ok: false,
+        },
+        401,
+      ),
+      onSessionInvalid,
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await expect(api.getMe("invalid-token")).rejects.toMatchObject({ code: "TOKEN_INVALID", status: 401 });
+    expect(store.clearSession).toHaveBeenCalledOnce();
+    expect(onSessionInvalid).toHaveBeenCalledWith(expect.objectContaining({
+      errorCode: "TOKEN_INVALID",
+      requestId: expect.stringMatching(/^opco_diag_/),
+      reason: "token_invalid",
+      source: "AUTHENTICATED_REQUEST",
+    }));
   });
 
   it("does not clear the local session when refresh fails because of network", async () => {
     const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
       clientId: "opco_app_123",
@@ -413,12 +462,83 @@ describe("createOpcoApi", () => {
           401,
         );
       },
+      onSessionInvalid,
       platformOS: "ios",
       tokenStore: store,
     });
 
     await expect(api.getMe("expired-token")).rejects.toBeInstanceOf(OpcoNetworkError);
     expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the local session when refresh returns a temporary server error", async () => {
+    const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        const path = new URL(String(url)).pathname;
+
+        if (path === "/api/v1/auth/refresh") {
+          return jsonResponse(
+            {
+              error: {
+                code: "DB_UNAVAILABLE",
+                message: "Base de datos no disponible.",
+              },
+              ok: false,
+            },
+            503,
+          );
+        }
+
+        return jsonResponse(
+          {
+            error: {
+              code: "TOKEN_EXPIRED",
+              message: "Token expirado.",
+            },
+            ok: false,
+          },
+          401,
+        );
+      },
+      onSessionInvalid,
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await expect(api.getMe("expired-token")).rejects.toMatchObject({ code: "DB_UNAVAILABLE", status: 503 });
+    expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+  });
+
+  it("does not touch session storage when ready checks fail", async () => {
+    const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse(
+        {
+          error: {
+            code: "DB_UNAVAILABLE",
+            message: "Base de datos no disponible.",
+          },
+          ok: false,
+        },
+        503,
+      ),
+      onSessionInvalid,
+      platformOS: "web",
+      tokenStore: store,
+    });
+
+    await expect(api.getReady({ timeoutMs: 2_500 })).rejects.toMatchObject({ code: "DB_UNAVAILABLE", status: 503 });
+    expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
   });
 
   it("normalizes trailing slashes from the base URL", async () => {
@@ -560,6 +680,80 @@ describe("createOpcoApi", () => {
     }));
     expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("contract_fixture");
     expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("view_fixture");
+  });
+
+  it("refreshes an expired token and retries the STATE_UPDATE save without logging out", async () => {
+    const requests: { authorization: string | null; path: string }[] = [];
+    const store = createSessionTokenStore("refresh-token-1");
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const headers = new Headers(init?.headers);
+        requests.push({ authorization: headers.get("authorization"), path });
+
+        if (path === "/api/v1/auth/refresh") {
+          return jsonResponse({
+            data: {
+              accessToken: "fresh-token",
+              expiresIn: 3600,
+              refreshToken: "refresh-token-2",
+              tokenType: "Bearer",
+            },
+            ok: true,
+          });
+        }
+
+        if (requests.filter((request) => request.path.endsWith("/workflow/state-update")).length === 1) {
+          return jsonResponse(
+            {
+              error: {
+                code: "TOKEN_EXPIRED",
+                message: "Token expirado.",
+              },
+              ok: false,
+            },
+            401,
+          );
+        }
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_1", name: "Asistencia", slug: "asistencia" },
+            result: {
+              recordId: "record_1",
+              result: "CREATED",
+              subjectRecordId: "person_1",
+              updatedAt: "2026-08-28T12:00:00.000Z",
+            },
+          },
+          ok: true,
+        });
+      },
+      onSessionInvalid,
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    await expect(api.saveStateUpdateWorkflow("expired-token", "contract_fixture", "view_fixture", {
+      clientRequestId: "client_request_fixture",
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectRecordId: "person_1",
+    })).resolves.toMatchObject({
+      results: [{ recordId: "record_1", result: "CREATED" }],
+    });
+
+    expect(requests.map((request) => request.path)).toEqual([
+      "/api/v1/contracts/contract_fixture/views/view_fixture/workflow/state-update",
+      "/api/v1/auth/refresh",
+      "/api/v1/contracts/contract_fixture/views/view_fixture/workflow/state-update",
+    ]);
+    expect(requests[0].authorization).toBe("Bearer expired-token");
+    expect(requests[2].authorization).toBe("Bearer fresh-token");
+    expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
   });
 
   it("sends a diagnostic request id and captures echoed Server-Timing headers", async () => {

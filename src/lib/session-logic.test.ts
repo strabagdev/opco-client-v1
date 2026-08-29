@@ -26,7 +26,24 @@ const contextFixture = {
 };
 
 describe("restoreSession", () => {
-  it("deletes the token when /me returns 401", async () => {
+  it("deletes the token when /me confirms an invalid session", async () => {
+    const store = {
+      clearSession: vi.fn(async () => undefined),
+      getAccessToken: vi.fn(async () => "token_123"),
+      getSessionOwnerKey: vi.fn(async () => "org_1:user_1"),
+    };
+
+    const result = await restoreSession(store, {
+      getMe: async () => {
+        throw new OpcoApiError("Token invalido.", "TOKEN_INVALID", 401);
+      },
+    });
+
+    expect(result.status).toBe("anonymous");
+    expect(store.clearSession).toHaveBeenCalledOnce();
+  });
+
+  it("does not delete the token when bootstrap sees a refreshable expired token", async () => {
     const store = {
       clearSession: vi.fn(async () => undefined),
       getAccessToken: vi.fn(async () => "token_123"),
@@ -39,8 +56,8 @@ describe("restoreSession", () => {
       },
     });
 
-    expect(result.status).toBe("anonymous");
-    expect(store.clearSession).toHaveBeenCalledOnce();
+    expect(result).toEqual({ status: "offline", token: "token_123" });
+    expect(store.clearSession).not.toHaveBeenCalled();
   });
 
   it("returns anonymous without calling /me when there is no token", async () => {

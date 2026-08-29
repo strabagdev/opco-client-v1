@@ -543,6 +543,7 @@ export class OpcoApiError extends Error {
     public readonly code: string,
     public readonly status: number,
     public readonly details?: unknown,
+    public readonly diagnosticRequestId?: string | null,
   ) {
     super(message);
     this.name = "OpcoApiError";
@@ -554,6 +555,7 @@ export type OpcoNetworkDiagnostics = {
   diagnosticOperation?: OpcoDiagnosticRequestOperation;
   diagnosticRequestId?: string;
   diagnosticSyncRunId?: string | null;
+  errorCode?: string | null;
   fetchResolvedAt: string | null;
   httpStatus: number | null;
   method: string;
@@ -577,8 +579,17 @@ export type OpcoDiagnosticRequestOperation =
   | "PERSON_LOAD"
   | "RECONCILE"
   | "READY_CHECK"
+  | "AUTH_REFRESH"
   | "HEALTH"
   | "OTHER";
+
+export type OpcoSessionTerminationDiagnostics = {
+  errorCode: string;
+  reason: "refresh_invalid" | "token_invalid" | "user_sign_out";
+  requestId: string | null;
+  source: "AUTH_REFRESH" | "AUTHENTICATED_REQUEST" | "USER";
+  timestamp: string;
+};
 
 export type OpcoServerTimingMetric = {
   description: string | null;
@@ -608,7 +619,7 @@ type ApiClientOptions = {
   apiUrl?: string;
   clientId?: string;
   fetcher?: FetchLike;
-  onSessionInvalid?: () => void;
+  onSessionInvalid?: (diagnostics: OpcoSessionTerminationDiagnostics) => void;
   onRequestDiagnostics?: (diagnostics: OpcoNetworkDiagnostics) => void;
   onSessionRefreshed?: (tokens: RefreshResponse) => void;
   platformOS?: PlatformOS;
@@ -637,13 +648,13 @@ type SessionTokenStore = {
   setSession(tokens: { accessToken: string; refreshToken?: string | null }): Promise<void>;
 };
 
-export function parseApiEnvelope<T>(body: unknown, status = 200): T {
+export function parseApiEnvelope<T>(body: unknown, status = 200, diagnosticRequestId?: string | null): T {
   if (!isApiEnvelope<T>(body)) {
-    throw new OpcoApiError("Respuesta inesperada de Opco.", "INVALID_API_ENVELOPE", status);
+    throw new OpcoApiError("Respuesta inesperada de Opco.", "INVALID_API_ENVELOPE", status, undefined, diagnosticRequestId);
   }
 
   if (!body.ok) {
-    throw new OpcoApiError(body.error.message, body.error.code, status, body.error.details);
+    throw new OpcoApiError(body.error.message, body.error.code, status, body.error.details, diagnosticRequestId);
   }
 
   return body.data;
@@ -706,6 +717,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         diagnosticOperation,
         diagnosticRequestId,
         diagnosticSyncRunId,
+        errorCode: null,
         fetchResolvedAt,
         httpStatus: null,
         init,
@@ -733,11 +745,13 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     responseBodyStartedAt = new Date();
     const body = await response.json().catch(() => null);
     responseParsedAt = new Date();
+    const errorCode = apiEnvelopeErrorCode(body);
     options.onRequestDiagnostics?.(requestDiagnostics({
       abortControllerTriggered,
       diagnosticOperation,
       diagnosticRequestId,
       diagnosticSyncRunId,
+      errorCode,
       fetchResolvedAt,
       httpStatus: response.status,
       init,
@@ -752,7 +766,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       timeoutMs: requestTimeoutMs,
     }));
 
-    return parseApiEnvelope<T>(body, response.status);
+    return parseApiEnvelope<T>(body, response.status, diagnosticRequestId);
   }
 
   async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}) {
@@ -786,7 +800,12 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         .catch(async (error) => {
           if (isInvalidRefreshError(error)) {
             await tokenStore?.clearSession();
-            options.onSessionInvalid?.();
+            options.onSessionInvalid?.(sessionTerminationDiagnostics({
+              error,
+              requestId: null,
+              reason: "refresh_invalid",
+              source: "AUTH_REFRESH",
+            }));
           }
 
           throw error;
@@ -803,6 +822,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     if (platformOS === "web") {
       return request<RefreshResponse>("/api/v1/auth/refresh", {
         credentials: "include",
+        diagnosticOperation: "AUTH_REFRESH",
         method: "POST",
       });
     }
@@ -815,6 +835,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
     return request<RefreshResponse>("/api/v1/auth/refresh", {
       body: JSON.stringify({ refreshToken }),
+      diagnosticOperation: "AUTH_REFRESH",
       headers: nativePlatformHeaders(),
       method: "POST",
     });
@@ -849,7 +870,12 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   async function clearInvalidSession(error: unknown) {
     if (error instanceof OpcoApiError && error.status === 401 && error.code === TOKEN_INVALID_CODE) {
       await tokenStore?.clearSession();
-      options.onSessionInvalid?.();
+      options.onSessionInvalid?.(sessionTerminationDiagnostics({
+        error,
+        requestId: null,
+        reason: "token_invalid",
+        source: "AUTHENTICATED_REQUEST",
+      }));
     }
   }
 
@@ -1237,6 +1263,7 @@ function requestDiagnostics({
   diagnosticOperation,
   diagnosticRequestId,
   diagnosticSyncRunId,
+  errorCode,
   fetchResolvedAt,
   httpStatus,
   init,
@@ -1254,6 +1281,7 @@ function requestDiagnostics({
   diagnosticOperation: OpcoDiagnosticRequestOperation;
   diagnosticRequestId: string;
   diagnosticSyncRunId: string | null;
+  errorCode: string | null;
   fetchResolvedAt: Date | null;
   httpStatus: number | null;
   init: OpcoRequestInit;
@@ -1272,6 +1300,7 @@ function requestDiagnostics({
     diagnosticOperation,
     diagnosticRequestId,
     diagnosticSyncRunId,
+    errorCode,
     fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
     httpStatus,
     method: String(init.method ?? "GET").toUpperCase(),
@@ -1285,6 +1314,38 @@ function requestDiagnostics({
     responseStarted,
     serverTiming,
     timeoutMs,
+  };
+}
+
+function apiEnvelopeErrorCode(body: unknown) {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+
+  const envelope = body as Partial<ApiEnvelope<unknown>>;
+
+  return envelope.ok === false && envelope.error && typeof envelope.error.code === "string"
+    ? envelope.error.code
+    : null;
+}
+
+function sessionTerminationDiagnostics({
+  error,
+  reason,
+  requestId,
+  source,
+}: {
+  error: OpcoApiError;
+  reason: OpcoSessionTerminationDiagnostics["reason"];
+  requestId: string | null;
+  source: OpcoSessionTerminationDiagnostics["source"];
+}): OpcoSessionTerminationDiagnostics {
+  return {
+    errorCode: error.code,
+    reason,
+    requestId: error.diagnosticRequestId ?? requestId,
+    source,
+    timestamp: new Date().toISOString(),
   };
 }
 

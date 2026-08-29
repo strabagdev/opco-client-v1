@@ -1,4 +1,5 @@
 import { AttendanceBatchResult, AttendanceLatestItem, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
+import type { ConnectivityStatus } from "@/lib/connectivity";
 
 export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
 // Mirrors the backend Attendance latest take=10 contract used to infer full-day snapshots.
@@ -37,6 +38,20 @@ export function normalizeAttendanceSearch(value: string) {
 
 export function shouldSearchAttendancePeople(value: string) {
   return normalizeAttendanceSearch(value).length > 0;
+}
+
+export function shouldShowAttendanceOfflineNotice(connectivityStatus: ConnectivityStatus) {
+  return connectivityStatus !== "online";
+}
+
+export function formatAttendancePendingText(pendingCount: number) {
+  if (pendingCount <= 0) {
+    return null;
+  }
+
+  return pendingCount === 1
+    ? "1 registro por sincronizar"
+    : `${pendingCount} registros por sincronizar`;
 }
 
 export function selectDefaultCheckInStatus(statuses: AttendanceStatusOption[]) {

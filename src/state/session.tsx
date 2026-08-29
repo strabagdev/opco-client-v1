@@ -42,7 +42,9 @@ import {
   StateUpdateDiagnosticRun,
   StateUpdateReconnectDiagnostics,
   recordStateUpdateNetworkDiagnostics,
+  recordStateUpdateSessionTermination,
   setStateUpdateNetworkDiagnosticsRecorder,
+  setStateUpdateSessionTerminationRecorder,
   useSessionDiagnostics,
 } from "@/state/use-session-diagnostics";
 import { syncPendingWork } from "@/sync/pending-work-sync";
@@ -55,8 +57,10 @@ type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
 type SessionContextValue = {
   api: OpcoApi;
+  connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
+  isPendingWorkSyncing: boolean;
   me: MeResponse | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
@@ -130,7 +134,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
         onRequestDiagnostics(diagnostics) {
           recordStateUpdateNetworkDiagnostics(diagnostics);
         },
-        onSessionInvalid() {
+        onSessionInvalid(termination) {
+          recordStateUpdateSessionTermination(termination);
           setToken(null);
           setMe(null);
           setContext(null);
@@ -223,6 +228,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     isStateUpdateDiagnosticSyncing,
     persistStateUpdateReconnectDiagnostics,
     recordStateUpdateSyncRun,
+    recordStateUpdateSessionTerminationDiagnostics,
     refreshStateUpdateDiagnostics,
     recordStateUpdateRequestDiagnostics,
     retryFailedStateUpdateDiagnostics,
@@ -244,11 +250,25 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     return setStateUpdateNetworkDiagnosticsRecorder((diagnostics) => {
-      void recordStateUpdateRequestDiagnostics(diagnostics);
-    });
-  }, [recordStateUpdateRequestDiagnostics]);
+      void (async () => {
+        const telemetryOwnerKey = ownerKey ?? await tokenStorage.getSessionOwnerKey();
 
-  const { syncPendingRecords } = usePendingWorkLifecycle({
+        await recordStateUpdateRequestDiagnostics(diagnostics, telemetryOwnerKey ?? undefined);
+      })();
+    });
+  }, [ownerKey, recordStateUpdateRequestDiagnostics]);
+
+  useEffect(() => {
+    return setStateUpdateSessionTerminationRecorder((event) => {
+      void (async () => {
+        const telemetryOwnerKey = ownerKey ?? await tokenStorage.getSessionOwnerKey();
+
+        await recordStateUpdateSessionTerminationDiagnostics(event, telemetryOwnerKey ?? undefined);
+      })();
+    });
+  }, [ownerKey, recordStateUpdateSessionTerminationDiagnostics]);
+
+  const { isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
     api,
     connectivityStatus,
     definitionCache,
@@ -382,11 +402,22 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   async function signOut() {
     const refreshToken = await tokenStorage.getRefreshToken();
+    const manualSignOutOwnerKey = ownerKey;
 
     try {
       await api.logout(refreshToken);
     } catch {
       // Local logout must not be blocked by network or remote revocation failures.
+    }
+
+    if (manualSignOutOwnerKey) {
+      await recordStateUpdateSessionTerminationDiagnostics({
+        errorCode: "USER_SIGN_OUT",
+        reason: "user_sign_out",
+        requestId: null,
+        source: "USER",
+        timestamp: new Date().toISOString(),
+      }, manualSignOutOwnerKey);
     }
 
     await tokenStorage.clearSession();
@@ -433,8 +464,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
     <SessionContext.Provider
       value={{
         api,
+        connectivityStatus,
         context,
         definitionCache,
+        isPendingWorkSyncing,
         me,
         ownerKey,
         pendingRecordsCount,

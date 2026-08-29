@@ -13,6 +13,7 @@ import {
   mergeStateUpdateSyncDiagnosticsTelemetry,
   stateUpdateRequestDiagnosticsFromNetwork,
   StateUpdateOutboxDiagnostics,
+  StateUpdateSessionTerminationTelemetry,
   StateUpdateSyncDiagnosticsTelemetry,
   StateUpdateSyncTrigger,
 } from "../lib/state-update-offline";
@@ -25,6 +26,7 @@ export type StateUpdateReconnectDiagnostics = {
   lastReconnect: StateUpdateSyncDiagnosticsTelemetry["lastReconnect"];
   lastStateUpdateActivity: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"];
   lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
+  lastSessionTermination?: StateUpdateSyncDiagnosticsTelemetry["lastSessionTermination"];
   lastVisibleErrorEvent: StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"];
   requestHistory?: StateUpdateSyncDiagnosticsTelemetry["requestHistory"];
 };
@@ -68,14 +70,20 @@ export const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnosti
   },
   lastStateUpdateActivity: null,
   lastStateUpdateSync: null,
+  lastSessionTermination: null,
   lastVisibleErrorEvent: null,
   requestHistory: [],
 };
 
 let stateUpdateNetworkDiagnosticsRecorder: (diagnostics: OpcoNetworkDiagnostics) => void = () => undefined;
+let stateUpdateSessionTerminationRecorder: (event: StateUpdateSessionTerminationTelemetry) => void = () => undefined;
 
 export function recordStateUpdateNetworkDiagnostics(diagnostics: OpcoNetworkDiagnostics) {
   stateUpdateNetworkDiagnosticsRecorder(diagnostics);
+}
+
+export function recordStateUpdateSessionTermination(event: StateUpdateSessionTerminationTelemetry) {
+  stateUpdateSessionTerminationRecorder(event);
 }
 
 export function setStateUpdateNetworkDiagnosticsRecorder(
@@ -86,6 +94,18 @@ export function setStateUpdateNetworkDiagnosticsRecorder(
   return () => {
     if (stateUpdateNetworkDiagnosticsRecorder === recorder) {
       stateUpdateNetworkDiagnosticsRecorder = () => undefined;
+    }
+  };
+}
+
+export function setStateUpdateSessionTerminationRecorder(
+  recorder: (event: StateUpdateSessionTerminationTelemetry) => void,
+) {
+  stateUpdateSessionTerminationRecorder = recorder;
+
+  return () => {
+    if (stateUpdateSessionTerminationRecorder === recorder) {
+      stateUpdateSessionTerminationRecorder = () => undefined;
     }
   };
 }
@@ -257,6 +277,26 @@ export function useSessionDiagnostics({
       return;
     }
   }, [definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+
+  const recordStateUpdateSessionTerminationDiagnostics = useCallback(async (
+    event: StateUpdateSessionTerminationTelemetry,
+    runOwnerKey = ownerKey,
+  ) => {
+    if (!runOwnerKey) {
+      return;
+    }
+
+    try {
+      await definitionCache.recordStateUpdateSessionTermination(runOwnerKey, event);
+      const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
+
+      if (persisted) {
+        setStateUpdateReconnectDiagnostics(persisted);
+      }
+    } catch {
+      return;
+    }
+  }, [definitionCache, ownerKey]);
 
   const syncPendingStateUpdatesWithTelemetry = useCallback(async ({
     api: stateUpdateApi = api,
@@ -444,6 +484,7 @@ export function useSessionDiagnostics({
     isStateUpdateDiagnosticSyncing,
     persistStateUpdateReconnectDiagnostics,
     recordStateUpdateSyncRun,
+    recordStateUpdateSessionTerminationDiagnostics,
     recordStateUpdateRequestDiagnostics,
     refreshStateUpdateDiagnostics,
     retryFailedStateUpdateDiagnostics,

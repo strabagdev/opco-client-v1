@@ -6,6 +6,7 @@ import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
+  formatAttendancePendingText,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
   isAttendanceRemoteSnapshotComplete,
@@ -14,6 +15,7 @@ import {
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
   shouldSearchAttendancePeople,
+  shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
   splitStatusButtons,
 } from "./attendance-workflow-logic";
@@ -65,6 +67,15 @@ describe("attendance workflow logic", () => {
     expect(normalizeAttendanceSearch("  ana  ")).toBe("ana");
     expect(shouldSearchAttendancePeople("   ")).toBe(false);
     expect(shouldSearchAttendancePeople("ana")).toBe(true);
+  });
+
+  it("derives offline and pending UI copy from canonical runtime state", () => {
+    expect(shouldShowAttendanceOfflineNotice("online")).toBe(false);
+    expect(shouldShowAttendanceOfflineNotice("offline")).toBe(true);
+    expect(shouldShowAttendanceOfflineNotice("unknown")).toBe(true);
+    expect(formatAttendancePendingText(0)).toBeNull();
+    expect(formatAttendancePendingText(1)).toBe("1 registro por sincronizar");
+    expect(formatAttendancePendingText(2)).toBe("2 registros por sincronizar");
   });
 
   it("classifies successful, error, and conflict batch results", () => {

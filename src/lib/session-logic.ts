@@ -1,6 +1,16 @@
 import { AppNavigationCache, CachedContextSnapshot, isNetworkLikeError } from "./app-navigation-cache";
 import { OpcoApiError, MeResponse } from "./opco-api";
 
+const INVALID_SESSION_CODES = new Set([
+  "REFRESH_APP_INACTIVE",
+  "REFRESH_TOKEN_EXPIRED",
+  "REFRESH_TOKEN_MISSING",
+  "REFRESH_TOKEN_REUSED",
+  "REFRESH_TOKEN_REVOKED",
+  "REFRESH_USER_INACTIVE",
+  "TOKEN_INVALID",
+]);
+
 export type TokenStore = {
   clearSession(): Promise<void>;
   getAccessToken(): Promise<string | null>;
@@ -47,7 +57,7 @@ export async function restoreSession(
       token: currentToken,
     };
   } catch (error) {
-    if (error instanceof OpcoApiError && error.status === 401) {
+    if (isConfirmedInvalidSessionError(error)) {
       await tokenStore.clearSession();
       return { status: "anonymous" };
     }
@@ -62,6 +72,12 @@ export async function restoreSession(
       token,
     };
   }
+}
+
+function isConfirmedInvalidSessionError(error: unknown) {
+  return error instanceof OpcoApiError &&
+    error.status === 401 &&
+    INVALID_SESSION_CODES.has(error.code);
 }
 
 async function readContextSnapshot(cache: Pick<AppNavigationCache, "getContextSnapshot"> | undefined, ownerKey: string) {
