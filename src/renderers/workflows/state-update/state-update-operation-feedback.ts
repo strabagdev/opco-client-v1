@@ -69,7 +69,7 @@ export function resolveStateUpdateOperationFeedback({
     return { message: "Conflicto pendiente de resolver.", phase: "CONFLICT" };
   }
 
-  if (visibleError) {
+  if (visibleError && !isReadinessOnlyPending({ connectivityStatus, lastActivity, pendingCount })) {
     return { message: visibleError, phase: "FAILED" };
   }
 
@@ -176,6 +176,29 @@ export function createStateUpdateVisibleErrorDiagnostics({
     syncRunId,
     timeoutOccurred: diagnostics?.abortControllerTriggered === true,
   };
+}
+
+function isReadinessOnlyPending({
+  connectivityStatus,
+  lastActivity,
+  pendingCount,
+}: {
+  connectivityStatus: ConnectivityStatus;
+  lastActivity?: {
+    result: string;
+    type: string;
+  } | null;
+  pendingCount: number;
+}) {
+  return connectivityStatus === "online" &&
+    pendingCount > 0 &&
+    lastActivity?.type === "ready_check" &&
+    (
+      lastActivity.result === "ready_failed" ||
+      lastActivity.result === "reconnecting" ||
+      lastActivity.result === "interrupted" ||
+      lastActivity.result === "cancelled_scope_changed"
+    );
 }
 
 export function stateUpdateRefreshErrorMessage(error: unknown) {

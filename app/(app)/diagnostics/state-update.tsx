@@ -14,7 +14,7 @@ import {
 } from "@/diagnostics/state-update-route-logic";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { AppView, OpcoApiError } from "@/lib/opco-api";
-import { StateUpdateOutboxDiagnostics, StateUpdateRequestDiagnostics, StateUpdateRequestHistoryEvent } from "@/lib/state-update-offline";
+import { StateUpdateOutboxDiagnostics, StateUpdateRequestDiagnostics, StateUpdateRequestHistoryEvent, StateUpdateSyncDiagnosticsTelemetry } from "@/lib/state-update-offline";
 import {
   StateUpdateDiagnosticRun,
   StateUpdateReconnectDiagnostics,
@@ -402,6 +402,7 @@ function StateUpdateOperationalDiagnostics({
               ["durationMs", request.requestDurationMs],
               ["status", request.httpStatus ?? "none"],
               ["timeout", request.abortControllerTriggered],
+              ["attempt", request.attemptNumber ?? "none"],
               ["errorCode", request.errorCode ?? "none"],
               ["interpretation", request.interpretation],
               ["requestId", request.responseRequestId ?? request.diagnosticRequestId ?? "unknown"],
@@ -419,6 +420,9 @@ function StateUpdateOperationalDiagnostics({
           ["state-update local records", diagnostics?.summary.stateUpdateTotalLocal ?? "loading"],
           ["active non-zero metrics", activeSummary.length ? activeSummary.map(([key, value]) => `${key}:${value}`).join(", ") : "none"],
         ]} />
+      </Section>
+      <Section title="Preflight reconnect">
+        <DiagnosticsRows rows={preflightRows(reconnect.lastReconnectPreflight)} />
       </Section>
       {healthCheck ? (
         <Section title="Health manual">
@@ -511,6 +515,7 @@ function requestRows(request: StateUpdateRequestDiagnostics): [string, string | 
     ["completedAt", request.requestCompletedAt],
     ["durationMs", request.requestDurationMs],
     ["timeoutMs", request.timeoutMs],
+    ["attempt", request.attemptNumber ?? "none"],
     ["abortController", request.abortControllerTriggered],
     ["httpStatus", request.httpStatus ?? "none"],
     ["errorCode", request.errorCode ?? "none"],
@@ -518,6 +523,38 @@ function requestRows(request: StateUpdateRequestDiagnostics): [string, string | 
     ["syncRunId", request.diagnosticSyncRunId ?? "none"],
     ["serverTiming", formatServerTiming(request.serverTiming ?? [])],
     ["clientMinusServerMs", clientMinusServerMs(request)],
+  ];
+}
+
+function preflightRows(
+  preflight: StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"],
+): [string, string | number | boolean | null][] {
+  if (!preflight) {
+    return [
+      ["syncRunId", "none"],
+      ["trigger", "none"],
+    ];
+  }
+
+  return [
+    ["syncRunId", preflight.syncRunId ?? "none"],
+    ["trigger", preflight.trigger],
+    ["reconnectDetectedAt", preflight.reconnectDetectedAt ?? "none"],
+    ["debounceStartedAt", preflight.debounceStartedAt ?? "none"],
+    ["debounceCompletedAt", preflight.debounceCompletedAt ?? "none"],
+    ["debounceDurationMs", preflight.debounceDurationMs ?? "none"],
+    ["shouldSyncStartedAt", preflight.shouldSyncStartedAt ?? "none"],
+    ["shouldSyncCompletedAt", preflight.shouldSyncCompletedAt ?? "none"],
+    ["shouldSyncDurationMs", preflight.shouldSyncDurationMs ?? "none"],
+    ["countPendingOperationsDurationMs", preflight.countPendingOperationsDurationMs ?? "none"],
+    ["listPendingStateUpdateOperationsDurationMs", preflight.listPendingStateUpdateOperationsDurationMs ?? "none"],
+    ["shouldSyncResult", preflight.shouldSyncResult ?? "none"],
+    ["runSyncStartedAt", preflight.runSyncStartedAt ?? "none"],
+    ["readinessStartedAt", preflight.readinessStartedAt ?? "none"],
+    ["readinessCompletedAt", preflight.readinessCompletedAt ?? "none"],
+    ["readinessDurationMs", preflight.readinessDurationMs ?? "none"],
+    ["readinessAttempts", preflight.readinessAttempts ?? "none"],
+    ["completedAt", preflight.completedAt ?? "none"],
   ];
 }
 

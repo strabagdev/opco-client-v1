@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createReconnectSyncController } from "./reconnect-sync";
 import {
+  getOperationalCoreReadyRecoveryDelayMs,
   isRecoverableAuthRefreshError,
   isSessionLifecycleScopeCurrent,
   OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS,
   OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS,
   OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
+  OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS,
   probeOperationalCoreReadiness,
+  shouldScheduleOperationalCoreReadyRecovery,
   shouldRefreshAccessTokenForSync,
   shouldGatePendingSyncWithOperationalCoreReady,
   shouldRunOnlinePendingSyncForReadyScope,
@@ -132,6 +135,7 @@ describe("pending work lifecycle guards", () => {
 
     expect(result).toEqual({ attempts: 1, ready: true });
     expect(getReady).toHaveBeenCalledWith({
+      diagnosticAttemptNumber: 1,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_reconnect_1",
       timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
@@ -174,11 +178,13 @@ describe("pending work lifecycle guards", () => {
     expect(result).toEqual({ attempts: 2, ready: true });
     expect(getReady).toHaveBeenCalledTimes(2);
     expect(getReady).toHaveBeenNthCalledWith(1, {
+      diagnosticAttemptNumber: 1,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_retry_attempts",
       timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
     });
     expect(getReady).toHaveBeenNthCalledWith(2, {
+      diagnosticAttemptNumber: 2,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_retry_attempts",
       timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
@@ -202,6 +208,47 @@ describe("pending work lifecycle guards", () => {
     expect(result).toEqual({ attempts: 3, ready: false });
     expect(getReady).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([500, 1_000]);
+  });
+
+  it("uses a bounded recovery schedule after exhausted readiness cycles", () => {
+    expect(getOperationalCoreReadyRecoveryDelayMs(0)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[0]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(1)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[1]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(2)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[2]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(3)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[3]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(4)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[3]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(20)).toBe(OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[3]);
+    expect(getOperationalCoreReadyRecoveryDelayMs(-1)).toBeNull();
+  });
+
+  it("keeps a future recovery attempt guaranteed after the third cycle while conditions remain valid", () => {
+    expect(getOperationalCoreReadyRecoveryDelayMs(3)).toBe(60_000);
+    expect(getOperationalCoreReadyRecoveryDelayMs(4)).toBe(60_000);
+    expect(shouldScheduleOperationalCoreReadyRecovery({
+      appLifecycleState: "active",
+      connectivityStatus: "online",
+      hasRecoveryTimer: false,
+      hasRunActive: false,
+      isScopeCurrent: true,
+      pendingWorkExists: true,
+    })).toBe(true);
+  });
+
+  it("does not schedule recovery when pending is gone, offline, backgrounded, or already active", () => {
+    const base = {
+      appLifecycleState: "active" as const,
+      connectivityStatus: "online" as const,
+      hasRecoveryTimer: false,
+      hasRunActive: false,
+      isScopeCurrent: true,
+      pendingWorkExists: true,
+    };
+
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, pendingWorkExists: false })).toBe(false);
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, connectivityStatus: "offline" })).toBe(false);
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, appLifecycleState: "background" })).toBe(false);
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, hasRecoveryTimer: true })).toBe(false);
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, hasRunActive: true })).toBe(false);
+    expect(shouldScheduleOperationalCoreReadyRecovery({ ...base, isScopeCurrent: false })).toBe(false);
   });
 
   it("allows a new online transition to retry after a previous readiness run failed", async () => {

@@ -24,6 +24,7 @@ import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state
 export type StateUpdateReconnectDiagnostics = {
   currentConnectivity: StateUpdateSyncDiagnosticsTelemetry["currentConnectivity"];
   lastReconnect: StateUpdateSyncDiagnosticsTelemetry["lastReconnect"];
+  lastReconnectPreflight?: StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"];
   lastStateUpdateActivity: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"];
   lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
   lastSessionTermination?: StateUpdateSyncDiagnosticsTelemetry["lastSessionTermination"];
@@ -68,6 +69,7 @@ export const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnosti
     previousConnectivityStatus: null,
     resultingConnectivityStatus: null,
   },
+  lastReconnectPreflight: null,
   lastStateUpdateActivity: null,
   lastStateUpdateSync: null,
   lastSessionTermination: null,

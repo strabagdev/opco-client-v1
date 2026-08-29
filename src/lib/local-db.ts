@@ -3830,6 +3830,7 @@ async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: State
       previousConnectivityStatus: null,
       resultingConnectivityStatus: null,
     },
+    lastReconnectPreflight: current?.lastReconnectPreflight ?? null,
     lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
     lastSessionTermination: current?.lastSessionTermination ?? null,
@@ -3852,6 +3853,7 @@ async function recordStateUpdateSessionTermination(ownerKey: string, event: Stat
       previousConnectivityStatus: null,
       resultingConnectivityStatus: null,
     },
+    lastReconnectPreflight: current?.lastReconnectPreflight ?? null,
     lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
     lastSessionTermination: event,
@@ -3927,6 +3929,7 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
         previousConnectivityStatus,
         resultingConnectivityStatus,
       },
+      lastReconnectPreflight: normalizeStateUpdateReconnectPreflightTelemetry(parsed.lastReconnectPreflight),
       lastStateUpdateActivity: normalizeLastStateUpdateActivityTelemetry(parsed.lastStateUpdateActivity),
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
       lastSessionTermination: normalizeStateUpdateSessionTerminationTelemetry(parsed.lastSessionTermination),
@@ -3959,6 +3962,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
       previousConnectivityStatus: null,
       resultingConnectivityStatus: null,
     },
+    lastReconnectPreflight: current?.lastReconnectPreflight ?? null,
     lastStateUpdateActivity: {
       completedAt,
       lastRequestDiagnostics: previousRun?.lastRequestDiagnostics ?? null,
@@ -4039,6 +4043,37 @@ function normalizeLastStateUpdateActivityTelemetry(
   };
 }
 
+function normalizeStateUpdateReconnectPreflightTelemetry(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]> | null | undefined,
+): StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"] {
+  if (!telemetry || typeof telemetry !== "object") {
+    return null;
+  }
+
+  const trigger = normalizeStateUpdateSyncTrigger(telemetry.trigger);
+
+  return {
+    completedAt: normalizeDiagnosticTimestamp(telemetry.completedAt),
+    countPendingOperationsDurationMs: normalizeNullableDiagnosticDuration(telemetry.countPendingOperationsDurationMs),
+    debounceCompletedAt: normalizeDiagnosticTimestamp(telemetry.debounceCompletedAt),
+    debounceDurationMs: normalizeNullableDiagnosticDuration(telemetry.debounceDurationMs),
+    debounceStartedAt: normalizeDiagnosticTimestamp(telemetry.debounceStartedAt),
+    listPendingStateUpdateOperationsDurationMs: normalizeNullableDiagnosticDuration(telemetry.listPendingStateUpdateOperationsDurationMs),
+    readinessAttempts: normalizeNullableDiagnosticCount(telemetry.readinessAttempts),
+    readinessCompletedAt: normalizeDiagnosticTimestamp(telemetry.readinessCompletedAt),
+    readinessDurationMs: normalizeNullableDiagnosticDuration(telemetry.readinessDurationMs),
+    readinessStartedAt: normalizeDiagnosticTimestamp(telemetry.readinessStartedAt),
+    reconnectDetectedAt: normalizeDiagnosticTimestamp(telemetry.reconnectDetectedAt),
+    runSyncStartedAt: normalizeDiagnosticTimestamp(telemetry.runSyncStartedAt),
+    shouldSyncCompletedAt: normalizeDiagnosticTimestamp(telemetry.shouldSyncCompletedAt),
+    shouldSyncDurationMs: normalizeNullableDiagnosticDuration(telemetry.shouldSyncDurationMs),
+    shouldSyncResult: typeof telemetry.shouldSyncResult === "boolean" ? telemetry.shouldSyncResult : null,
+    shouldSyncStartedAt: normalizeDiagnosticTimestamp(telemetry.shouldSyncStartedAt),
+    syncRunId: normalizeDiagnosticToken(telemetry.syncRunId),
+    trigger,
+  };
+}
+
 function normalizeLastVisibleErrorEventTelemetry(
   telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"]> | null | undefined,
 ): StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"] {
@@ -4116,6 +4151,7 @@ function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequ
 
   return {
     abortControllerTriggered: diagnostics.abortControllerTriggered === true,
+    attemptNumber: normalizeDiagnosticAttemptNumber(diagnostics.attemptNumber),
     diagnosticOperation: normalizeDiagnosticOperation(diagnostics.diagnosticOperation),
     diagnosticRequestId: normalizeDiagnosticToken(diagnostics.diagnosticRequestId) ?? "unknown",
     diagnosticSyncRunId: normalizeDiagnosticToken(diagnostics.diagnosticSyncRunId),
@@ -4222,6 +4258,26 @@ function normalizeRequestInterpretation(value: unknown): StateUpdateRequestHisto
 
 function normalizeDiagnosticCount(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function normalizeDiagnosticAttemptNumber(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 99 ? value : null;
+}
+
+function normalizeNullableDiagnosticCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function normalizeNullableDiagnosticDuration(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+}
+
+function normalizeDiagnosticTimestamp(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return Number.isFinite(Date.parse(value)) ? value : null;
 }
 
 function normalizeConnectivityStatus(value: unknown): StateUpdateSyncDiagnosticsTelemetry["currentConnectivity"]["status"] {

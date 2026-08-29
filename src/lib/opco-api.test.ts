@@ -727,12 +727,14 @@ describe("createOpcoApi", () => {
     });
 
     await api.getReady({
+      diagnosticAttemptNumber: 2,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_reconnect_1",
       timeoutMs: 2_500,
     });
 
     expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      attemptNumber: 2,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_reconnect_1",
       httpStatus: 200,

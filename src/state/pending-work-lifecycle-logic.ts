@@ -13,6 +13,7 @@ export type SessionLifecycleScope = {
 export const OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS = 2_500;
 export const OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS = 3;
 export const OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS = [500, 1_000] as const;
+export const OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000] as const;
 export const ACCESS_TOKEN_SYNC_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export type OperationalCoreReadinessProbeResult = {
@@ -74,6 +75,38 @@ export function shouldGatePendingSyncWithOperationalCoreReady(trigger: StateUpda
     trigger === "foreground/resume";
 }
 
+export function getOperationalCoreReadyRecoveryDelayMs(attempts: number) {
+  if (!Number.isInteger(attempts) || attempts < 0) {
+    return null;
+  }
+
+  return OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[attempts] ??
+    OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS[OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS.length - 1];
+}
+
+export function shouldScheduleOperationalCoreReadyRecovery({
+  appLifecycleState,
+  connectivityStatus,
+  hasRecoveryTimer,
+  hasRunActive,
+  isScopeCurrent,
+  pendingWorkExists,
+}: {
+  appLifecycleState: AppLifecycleState;
+  connectivityStatus: ConnectivityStatus;
+  hasRecoveryTimer: boolean;
+  hasRunActive: boolean;
+  isScopeCurrent: boolean;
+  pendingWorkExists: boolean;
+}) {
+  return connectivityStatus === "online" &&
+    appLifecycleState === "active" &&
+    pendingWorkExists &&
+    isScopeCurrent &&
+    !hasRecoveryTimer &&
+    !hasRunActive;
+}
+
 export function shouldRefreshAccessTokenForSync(
   token: string,
   nowMs = Date.now(),
@@ -109,6 +142,7 @@ export async function probeOperationalCoreReadiness({
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await api.getReady({
+        diagnosticAttemptNumber: attempt,
         diagnosticOperation: "READY_CHECK",
         diagnosticSyncRunId: syncRunId,
         timeoutMs: probeTimeoutMs,

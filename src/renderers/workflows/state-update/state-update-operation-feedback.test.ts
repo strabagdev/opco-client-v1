@@ -84,6 +84,21 @@ describe("state update operation feedback", () => {
     });
   });
 
+  it("does not show a network error as a write failure when only readiness failed", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "ready_failed",
+        type: "ready_check",
+      },
+      pendingCount: 1,
+      visibleError: "OpcoNetworkError",
+    })).toMatchObject({
+      message: "Pendiente de sincronizacion.",
+      phase: "PENDING",
+    });
+  });
+
   it("shows session restoring feedback only while auth refresh is active", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",

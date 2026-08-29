@@ -179,9 +179,31 @@ export type StateUpdateLastReconnectTelemetry = {
   resultingConnectivityStatus: ConnectivityStatus | null;
 };
 
+export type StateUpdateReconnectPreflightTelemetry = {
+  completedAt: string | null;
+  countPendingOperationsDurationMs: number | null;
+  debounceCompletedAt: string | null;
+  debounceDurationMs: number | null;
+  debounceStartedAt: string | null;
+  listPendingStateUpdateOperationsDurationMs: number | null;
+  readinessAttempts: number | null;
+  readinessCompletedAt: string | null;
+  readinessDurationMs: number | null;
+  readinessStartedAt: string | null;
+  reconnectDetectedAt: string | null;
+  runSyncStartedAt: string | null;
+  shouldSyncCompletedAt: string | null;
+  shouldSyncDurationMs: number | null;
+  shouldSyncResult: boolean | null;
+  shouldSyncStartedAt: string | null;
+  syncRunId: string | null;
+  trigger: StateUpdateSyncTrigger;
+};
+
 export type StateUpdateRequestDiagnostics = Pick<
   OpcoNetworkDiagnostics,
   | "abortControllerTriggered"
+  | "attemptNumber"
   | "errorCode"
   | "fetchResolvedAt"
   | "httpStatus"
@@ -204,6 +226,7 @@ export type StateUpdateRequestDiagnostics = Pick<
 >>;
 
 export type StateUpdateRequestHistoryEvent = StateUpdateRequestDiagnostics & {
+  attemptNumber?: number | null;
   interpretation: StateUpdateRequestInterpretation;
 };
 
@@ -271,6 +294,7 @@ export type StateUpdateSyncDiagnosticsTelemetry = {
     updatedAt: string | null;
   };
   lastReconnect: StateUpdateLastReconnectTelemetry;
+  lastReconnectPreflight?: StateUpdateReconnectPreflightTelemetry | null;
   lastStateUpdateActivity: StateUpdateActivityTelemetry | null;
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
   lastSessionTermination?: StateUpdateSessionTerminationTelemetry | null;
@@ -390,6 +414,7 @@ export function stateUpdateRequestDiagnosticsFromNetwork(
 
   return {
     abortControllerTriggered: diagnostics.abortControllerTriggered,
+    attemptNumber: diagnostics.attemptNumber ?? null,
     diagnosticOperation: diagnostics.diagnosticOperation,
     diagnosticRequestId: diagnostics.diagnosticRequestId,
     diagnosticSyncRunId: diagnostics.diagnosticSyncRunId ?? null,
@@ -421,6 +446,7 @@ export function appendStateUpdateRequestHistory(
 
   const nextEvent: StateUpdateRequestHistoryEvent = {
     ...event,
+    attemptNumber: normalizeDiagnosticAttemptNumber(event.attemptNumber),
     diagnosticOperation: event.diagnosticOperation ?? "OTHER",
     diagnosticRequestId: event.diagnosticRequestId ?? "unknown",
     diagnosticSyncRunId: event.diagnosticSyncRunId ?? null,
@@ -467,6 +493,10 @@ export function isStateUpdateDiagnosticPath(pathTemplate: string) {
     pathTemplate === "/api/v1/ready" ||
     pathTemplate.endsWith("/workflow/state-update") ||
     pathTemplate.endsWith("/workflow/attendance");
+}
+
+function normalizeDiagnosticAttemptNumber(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 99 ? value : null;
 }
 
 export type StateUpdateScope = {

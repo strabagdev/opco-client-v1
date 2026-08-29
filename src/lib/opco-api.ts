@@ -552,6 +552,7 @@ export class OpcoApiError extends Error {
 
 export type OpcoNetworkDiagnostics = {
   abortControllerTriggered: boolean;
+  attemptNumber?: number | null;
   diagnosticOperation?: OpcoDiagnosticRequestOperation;
   diagnosticRequestId?: string;
   diagnosticSyncRunId?: string | null;
@@ -598,6 +599,7 @@ export type OpcoServerTimingMetric = {
 };
 
 type OpcoRequestInit = RequestInit & {
+  diagnosticAttemptNumber?: number | null;
   diagnosticOperation?: OpcoDiagnosticRequestOperation;
   diagnosticSyncRunId?: string | null;
   timeoutMs?: number;
@@ -681,6 +683,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     let serverTiming: OpcoServerTimingMetric[] = [];
     const requestStartedAt = new Date();
     const requestStartedMs = Date.now();
+    const diagnosticAttemptNumber = normalizeDiagnosticAttemptNumber(init.diagnosticAttemptNumber);
     const diagnosticRequestId = getDiagnosticRequestId(init);
     const diagnosticOperation = init.diagnosticOperation ?? "OTHER";
     const diagnosticSyncRunId = init.diagnosticSyncRunId ?? null;
@@ -691,6 +694,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       controller.abort();
     }, requestTimeoutMs);
     const {
+      diagnosticAttemptNumber: _diagnosticAttemptNumber,
       diagnosticOperation: _diagnosticOperation,
       diagnosticSyncRunId: _diagnosticSyncRunId,
       timeoutMs: _timeoutMs,
@@ -715,6 +719,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     } catch (error) {
       const diagnostics = requestDiagnostics({
         abortControllerTriggered,
+        attemptNumber: diagnosticAttemptNumber,
         diagnosticOperation,
         diagnosticRequestId,
         diagnosticSyncRunId,
@@ -749,6 +754,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     const errorCode = apiEnvelopeErrorCode(body);
     options.onRequestDiagnostics?.(requestDiagnostics({
       abortControllerTriggered,
+      attemptNumber: diagnosticAttemptNumber,
       diagnosticOperation,
       diagnosticRequestId,
       diagnosticSyncRunId,
@@ -1110,8 +1116,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         diagnosticOperation: "HEALTH",
       });
     },
-    getReady(options: { diagnosticOperation?: OpcoDiagnosticRequestOperation; diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
+    getReady(options: { diagnosticAttemptNumber?: number | null; diagnosticOperation?: OpcoDiagnosticRequestOperation; diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
       return request<unknown>("/api/v1/ready", {
+        diagnosticAttemptNumber: options.diagnosticAttemptNumber,
         diagnosticOperation: options.diagnosticOperation ?? "READY_CHECK",
         diagnosticSyncRunId: options.diagnosticSyncRunId,
         timeoutMs: options.timeoutMs,
@@ -1267,6 +1274,7 @@ function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
 
 function requestDiagnostics({
   abortControllerTriggered,
+  attemptNumber,
   diagnosticOperation,
   diagnosticRequestId,
   diagnosticSyncRunId,
@@ -1285,6 +1293,7 @@ function requestDiagnostics({
   timeoutMs,
 }: {
   abortControllerTriggered: boolean;
+  attemptNumber: number | null;
   diagnosticOperation: OpcoDiagnosticRequestOperation;
   diagnosticRequestId: string;
   diagnosticSyncRunId: string | null;
@@ -1304,6 +1313,7 @@ function requestDiagnostics({
 }): OpcoNetworkDiagnostics {
   return {
     abortControllerTriggered,
+    attemptNumber,
     diagnosticOperation,
     diagnosticRequestId,
     diagnosticSyncRunId,
@@ -1322,6 +1332,10 @@ function requestDiagnostics({
     serverTiming,
     timeoutMs,
   };
+}
+
+function normalizeDiagnosticAttemptNumber(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 99 ? value : null;
 }
 
 function apiEnvelopeErrorCode(body: unknown) {

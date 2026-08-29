@@ -502,6 +502,7 @@ describe("state-update sync diagnostics telemetry", () => {
 
     const ready = appendStateUpdateRequestHistory(current, {
       abortControllerTriggered: false,
+      attemptNumber: 1,
       diagnosticOperation: "READY_CHECK",
       diagnosticRequestId: "opco_diag_ready",
       diagnosticSyncRunId: "sync_reconnect_1",
@@ -541,6 +542,7 @@ describe("state-update sync diagnostics telemetry", () => {
 
     expect(saved.requestHistory?.map((request) => request.diagnosticOperation)).toEqual(["READY_CHECK", "SAVE"]);
     expect(saved.requestHistory?.map((request) => request.diagnosticSyncRunId)).toEqual(["sync_reconnect_1", "sync_reconnect_1"]);
+    expect(saved.requestHistory?.[0]?.attemptNumber).toBe(1);
   });
 
   it("ignores non-workflow request diagnostics and classifies timeout/network cases", () => {
