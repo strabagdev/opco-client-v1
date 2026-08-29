@@ -1,6 +1,6 @@
 import { LocalDatabaseStorageState } from "../lib/local-db-recovery";
 import { AttendanceResponse, DEFAULT_REQUEST_TIMEOUT_MS, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
-import { StateUpdateOutboxDiagnostics } from "../lib/state-update-offline";
+import { StateUpdateOutboxDiagnostics, StateUpdateSyncDiagnosticsTelemetry } from "../lib/state-update-offline";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 
 type DiagnosticsSessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -119,6 +119,107 @@ export type AttendanceGetDiagnostics = {
   latestCount: number;
   summaryTotalRegistered: number;
 };
+
+export type StateUpdateDiagnosticHealth = {
+  cards: {
+    label: string;
+    tone: "good" | "risk" | "warn";
+    value: string;
+  }[];
+  interpretation: string;
+  pendingState: string;
+};
+
+export function buildStateUpdateDiagnosticHealth({
+  diagnostics,
+  reconnect,
+}: {
+  diagnostics: StateUpdateOutboxDiagnostics | null;
+  reconnect: StateUpdateSyncDiagnosticsTelemetry;
+}): StateUpdateDiagnosticHealth {
+  const summary = diagnostics?.summary;
+  const pending = summary
+    ? summary.pendingCreate + summary.pendingUpdate + summary.syncing + summary.failed + summary.conflict
+    : 0;
+  const recentTimeout = (reconnect.requestHistory ?? []).some((request) => request.abortControllerTriggered);
+  const hasError = Boolean(reconnect.lastVisibleErrorEvent && !reconnect.lastVisibleErrorEvent.clearedAt);
+  const pendingState = summary
+    ? [
+        summary.pendingCreate ? `pending_create:${summary.pendingCreate}` : null,
+        summary.pendingUpdate ? `pending_update:${summary.pendingUpdate}` : null,
+        summary.syncing ? `syncing:${summary.syncing}` : null,
+        summary.failed ? `failed:${summary.failed}` : null,
+        summary.conflict ? `conflict:${summary.conflict}` : null,
+      ].filter(Boolean).join(", ") || "none"
+    : "loading";
+
+  return {
+    cards: [
+      {
+        label: "Conectividad",
+        tone: reconnect.currentConnectivity.status === "online" ? "good" : reconnect.currentConnectivity.status === "offline" ? "warn" : "risk",
+        value: reconnect.currentConnectivity.status,
+      },
+      {
+        label: "Trabajo local",
+        tone: pending > 0 ? "warn" : "good",
+        value: summary ? String(pending) : "loading",
+      },
+      {
+        label: "Ultimo sync",
+        tone: reconnect.lastStateUpdateSync?.result === "success" || reconnect.lastStateUpdateSync?.result === "reconciled_success" ? "good" : reconnect.lastStateUpdateSync ? "warn" : "risk",
+        value: reconnect.lastStateUpdateSync?.result ?? "none",
+      },
+      {
+        label: "Timeout reciente",
+        tone: recentTimeout ? "warn" : "good",
+        value: recentTimeout ? "si" : "no",
+      },
+      {
+        label: "Error visible",
+        tone: hasError ? "risk" : "good",
+        value: hasError ? reconnect.lastVisibleErrorEvent?.errorCode ?? "error" : "none",
+      },
+    ],
+    interpretation: describeStateUpdateHealth({
+      hasError,
+      pending,
+      recentTimeout,
+      syncResult: reconnect.lastStateUpdateSync?.result ?? null,
+    }),
+    pendingState,
+  };
+}
+
+function describeStateUpdateHealth({
+  hasError,
+  pending,
+  recentTimeout,
+  syncResult,
+}: {
+  hasError: boolean;
+  pending: number;
+  recentTimeout: boolean;
+  syncResult: string | null;
+}) {
+  if (hasError) {
+    return "Hay un error visible sin resolver; revisar ultimo request y actividad antes de reintentar.";
+  }
+
+  if (pending > 0) {
+    return "Existe intencion local pendiente; el registro debe seguir visible mientras sync/reconcile lo resuelve.";
+  }
+
+  if (syncResult === "reconciled_success") {
+    return "El ultimo timeout tecnico fue reconciliado con exito remoto.";
+  }
+
+  if (recentTimeout) {
+    return "Hubo timeout reciente; comparar duracion cliente con Server-Timing para ubicar red vs servidor.";
+  }
+
+  return "No hay senales activas de bloqueo STATE_UPDATE.";
+}
 
 export type StateUpdateDiagnosticRow = {
   clientRequestId: string;

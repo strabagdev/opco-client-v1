@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendStateUpdateRequestHistory,
   createStateUpdateLocalRecordId,
+  interpretStateUpdateRequest,
   isStateUpdateCompatibleWorkflow,
   isValidStateUpdateRemoteUpdatedAt,
   mergeStateUpdateSyncDiagnosticsTelemetry,
@@ -391,5 +393,91 @@ describe("state-update sync diagnostics telemetry", () => {
       type: "snapshot_reconciliation",
     });
     expect(next.lastStateUpdateSync).toBeNull();
+  });
+
+  it("keeps a bounded sanitized STATE_UPDATE request history", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      requestHistory: [],
+    };
+
+    const next = appendStateUpdateRequestHistory(current, {
+      abortControllerTriggered: false,
+      diagnosticOperation: "SAVE",
+      diagnosticRequestId: "opco_diag_123",
+      fetchResolvedAt: "2026-08-29T10:00:01.000Z",
+      httpStatus: 200,
+      method: "POST",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+      requestCompletedAt: "2026-08-29T10:00:01.500Z",
+      requestDurationMs: 1500,
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: "2026-08-29T10:00:01.000Z",
+      responseParsedAt: "2026-08-29T10:00:01.500Z",
+      responseRequestId: "opco_diag_123",
+      responseStarted: true,
+      serverTiming: [{ description: null, durationMs: 1200, name: "total" }],
+      timeoutMs: 12000,
+    }, 1);
+
+    expect(next.requestHistory).toHaveLength(1);
+    expect(next.requestHistory?.[0]).toMatchObject({
+      diagnosticOperation: "SAVE",
+      interpretation: "success",
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+    });
+    expect(JSON.stringify(next)).not.toContain("contract_1");
+  });
+
+  it("ignores non-workflow request diagnostics and classifies timeout/network cases", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: false,
+        detectedAt: null,
+        previousConnectivityStatus: null,
+        resultingConnectivityStatus: null,
+      },
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+    };
+    const unrelated = appendStateUpdateRequestHistory(current, {
+      abortControllerTriggered: false,
+      fetchResolvedAt: null,
+      httpStatus: 200,
+      pathTemplate: "/api/v1/me",
+      requestCompletedAt: "2026-08-29T10:00:00.000Z",
+      requestDurationMs: 1,
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: null,
+      responseParsedAt: null,
+      responseStarted: false,
+      timeoutMs: 12000,
+    });
+
+    expect(unrelated.requestHistory).toBeUndefined();
+    expect(interpretStateUpdateRequest({
+      abortControllerTriggered: true,
+      fetchResolvedAt: null,
+      httpStatus: null,
+      pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
+      requestCompletedAt: "2026-08-29T10:00:12.000Z",
+      requestDurationMs: 12000,
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: null,
+      responseParsedAt: null,
+      responseStarted: false,
+      timeoutMs: 12000,
+    })).toBe("client_timeout_before_response");
   });
 });

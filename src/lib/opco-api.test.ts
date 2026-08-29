@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope } from "./opco-api";
+import { createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope, parseServerTimingHeader } from "./opco-api";
 import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
 const meFixture = {
@@ -519,8 +519,8 @@ describe("createOpcoApi", () => {
       onRequestDiagnostics: diagnostics,
     });
 
-    await api.saveStateUpdateWorkflow("token_123", "contract_secret", "view_secret", {
-      clientRequestId: "client_request_secret",
+    await api.saveStateUpdateWorkflow("token_123", "contract_fixture", "view_fixture", {
+      clientRequestId: "client_request_fixture",
       stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
       subjectRecordId: "person_1",
     });
@@ -532,8 +532,68 @@ describe("createOpcoApi", () => {
       pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
       responseStarted: true,
     }));
-    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("contract_secret");
-    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("view_secret");
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("contract_fixture");
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("view_fixture");
+  });
+
+  it("sends a diagnostic request id and captures echoed Server-Timing headers", async () => {
+    const diagnostics = vi.fn();
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return new Response(JSON.stringify({
+          data: {
+            appView: { id: "view_1", name: "Asistencia", slug: "asistencia" },
+            result: {
+              recordId: "record_1",
+              result: "CREATED",
+              subjectRecordId: "person_1",
+              updatedAt: "2026-08-28T12:00:00.000Z",
+            },
+          },
+          ok: true,
+        }), {
+          headers: {
+            "Server-Timing": "total;dur=142, db;dur=120, result;desc=\"ok\"",
+            "X-Opco-Request-Id": "opco_diag_echo_1",
+          },
+          status: 200,
+        });
+      },
+      onRequestDiagnostics: diagnostics,
+    });
+
+    await api.saveStateUpdateWorkflow("token_123", "contract_fixture", "view_fixture", {
+      clientRequestId: "client_request_fixture",
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectRecordId: "person_1",
+    });
+
+    expect(requests[0].headers).toEqual(expect.objectContaining({
+      "X-Opco-Request-Id": expect.stringMatching(/^opco_diag_/),
+    }));
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      diagnosticOperation: "SAVE",
+      diagnosticRequestId: expect.stringMatching(/^opco_diag_/),
+      responseRequestId: "opco_diag_echo_1",
+      serverTiming: expect.arrayContaining([
+        expect.objectContaining({ durationMs: 142, name: "total" }),
+        expect.objectContaining({ durationMs: 120, name: "db" }),
+      ]),
+    }));
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("contract_fixture");
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("client_request_fixture");
+  });
+
+  it("parses Server-Timing defensively", () => {
+    expect(parseServerTimingHeader("total;dur=12.5, bad name;dur=1, db;desc=\"ok\"")).toEqual([
+      { description: null, durationMs: 12.5, name: "total" },
+      { description: "ok", durationMs: null, name: "db" },
+    ]);
   });
 
   it("parses paginated entity records and sends search query params", async () => {

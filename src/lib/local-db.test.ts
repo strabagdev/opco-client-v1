@@ -252,6 +252,63 @@ describe("local database singleton", () => {
     });
   });
 
+  it("hydrates bounded STATE_UPDATE request history without raw owner ids", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:03.000Z" },
+            lastReconnect: {
+              detectedAt: "2026-08-29T10:00:00.000Z",
+              previousConnectivityStatus: "offline",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateActivity: null,
+            lastStateUpdateSync: null,
+            lastVisibleErrorEvent: null,
+            requestHistory: [{
+              abortControllerTriggered: false,
+              diagnosticOperation: "SAVE",
+              diagnosticRequestId: "opco_diag_123",
+              fetchResolvedAt: "2026-08-29T10:00:01.000Z",
+              httpStatus: 200,
+              interpretation: "success",
+              method: "POST",
+              pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+              requestCompletedAt: "2026-08-29T10:00:02.000Z",
+              requestDurationMs: 2000,
+              requestStartedAt: "2026-08-29T10:00:00.000Z",
+              responseBodyStartedAt: "2026-08-29T10:00:01.000Z",
+              responseParsedAt: "2026-08-29T10:00:02.000Z",
+              responseRequestId: "opco_diag_123",
+              responseStarted: true,
+              serverTiming: [{ durationMs: 1500, name: "total" }],
+              timeoutMs: 12000,
+            }],
+          }),
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    const telemetry = await store.getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1");
+
+    expect(telemetry?.requestHistory).toEqual([
+      expect.objectContaining({
+        diagnosticOperation: "SAVE",
+        diagnosticRequestId: "opco_diag_123",
+        interpretation: "success",
+        serverTiming: [expect.objectContaining({ durationMs: 1500, name: "total" })],
+      }),
+    ]);
+    expect(db.getFirstAsync).toHaveBeenCalledWith(
+      expect.stringContaining("FROM app_metadata"),
+      expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
+    );
+  });
+
   it("persists the last visible STATE_UPDATE UI error with the same sanitized owner scope", async () => {
     db.getFirstAsync.mockResolvedValueOnce(null);
     const store = getLocalDatabase();

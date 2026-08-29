@@ -7,9 +7,11 @@ import {
 } from "../diagnostics/state-update-route-logic";
 import { ConnectivityStatus } from "../lib/connectivity";
 import { LocalDatabase } from "../lib/local-db";
-import { OpcoApi } from "../lib/opco-api";
+import { OpcoApi, OpcoNetworkDiagnostics } from "../lib/opco-api";
 import {
+  appendStateUpdateRequestHistory,
   mergeStateUpdateSyncDiagnosticsTelemetry,
+  stateUpdateRequestDiagnosticsFromNetwork,
   StateUpdateOutboxDiagnostics,
   StateUpdateSyncDiagnosticsTelemetry,
   StateUpdateSyncTrigger,
@@ -24,6 +26,7 @@ export type StateUpdateReconnectDiagnostics = {
   lastStateUpdateActivity: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"];
   lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
   lastVisibleErrorEvent: StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"];
+  requestHistory?: StateUpdateSyncDiagnosticsTelemetry["requestHistory"];
 };
 
 export type StateUpdateDiagnosticRun = {
@@ -66,7 +69,26 @@ export const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnosti
   lastStateUpdateActivity: null,
   lastStateUpdateSync: null,
   lastVisibleErrorEvent: null,
+  requestHistory: [],
 };
+
+let stateUpdateNetworkDiagnosticsRecorder: (diagnostics: OpcoNetworkDiagnostics) => void = () => undefined;
+
+export function recordStateUpdateNetworkDiagnostics(diagnostics: OpcoNetworkDiagnostics) {
+  stateUpdateNetworkDiagnosticsRecorder(diagnostics);
+}
+
+export function setStateUpdateNetworkDiagnosticsRecorder(
+  recorder: (diagnostics: OpcoNetworkDiagnostics) => void,
+) {
+  stateUpdateNetworkDiagnosticsRecorder = recorder;
+
+  return () => {
+    if (stateUpdateNetworkDiagnosticsRecorder === recorder) {
+      stateUpdateNetworkDiagnosticsRecorder = () => undefined;
+    }
+  };
+}
 
 export function mergeStateUpdateReconnectDiagnosticsForPersistence({
   current,
@@ -205,6 +227,36 @@ export function useSessionDiagnostics({
     setStateUpdateReconnectDiagnostics(next);
     await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next);
   }, [connectivityStatus, definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+
+  const recordStateUpdateRequestDiagnostics = useCallback(async (
+    diagnostics: OpcoNetworkDiagnostics,
+    runOwnerKey = ownerKey,
+  ) => {
+    if (!runOwnerKey) {
+      return;
+    }
+
+    try {
+      const event = stateUpdateRequestDiagnosticsFromNetwork(diagnostics);
+
+      if (!event) {
+        return;
+      }
+
+      const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
+      const current = persisted ?? stateUpdateReconnectDiagnostics;
+      const next = appendStateUpdateRequestHistory(current, event);
+
+      if (next === current) {
+        return;
+      }
+
+      setStateUpdateReconnectDiagnostics(next);
+      await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(runOwnerKey, next);
+    } catch {
+      return;
+    }
+  }, [definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
 
   const syncPendingStateUpdatesWithTelemetry = useCallback(async ({
     api: stateUpdateApi = api,
@@ -391,6 +443,7 @@ export function useSessionDiagnostics({
     isStateUpdateDiagnosticSyncing,
     persistStateUpdateReconnectDiagnostics,
     recordStateUpdateSyncRun,
+    recordStateUpdateRequestDiagnostics,
     refreshStateUpdateDiagnostics,
     retryFailedStateUpdateDiagnostics,
     runStateUpdateDiagnosticSync,

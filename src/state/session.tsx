@@ -41,6 +41,8 @@ import {
   shouldShowStateUpdateDiagnostics,
   StateUpdateDiagnosticRun,
   StateUpdateReconnectDiagnostics,
+  recordStateUpdateNetworkDiagnostics,
+  setStateUpdateNetworkDiagnosticsRecorder,
   useSessionDiagnostics,
 } from "@/state/use-session-diagnostics";
 import { syncPendingWork } from "@/sync/pending-work-sync";
@@ -125,6 +127,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const api = useMemo(
     () =>
       createOpcoApi({
+        onRequestDiagnostics(diagnostics) {
+          recordStateUpdateNetworkDiagnostics(diagnostics);
+        },
         onSessionInvalid() {
           setToken(null);
           setMe(null);
@@ -219,6 +224,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     persistStateUpdateReconnectDiagnostics,
     recordStateUpdateSyncRun,
     refreshStateUpdateDiagnostics,
+    recordStateUpdateRequestDiagnostics,
     retryFailedStateUpdateDiagnostics,
     runStateUpdateDiagnosticSync,
     stateUpdateDiagnosticRun,
@@ -235,6 +241,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     showStateUpdateDiagnostics,
     token,
   });
+
+  useEffect(() => {
+    return setStateUpdateNetworkDiagnosticsRecorder((diagnostics) => {
+      void recordStateUpdateRequestDiagnostics(diagnostics);
+    });
+  }, [recordStateUpdateRequestDiagnostics]);
 
   const { syncPendingRecords } = usePendingWorkLifecycle({
     api,

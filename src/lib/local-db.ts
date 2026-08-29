@@ -16,6 +16,8 @@ import {
   StateUpdateSyncDiagnosticsTelemetry,
   StateUpdateOutboxDiagnostics,
   StateUpdateOfflineStore,
+  StateUpdateRequestDiagnostics,
+  StateUpdateRequestHistoryEvent,
   StateUpdateScope,
   StateUpdateSnapshotReconcileResult,
   StateUpdateVisibleErrorResolution,
@@ -3829,6 +3831,7 @@ async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: State
     lastStateUpdateActivity: current?.lastStateUpdateActivity ?? null,
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
     lastVisibleErrorEvent: event,
+    requestHistory: current?.requestHistory ?? [],
   });
 }
 
@@ -3847,6 +3850,7 @@ async function resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution:
       clearedAt: new Date().toISOString(),
       resolution,
     },
+    requestHistory: current.requestHistory ?? [],
   });
 }
 
@@ -3901,6 +3905,7 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
       lastStateUpdateActivity: normalizeLastStateUpdateActivityTelemetry(parsed.lastStateUpdateActivity),
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
       lastVisibleErrorEvent: normalizeLastVisibleErrorEventTelemetry(parsed.lastVisibleErrorEvent),
+      requestHistory: normalizeStateUpdateRequestHistory(parsed.requestHistory),
     };
   } catch {
     return null;
@@ -3942,6 +3947,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
     },
     lastStateUpdateSync: previousRun ?? null,
     lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
+    requestHistory: current?.requestHistory ?? [],
   });
 }
 
@@ -4019,7 +4025,7 @@ function normalizeLastVisibleErrorEventTelemetry(
   };
 }
 
-function normalizeStateUpdateRequestDiagnostics(value: unknown) {
+function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequestDiagnostics | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -4043,17 +4049,104 @@ function normalizeStateUpdateRequestDiagnostics(value: unknown) {
 
   return {
     abortControllerTriggered: diagnostics.abortControllerTriggered === true,
+    diagnosticOperation: normalizeDiagnosticOperation(diagnostics.diagnosticOperation),
+    diagnosticRequestId: normalizeDiagnosticToken(diagnostics.diagnosticRequestId) ?? "unknown",
     fetchResolvedAt: typeof diagnostics.fetchResolvedAt === "string" ? diagnostics.fetchResolvedAt : null,
     httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : null,
+    method: typeof diagnostics.method === "string" ? diagnostics.method : "UNKNOWN",
     pathTemplate,
     requestCompletedAt,
     requestDurationMs,
     requestStartedAt,
     responseBodyStartedAt: typeof diagnostics.responseBodyStartedAt === "string" ? diagnostics.responseBodyStartedAt : null,
     responseParsedAt: typeof diagnostics.responseParsedAt === "string" ? diagnostics.responseParsedAt : null,
+    responseRequestId: normalizeDiagnosticToken(diagnostics.responseRequestId),
     responseStarted: diagnostics.responseStarted === true,
+    serverTiming: normalizeServerTiming(diagnostics.serverTiming),
     timeoutMs,
   };
+}
+
+function normalizeStateUpdateRequestHistory(value: unknown): StateUpdateRequestHistoryEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .flatMap((item) => {
+      const diagnostics = normalizeStateUpdateRequestDiagnostics(item);
+
+      if (!diagnostics || !item || typeof item !== "object") {
+        return [];
+      }
+
+      const interpretation = (item as Record<string, unknown>).interpretation;
+
+      return [{
+        ...diagnostics,
+        interpretation: normalizeRequestInterpretation(interpretation),
+      }];
+    })
+    .slice(-20);
+}
+
+function normalizeServerTiming(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const metric = item as Record<string, unknown>;
+      const name = typeof metric.name === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(metric.name)
+        ? metric.name
+        : null;
+
+      if (!name) {
+        return null;
+      }
+
+      return {
+        description: typeof metric.description === "string" ? metric.description : null,
+        durationMs: typeof metric.durationMs === "number" && Number.isFinite(metric.durationMs) && metric.durationMs >= 0
+          ? metric.durationMs
+          : null,
+        name,
+      };
+    })
+    .filter((item): item is NonNullable<StateUpdateRequestHistoryEvent["serverTiming"]>[number] => Boolean(item));
+}
+
+function normalizeDiagnosticOperation(value: unknown): NonNullable<StateUpdateRequestDiagnostics["diagnosticOperation"]> {
+  return value === "SAVE" ||
+    value === "DAY_LOAD" ||
+    value === "REFRESH_AFTER_SYNC" ||
+    value === "SEARCH" ||
+    value === "PERSON_LOAD" ||
+    value === "RECONCILE" ||
+    value === "HEALTH" ||
+    value === "OTHER"
+    ? value
+    : "OTHER";
+}
+
+function normalizeDiagnosticToken(value: unknown) {
+  return typeof value === "string" && /^[A-Za-z0-9._:-]{1,96}$/.test(value) ? value : null;
+}
+
+function normalizeRequestInterpretation(value: unknown): StateUpdateRequestHistoryEvent["interpretation"] {
+  return value === "client_timeout_before_response" ||
+    value === "http_error" ||
+    value === "network_failure" ||
+    value === "server_slow" ||
+    value === "success" ||
+    value === "unknown"
+    ? value
+    : "unknown";
 }
 
 function normalizeDiagnosticCount(value: unknown) {

@@ -551,6 +551,8 @@ export class OpcoApiError extends Error {
 
 export type OpcoNetworkDiagnostics = {
   abortControllerTriggered: boolean;
+  diagnosticOperation?: OpcoDiagnosticRequestOperation;
+  diagnosticRequestId?: string;
   fetchResolvedAt: string | null;
   httpStatus: number | null;
   method: string;
@@ -560,8 +562,30 @@ export type OpcoNetworkDiagnostics = {
   requestStartedAt: string;
   responseBodyStartedAt: string | null;
   responseParsedAt: string | null;
+  responseRequestId?: string | null;
   responseStarted: boolean;
+  serverTiming?: OpcoServerTimingMetric[];
   timeoutMs: number;
+};
+
+export type OpcoDiagnosticRequestOperation =
+  | "SAVE"
+  | "DAY_LOAD"
+  | "REFRESH_AFTER_SYNC"
+  | "SEARCH"
+  | "PERSON_LOAD"
+  | "RECONCILE"
+  | "HEALTH"
+  | "OTHER";
+
+export type OpcoServerTimingMetric = {
+  description: string | null;
+  durationMs: number | null;
+  name: string;
+};
+
+type OpcoRequestInit = RequestInit & {
+  diagnosticOperation?: OpcoDiagnosticRequestOperation;
 };
 
 export class OpcoNetworkError extends Error {
@@ -592,6 +616,7 @@ type PlatformOS = "web" | "ios" | "android" | "macos" | "windows" | string;
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 const NATIVE_CLIENT_PLATFORM_HEADER = "native";
+const OPCO_REQUEST_ID_HEADER = "X-Opco-Request-Id";
 const TOKEN_EXPIRED_CODE = "TOKEN_EXPIRED";
 const TOKEN_INVALID_CODE = "TOKEN_INVALID";
 const INVALID_REFRESH_CODES = new Set([
@@ -629,36 +654,46 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   let refreshPromise: Promise<RefreshResponse> | null = null;
 
-  async function request<T>(path: string, init: RequestInit = {}) {
+  async function request<T>(path: string, init: OpcoRequestInit = {}) {
     let response: Response;
     let abortControllerTriggered = false;
     let fetchResolvedAt: Date | null = null;
     let responseStarted = false;
     let responseBodyStartedAt: Date | null = null;
     let responseParsedAt: Date | null = null;
+    let responseRequestId: string | null = null;
+    let serverTiming: OpcoServerTimingMetric[] = [];
     const requestStartedAt = new Date();
     const requestStartedMs = Date.now();
+    const diagnosticRequestId = getDiagnosticRequestId(init);
+    const diagnosticOperation = init.diagnosticOperation ?? "OTHER";
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       abortControllerTriggered = true;
       controller.abort();
     }, timeoutMs);
+    const { diagnosticOperation: _diagnosticOperation, ...fetchInit } = init;
 
     try {
       response = await fetcher(`${apiUrl}${path}`, {
-        ...init,
+        ...fetchInit,
         signal: controller.signal,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          ...init.headers,
+          ...fetchInit.headers,
+          [OPCO_REQUEST_ID_HEADER]: diagnosticRequestId,
         },
       });
       responseStarted = true;
       fetchResolvedAt = new Date();
+      responseRequestId = sanitizeDiagnosticRequestId(response.headers.get(OPCO_REQUEST_ID_HEADER));
+      serverTiming = parseServerTimingHeader(response.headers.get("Server-Timing"));
     } catch (error) {
       const diagnostics = requestDiagnostics({
         abortControllerTriggered,
+        diagnosticOperation,
+        diagnosticRequestId,
         fetchResolvedAt,
         httpStatus: null,
         init,
@@ -667,7 +702,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         requestStartedMs,
         responseBodyStartedAt,
         responseParsedAt,
+        responseRequestId,
         responseStarted,
+        serverTiming,
         timeoutMs,
       });
       options.onRequestDiagnostics?.(diagnostics);
@@ -686,6 +723,8 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     responseParsedAt = new Date();
     options.onRequestDiagnostics?.(requestDiagnostics({
       abortControllerTriggered,
+      diagnosticOperation,
+      diagnosticRequestId,
       fetchResolvedAt,
       httpStatus: response.status,
       init,
@@ -694,14 +733,16 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       requestStartedMs,
       responseBodyStartedAt,
       responseParsedAt,
+      responseRequestId,
       responseStarted,
+      serverTiming,
       timeoutMs,
     }));
 
     return parseApiEnvelope<T>(body, response.status);
   }
 
-  async function authenticatedRequest<T>(path: string, token: string, init: RequestInit = {}) {
+  async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}) {
     try {
       return await request<T>(path, withAuthHeaders(init, token));
     } catch (error) {
@@ -772,7 +813,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     };
   }
 
-  function withAuthHeaders(init: RequestInit, token: string): RequestInit {
+  function withAuthHeaders(init: OpcoRequestInit, token: string): OpcoRequestInit {
     return {
       ...init,
       headers: {
@@ -923,6 +964,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       contractId: string,
       appViewId: string,
       query: string | AttendanceWorkflowQuery,
+      diagnosticOperation?: OpcoDiagnosticRequestOperation,
     ) {
       const normalizedQuery = typeof query === "string" ? { date: query } : query;
       const searchParams = new URLSearchParams({ date: normalizedQuery.date });
@@ -940,6 +982,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           appViewId,
         )}/workflow/attendance?${searchParams.toString()}`,
         token,
+        {
+          diagnosticOperation: diagnosticOperation ?? attendanceDiagnosticOperation(normalizedQuery),
+        },
       ).then(normalizeAttendanceResponse);
     },
     getStateUpdateWorkflow(
@@ -969,6 +1014,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           appViewId,
         )}/workflow/state-update${serializedQuery ? `?${serializedQuery}` : ""}`,
         token,
+        {
+          diagnosticOperation: query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
+        },
       ).then(normalizeStateUpdateResponse);
     },
     saveAttendanceWorkflow(
@@ -982,6 +1030,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
         {
           body: JSON.stringify(input),
+          diagnosticOperation: "SAVE",
           method: "POST",
         },
       ).then(normalizeAttendanceBatchResponse);
@@ -997,9 +1046,20 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
         {
           body: JSON.stringify(serializeStateUpdateRequest(input)),
+          diagnosticOperation: "SAVE",
           method: "POST",
         },
       ).then(normalizeStateUpdateBatchResponse);
+    },
+    getHealth() {
+      return request<unknown>("/api/v1/health", {
+        diagnosticOperation: "HEALTH",
+      });
+    },
+    getReady() {
+      return request<unknown>("/api/v1/ready", {
+        diagnosticOperation: "HEALTH",
+      });
     },
   };
 }
@@ -1151,6 +1211,8 @@ function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
 
 function requestDiagnostics({
   abortControllerTriggered,
+  diagnosticOperation,
+  diagnosticRequestId,
   fetchResolvedAt,
   httpStatus,
   init,
@@ -1159,23 +1221,31 @@ function requestDiagnostics({
   requestStartedMs,
   responseBodyStartedAt,
   responseParsedAt,
+  responseRequestId,
   responseStarted,
+  serverTiming,
   timeoutMs,
 }: {
   abortControllerTriggered: boolean;
+  diagnosticOperation: OpcoDiagnosticRequestOperation;
+  diagnosticRequestId: string;
   fetchResolvedAt: Date | null;
   httpStatus: number | null;
-  init: RequestInit;
+  init: OpcoRequestInit;
   path: string;
   requestStartedAt: Date;
   requestStartedMs: number;
   responseBodyStartedAt: Date | null;
   responseParsedAt: Date | null;
+  responseRequestId: string | null;
   responseStarted: boolean;
+  serverTiming: OpcoServerTimingMetric[];
   timeoutMs: number;
 }): OpcoNetworkDiagnostics {
   return {
     abortControllerTriggered,
+    diagnosticOperation,
+    diagnosticRequestId,
     fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
     httpStatus,
     method: String(init.method ?? "GET").toUpperCase(),
@@ -1185,9 +1255,107 @@ function requestDiagnostics({
     requestStartedAt: requestStartedAt.toISOString(),
     responseBodyStartedAt: responseBodyStartedAt?.toISOString() ?? null,
     responseParsedAt: responseParsedAt?.toISOString() ?? null,
+    responseRequestId,
     responseStarted,
+    serverTiming,
     timeoutMs,
   };
+}
+
+function getDiagnosticRequestId(init: OpcoRequestInit) {
+  const existing = headersGet(init.headers, OPCO_REQUEST_ID_HEADER);
+
+  return sanitizeDiagnosticRequestId(existing) ?? createDiagnosticRequestId();
+}
+
+function headersGet(headers: HeadersInit | undefined, key: string) {
+  if (!headers) {
+    return null;
+  }
+
+  if (headers instanceof Headers) {
+    return headers.get(key);
+  }
+
+  if (Array.isArray(headers)) {
+    const found = headers.find(([name]) => name.toLowerCase() === key.toLowerCase());
+
+    return found?.[1] ?? null;
+  }
+
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1] ?? null;
+}
+
+function createDiagnosticRequestId() {
+  return `opco_diag_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function sanitizeDiagnosticRequestId(value: string | null | undefined) {
+  if (!value || !/^[A-Za-z0-9._:-]{1,96}$/.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+export function parseServerTimingHeader(value: string | null | undefined): OpcoServerTimingMetric[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [rawName, ...params] = entry.split(";").map((part) => part.trim());
+      const name = /^[A-Za-z0-9_-]{1,40}$/.test(rawName) ? rawName : null;
+
+      if (!name) {
+        return null;
+      }
+
+      let durationMs: number | null = null;
+      let description: string | null = null;
+
+      for (const param of params) {
+        const [paramName, rawValue = ""] = param.split("=");
+
+        if (paramName === "dur") {
+          const parsed = Number(rawValue);
+
+          durationMs = Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+        }
+
+        if (paramName === "desc") {
+          const unquoted = rawValue.replace(/^"|"$/g, "");
+          description = /^[ A-Za-z0-9._:/-]{1,80}$/.test(unquoted) ? unquoted : null;
+        }
+      }
+
+      return { description, durationMs, name };
+    })
+    .filter((metric): metric is OpcoServerTimingMetric => Boolean(metric));
+}
+
+function attendanceDiagnosticOperation(query: AttendanceWorkflowQuery): OpcoDiagnosticRequestOperation {
+  if (query.personRecordId?.trim()) {
+    return "PERSON_LOAD";
+  }
+
+  if (query.search?.trim()) {
+    return "SEARCH";
+  }
+
+  return "DAY_LOAD";
+}
+
+function stateUpdateReadDiagnosticOperation(query: StateUpdateWorkflowQuery): OpcoDiagnosticRequestOperation {
+  if (query.search?.trim()) {
+    return "SEARCH";
+  }
+
+  return "DAY_LOAD";
 }
 
 function templateApiPath(path: string) {

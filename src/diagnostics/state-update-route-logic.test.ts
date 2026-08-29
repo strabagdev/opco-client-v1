@@ -5,6 +5,7 @@ import { OpcoApi, OpcoApiError } from "../lib/opco-api";
 import { StateUpdateOutboxDiagnostics } from "../lib/state-update-offline";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 import {
+  buildStateUpdateDiagnosticHealth,
   createStateUpdateDiagnosticApi,
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
@@ -94,6 +95,58 @@ describe("state update diagnostics route readiness", () => {
       autoSync: false,
       readOutbox: true,
     });
+  });
+
+  it("summarizes operational health without exposing raw identifiers", () => {
+    const health = buildStateUpdateDiagnosticHealth({
+      diagnostics: {
+        consistency: "OK",
+        localRecords: [],
+        operations: [],
+        summary: {
+          ...emptyStateUpdateDiagnosticsSummary(),
+          pendingCreate: 1,
+        },
+      },
+      reconnect: {
+        currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+        lastReconnect: {
+          detected: true,
+          detectedAt: "2026-08-29T10:00:00.000Z",
+          previousConnectivityStatus: "offline",
+          resultingConnectivityStatus: "online",
+        },
+        lastStateUpdateActivity: null,
+        lastStateUpdateSync: null,
+        lastVisibleErrorEvent: null,
+        requestHistory: [{
+          abortControllerTriggered: true,
+          diagnosticOperation: "SAVE",
+          diagnosticRequestId: "opco_diag_123",
+          fetchResolvedAt: null,
+          httpStatus: null,
+          interpretation: "client_timeout_before_response",
+          method: "POST",
+          pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+          requestCompletedAt: "2026-08-29T10:00:12.000Z",
+          requestDurationMs: 12000,
+          requestStartedAt: "2026-08-29T10:00:00.000Z",
+          responseBodyStartedAt: null,
+          responseParsedAt: null,
+          responseRequestId: null,
+          responseStarted: false,
+          serverTiming: [],
+          timeoutMs: 12000,
+        }],
+      },
+    });
+
+    expect(health.pendingState).toBe("pending_create:1");
+    expect(health.cards).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Trabajo local", tone: "warn", value: "1" }),
+      expect.objectContaining({ label: "Timeout reciente", tone: "warn", value: "si" }),
+    ]));
+    expect(JSON.stringify(health)).not.toContain("contract_");
   });
 });
 

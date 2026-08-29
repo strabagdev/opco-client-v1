@@ -183,7 +183,26 @@ export type StateUpdateRequestDiagnostics = Pick<
   | "responseParsedAt"
   | "responseStarted"
   | "timeoutMs"
->;
+> & Partial<Pick<
+  OpcoNetworkDiagnostics,
+  | "diagnosticOperation"
+  | "diagnosticRequestId"
+  | "method"
+  | "responseRequestId"
+  | "serverTiming"
+>>;
+
+export type StateUpdateRequestHistoryEvent = StateUpdateRequestDiagnostics & {
+  interpretation: StateUpdateRequestInterpretation;
+};
+
+export type StateUpdateRequestInterpretation =
+  | "client_timeout_before_response"
+  | "http_error"
+  | "network_failure"
+  | "server_slow"
+  | "success"
+  | "unknown";
 
 export type StateUpdateLastSyncTelemetry = {
   completedAt: string | null;
@@ -242,7 +261,10 @@ export type StateUpdateSyncDiagnosticsTelemetry = {
   lastStateUpdateActivity: StateUpdateActivityTelemetry | null;
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
   lastVisibleErrorEvent: StateUpdateVisibleErrorTelemetry | null;
+  requestHistory?: StateUpdateRequestHistoryEvent[];
 };
+
+export const STATE_UPDATE_REQUEST_HISTORY_LIMIT = 20;
 
 export function resolveStateUpdateSyncTelemetryResult({
   operationsFailed,
@@ -300,9 +322,10 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
 
   if (operationsSelected === 0 && (current.lastStateUpdateSync || current.lastStateUpdateActivity)) {
     return {
-      ...current,
-      currentConnectivity,
-    };
+    ...current,
+    currentConnectivity,
+    requestHistory: current.requestHistory ?? [],
+  };
   }
 
   const lastStateUpdateSync = {
@@ -340,6 +363,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
       type: "sync",
     },
     lastStateUpdateSync,
+    requestHistory: current.requestHistory ?? [],
   };
 }
 
@@ -352,17 +376,78 @@ export function stateUpdateRequestDiagnosticsFromNetwork(
 
   return {
     abortControllerTriggered: diagnostics.abortControllerTriggered,
+    diagnosticOperation: diagnostics.diagnosticOperation,
+    diagnosticRequestId: diagnostics.diagnosticRequestId,
     fetchResolvedAt: diagnostics.fetchResolvedAt,
     httpStatus: diagnostics.httpStatus,
+    method: diagnostics.method,
     pathTemplate: diagnostics.pathTemplate,
     requestCompletedAt: diagnostics.requestCompletedAt,
     requestDurationMs: diagnostics.requestDurationMs,
     requestStartedAt: diagnostics.requestStartedAt,
     responseBodyStartedAt: diagnostics.responseBodyStartedAt,
     responseParsedAt: diagnostics.responseParsedAt,
+    responseRequestId: diagnostics.responseRequestId,
     responseStarted: diagnostics.responseStarted,
+    serverTiming: diagnostics.serverTiming,
     timeoutMs: diagnostics.timeoutMs,
   };
+}
+
+export function appendStateUpdateRequestHistory(
+  current: StateUpdateSyncDiagnosticsTelemetry,
+  event: StateUpdateRequestDiagnostics,
+  limit = STATE_UPDATE_REQUEST_HISTORY_LIMIT,
+): StateUpdateSyncDiagnosticsTelemetry {
+  if (!isStateUpdateDiagnosticPath(event.pathTemplate)) {
+    return current;
+  }
+
+  const nextEvent: StateUpdateRequestHistoryEvent = {
+    ...event,
+    diagnosticOperation: event.diagnosticOperation ?? "OTHER",
+    diagnosticRequestId: event.diagnosticRequestId ?? "unknown",
+    interpretation: interpretStateUpdateRequest(event),
+    method: event.method ?? "UNKNOWN",
+    responseRequestId: event.responseRequestId ?? null,
+    serverTiming: event.serverTiming ?? [],
+  };
+
+  return {
+    ...current,
+    requestHistory: [...(current.requestHistory ?? []), nextEvent].slice(-limit),
+  };
+}
+
+export function interpretStateUpdateRequest(event: StateUpdateRequestDiagnostics): StateUpdateRequestInterpretation {
+  if (event.abortControllerTriggered && !event.responseStarted) {
+    return "client_timeout_before_response";
+  }
+
+  if (event.httpStatus && event.httpStatus >= 400) {
+    return "http_error";
+  }
+
+  if (event.httpStatus === null) {
+    return "network_failure";
+  }
+
+  if ((event.serverTiming ?? []).some((metric) => typeof metric.durationMs === "number" && metric.durationMs > event.timeoutMs)) {
+    return "server_slow";
+  }
+
+  if (event.httpStatus >= 200 && event.httpStatus < 400) {
+    return "success";
+  }
+
+  return "unknown";
+}
+
+export function isStateUpdateDiagnosticPath(pathTemplate: string) {
+  return pathTemplate === "/api/v1/health" ||
+    pathTemplate === "/api/v1/ready" ||
+    pathTemplate.endsWith("/workflow/state-update") ||
+    pathTemplate.endsWith("/workflow/attendance");
 }
 
 export type StateUpdateScope = {
