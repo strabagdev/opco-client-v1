@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createReconnectSyncController } from "./reconnect-sync";
 import {
   isRecoverableAuthRefreshError,
   isSessionLifecycleScopeCurrent,
@@ -158,6 +159,32 @@ describe("pending work lifecycle guards", () => {
     expect(sleeps).toEqual([...OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS]);
   });
 
+  it("keeps all readiness retry attempts correlated with the same syncRunId", async () => {
+    const getReady = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await probeOperationalCoreReadiness({
+      api: { getReady },
+      sleep: async () => undefined,
+      syncRunId: "sync_retry_attempts",
+    });
+
+    expect(result).toEqual({ attempts: 2, ready: true });
+    expect(getReady).toHaveBeenCalledTimes(2);
+    expect(getReady).toHaveBeenNthCalledWith(1, {
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_retry_attempts",
+      timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
+    });
+    expect(getReady).toHaveBeenNthCalledWith(2, {
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_retry_attempts",
+      timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
+    });
+  });
+
   it("returns not ready without throwing when /ready never confirms", async () => {
     const sleeps: number[] = [];
     const getReady = vi.fn(async () => {
@@ -175,6 +202,43 @@ describe("pending work lifecycle guards", () => {
     expect(result).toEqual({ attempts: 3, ready: false });
     expect(getReady).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([500, 1_000]);
+  });
+
+  it("allows a new online transition to retry after a previous readiness run failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const runSync = vi.fn()
+        .mockRejectedValueOnce(new Error("ready timeout"))
+        .mockResolvedValueOnce(undefined);
+      const shouldSync = vi.fn(async () => true);
+      const controller = createReconnectSyncController({
+        debounceMs: 100,
+        runSync,
+        shouldSync,
+      });
+
+      controller.handleConnectivityStatus("offline");
+      controller.handleConnectivityStatus("online");
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.resolve();
+
+      expect(runSync).toHaveBeenCalledOnce();
+
+      controller.handleConnectivityStatus("offline");
+      controller.handleConnectivityStatus("online");
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.resolve();
+
+      expect(shouldSync).toHaveBeenCalledTimes(2);
+      expect(runSync).toHaveBeenCalledTimes(2);
+      expect(runSync).toHaveBeenLastCalledWith({
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+        trigger: "reconnect",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

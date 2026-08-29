@@ -93,6 +93,8 @@ export function usePendingWorkLifecycle({
   const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const activePendingWorkRunKeyRef = useRef<string | null>(null);
+  const persistStateUpdateReconnectDiagnosticsRef = useRef(persistStateUpdateReconnectDiagnostics);
+  const setRecordsReconnectRefreshKeyRef = useRef(setRecordsReconnectRefreshKey);
   const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
   const [isAuthSessionRestoring, setIsAuthSessionRestoring] = useState(false);
   const [isOperationalCoreReadinessChecking, setIsOperationalCoreReadinessChecking] = useState(false);
@@ -109,6 +111,14 @@ export function usePendingWorkLifecycle({
       token,
     };
   }, [ownerKey, selectedContractIdState, token]);
+
+  useEffect(() => {
+    persistStateUpdateReconnectDiagnosticsRef.current = persistStateUpdateReconnectDiagnostics;
+  }, [persistStateUpdateReconnectDiagnostics]);
+
+  useEffect(() => {
+    setRecordsReconnectRefreshKeyRef.current = setRecordsReconnectRefreshKey;
+  }, [setRecordsReconnectRefreshKey]);
 
   const markStateUpdateActivity = useCallback(async ({
     result,
@@ -585,7 +595,7 @@ export function usePendingWorkLifecycle({
       onDetected({ previousConnectivityStatus, resultingConnectivityStatus, trigger }) {
         const detectedAt = new Date().toISOString();
 
-        void persistStateUpdateReconnectDiagnostics((current) => ({
+        void persistStateUpdateReconnectDiagnosticsRef.current((current) => ({
           ...current,
           currentConnectivity: {
             status: resultingConnectivityStatus,
@@ -600,7 +610,7 @@ export function usePendingWorkLifecycle({
         }));
       },
       onSynced() {
-        setRecordsReconnectRefreshKey((key) => key + 1);
+        setRecordsReconnectRefreshKeyRef.current((key) => key + 1);
       },
       runSync({ trigger }) {
         return reconnectSessionAndRecordsRef.current(trigger);
@@ -616,7 +626,7 @@ export function usePendingWorkLifecycle({
       controller.dispose();
       reconnectSyncControllerRef.current = null;
     };
-  }, [persistStateUpdateReconnectDiagnostics, setRecordsReconnectRefreshKey]);
+  }, []);
 
   useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {

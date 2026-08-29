@@ -182,6 +182,49 @@ describe("state update diagnostics route readiness", () => {
     });
   });
 
+  it("uses the latest READY_CHECK run instead of an older ready-confirmed activity", () => {
+    const reconnect = reconnectDiagnostics({
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T09:04:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "ready_confirmed",
+        startedAt: "2026-08-29T09:03:58.000Z",
+        syncRunId: "sync_previous_ready",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      requestHistory: [
+        requestHistoryEvent({
+          abortControllerTriggered: false,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_previous_ready",
+          httpStatus: 200,
+          requestCompletedAt: "2026-08-29T09:03:59.000Z",
+          requestStartedAt: "2026-08-29T09:03:58.000Z",
+        }),
+        requestHistoryEvent({
+          abortControllerTriggered: true,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_latest_timeout",
+          httpStatus: null,
+          requestCompletedAt: "2026-08-29T09:05:18.472Z",
+          requestDurationMs: 2500,
+          requestStartedAt: "2026-08-29T09:05:15.972Z",
+          timeoutMs: 2500,
+        }),
+      ],
+    });
+
+    expect(resolveStateUpdateCurrentActivity({ pending: 1, reconnect })).toEqual({
+      result: "ready_failed",
+      syncRunId: "sync_latest_timeout",
+      type: "ready_check",
+    });
+  });
+
   it("summarizes current activity as idle after successful sync with no pending work", () => {
     const health = buildStateUpdateDiagnosticHealth({
       diagnostics: {

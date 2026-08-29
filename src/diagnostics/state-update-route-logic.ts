@@ -216,12 +216,30 @@ export function resolveStateUpdateCurrentActivity({
 }) {
   const activity = reconnect.lastStateUpdateActivity;
   const lastSync = reconnect.lastStateUpdateSync;
+  const latestReadyCheck = getLatestRequestHistoryEvent(reconnect.requestHistory ?? [], "READY_CHECK");
+  const activityTimestampMs = parseTelemetryTimestampMs(activity?.completedAt ?? activity?.startedAt ?? null);
+  const latestReadyCheckTimestampMs = parseTelemetryTimestampMs(
+    latestReadyCheck?.requestCompletedAt ?? latestReadyCheck?.requestStartedAt ?? null,
+  );
 
   if (pending === 0 && isSuccessfulSyncResult(lastSync?.result)) {
     return {
       result: "none",
       syncRunId: null,
       type: "idle",
+    };
+  }
+
+  if (
+    latestReadyCheck &&
+    latestReadyCheck.diagnosticSyncRunId &&
+    latestReadyCheck.diagnosticSyncRunId !== activity?.syncRunId &&
+    (activityTimestampMs === null || latestReadyCheckTimestampMs === null || latestReadyCheckTimestampMs >= activityTimestampMs)
+  ) {
+    return {
+      result: isSuccessfulRequest(latestReadyCheck) ? "ready_confirmed" : "ready_failed",
+      syncRunId: latestReadyCheck.diagnosticSyncRunId,
+      type: "ready_check",
     };
   }
 
@@ -277,6 +295,44 @@ export function hasRecentStateUpdateTimeout({
 
     return Number.isFinite(completedAtMs) && nowMs - completedAtMs >= 0 && nowMs - completedAtMs <= windowMs;
   });
+}
+
+function getLatestRequestHistoryEvent(
+  requestHistory: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>,
+  operation: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number]["diagnosticOperation"],
+) {
+  return requestHistory.reduce<NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number] | null>((latest, request) => {
+    if (request.diagnosticOperation !== operation) {
+      return latest;
+    }
+
+    if (!latest) {
+      return request;
+    }
+
+    const latestTimestampMs = parseTelemetryTimestampMs(latest.requestCompletedAt ?? latest.requestStartedAt);
+    const requestTimestampMs = parseTelemetryTimestampMs(request.requestCompletedAt ?? request.requestStartedAt);
+
+    return requestTimestampMs !== null && (latestTimestampMs === null || requestTimestampMs >= latestTimestampMs)
+      ? request
+      : latest;
+  }, null);
+}
+
+function isSuccessfulRequest(
+  request: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number],
+) {
+  return request.httpStatus === 200 && request.abortControllerTriggered !== true;
+}
+
+function parseTelemetryTimestampMs(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const timestampMs = Date.parse(value);
+
+  return Number.isFinite(timestampMs) ? timestampMs : null;
 }
 
 function isSuccessfulSyncResult(result: string | null | undefined) {
