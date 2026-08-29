@@ -16,15 +16,16 @@ import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state
 import * as tokenStorage from "../lib/token-storage";
 import {
   isSessionLifecycleScopeCurrent,
+  getSessionLifecycleScopeMismatchReason,
   isRecoverableAuthRefreshError,
   getOperationalCoreReadyRecoveryDelayMs,
+  planPostReadinessPendingWork,
   probeOperationalCoreReadiness,
   SessionLifecycleScope,
   shouldScheduleOperationalCoreReadyRecovery,
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
   shouldGatePendingSyncWithOperationalCoreReady,
-  shouldRefreshAccessTokenForSync,
 } from "./pending-work-lifecycle-logic";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -141,11 +142,11 @@ export function usePendingWorkLifecycle({
     trigger,
     type,
   }: {
-    result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
+    result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "failed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
     startedAt: string;
     syncRunId: string;
     trigger: StateUpdateSyncTrigger | "auth_refresh" | "ready_check" | "reconnect";
-    type: "auth_refresh" | "ready_check" | "reconnect";
+    type: "auth_refresh" | "ready_check" | "reconnect" | "sync";
   }) => {
     const completedAt = new Date().toISOString();
 
@@ -186,22 +187,31 @@ export function usePendingWorkLifecycle({
         ? current.lastReconnectPreflight
         : null;
       const base = previous ?? {
+        authDecision: null,
+        authRefreshCompletedAt: null,
+        authRefreshStartedAt: null,
         completedAt: null,
+        countPendingOperationsCount: null,
         countPendingOperationsDurationMs: null,
         debounceCompletedAt: null,
         debounceDurationMs: null,
         debounceStartedAt: null,
+        listPendingStateUpdateOperationsCount: null,
         listPendingStateUpdateOperationsDurationMs: null,
         readinessAttempts: null,
         readinessCompletedAt: null,
+        readinessConfirmedAt: null,
         readinessDurationMs: null,
         readinessStartedAt: null,
         reconnectDetectedAt: null,
         runSyncStartedAt: null,
+        scopeCheckAfterReadiness: null,
         shouldSyncCompletedAt: null,
         shouldSyncDurationMs: null,
         shouldSyncResult: null,
         shouldSyncStartedAt: null,
+        syncPendingWorkCompletedAt: null,
+        syncPendingWorkStartedAt: null,
         syncRunId,
         trigger: "other",
       };
@@ -354,6 +364,10 @@ export function usePendingWorkLifecycle({
         });
 
         if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+          updateReconnectPreflight(syncRunId, (current) => ({
+            ...current,
+            scopeCheckAfterReadiness: getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current),
+          }));
           await markStateUpdateActivity({
             result: "cancelled_scope_changed",
             startedAt,
@@ -415,11 +429,38 @@ export function usePendingWorkLifecycle({
           trigger: "ready_check",
           type: "ready_check",
         });
+        const postReadinessPlan = planPostReadinessPendingWork({
+          currentScope: latestSessionScopeRef.current,
+          runScope,
+          token: syncToken,
+        });
+        updateReconnectPreflight(syncRunId, (current) => ({
+          ...current,
+          authDecision: postReadinessPlan.authDecision,
+          readinessConfirmedAt: readinessCompletedAt,
+          scopeCheckAfterReadiness: postReadinessPlan.scopeCheckAfterReadiness,
+        }));
 
-        if (shouldRefreshAccessTokenForSync(syncToken)) {
+        if (postReadinessPlan.nextAction === "cancelled_scope_changed") {
+          await markStateUpdateActivity({
+            result: "cancelled_scope_changed",
+            startedAt,
+            syncRunId,
+            trigger: "ready_check",
+            type: "ready_check",
+          });
+          return "cancelled";
+        }
+
+        if (postReadinessPlan.authDecision === "refresh_required") {
+          const authRefreshStartedAt = new Date().toISOString();
+          updateReconnectPreflight(syncRunId, (current) => ({
+            ...current,
+            authRefreshStartedAt,
+          }));
           await markStateUpdateActivity({
             result: "auth_pending",
-            startedAt,
+            startedAt: authRefreshStartedAt,
             syncRunId,
             trigger: "auth_refresh",
             type: "auth_refresh",
@@ -438,7 +479,15 @@ export function usePendingWorkLifecycle({
               token: syncToken,
             };
             setToken(syncToken);
+            updateReconnectPreflight(syncRunId, (current) => ({
+              ...current,
+              authRefreshCompletedAt: new Date().toISOString(),
+            }));
           } catch (error) {
+            updateReconnectPreflight(syncRunId, (current) => ({
+              ...current,
+              authRefreshCompletedAt: new Date().toISOString(),
+            }));
             const result = error instanceof OpcoNetworkError && error.diagnostics?.abortControllerTriggered
               ? "auth_timeout"
               : "auth_pending";
@@ -467,7 +516,13 @@ export function usePendingWorkLifecycle({
           }
         }
 
-        if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+        const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current);
+        updateReconnectPreflight(syncRunId, (current) => ({
+          ...current,
+          scopeCheckAfterReadiness,
+        }));
+
+        if (scopeCheckAfterReadiness !== "current") {
           await markStateUpdateActivity({
             result: "cancelled_scope_changed",
             startedAt,
@@ -487,6 +542,10 @@ export function usePendingWorkLifecycle({
         });
       }
 
+      updateReconnectPreflight(syncRunId, (current) => ({
+        ...current,
+        syncPendingWorkStartedAt: new Date().toISOString(),
+      }));
       setIsPendingWorkSyncing(true);
       try {
         await syncPendingWork({
@@ -498,8 +557,25 @@ export function usePendingWorkLifecycle({
           token: syncToken,
           trigger,
         });
+        updateReconnectPreflight(syncRunId, (current) => ({
+          ...current,
+          syncPendingWorkCompletedAt: new Date().toISOString(),
+        }));
         clearReadinessRecoveryTimer({ resetAttempts: true });
         return "completed";
+      } catch (error) {
+        updateReconnectPreflight(syncRunId, (current) => ({
+          ...current,
+          syncPendingWorkCompletedAt: new Date().toISOString(),
+        }));
+        await markStateUpdateActivity({
+          result: "failed",
+          startedAt: new Date().toISOString(),
+          syncRunId,
+          trigger,
+          type: "sync",
+        });
+        throw error;
       } finally {
         setIsPendingWorkSyncing(false);
       }
@@ -717,9 +793,11 @@ export function usePendingWorkLifecycle({
     if (preflight) {
       updateReconnectPreflight(preflight.syncRunId, (current) => ({
         ...current,
+        countPendingOperationsCount: recordsResult.count,
         countPendingOperationsDurationMs: recordsResult.durationMs,
         debounceCompletedAt: current.debounceCompletedAt ?? startedAt.toISOString(),
         debounceDurationMs: current.debounceStartedAt ? Date.parse(startedAt.toISOString()) - Date.parse(current.debounceStartedAt) : null,
+        listPendingStateUpdateOperationsCount: stateUpdateResult.operations.length,
         listPendingStateUpdateOperationsDurationMs: stateUpdateResult.durationMs,
         shouldSyncCompletedAt: completedAt,
         shouldSyncDurationMs: Date.now() - startedMs,
@@ -845,22 +923,31 @@ export function usePendingWorkLifecycle({
             resultingConnectivityStatus,
           },
           lastReconnectPreflight: {
+            authDecision: null,
+            authRefreshCompletedAt: null,
+            authRefreshStartedAt: null,
             completedAt: null,
+            countPendingOperationsCount: null,
             countPendingOperationsDurationMs: null,
             debounceCompletedAt: null,
             debounceDurationMs: null,
             debounceStartedAt: detectedAt,
+            listPendingStateUpdateOperationsCount: null,
             listPendingStateUpdateOperationsDurationMs: null,
             readinessAttempts: null,
             readinessCompletedAt: null,
+            readinessConfirmedAt: null,
             readinessDurationMs: null,
             readinessStartedAt: null,
             reconnectDetectedAt: detectedAt,
             runSyncStartedAt: null,
+            scopeCheckAfterReadiness: null,
             shouldSyncCompletedAt: null,
             shouldSyncDurationMs: null,
             shouldSyncResult: null,
             shouldSyncStartedAt: null,
+            syncPendingWorkCompletedAt: null,
+            syncPendingWorkStartedAt: null,
             syncRunId,
             trigger,
           },

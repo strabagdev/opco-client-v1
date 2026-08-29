@@ -180,22 +180,31 @@ export type StateUpdateLastReconnectTelemetry = {
 };
 
 export type StateUpdateReconnectPreflightTelemetry = {
+  authDecision: "refresh_required" | "token_valid" | null;
+  authRefreshCompletedAt: string | null;
+  authRefreshStartedAt: string | null;
   completedAt: string | null;
+  countPendingOperationsCount: number | null;
   countPendingOperationsDurationMs: number | null;
   debounceCompletedAt: string | null;
   debounceDurationMs: number | null;
   debounceStartedAt: string | null;
+  listPendingStateUpdateOperationsCount: number | null;
   listPendingStateUpdateOperationsDurationMs: number | null;
   readinessAttempts: number | null;
   readinessCompletedAt: string | null;
+  readinessConfirmedAt: string | null;
   readinessDurationMs: number | null;
   readinessStartedAt: string | null;
   reconnectDetectedAt: string | null;
   runSyncStartedAt: string | null;
+  scopeCheckAfterReadiness: "contract_changed" | "current" | "owner_changed" | "token_changed" | null;
   shouldSyncCompletedAt: string | null;
   shouldSyncDurationMs: number | null;
   shouldSyncResult: boolean | null;
   shouldSyncStartedAt: string | null;
+  syncPendingWorkCompletedAt: string | null;
+  syncPendingWorkStartedAt: string | null;
   syncRunId: string | null;
   trigger: StateUpdateSyncTrigger;
 };

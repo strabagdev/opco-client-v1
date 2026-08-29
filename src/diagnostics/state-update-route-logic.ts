@@ -135,6 +135,12 @@ export type StateUpdateDiagnosticHealth = {
   pendingState: string;
 };
 
+export type StateUpdateRunSummary = {
+  phase: "activity" | "request" | "sync" | "none";
+  syncRunId: string | null;
+  terminalResult: string;
+};
+
 export const STATE_UPDATE_RECENT_TIMEOUT_WINDOW_MS = 5 * 60 * 1000;
 
 export function buildStateUpdateDiagnosticHealth({
@@ -297,6 +303,83 @@ export function hasRecentStateUpdateTimeout({
   });
 }
 
+export function resolveLatestStateUpdateRunSummary(
+  reconnect: StateUpdateSyncDiagnosticsTelemetry,
+): StateUpdateRunSummary {
+  const candidates: {
+    phase: StateUpdateRunSummary["phase"];
+    syncRunId: string | null;
+    terminalResult: string;
+    timestampMs: number | null;
+  }[] = [];
+
+  const lastRequest = (reconnect.requestHistory ?? []).reduce<NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number] | null>((latest, request) => {
+    if (!latest) {
+      return request;
+    }
+
+    const latestTimestampMs = parseTelemetryTimestampMs(latest.requestCompletedAt ?? latest.requestStartedAt);
+    const requestTimestampMs = parseTelemetryTimestampMs(request.requestCompletedAt ?? request.requestStartedAt);
+
+    return requestTimestampMs !== null && (latestTimestampMs === null || requestTimestampMs >= latestTimestampMs)
+      ? request
+      : latest;
+  }, null);
+
+  if (lastRequest) {
+    candidates.push({
+      phase: "request",
+      syncRunId: lastRequest.diagnosticSyncRunId ?? null,
+      terminalResult: requestTerminalResult(lastRequest),
+      timestampMs: parseTelemetryTimestampMs(lastRequest.requestCompletedAt ?? lastRequest.requestStartedAt),
+    });
+  }
+
+  if (reconnect.lastStateUpdateActivity) {
+    candidates.push({
+      phase: "activity",
+      syncRunId: reconnect.lastStateUpdateActivity.syncRunId,
+      terminalResult: reconnect.lastStateUpdateActivity.result,
+      timestampMs: parseTelemetryTimestampMs(
+        reconnect.lastStateUpdateActivity.completedAt ?? reconnect.lastStateUpdateActivity.startedAt,
+      ),
+    });
+  }
+
+  if (reconnect.lastStateUpdateSync) {
+    candidates.push({
+      phase: "sync",
+      syncRunId: reconnect.lastStateUpdateSync.syncRunId,
+      terminalResult: reconnect.lastStateUpdateSync.result,
+      timestampMs: parseTelemetryTimestampMs(
+        reconnect.lastStateUpdateSync.completedAt ?? reconnect.lastStateUpdateSync.startedAt,
+      ),
+    });
+  }
+
+  const latest = candidates.reduce<typeof candidates[number] | null>((current, candidate) => {
+    if (!current) {
+      return candidate;
+    }
+
+    return candidate.timestampMs !== null && (current.timestampMs === null || candidate.timestampMs >= current.timestampMs)
+      ? candidate
+      : current;
+  }, null);
+
+  return latest
+    ? {
+        phase: latest.phase,
+        syncRunId: latest.syncRunId,
+        terminalResult: latest.terminalResult,
+      }
+    : {
+        phase: "none",
+        syncRunId: null,
+        terminalResult: "none",
+      };
+}
+
 function getLatestRequestHistoryEvent(
   requestHistory: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>,
   operation: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number]["diagnosticOperation"],
@@ -323,6 +406,20 @@ function isSuccessfulRequest(
   request: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number],
 ) {
   return request.httpStatus === 200 && request.abortControllerTriggered !== true;
+}
+
+function requestTerminalResult(
+  request: NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number],
+) {
+  if (isSuccessfulRequest(request)) {
+    return "success";
+  }
+
+  if (request.abortControllerTriggered) {
+    return "timeout";
+  }
+
+  return request.errorCode ?? "request_failed";
 }
 
 function parseTelemetryTimestampMs(value: string | null | undefined) {

@@ -12,6 +12,7 @@ import {
   getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
   hasRecentStateUpdateTimeout,
+  resolveLatestStateUpdateRunSummary,
   resolveStateUpdateCurrentActivity,
   summarizeAttendanceGetResponse,
 } from "./state-update-route-logic";
@@ -303,6 +304,47 @@ describe("state update diagnostics route readiness", () => {
         })],
       }),
     })).toBe(true);
+  });
+
+  it("summarizes the latest run from request history instead of an older activity syncRunId", () => {
+    const reconnect = reconnectDiagnostics({
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T09:04:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "ready_confirmed",
+        startedAt: "2026-08-29T09:03:58.000Z",
+        syncRunId: "sync_previous_ready",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      requestHistory: [
+        requestHistoryEvent({
+          abortControllerTriggered: false,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_previous_ready",
+          httpStatus: 200,
+          requestCompletedAt: "2026-08-29T09:03:59.000Z",
+          requestStartedAt: "2026-08-29T09:03:58.000Z",
+        }),
+        requestHistoryEvent({
+          abortControllerTriggered: false,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_latest_ready",
+          httpStatus: 200,
+          requestCompletedAt: "2026-08-29T09:06:15.000Z",
+          requestStartedAt: "2026-08-29T09:06:14.500Z",
+        }),
+      ],
+    });
+
+    expect(resolveLatestStateUpdateRunSummary(reconnect)).toEqual({
+      phase: "request",
+      syncRunId: "sync_latest_ready",
+      terminalResult: "success",
+    });
   });
 });
 

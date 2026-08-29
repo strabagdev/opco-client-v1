@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createReconnectSyncController } from "./reconnect-sync";
 import {
   getOperationalCoreReadyRecoveryDelayMs,
+  getSessionLifecycleScopeMismatchReason,
   isRecoverableAuthRefreshError,
   isSessionLifecycleScopeCurrent,
   OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS,
   OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS,
   OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
   OPERATIONAL_CORE_READY_RECOVERY_BACKOFF_MS,
+  planPostReadinessPendingWork,
   probeOperationalCoreReadiness,
   shouldScheduleOperationalCoreReadyRecovery,
   shouldRefreshAccessTokenForSync,
@@ -60,6 +62,76 @@ describe("pending work lifecycle guards", () => {
     expect(isSessionLifecycleScopeCurrent(runScope, { ...runScope, token: null })).toBe(false);
     expect(isSessionLifecycleScopeCurrent(runScope, { ...runScope, selectedContractId: "contract_2" })).toBe(false);
     expect(isSessionLifecycleScopeCurrent(runScope, { ...runScope, ownerKey: "org_1:user_2" })).toBe(false);
+  });
+
+  it("classifies the post-readiness scope check without exposing raw scope values", () => {
+    const runScope = {
+      ownerKey: "org_1:user_1",
+      selectedContractId: "contract_1",
+      token: "token_1",
+    };
+
+    expect(getSessionLifecycleScopeMismatchReason(runScope, runScope)).toBe("current");
+    expect(getSessionLifecycleScopeMismatchReason(runScope, { ...runScope, ownerKey: "org_1:user_2" })).toBe("owner_changed");
+    expect(getSessionLifecycleScopeMismatchReason(runScope, { ...runScope, selectedContractId: "contract_2" })).toBe("contract_changed");
+    expect(getSessionLifecycleScopeMismatchReason(runScope, { ...runScope, token: "token_2" })).toBe("token_changed");
+    expect(getSessionLifecycleScopeMismatchReason(runScope, { ...runScope, token: null })).toBe("token_changed");
+  });
+
+  it("plans direct sync after ready 200 when the token is valid and scope is current", () => {
+    const runScope = {
+      ownerKey: "org_1:user_1",
+      selectedContractId: "contract_1",
+      token: jwtExpiringAt("2026-08-29T11:00:00.000Z"),
+    };
+
+    expect(planPostReadinessPendingWork({
+      currentScope: runScope,
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      runScope,
+      token: runScope.token,
+    })).toEqual({
+      authDecision: "token_valid",
+      nextAction: "sync_pending_work",
+      scopeCheckAfterReadiness: "current",
+    });
+  });
+
+  it("plans auth refresh after ready 200 when the token is near expiration", () => {
+    const runScope = {
+      ownerKey: "org_1:user_1",
+      selectedContractId: "contract_1",
+      token: jwtExpiringAt("2026-08-29T10:04:59.000Z"),
+    };
+
+    expect(planPostReadinessPendingWork({
+      currentScope: runScope,
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      runScope,
+      token: runScope.token,
+    })).toEqual({
+      authDecision: "refresh_required",
+      nextAction: "auth_refresh",
+      scopeCheckAfterReadiness: "current",
+    });
+  });
+
+  it("plans cancellation after ready 200 when the lifecycle scope changed", () => {
+    const runScope = {
+      ownerKey: "org_1:user_1",
+      selectedContractId: "contract_1",
+      token: "token_1",
+    };
+
+    expect(planPostReadinessPendingWork({
+      currentScope: { ...runScope, selectedContractId: "contract_2" },
+      runScope,
+      token: runScope.token,
+    })).toEqual({
+      authDecision: null,
+      nextAction: "cancelled_scope_changed",
+      scopeCheckAfterReadiness: "contract_changed",
+    });
   });
 
   it("runs an online pending sync catch-up once session scope is ready", () => {

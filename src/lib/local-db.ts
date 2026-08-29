@@ -4053,22 +4053,36 @@ function normalizeStateUpdateReconnectPreflightTelemetry(
   const trigger = normalizeStateUpdateSyncTrigger(telemetry.trigger);
 
   return {
+    authDecision: telemetry.authDecision === "refresh_required" || telemetry.authDecision === "token_valid" ? telemetry.authDecision : null,
+    authRefreshCompletedAt: normalizeDiagnosticTimestamp(telemetry.authRefreshCompletedAt),
+    authRefreshStartedAt: normalizeDiagnosticTimestamp(telemetry.authRefreshStartedAt),
     completedAt: normalizeDiagnosticTimestamp(telemetry.completedAt),
+    countPendingOperationsCount: normalizeNullableDiagnosticCount(telemetry.countPendingOperationsCount),
     countPendingOperationsDurationMs: normalizeNullableDiagnosticDuration(telemetry.countPendingOperationsDurationMs),
     debounceCompletedAt: normalizeDiagnosticTimestamp(telemetry.debounceCompletedAt),
     debounceDurationMs: normalizeNullableDiagnosticDuration(telemetry.debounceDurationMs),
     debounceStartedAt: normalizeDiagnosticTimestamp(telemetry.debounceStartedAt),
+    listPendingStateUpdateOperationsCount: normalizeNullableDiagnosticCount(telemetry.listPendingStateUpdateOperationsCount),
     listPendingStateUpdateOperationsDurationMs: normalizeNullableDiagnosticDuration(telemetry.listPendingStateUpdateOperationsDurationMs),
     readinessAttempts: normalizeNullableDiagnosticCount(telemetry.readinessAttempts),
     readinessCompletedAt: normalizeDiagnosticTimestamp(telemetry.readinessCompletedAt),
+    readinessConfirmedAt: normalizeDiagnosticTimestamp(telemetry.readinessConfirmedAt),
     readinessDurationMs: normalizeNullableDiagnosticDuration(telemetry.readinessDurationMs),
     readinessStartedAt: normalizeDiagnosticTimestamp(telemetry.readinessStartedAt),
     reconnectDetectedAt: normalizeDiagnosticTimestamp(telemetry.reconnectDetectedAt),
     runSyncStartedAt: normalizeDiagnosticTimestamp(telemetry.runSyncStartedAt),
+    scopeCheckAfterReadiness: telemetry.scopeCheckAfterReadiness === "contract_changed" ||
+      telemetry.scopeCheckAfterReadiness === "current" ||
+      telemetry.scopeCheckAfterReadiness === "owner_changed" ||
+      telemetry.scopeCheckAfterReadiness === "token_changed"
+      ? telemetry.scopeCheckAfterReadiness
+      : null,
     shouldSyncCompletedAt: normalizeDiagnosticTimestamp(telemetry.shouldSyncCompletedAt),
     shouldSyncDurationMs: normalizeNullableDiagnosticDuration(telemetry.shouldSyncDurationMs),
     shouldSyncResult: typeof telemetry.shouldSyncResult === "boolean" ? telemetry.shouldSyncResult : null,
     shouldSyncStartedAt: normalizeDiagnosticTimestamp(telemetry.shouldSyncStartedAt),
+    syncPendingWorkCompletedAt: normalizeDiagnosticTimestamp(telemetry.syncPendingWorkCompletedAt),
+    syncPendingWorkStartedAt: normalizeDiagnosticTimestamp(telemetry.syncPendingWorkStartedAt),
     syncRunId: normalizeDiagnosticToken(telemetry.syncRunId),
     trigger,
   };

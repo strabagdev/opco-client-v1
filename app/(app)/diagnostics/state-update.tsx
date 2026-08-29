@@ -10,6 +10,7 @@ import {
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
   getStateUpdateDiagnosticsRouteState,
+  resolveLatestStateUpdateRunSummary,
   summarizeAttendanceGetResponse,
 } from "@/diagnostics/state-update-route-logic";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
@@ -333,6 +334,7 @@ function StateUpdateOperationalDiagnostics({
   run: StateUpdateDiagnosticRun | null;
 }) {
   const health = buildStateUpdateDiagnosticHealth({ diagnostics, reconnect });
+  const latestRun = resolveLatestStateUpdateRunSummary(reconnect);
   const requestHistory = reconnect.requestHistory ?? [];
   const lastRequest = requestHistory.at(-1) ?? reconnect.lastStateUpdateActivity?.lastRequestDiagnostics ?? reconnect.lastStateUpdateSync?.lastRequestDiagnostics ?? null;
   const activeSummary = diagnostics ? Object.entries(diagnostics.summary).filter(([, value]) => value > 0) : [];
@@ -377,6 +379,13 @@ function StateUpdateOperationalDiagnostics({
           ["result", health.currentActivity.result],
           ["syncRunId", health.currentActivity.syncRunId ?? "none"],
           ["T reconnect->activity ms", elapsedMs(reconnect.lastReconnect.detectedAt, reconnect.lastStateUpdateActivity?.startedAt ?? reconnect.lastStateUpdateSync?.startedAt)],
+        ]} />
+      </Section>
+      <Section title="Ultimo run">
+        <DiagnosticsRows rows={[
+          ["syncRunId", latestRun.syncRunId ?? "none"],
+          ["phase", latestRun.phase],
+          ["terminalResult", latestRun.terminalResult],
         ]} />
       </Section>
       <Section title="Ultimo request">
@@ -546,14 +555,23 @@ function preflightRows(
     ["shouldSyncStartedAt", preflight.shouldSyncStartedAt ?? "none"],
     ["shouldSyncCompletedAt", preflight.shouldSyncCompletedAt ?? "none"],
     ["shouldSyncDurationMs", preflight.shouldSyncDurationMs ?? "none"],
+    ["countPendingOperationsCount", preflight.countPendingOperationsCount ?? "none"],
     ["countPendingOperationsDurationMs", preflight.countPendingOperationsDurationMs ?? "none"],
+    ["listPendingStateUpdateOperationsCount", preflight.listPendingStateUpdateOperationsCount ?? "none"],
     ["listPendingStateUpdateOperationsDurationMs", preflight.listPendingStateUpdateOperationsDurationMs ?? "none"],
     ["shouldSyncResult", preflight.shouldSyncResult ?? "none"],
     ["runSyncStartedAt", preflight.runSyncStartedAt ?? "none"],
     ["readinessStartedAt", preflight.readinessStartedAt ?? "none"],
     ["readinessCompletedAt", preflight.readinessCompletedAt ?? "none"],
+    ["readinessConfirmedAt", preflight.readinessConfirmedAt ?? "none"],
     ["readinessDurationMs", preflight.readinessDurationMs ?? "none"],
     ["readinessAttempts", preflight.readinessAttempts ?? "none"],
+    ["authDecision", preflight.authDecision ?? "none"],
+    ["authRefreshStartedAt", preflight.authRefreshStartedAt ?? "none"],
+    ["authRefreshCompletedAt", preflight.authRefreshCompletedAt ?? "none"],
+    ["scopeCheckAfterReadiness", preflight.scopeCheckAfterReadiness ?? "none"],
+    ["syncPendingWorkStartedAt", preflight.syncPendingWorkStartedAt ?? "none"],
+    ["syncPendingWorkCompletedAt", preflight.syncPendingWorkCompletedAt ?? "none"],
     ["completedAt", preflight.completedAt ?? "none"],
   ];
 }

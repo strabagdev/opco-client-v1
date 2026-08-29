@@ -28,6 +28,25 @@ export function isSessionLifecycleScopeCurrent(runScope: SessionLifecycleScope, 
     runScope.selectedContractId === currentScope.selectedContractId;
 }
 
+export function getSessionLifecycleScopeMismatchReason(
+  runScope: SessionLifecycleScope,
+  currentScope: SessionLifecycleScope,
+) {
+  if (runScope.ownerKey !== currentScope.ownerKey) {
+    return "owner_changed";
+  }
+
+  if (runScope.selectedContractId !== currentScope.selectedContractId) {
+    return "contract_changed";
+  }
+
+  if (runScope.token === null || runScope.token !== currentScope.token) {
+    return "token_changed";
+  }
+
+  return "current";
+}
+
 export function shouldRunForegroundPendingSync({
   connectivityStatus,
   hasInFlightSync,
@@ -119,6 +138,40 @@ export function shouldRefreshAccessTokenForSync(
   }
 
   return expiresAtMs - nowMs <= refreshMarginMs;
+}
+
+export function planPostReadinessPendingWork({
+  currentScope,
+  nowMs = Date.now(),
+  refreshMarginMs = ACCESS_TOKEN_SYNC_REFRESH_MARGIN_MS,
+  runScope,
+  token,
+}: {
+  currentScope: SessionLifecycleScope;
+  nowMs?: number;
+  refreshMarginMs?: number;
+  runScope: SessionLifecycleScope;
+  token: string;
+}) {
+  const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, currentScope);
+
+  if (scopeCheckAfterReadiness !== "current") {
+    return {
+      authDecision: null,
+      nextAction: "cancelled_scope_changed",
+      scopeCheckAfterReadiness,
+    } as const;
+  }
+
+  const authDecision = shouldRefreshAccessTokenForSync(token, nowMs, refreshMarginMs)
+    ? "refresh_required"
+    : "token_valid";
+
+  return {
+    authDecision,
+    nextAction: authDecision === "refresh_required" ? "auth_refresh" : "sync_pending_work",
+    scopeCheckAfterReadiness,
+  } as const;
 }
 
 export function isRecoverableAuthRefreshError(error: unknown) {
