@@ -4231,12 +4231,16 @@ function normalizeNullableConnectivityStatus(value: unknown) {
 }
 
 function normalizeStateUpdateSyncTelemetryResult(value: unknown) {
-  return value === "failed" ||
+  return value === "cancelled_scope_changed" ||
+    value === "failed" ||
+    value === "interrupted" ||
     value === "noop" ||
     value === "partial_failure" ||
+    value === "ready_confirmed" ||
     value === "ready_failed" ||
     value === "reconnecting" ||
     value === "reconciled_success" ||
+    value === "sync_started" ||
     value === "success"
     ? value
     : "failed";

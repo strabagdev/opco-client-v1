@@ -252,6 +252,46 @@ describe("local database singleton", () => {
     });
   });
 
+  it("hydrates terminal readiness activity results from app_metadata", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:03.000Z" },
+            lastReconnect: {
+              detected: true,
+              detectedAt: "2026-08-29T10:00:00.000Z",
+              previousConnectivityStatus: "unknown",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateActivity: {
+              completedAt: "2026-08-29T10:00:01.000Z",
+              lastRequestDiagnostics: null,
+              operationsCompleted: 0,
+              operationsFailed: 0,
+              result: "interrupted",
+              startedAt: "2026-08-29T10:00:00.000Z",
+              syncRunId: "sync_interrupted_ready",
+              timeoutOccurred: false,
+              trigger: "ready_check",
+              type: "ready_check",
+            },
+          }),
+        };
+      }
+
+      return null;
+    });
+
+    await expect(getLocalDatabase().getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1")).resolves.toMatchObject({
+      lastStateUpdateActivity: {
+        result: "interrupted",
+        syncRunId: "sync_interrupted_ready",
+        type: "ready_check",
+      },
+    });
+  });
+
   it("hydrates bounded STATE_UPDATE request history without raw owner ids", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM app_metadata")) {

@@ -40,6 +40,7 @@ export function resolveStateUpdateOperationFeedback({
   connectivityStatus,
   hasConflict = false,
   isSaving = false,
+  isReadinessChecking = false,
   isSyncing = false,
   lastActivity,
   lastSync,
@@ -50,6 +51,7 @@ export function resolveStateUpdateOperationFeedback({
   connectivityStatus: ConnectivityStatus;
   hasConflict?: boolean;
   isSaving?: boolean;
+  isReadinessChecking?: boolean;
   isSyncing?: boolean;
   lastActivity?: {
     result: string;
@@ -88,10 +90,16 @@ export function resolveStateUpdateOperationFeedback({
 
   if (connectivityStatus === "online" && pendingCount > 0 && lastActivity?.type === "ready_check") {
     if (lastActivity.result === "reconnecting") {
-      return { message: "Reconectando con Opco...", phase: "RECONNECTING" };
+      return isReadinessChecking
+        ? { message: "Reconectando con Opco...", phase: "RECONNECTING" }
+        : { message: "Pendiente de sincronizacion.", phase: "PENDING" };
     }
 
-    if (lastActivity.result === "ready_failed") {
+    if (lastActivity.result === "ready_failed" ||
+      lastActivity.result === "cancelled_scope_changed" ||
+      lastActivity.result === "interrupted" ||
+      lastActivity.result === "ready_confirmed" ||
+      lastActivity.result === "sync_started") {
       return { message: "Pendiente de sincronizacion.", phase: "PENDING" };
     }
   }

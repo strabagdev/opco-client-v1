@@ -72,6 +72,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     api,
     connectivityStatus,
     definitionCache,
+    isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     ownerKey,
     refreshRecordsSyncSummary,
@@ -125,6 +126,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const operationFeedback = resolveStateUpdateOperationFeedback({
     connectivityStatus,
     hasConflict: Boolean(conflict || readSummaryCount(response, "conflictCount") > 0),
+    isReadinessChecking: isOperationalCoreReadinessChecking,
     isSaving,
     isSyncing: isPendingWorkSyncing,
     lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,

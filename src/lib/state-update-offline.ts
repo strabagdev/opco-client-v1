@@ -158,12 +158,16 @@ export type StateUpdateSyncTrigger =
   | "other";
 
 export type StateUpdateSyncTelemetryResult =
+  | "cancelled_scope_changed"
   | "failed"
+  | "interrupted"
   | "noop"
   | "partial_failure"
+  | "ready_confirmed"
   | "ready_failed"
   | "reconnecting"
   | "reconciled_success"
+  | "sync_started"
   | "success";
 
 export type StateUpdateLastReconnectTelemetry = {

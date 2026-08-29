@@ -122,6 +122,34 @@ export function mergeStateUpdateReconnectDiagnosticsForPersistence({
   return updater(persisted ?? current);
 }
 
+export function markInterruptedReadinessActivity(
+  telemetry: StateUpdateReconnectDiagnostics,
+  completedAt = new Date().toISOString(),
+): StateUpdateReconnectDiagnostics {
+  const activity = telemetry.lastStateUpdateActivity;
+
+  if (activity?.type !== "ready_check" || activity.result !== "reconnecting" || !activity.syncRunId) {
+    return telemetry;
+  }
+
+  const hasReadyCheckRequest = (telemetry.requestHistory ?? []).some((request) =>
+    request.diagnosticSyncRunId === activity.syncRunId && request.diagnosticOperation === "READY_CHECK"
+  );
+
+  if (hasReadyCheckRequest) {
+    return telemetry;
+  }
+
+  return {
+    ...telemetry,
+    lastStateUpdateActivity: {
+      ...activity,
+      completedAt,
+      result: "interrupted",
+    },
+  };
+}
+
 type SyncPendingStateUpdatesWithTelemetry = (input: {
   api?: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey?: string;
@@ -439,7 +467,12 @@ export function useSessionDiagnostics({
     definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey)
       .then((telemetry) => {
         if (isMounted && telemetry) {
-          setStateUpdateReconnectDiagnostics(telemetry);
+          const next = markInterruptedReadinessActivity(telemetry);
+
+          setStateUpdateReconnectDiagnostics(next);
+          if (next !== telemetry) {
+            void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next);
+          }
         }
       })
       .catch(() => undefined);

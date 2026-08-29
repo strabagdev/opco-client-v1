@@ -60,6 +60,7 @@ type SessionContextValue = {
   connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
+  isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   me: MeResponse | null;
   ownerKey: string | null;
@@ -268,7 +269,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     });
   }, [ownerKey, recordStateUpdateSessionTerminationDiagnostics]);
 
-  const { isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
+  const { isOperationalCoreReadinessChecking, isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
     api,
     connectivityStatus,
     definitionCache,
@@ -467,6 +468,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         connectivityStatus,
         context,
         definitionCache,
+        isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
         me,
         ownerKey,
@@ -856,9 +858,9 @@ export function StateUpdateDiagnosticsPanel({
         <DiagnosticsRows rows={currentConnectivityRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Last reconnect</Text>
         <DiagnosticsRows rows={lastReconnectRows} />
-        <Text style={diagnosticsPanelStyles.sectionTitle}>Last STATE_UPDATE activity</Text>
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Actividad actual</Text>
         <DiagnosticsRows rows={lastStateUpdateActivityRows} />
-        <Text style={diagnosticsPanelStyles.sectionTitle}>Last STATE_UPDATE sync</Text>
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Ultimo sync completado</Text>
         <DiagnosticsRows rows={lastStateUpdateSyncRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Last visible UI error</Text>
         <DiagnosticsRows rows={lastVisibleErrorRows} />

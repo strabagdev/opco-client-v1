@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   emptyStateUpdateReconnectDiagnostics,
+  markInterruptedReadinessActivity,
   mergeStateUpdateReconnectDiagnosticsForPersistence,
   shouldShowStateUpdateDiagnostics,
 } from "./use-session-diagnostics";
@@ -87,5 +88,72 @@ describe("session diagnostics controller helpers", () => {
       lastStateUpdateActivity: { type: "snapshot_reconciliation", result: "reconciled_success" },
       lastVisibleErrorEvent: { operation: "refresh", resolution: "cleared_after_success" },
     });
+  });
+
+  it("marks a persisted reconnecting readiness run without READY_CHECK history as interrupted", () => {
+    const telemetry = markInterruptedReadinessActivity({
+      ...emptyStateUpdateReconnectDiagnostics,
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T10:00:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "reconnecting",
+        startedAt: "2026-08-29T10:00:00.000Z",
+        syncRunId: "sync_orphaned_ready",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      requestHistory: [],
+    }, "2026-08-29T10:05:00.000Z");
+
+    expect(telemetry.lastStateUpdateActivity).toMatchObject({
+      completedAt: "2026-08-29T10:05:00.000Z",
+      result: "interrupted",
+      syncRunId: "sync_orphaned_ready",
+      type: "ready_check",
+    });
+  });
+
+  it("does not interrupt a reconnecting readiness run that has READY_CHECK history", () => {
+    const telemetry = markInterruptedReadinessActivity({
+      ...emptyStateUpdateReconnectDiagnostics,
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T10:00:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "reconnecting",
+        startedAt: "2026-08-29T10:00:00.000Z",
+        syncRunId: "sync_ready_started",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      requestHistory: [{
+        abortControllerTriggered: false,
+        diagnosticOperation: "READY_CHECK",
+        diagnosticRequestId: "opco_diag_ready",
+        diagnosticSyncRunId: "sync_ready_started",
+        errorCode: null,
+        fetchResolvedAt: null,
+        httpStatus: null,
+        interpretation: "unknown",
+        method: "GET",
+        pathTemplate: "/api/v1/ready",
+        requestCompletedAt: "2026-08-29T10:00:01.000Z",
+        requestDurationMs: 1000,
+        requestStartedAt: "2026-08-29T10:00:00.000Z",
+        responseBodyStartedAt: null,
+        responseParsedAt: null,
+        responseRequestId: null,
+        responseStarted: false,
+        serverTiming: [],
+        timeoutMs: 2500,
+      }],
+    }, "2026-08-29T10:05:00.000Z");
+
+    expect(telemetry.lastStateUpdateActivity?.result).toBe("reconnecting");
   });
 });

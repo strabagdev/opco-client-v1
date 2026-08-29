@@ -92,6 +92,7 @@ export function usePendingWorkLifecycle({
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const activePendingWorkRunKeyRef = useRef<string | null>(null);
   const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
+  const [isOperationalCoreReadinessChecking, setIsOperationalCoreReadinessChecking] = useState(false);
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     ownerKey,
     selectedContractId: selectedContractIdState,
@@ -113,7 +114,7 @@ export function usePendingWorkLifecycle({
     trigger,
     type,
   }: {
-    result: "ready_failed" | "reconnecting";
+    result: "cancelled_scope_changed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
     startedAt: string;
     syncRunId: string;
     trigger: StateUpdateSyncTrigger | "ready_check" | "reconnect";
@@ -181,7 +182,33 @@ export function usePendingWorkLifecycle({
           type: "ready_check",
         });
 
-        const readiness = await probeOperationalCoreReadiness({ api, syncRunId });
+        if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+          await markStateUpdateActivity({
+            result: "cancelled_scope_changed",
+            startedAt,
+            syncRunId,
+            trigger: "ready_check",
+            type: "ready_check",
+          });
+          return;
+        }
+
+        setIsOperationalCoreReadinessChecking(true);
+        let readiness;
+        try {
+          readiness = await probeOperationalCoreReadiness({ api, syncRunId });
+        } catch {
+          await markStateUpdateActivity({
+            result: "interrupted",
+            startedAt,
+            syncRunId,
+            trigger: "ready_check",
+            type: "ready_check",
+          });
+          return;
+        } finally {
+          setIsOperationalCoreReadinessChecking(false);
+        }
 
         if (!readiness.ready) {
           await markStateUpdateActivity({
@@ -193,6 +220,33 @@ export function usePendingWorkLifecycle({
           });
           return;
         }
+
+        await markStateUpdateActivity({
+          result: "ready_confirmed",
+          startedAt,
+          syncRunId,
+          trigger: "ready_check",
+          type: "ready_check",
+        });
+
+        if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+          await markStateUpdateActivity({
+            result: "cancelled_scope_changed",
+            startedAt,
+            syncRunId,
+            trigger: "ready_check",
+            type: "ready_check",
+          });
+          return;
+        }
+
+        await markStateUpdateActivity({
+          result: "sync_started",
+          startedAt,
+          syncRunId,
+          trigger: "ready_check",
+          type: "ready_check",
+        });
       }
 
       setIsPendingWorkSyncing(true);
@@ -305,6 +359,13 @@ export function usePendingWorkLifecycle({
     );
 
     setSelectedContractIdState(nextContractId);
+    runScope.ownerKey = nextOwnerKey;
+    runScope.selectedContractId = nextContractId;
+    latestSessionScopeRef.current = {
+      ownerKey: nextOwnerKey,
+      selectedContractId: nextContractId,
+      token: nextToken,
+    };
 
     if (nextContractId) {
       const appViewsResult = await loadAppViewsWithCache({
@@ -522,6 +583,7 @@ export function usePendingWorkLifecycle({
   }, [connectivityStatus, persistStateUpdateReconnectDiagnostics, status]);
 
   return {
+    isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     reconnectSessionAndRecords,
     syncPendingRecords,

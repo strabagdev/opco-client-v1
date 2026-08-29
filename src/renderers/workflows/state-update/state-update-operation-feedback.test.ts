@@ -44,6 +44,7 @@ describe("state update operation feedback", () => {
   it("shows reconnecting feedback while Operational Core readiness is being checked", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",
+      isReadinessChecking: true,
       lastActivity: {
         result: "reconnecting",
         type: "ready_check",
@@ -52,6 +53,20 @@ describe("state update operation feedback", () => {
     })).toMatchObject({
       message: "Reconectando con Opco...",
       phase: "RECONNECTING",
+    });
+  });
+
+  it("does not keep reconnecting feedback from historical readiness telemetry", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "reconnecting",
+        type: "ready_check",
+      },
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Pendiente de sincronizacion.",
+      phase: "PENDING",
     });
   });
 
