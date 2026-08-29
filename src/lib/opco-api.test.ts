@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope, parseServerTimingHeader } from "./opco-api";
+import { AUTH_REFRESH_TIMEOUT_MS, createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope, parseServerTimingHeader } from "./opco-api";
 import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
 const meFixture = {
@@ -256,6 +256,104 @@ describe("createOpcoApi", () => {
       errorCode: null,
       httpStatus: 200,
       pathTemplate: "/api/v1/auth/refresh",
+    }));
+  });
+
+  it("correlates AUTH_REFRESH with the original syncRunId and uses the auth timeout", async () => {
+    const diagnostics = vi.fn();
+    let refreshSignal: AbortSignal | null = null;
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+
+        if (path === "/api/v1/auth/refresh") {
+          refreshSignal = init?.signal as AbortSignal;
+          return jsonResponse({
+            data: {
+              accessToken: "fresh-token",
+              expiresIn: 3600,
+              refreshToken: "refresh-token-2",
+              tokenType: "Bearer",
+            },
+            ok: true,
+          });
+        }
+
+        if (path === "/api/v1/contracts/contract_1/views/view_1/workflow/state-update") {
+          const authorization = new Headers(init?.headers).get("authorization");
+
+          if (authorization === "Bearer expired-token") {
+            return jsonResponse(
+              {
+                error: {
+                  code: "TOKEN_EXPIRED",
+                  message: "Token expirado.",
+                },
+                ok: false,
+              },
+              401,
+            );
+          }
+        }
+
+        return jsonResponse({ data: { results: [] }, ok: true });
+      },
+      onRequestDiagnostics: diagnostics,
+      platformOS: "ios",
+      tokenStore: createSessionTokenStore("refresh-token-1"),
+    });
+
+    await api.saveStateUpdateWorkflow("expired-token", "contract_1", "view_1", {
+      clientRequestId: "client_request_1",
+      stateValues: [],
+      subjectRecordId: "subject_1",
+    }, { diagnosticSyncRunId: "sync_reconnect_1" });
+
+    expect(refreshSignal).toBeTruthy();
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      diagnosticOperation: "AUTH_REFRESH",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      pathTemplate: "/api/v1/auth/refresh",
+      timeoutMs: AUTH_REFRESH_TIMEOUT_MS,
+    }));
+  });
+
+  it("does not clear the local session when refresh times out", async () => {
+    vi.useFakeTimers();
+    const store = createSessionTokenStore("refresh-token-1");
+    const diagnostics = vi.fn();
+    const onSessionInvalid = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+          });
+        }),
+      onRequestDiagnostics: diagnostics,
+      onSessionInvalid,
+      platformOS: "ios",
+      tokenStore: store,
+    });
+
+    const request = api.refreshSession({ diagnosticSyncRunId: "sync_refresh_timeout" });
+    const expectation = expect(request).rejects.toBeInstanceOf(OpcoNetworkError);
+
+    await vi.advanceTimersByTimeAsync(AUTH_REFRESH_TIMEOUT_MS);
+    await expectation;
+
+    expect(store.clearSession).not.toHaveBeenCalled();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      abortControllerTriggered: true,
+      diagnosticOperation: "AUTH_REFRESH",
+      diagnosticSyncRunId: "sync_refresh_timeout",
+      pathTemplate: "/api/v1/auth/refresh",
+      timeoutMs: AUTH_REFRESH_TIMEOUT_MS,
     }));
   });
 

@@ -53,6 +53,8 @@ The first authenticated request after reconnect may discover an expired access t
 authenticated request -> 401 TOKEN_EXPIRED -> AUTH_REFRESH -> new access token -> retry original request
 ```
 
+For automatic pending-work sync, the lifecycle performs auth readiness after `/ready` and before business POSTs when the local access token is expired or within the five minute refresh margin. `AUTH_REFRESH` uses a separate `30_000 ms` timeout because losing a refresh response after server-side rotation is materially different from a normal idempotent business retry. If refresh times out or fails with a temporary infrastructure error, no STATE_UPDATE/RECORDS POST is sent for that run; pending intent remains durable for a later trigger.
+
 Only a confirmed invalid session can clear local credentials automatically: revoked/expired/reused/missing refresh token, inactive refresh user/app, or a backend-confirmed `TOKEN_INVALID` on an authenticated request. Network failures, client timeouts, `503`, and `DB_UNAVAILABLE` during refresh are recoverable connectivity/server failures; they must preserve the local session and leave pending work durable for a later retry.
 
 STATE_UPDATE diagnostics persist sanitized auth evidence. `requestHistory` can include `AUTH_REFRESH` entries with method, path template, timing, HTTP status, timeout flag, error code, and local request id. `lastSessionTermination` records the last manual or automatic session termination with reason, source, timestamp, error code, and sanitized request id. It does not persist tokens, cookies, payloads, names, raw owner ids, or form values.
@@ -426,6 +428,8 @@ Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_U
 
 Reconnect-like automatic triggers do not treat NetInfo `online` as proof that Operational Core is ready. For reconnect, unknown-to-online, startup-with-pending, and foreground/resume, the lifecycle hook first confirms owner/token/contract scope, checks durable pending work, then runs a short `GET /api/v1/ready` gate before POST sync. The ready probe uses its own `2_500 ms` timeout, at most three attempts, and bounded backoff. If the scope becomes ready after NetInfo already moved to online, the hook performs a one-time catch-up for that scope by re-checking durable pending work; this avoids waiting for a later remount or foreground event. A ready gate run cannot remain semantically active forever: stale persisted `reconnecting` telemetry without a `READY_CHECK` request is marked `interrupted` on hydration, scope changes are marked `cancelled_scope_changed`, and active run guards are cleared in `finally`.
 
+After readiness succeeds and before pending business writes, the hook checks the access-token `exp` claim. Tokens that are expired or within the five minute margin are refreshed once through `AUTH_REFRESH` with the same local `syncRunId`; opaque/unparseable tokens are not proactively refreshed and instead rely on the normal authenticated-request `401 TOKEN_EXPIRED` path. Recoverable refresh failures (`timeout`, network, `503`, `DB_UNAVAILABLE`) block that run without clearing credentials or consuming business retry semantics. Backend-confirmed invalid refresh/session responses still allow automatic logout.
+
 Mounted workflow renderers must use the `SessionProvider` connectivity value, not independent NetInfo listeners. `SessionProvider` is the canonical runtime connectivity source for UI, lifecycle, and diagnostics. Workflow pending indicators come from durable SQLite/outbox state for the same owner/contract/AppView/date/entity scope. `online + pending` is only `PENDING`; `SYNCING` requires the pending-work engine to be actively running, `RECONNECTING` requires the readiness gate to be active in runtime, and `CONFIRMING` means a write or timeout reconciliation is still being confirmed.
 
 Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results. Lifecycle runs compare their starting token/owner/contract scope with the current scope before applying refresh side effects, so logout or contract switch does not apply stale refresh results.
@@ -552,6 +556,7 @@ Reset protections:
 - Web refresh through HttpOnly cookie.
 - Native refresh token transport through SecureStore.
 - 12 second `AbortController` timeout.
+- 30 second `AUTH_REFRESH` timeout for refresh-token rotation requests.
 - JSON envelope parsing.
 - Contract shape assertions for records, workflows, updatedAt, and idempotency results.
 - Request timing diagnostics for network failures.

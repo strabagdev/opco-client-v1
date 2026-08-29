@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isRecoverableAuthRefreshError,
   isSessionLifecycleScopeCurrent,
   OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS,
   OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS,
   OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
   probeOperationalCoreReadiness,
+  shouldRefreshAccessTokenForSync,
   shouldGatePendingSyncWithOperationalCoreReady,
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
 } from "./pending-work-lifecycle-logic";
+import { OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 
 describe("pending work lifecycle guards", () => {
   it("runs foreground sync only when returning active online without an in-flight sync", () => {
@@ -101,6 +104,23 @@ describe("pending work lifecycle guards", () => {
     expect(shouldGatePendingSyncWithOperationalCoreReady("manual-retry")).toBe(false);
   });
 
+  it("refreshes access tokens for sync only when the JWT is expired or close to expiration", () => {
+    const nowMs = Date.parse("2026-08-29T10:00:00.000Z");
+
+    expect(shouldRefreshAccessTokenForSync(jwtExpiringAt("2026-08-29T11:00:00.000Z"), nowMs)).toBe(false);
+    expect(shouldRefreshAccessTokenForSync(jwtExpiringAt("2026-08-29T10:04:59.000Z"), nowMs)).toBe(true);
+    expect(shouldRefreshAccessTokenForSync(jwtExpiringAt("2026-08-29T09:59:59.000Z"), nowMs)).toBe(true);
+    expect(shouldRefreshAccessTokenForSync("opaque-token", nowMs)).toBe(false);
+  });
+
+  it("treats temporary auth refresh failures as recoverable session state", () => {
+    expect(isRecoverableAuthRefreshError(new OpcoNetworkError("timeout"))).toBe(true);
+    expect(isRecoverableAuthRefreshError(new OpcoApiError("Servicio temporalmente no disponible.", "DB_UNAVAILABLE", 503))).toBe(true);
+    expect(isRecoverableAuthRefreshError(new OpcoApiError("Servicio temporalmente no disponible.", "SERVER_UNAVAILABLE", 503))).toBe(true);
+    expect(isRecoverableAuthRefreshError(new OpcoApiError("Refresh token no valido", "REFRESH_TOKEN_REUSED", 401))).toBe(false);
+    expect(isRecoverableAuthRefreshError(new OpcoApiError("Refresh token expirado", "REFRESH_TOKEN_EXPIRED", 401))).toBe(false);
+  });
+
   it("probes /ready with a short timeout and shared syncRunId", async () => {
     const getReady = vi.fn(async () => ({ ok: true }));
 
@@ -157,3 +177,10 @@ describe("pending work lifecycle guards", () => {
     expect(sleeps).toEqual([500, 1_000]);
   });
 });
+
+function jwtExpiringAt(iso: string) {
+  const payload = { exp: Math.floor(Date.parse(iso) / 1000) };
+  const encoded = btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+  return `header.${encoded}.signature`;
+}

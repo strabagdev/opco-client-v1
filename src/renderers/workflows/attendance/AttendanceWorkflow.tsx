@@ -75,6 +75,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     connectivityStatus,
     context,
     definitionCache,
+    isAuthSessionRestoring,
     isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     ownerKey,
@@ -127,6 +128,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const operationFeedback = resolveStateUpdateOperationFeedback({
     connectivityStatus,
     hasConflict: Boolean(conflict || localConflicts.length > 0),
+    isAuthSessionRestoring,
     isReadinessChecking: isOperationalCoreReadinessChecking,
     isSaving,
     isSyncing: isPendingWorkSyncing,

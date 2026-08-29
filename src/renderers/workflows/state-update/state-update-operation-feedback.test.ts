@@ -84,6 +84,33 @@ describe("state update operation feedback", () => {
     });
   });
 
+  it("shows session restoring feedback only while auth refresh is active", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      isAuthSessionRestoring: true,
+      lastActivity: {
+        result: "auth_pending",
+        type: "auth_refresh",
+      },
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Restableciendo sesion con Opco...",
+      phase: "RESTORING_SESSION",
+    });
+
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "auth_timeout",
+        type: "auth_refresh",
+      },
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Pendiente de sincronizacion.",
+      phase: "PENDING",
+    });
+  });
+
   it("does not show a definitive timeout error while confirmation is still pending", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",

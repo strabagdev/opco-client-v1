@@ -1,5 +1,5 @@
 import { ConnectivityStatus } from "../lib/connectivity";
-import { OpcoApi } from "../lib/opco-api";
+import { OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { StateUpdateSyncTrigger } from "../lib/state-update-offline";
 
 type AppLifecycleState = "active" | "background" | "inactive" | "unknown" | "extension";
@@ -13,6 +13,7 @@ export type SessionLifecycleScope = {
 export const OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS = 2_500;
 export const OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS = 3;
 export const OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS = [500, 1_000] as const;
+export const ACCESS_TOKEN_SYNC_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export type OperationalCoreReadinessProbeResult = {
   attempts: number;
@@ -73,6 +74,25 @@ export function shouldGatePendingSyncWithOperationalCoreReady(trigger: StateUpda
     trigger === "foreground/resume";
 }
 
+export function shouldRefreshAccessTokenForSync(
+  token: string,
+  nowMs = Date.now(),
+  refreshMarginMs = ACCESS_TOKEN_SYNC_REFRESH_MARGIN_MS,
+) {
+  const expiresAtMs = readJwtExpirationMs(token);
+
+  if (!expiresAtMs) {
+    return false;
+  }
+
+  return expiresAtMs - nowMs <= refreshMarginMs;
+}
+
+export function isRecoverableAuthRefreshError(error: unknown) {
+  return error instanceof OpcoNetworkError ||
+    (error instanceof OpcoApiError && (error.status >= 500 || error.code === "DB_UNAVAILABLE"));
+}
+
 export async function probeOperationalCoreReadiness({
   api,
   maxAttempts = OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS,
@@ -111,4 +131,28 @@ function defaultSleep(durationMs: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, durationMs);
   });
+}
+
+function readJwtExpirationMs(token: string) {
+  const [, payload] = token.split(".");
+
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+    const decoded = globalThis.atob?.(padded);
+
+    if (!decoded) {
+      return null;
+    }
+
+    const parsed = JSON.parse(decoded) as { exp?: unknown };
+
+    return typeof parsed.exp === "number" && Number.isFinite(parsed.exp) ? parsed.exp * 1000 : null;
+  } catch {
+    return null;
+  }
 }

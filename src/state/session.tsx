@@ -60,6 +60,7 @@ type SessionContextValue = {
   connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
+  isAuthSessionRestoring: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   me: MeResponse | null;
@@ -269,7 +270,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     });
   }, [ownerKey, recordStateUpdateSessionTerminationDiagnostics]);
 
-  const { isOperationalCoreReadinessChecking, isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
+  const { isAuthSessionRestoring, isOperationalCoreReadinessChecking, isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
     api,
     connectivityStatus,
     definitionCache,
@@ -468,6 +469,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         connectivityStatus,
         context,
         definitionCache,
+        isAuthSessionRestoring,
         isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
         me,

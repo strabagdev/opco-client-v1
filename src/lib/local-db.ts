@@ -4008,7 +4008,8 @@ function normalizeLastStateUpdateActivityTelemetry(
     return null;
   }
 
-  const type = telemetry.type === "ready_check" ||
+  const type = telemetry.type === "auth_refresh" ||
+    telemetry.type === "ready_check" ||
     telemetry.type === "reconnect" ||
     telemetry.type === "snapshot_reconciliation" ||
     telemetry.type === "sync"
@@ -4028,7 +4029,8 @@ function normalizeLastStateUpdateActivityTelemetry(
     startedAt: telemetry.startedAt,
     syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
     timeoutOccurred: telemetry.timeoutOccurred === true,
-    trigger: telemetry.trigger === "snapshot_reconciliation" ||
+    trigger: telemetry.trigger === "auth_refresh" ||
+      telemetry.trigger === "snapshot_reconciliation" ||
       telemetry.trigger === "ready_check" ||
       telemetry.trigger === "reconnect"
       ? telemetry.trigger
@@ -4231,7 +4233,9 @@ function normalizeNullableConnectivityStatus(value: unknown) {
 }
 
 function normalizeStateUpdateSyncTelemetryResult(value: unknown) {
-  return value === "cancelled_scope_changed" ||
+  return value === "auth_pending" ||
+    value === "auth_timeout" ||
+    value === "cancelled_scope_changed" ||
     value === "failed" ||
     value === "interrupted" ||
     value === "noop" ||

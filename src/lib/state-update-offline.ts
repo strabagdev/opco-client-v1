@@ -158,6 +158,8 @@ export type StateUpdateSyncTrigger =
   | "other";
 
 export type StateUpdateSyncTelemetryResult =
+  | "auth_pending"
+  | "auth_timeout"
   | "cancelled_scope_changed"
   | "failed"
   | "interrupted"
@@ -237,8 +239,8 @@ export type StateUpdateActivityTelemetry = {
   startedAt: string;
   syncRunId: string | null;
   timeoutOccurred: boolean;
-  trigger: StateUpdateSyncTrigger | "ready_check" | "reconnect" | "snapshot_reconciliation";
-  type: "ready_check" | "reconnect" | "snapshot_reconciliation" | "sync";
+  trigger: StateUpdateSyncTrigger | "auth_refresh" | "ready_check" | "reconnect" | "snapshot_reconciliation";
+  type: "auth_refresh" | "ready_check" | "reconnect" | "snapshot_reconciliation" | "sync";
 };
 
 export type StateUpdateVisibleErrorResolution =

@@ -6,7 +6,7 @@ import { prewarmAssignedAppViewsOnce } from "../lib/app-view-prewarm";
 import { ConnectivityStatus } from "../lib/connectivity";
 import { selectContractId } from "../lib/contract-selection";
 import { LocalDatabase } from "../lib/local-db";
-import { ContextResponse, MeResponse, OpcoApi, OpcoNetworkError } from "../lib/opco-api";
+import { AUTH_REFRESH_TIMEOUT_MS, ContextResponse, MeResponse, OpcoApi, OpcoNetworkError } from "../lib/opco-api";
 import { readPersistedContractId } from "../lib/session-persistence";
 import { StateUpdateSyncTrigger } from "../lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "./reconnect-sync";
@@ -16,11 +16,13 @@ import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state
 import * as tokenStorage from "../lib/token-storage";
 import {
   isSessionLifecycleScopeCurrent,
+  isRecoverableAuthRefreshError,
   probeOperationalCoreReadiness,
   SessionLifecycleScope,
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
   shouldGatePendingSyncWithOperationalCoreReady,
+  shouldRefreshAccessTokenForSync,
 } from "./pending-work-lifecycle-logic";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -92,6 +94,7 @@ export function usePendingWorkLifecycle({
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const activePendingWorkRunKeyRef = useRef<string | null>(null);
   const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
+  const [isAuthSessionRestoring, setIsAuthSessionRestoring] = useState(false);
   const [isOperationalCoreReadinessChecking, setIsOperationalCoreReadinessChecking] = useState(false);
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     ownerKey,
@@ -114,11 +117,11 @@ export function usePendingWorkLifecycle({
     trigger,
     type,
   }: {
-    result: "cancelled_scope_changed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
+    result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
     startedAt: string;
     syncRunId: string;
-    trigger: StateUpdateSyncTrigger | "ready_check" | "reconnect";
-    type: "ready_check" | "reconnect";
+    trigger: StateUpdateSyncTrigger | "auth_refresh" | "ready_check" | "reconnect";
+    type: "auth_refresh" | "ready_check" | "reconnect";
   }) => {
     const completedAt = new Date().toISOString();
 
@@ -166,11 +169,13 @@ export function usePendingWorkLifecycle({
     const runKey = `${runOwnerKey}:${runScope.selectedContractId ?? "none"}:${runToken}`;
 
     if (activePendingWorkRunKeyRef.current === runKey) {
-      return;
+      return "already-running";
     }
 
     activePendingWorkRunKeyRef.current = runKey;
     try {
+      let syncToken = runToken;
+
       if (shouldGatePendingSyncWithOperationalCoreReady(trigger)) {
         const startedAt = new Date().toISOString();
 
@@ -190,7 +195,7 @@ export function usePendingWorkLifecycle({
             trigger: "ready_check",
             type: "ready_check",
           });
-          return;
+          return "cancelled";
         }
 
         setIsOperationalCoreReadinessChecking(true);
@@ -205,7 +210,7 @@ export function usePendingWorkLifecycle({
             trigger: "ready_check",
             type: "ready_check",
           });
-          return;
+          return "blocked";
         } finally {
           setIsOperationalCoreReadinessChecking(false);
         }
@@ -218,7 +223,7 @@ export function usePendingWorkLifecycle({
             trigger: "ready_check",
             type: "ready_check",
           });
-          return;
+          return "blocked";
         }
 
         await markStateUpdateActivity({
@@ -229,6 +234,57 @@ export function usePendingWorkLifecycle({
           type: "ready_check",
         });
 
+        if (shouldRefreshAccessTokenForSync(syncToken)) {
+          await markStateUpdateActivity({
+            result: "auth_pending",
+            startedAt,
+            syncRunId,
+            trigger: "auth_refresh",
+            type: "auth_refresh",
+          });
+          setIsAuthSessionRestoring(true);
+          try {
+            const refreshed = await api.refreshSession({
+              diagnosticSyncRunId: syncRunId,
+              timeoutMs: AUTH_REFRESH_TIMEOUT_MS,
+            });
+
+            syncToken = refreshed.accessToken;
+            runScope.token = syncToken;
+            latestSessionScopeRef.current = {
+              ...latestSessionScopeRef.current,
+              token: syncToken,
+            };
+            setToken(syncToken);
+          } catch (error) {
+            const result = error instanceof OpcoNetworkError && error.diagnostics?.abortControllerTriggered
+              ? "auth_timeout"
+              : "auth_pending";
+
+            if (isRecoverableAuthRefreshError(error)) {
+              await markStateUpdateActivity({
+                result,
+                startedAt,
+                syncRunId,
+                trigger: "auth_refresh",
+                type: "auth_refresh",
+              });
+              return "blocked";
+            }
+
+            await markStateUpdateActivity({
+              result: "auth_pending",
+              startedAt,
+              syncRunId,
+              trigger: "auth_refresh",
+              type: "auth_refresh",
+            });
+            throw error;
+          } finally {
+            setIsAuthSessionRestoring(false);
+          }
+        }
+
         if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
           await markStateUpdateActivity({
             result: "cancelled_scope_changed",
@@ -237,7 +293,7 @@ export function usePendingWorkLifecycle({
             trigger: "ready_check",
             type: "ready_check",
           });
-          return;
+          return "cancelled";
         }
 
         await markStateUpdateActivity({
@@ -257,9 +313,10 @@ export function usePendingWorkLifecycle({
           recordsStore: definitionCache,
           syncRunId,
           syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
-          token: runToken,
+          token: syncToken,
           trigger,
         });
+        return "completed";
       } finally {
         setIsPendingWorkSyncing(false);
       }
@@ -268,7 +325,7 @@ export function usePendingWorkLifecycle({
         activePendingWorkRunKeyRef.current = null;
       }
     }
-  }, [api, definitionCache, markStateUpdateActivity, syncPendingStateUpdatesWithTelemetry]);
+  }, [api, definitionCache, markStateUpdateActivity, setToken, syncPendingStateUpdatesWithTelemetry]);
 
   const syncPendingRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "manual-retry") => {
     if (!token || !ownerKey) {
@@ -314,29 +371,30 @@ export function usePendingWorkLifecycle({
     }
 
     let nextToken = token;
+    let pendingWorkAlreadyHandled = false;
+    const syncRunId = createSyncRunId();
     const runScope = {
       ownerKey,
       selectedContractId: selectedContractIdState,
       token,
     };
 
-    try {
-      const refreshed = await api.refreshSession();
+    if (ownerKey && selectedContractIdState) {
+      const syncResult = await runPendingWorkAfterReadiness({
+        ownerKey,
+        runScope,
+        syncRunId,
+        token,
+        trigger,
+      });
 
-      nextToken = refreshed.accessToken;
-      if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+      nextToken = latestSessionScopeRef.current.token ?? token;
+
+      if (syncResult === "blocked" || syncResult === "cancelled") {
         return;
       }
-      runScope.token = nextToken;
-      latestSessionScopeRef.current = {
-        ...latestSessionScopeRef.current,
-        token: nextToken,
-      };
-      setToken(nextToken);
-    } catch (error) {
-      if (!(error instanceof OpcoNetworkError)) {
-        throw error;
-      }
+
+      pendingWorkAlreadyHandled = syncResult === "completed" || syncResult === "already-running";
     }
 
     const nextMe = await api.getMe(nextToken);
@@ -392,13 +450,15 @@ export function usePendingWorkLifecycle({
       return;
     }
 
-    await runPendingWorkAfterReadiness({
-      ownerKey: nextOwnerKey,
-      runScope,
-      syncRunId: createSyncRunId(),
-      token: nextToken,
-      trigger,
-    });
+    if (!pendingWorkAlreadyHandled) {
+      await runPendingWorkAfterReadiness({
+        ownerKey: nextOwnerKey,
+        runScope,
+        syncRunId,
+        token: nextToken,
+        trigger,
+      });
+    }
     if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
       return;
     }
@@ -418,7 +478,6 @@ export function usePendingWorkLifecycle({
     setMe,
     setSelectedContractIdState,
     setStatus,
-    setToken,
     shouldShowStateUpdateDiagnostics,
     runPendingWorkAfterReadiness,
     token,
@@ -583,6 +642,7 @@ export function usePendingWorkLifecycle({
   }, [connectivityStatus, persistStateUpdateReconnectDiagnostics, status]);
 
   return {
+    isAuthSessionRestoring,
     isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     reconnectSessionAndRecords,

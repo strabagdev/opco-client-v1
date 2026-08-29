@@ -14,6 +14,7 @@ export type StateUpdateOperationFeedbackPhase =
   | "OFFLINE_SAVED"
   | "PENDING"
   | "RECONNECTING"
+  | "RESTORING_SESSION"
   | "SUCCESS"
   | "SYNCING"
   | "UNRESOLVED_ERROR";
@@ -39,6 +40,7 @@ const TIMEOUT_ERROR_TEXT = "agoto el tiempo de espera";
 export function resolveStateUpdateOperationFeedback({
   connectivityStatus,
   hasConflict = false,
+  isAuthSessionRestoring = false,
   isSaving = false,
   isReadinessChecking = false,
   isSyncing = false,
@@ -50,6 +52,7 @@ export function resolveStateUpdateOperationFeedback({
 }: {
   connectivityStatus: ConnectivityStatus;
   hasConflict?: boolean;
+  isAuthSessionRestoring?: boolean;
   isSaving?: boolean;
   isReadinessChecking?: boolean;
   isSyncing?: boolean;
@@ -86,6 +89,12 @@ export function resolveStateUpdateOperationFeedback({
     return lastSync.operationsFailed > 0
       ? { message: "No fue posible confirmar el cambio con Opco.", phase: "UNRESOLVED_ERROR" }
       : { message: "Confirmando con Opco...", phase: "CONFIRMING" };
+  }
+
+  if (connectivityStatus === "online" && pendingCount > 0 && lastActivity?.type === "auth_refresh") {
+    return isAuthSessionRestoring
+      ? { message: "Restableciendo sesion con Opco...", phase: "RESTORING_SESSION" }
+      : { message: "Pendiente de sincronizacion.", phase: "PENDING" };
   }
 
   if (connectivityStatus === "online" && pendingCount > 0 && lastActivity?.type === "ready_check") {

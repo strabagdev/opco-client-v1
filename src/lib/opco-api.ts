@@ -630,6 +630,7 @@ type ApiClientOptions = {
 type PlatformOS = "web" | "ios" | "android" | "macos" | "windows" | string;
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+export const AUTH_REFRESH_TIMEOUT_MS = 30_000;
 const NATIVE_CLIENT_PLATFORM_HEADER = "native";
 const OPCO_REQUEST_ID_HEADER = "X-Opco-Request-Id";
 const TOKEN_EXPIRED_CODE = "TOKEN_EXPIRED";
@@ -779,7 +780,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       }
     }
 
-    const refreshed = await refreshSession();
+    const refreshed = await refreshSession({
+      diagnosticSyncRunId: init.diagnosticSyncRunId,
+    });
 
     try {
       return await request<T>(path, withAuthHeaders(init, refreshed.accessToken));
@@ -789,9 +792,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     }
   }
 
-  async function refreshSession() {
+  async function refreshSession(refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
     if (!refreshPromise) {
-      refreshPromise = performRefresh()
+      refreshPromise = performRefresh(refreshOptions)
         .then(async (tokens) => {
           await tokenStore?.setSession(tokens);
           options.onSessionRefreshed?.(tokens);
@@ -818,12 +821,14 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     return refreshPromise;
   }
 
-  async function performRefresh() {
+  async function performRefresh(refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
     if (platformOS === "web") {
       return request<RefreshResponse>("/api/v1/auth/refresh", {
         credentials: "include",
         diagnosticOperation: "AUTH_REFRESH",
+        diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId,
         method: "POST",
+        timeoutMs: refreshOptions.timeoutMs ?? AUTH_REFRESH_TIMEOUT_MS,
       });
     }
 
@@ -836,8 +841,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     return request<RefreshResponse>("/api/v1/auth/refresh", {
       body: JSON.stringify({ refreshToken }),
       diagnosticOperation: "AUTH_REFRESH",
+      diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId,
       headers: nativePlatformHeaders(),
       method: "POST",
+      timeoutMs: refreshOptions.timeoutMs ?? AUTH_REFRESH_TIMEOUT_MS,
     });
   }
 
