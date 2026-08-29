@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isSessionLifecycleScopeCurrent,
+  OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS,
+  OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS,
+  OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
+  probeOperationalCoreReadiness,
+  shouldGatePendingSyncWithOperationalCoreReady,
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
 } from "./pending-work-lifecycle-logic";
@@ -86,5 +91,69 @@ describe("pending work lifecycle guards", () => {
       status: "authenticated",
       token: "token_1",
     })).toBe(false);
+  });
+
+  it("gates lifecycle reconnect triggers behind Operational Core readiness", () => {
+    expect(shouldGatePendingSyncWithOperationalCoreReady("reconnect")).toBe(true);
+    expect(shouldGatePendingSyncWithOperationalCoreReady("unknown-to-online")).toBe(true);
+    expect(shouldGatePendingSyncWithOperationalCoreReady("startup-with-pending")).toBe(true);
+    expect(shouldGatePendingSyncWithOperationalCoreReady("foreground/resume")).toBe(true);
+    expect(shouldGatePendingSyncWithOperationalCoreReady("manual-retry")).toBe(false);
+  });
+
+  it("probes /ready with a short timeout and shared syncRunId", async () => {
+    const getReady = vi.fn(async () => ({ ok: true }));
+
+    const result = await probeOperationalCoreReadiness({
+      api: { getReady },
+      syncRunId: "sync_reconnect_1",
+    });
+
+    expect(result).toEqual({ attempts: 1, ready: true });
+    expect(getReady).toHaveBeenCalledWith({
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
+    });
+  });
+
+  it("bounds readiness retries before allowing business sync", async () => {
+    const sleeps: number[] = [];
+    const getReady = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("not yet"))
+      .mockRejectedValueOnce(new Error("still warming"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await probeOperationalCoreReadiness({
+      api: { getReady },
+      sleep: async (durationMs) => {
+        sleeps.push(durationMs);
+      },
+      syncRunId: "sync_reconnect_2",
+    });
+
+    expect(result).toEqual({ attempts: 3, ready: true });
+    expect(getReady).toHaveBeenCalledTimes(OPERATIONAL_CORE_READY_PROBE_MAX_ATTEMPTS);
+    expect(sleeps).toEqual([...OPERATIONAL_CORE_READY_PROBE_BACKOFF_MS]);
+  });
+
+  it("returns not ready without throwing when /ready never confirms", async () => {
+    const sleeps: number[] = [];
+    const getReady = vi.fn(async () => {
+      throw new Error("railway still reconnecting");
+    });
+
+    const result = await probeOperationalCoreReadiness({
+      api: { getReady },
+      sleep: async (durationMs) => {
+        sleeps.push(durationMs);
+      },
+      syncRunId: "sync_reconnect_3",
+    });
+
+    expect(result).toEqual({ attempts: 3, ready: false });
+    expect(getReady).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual([500, 1_000]);
   });
 });

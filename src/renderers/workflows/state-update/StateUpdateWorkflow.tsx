@@ -126,6 +126,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     connectivityStatus,
     hasConflict: Boolean(conflict || readSummaryCount(response, "conflictCount") > 0),
     isSaving,
+    lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,
     lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
     pendingCount: unresolvedCount,
     successMessage,

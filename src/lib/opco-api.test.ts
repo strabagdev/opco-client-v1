@@ -498,6 +498,32 @@ describe("createOpcoApi", () => {
     }));
   });
 
+  it("records /ready probes as readiness diagnostics with request timeout overrides", async () => {
+    const diagnostics = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse({ data: { ready: true }, ok: true }),
+      onRequestDiagnostics: diagnostics,
+      timeoutMs: 12_000,
+    });
+
+    await api.getReady({
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      timeoutMs: 2_500,
+    });
+
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_reconnect_1",
+      httpStatus: 200,
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      timeoutMs: 2_500,
+    }));
+  });
+
   it("reports sanitized request timing diagnostics for successful state-update POSTs", async () => {
     const diagnostics = vi.fn();
     const api = createOpcoApi({

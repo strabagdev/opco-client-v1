@@ -11,14 +11,16 @@ import { readPersistedContractId } from "../lib/session-persistence";
 import { StateUpdateSyncTrigger } from "../lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "./reconnect-sync";
 import { StateUpdateReconnectDiagnostics } from "./use-session-diagnostics";
-import { syncPendingWork } from "../sync/pending-work-sync";
+import { createSyncRunId, syncPendingWork } from "../sync/pending-work-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 import * as tokenStorage from "../lib/token-storage";
 import {
   isSessionLifecycleScopeCurrent,
+  probeOperationalCoreReadiness,
   SessionLifecycleScope,
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
+  shouldGatePendingSyncWithOperationalCoreReady,
 } from "./pending-work-lifecycle-logic";
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
@@ -88,7 +90,7 @@ export function usePendingWorkLifecycle({
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
   const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
-  const lastOnlineReadyScopeSyncKeyRef = useRef<string | null>(null);
+  const activePendingWorkRunKeyRef = useRef<string | null>(null);
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     ownerKey,
     selectedContractId: selectedContractIdState,
@@ -103,6 +105,111 @@ export function usePendingWorkLifecycle({
     };
   }, [ownerKey, selectedContractIdState, token]);
 
+  const markStateUpdateActivity = useCallback(async ({
+    result,
+    startedAt,
+    syncRunId,
+    trigger,
+    type,
+  }: {
+    result: "ready_failed" | "reconnecting";
+    startedAt: string;
+    syncRunId: string;
+    trigger: StateUpdateSyncTrigger | "ready_check" | "reconnect";
+    type: "ready_check" | "reconnect";
+  }) => {
+    const completedAt = new Date().toISOString();
+
+    await persistStateUpdateReconnectDiagnostics((current) => {
+      const lastRequestDiagnostics = (current.requestHistory ?? [])
+        .slice()
+        .reverse()
+        .find((request) => request.diagnosticSyncRunId === syncRunId) ?? null;
+
+      return {
+        ...current,
+        currentConnectivity: {
+          status: connectivityStatus,
+          updatedAt: completedAt,
+        },
+        lastStateUpdateActivity: {
+          completedAt,
+          lastRequestDiagnostics,
+          operationsCompleted: 0,
+          operationsFailed: result === "ready_failed" ? 1 : 0,
+          result,
+          startedAt,
+          syncRunId,
+          timeoutOccurred: lastRequestDiagnostics?.abortControllerTriggered === true,
+          trigger,
+          type,
+        },
+      };
+    });
+  }, [connectivityStatus, persistStateUpdateReconnectDiagnostics]);
+
+  const runPendingWorkAfterReadiness = useCallback(async ({
+    ownerKey: runOwnerKey,
+    runScope,
+    syncRunId,
+    token: runToken,
+    trigger,
+  }: {
+    ownerKey: string;
+    runScope: SessionLifecycleScope;
+    syncRunId: string;
+    token: string;
+    trigger: StateUpdateSyncTrigger;
+  }) => {
+    const runKey = `${runOwnerKey}:${runScope.selectedContractId ?? "none"}:${runToken}`;
+
+    if (activePendingWorkRunKeyRef.current === runKey) {
+      return;
+    }
+
+    activePendingWorkRunKeyRef.current = runKey;
+    try {
+      if (shouldGatePendingSyncWithOperationalCoreReady(trigger)) {
+        const startedAt = new Date().toISOString();
+
+        await markStateUpdateActivity({
+          result: "reconnecting",
+          startedAt,
+          syncRunId,
+          trigger: "ready_check",
+          type: "ready_check",
+        });
+
+        const readiness = await probeOperationalCoreReadiness({ api, syncRunId });
+
+        if (!readiness.ready) {
+          await markStateUpdateActivity({
+            result: "ready_failed",
+            startedAt,
+            syncRunId,
+            trigger: "ready_check",
+            type: "ready_check",
+          });
+          return;
+        }
+      }
+
+      await syncPendingWork({
+        api,
+        ownerKey: runOwnerKey,
+        recordsStore: definitionCache,
+        syncRunId,
+        syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
+        token: runToken,
+        trigger,
+      });
+    } finally {
+      if (activePendingWorkRunKeyRef.current === runKey) {
+        activePendingWorkRunKeyRef.current = null;
+      }
+    }
+  }, [api, definitionCache, markStateUpdateActivity, syncPendingStateUpdatesWithTelemetry]);
+
   const syncPendingRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "manual-retry") => {
     if (!token || !ownerKey) {
       return;
@@ -113,13 +220,13 @@ export function usePendingWorkLifecycle({
       selectedContractId: selectedContractIdState,
       token,
     };
+    const syncRunId = createSyncRunId();
 
     try {
-      await syncPendingWork({
-        api,
+      await runPendingWorkAfterReadiness({
         ownerKey,
-        recordsStore: definitionCache,
-        syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
+        runScope,
+        syncRunId,
         token,
         trigger,
       });
@@ -132,14 +239,12 @@ export function usePendingWorkLifecycle({
       }
     }
   }, [
-    api,
-    definitionCache,
     ownerKey,
     refreshPendingRecordsCount,
     refreshStateUpdateDiagnostics,
+    runPendingWorkAfterReadiness,
     selectedContractIdState,
     shouldShowStateUpdateDiagnostics,
-    syncPendingStateUpdatesWithTelemetry,
     token,
   ]);
 
@@ -220,11 +325,10 @@ export function usePendingWorkLifecycle({
       return;
     }
 
-    await syncPendingWork({
-      api,
+    await runPendingWorkAfterReadiness({
       ownerKey: nextOwnerKey,
-      recordsStore: definitionCache,
-      syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
+      runScope,
+      syncRunId: createSyncRunId(),
       token: nextToken,
       trigger,
     });
@@ -249,7 +353,7 @@ export function usePendingWorkLifecycle({
     setStatus,
     setToken,
     shouldShowStateUpdateDiagnostics,
-    syncPendingStateUpdatesWithTelemetry,
+    runPendingWorkAfterReadiness,
     token,
   ]);
 
@@ -286,7 +390,7 @@ export function usePendingWorkLifecycle({
       selectedContractId: selectedContractIdState,
       status,
       token,
-    }) || !scopeKey || lastOnlineReadyScopeSyncKeyRef.current === scopeKey) {
+    }) || !scopeKey) {
       return;
     }
 
@@ -301,8 +405,6 @@ export function usePendingWorkLifecycle({
         if (!shouldSync) {
           return undefined;
         }
-
-        lastOnlineReadyScopeSyncKeyRef.current = scopeKey;
         return reconnectSessionAndRecordsRef.current("startup-with-pending");
       })
       .catch(() => undefined)

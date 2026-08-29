@@ -124,6 +124,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     connectivityStatus,
     hasConflict: Boolean(conflict || localConflicts.length > 0),
     isSaving,
+    lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,
     lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
     pendingCount,
     successMessage,

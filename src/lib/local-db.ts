@@ -3981,7 +3981,12 @@ function normalizeLastStateUpdateActivityTelemetry(
     return null;
   }
 
-  const type = telemetry.type === "snapshot_reconciliation" || telemetry.type === "sync" ? telemetry.type : null;
+  const type = telemetry.type === "ready_check" ||
+    telemetry.type === "reconnect" ||
+    telemetry.type === "snapshot_reconciliation" ||
+    telemetry.type === "sync"
+    ? telemetry.type
+    : null;
 
   if (!type) {
     return null;
@@ -3996,8 +4001,10 @@ function normalizeLastStateUpdateActivityTelemetry(
     startedAt: telemetry.startedAt,
     syncRunId: typeof telemetry.syncRunId === "string" ? telemetry.syncRunId : null,
     timeoutOccurred: telemetry.timeoutOccurred === true,
-    trigger: telemetry.trigger === "snapshot_reconciliation"
-      ? "snapshot_reconciliation"
+    trigger: telemetry.trigger === "snapshot_reconciliation" ||
+      telemetry.trigger === "ready_check" ||
+      telemetry.trigger === "reconnect"
+      ? telemetry.trigger
       : normalizeStateUpdateSyncTrigger(telemetry.trigger),
     type,
   };
@@ -4051,6 +4058,7 @@ function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequ
     abortControllerTriggered: diagnostics.abortControllerTriggered === true,
     diagnosticOperation: normalizeDiagnosticOperation(diagnostics.diagnosticOperation),
     diagnosticRequestId: normalizeDiagnosticToken(diagnostics.diagnosticRequestId) ?? "unknown",
+    diagnosticSyncRunId: normalizeDiagnosticToken(diagnostics.diagnosticSyncRunId),
     fetchResolvedAt: typeof diagnostics.fetchResolvedAt === "string" ? diagnostics.fetchResolvedAt : null,
     httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : null,
     method: typeof diagnostics.method === "string" ? diagnostics.method : "UNKNOWN",
@@ -4128,6 +4136,7 @@ function normalizeDiagnosticOperation(value: unknown): NonNullable<StateUpdateRe
     value === "SEARCH" ||
     value === "PERSON_LOAD" ||
     value === "RECONCILE" ||
+    value === "READY_CHECK" ||
     value === "HEALTH" ||
     value === "OTHER"
     ? value
@@ -4165,6 +4174,8 @@ function normalizeStateUpdateSyncTelemetryResult(value: unknown) {
   return value === "failed" ||
     value === "noop" ||
     value === "partial_failure" ||
+    value === "ready_failed" ||
+    value === "reconnecting" ||
     value === "reconciled_success" ||
     value === "success"
     ? value

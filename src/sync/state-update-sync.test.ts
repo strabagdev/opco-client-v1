@@ -40,7 +40,12 @@ describe("state-update sync engine", () => {
       })),
     };
 
-    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
 
     expect(result.completed).toBe(1);
     expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_attendance", "view_attendance", {
@@ -51,6 +56,8 @@ describe("state-update sync engine", () => {
       overwrite: undefined,
       stateValues: [{ fieldId: "field_attendance_status", optionId: "status_present" }],
       subjectRecordId: "person_1",
+    }, {
+      diagnosticSyncRunId: null,
     });
     expect(store.operations).toHaveLength(0);
   });
@@ -65,7 +72,12 @@ describe("state-update sync engine", () => {
       })),
     };
 
-    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
 
     expect(result.completed).toBe(1);
     expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", {
@@ -79,9 +91,38 @@ describe("state-update sync engine", () => {
         { fieldId: "field_availability", optionId: "available" },
       ],
       subjectRecordId: "equipment_1",
+    }, {
+      diagnosticSyncRunId: null,
     });
     expect(store.completed).toHaveLength(1);
     expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastPushCompletedAt).toBe("now");
+  });
+
+  it("passes the lifecycle syncRunId to STATE_UPDATE POST diagnostics", async () => {
+    store.operations = [operation()];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
+        date: "2026-08-25",
+        results: [{ recordId: "event_1", result: "UPDATED" as const, subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:00.000Z" }],
+      })),
+    };
+
+    await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      syncRunId: "sync_reconnect_1",
+      token: "token_1",
+    });
+
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith(
+      "token_1",
+      "contract_1",
+      "view_equipment_state",
+      expect.any(Object),
+      { diagnosticSyncRunId: "sync_reconnect_1" },
+    );
   });
 
   it("syncs three distinct offline Attendance STATE_UPDATE operations through the generic engine", async () => {
@@ -97,7 +138,13 @@ describe("state-update sync engine", () => {
       })),
     };
 
-    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      syncRunId: "sync_reconnect_timeout",
+      token: "token_1",
+    });
 
     expect(result).toMatchObject({ completed: 3, failed: 0 });
     expect(api.saveStateUpdateWorkflow).toHaveBeenCalledTimes(3);
@@ -128,7 +175,13 @@ describe("state-update sync engine", () => {
       }),
     };
 
-    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      syncRunId: "sync_reconnect_timeout",
+      token: "token_1",
+    });
 
     expect(result).toMatchObject({ completed: 2, failed: 1 });
     expect(store.operations.map((item) => item.localRecordId)).toEqual(["local_c"]);
@@ -164,7 +217,13 @@ describe("state-update sync engine", () => {
       }),
     };
 
-    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      syncRunId: "sync_reconnect_timeout",
+      token: "token_1",
+    });
 
     expect(result).toMatchObject({ completed: 1, retriable: 0 });
     expect(result.operationsAttempted).toBe(1);
@@ -180,7 +239,16 @@ describe("state-update sync engine", () => {
     expect(api.getStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", {
       date: "2026-08-25",
       subjectRecordId: "equipment_1",
+    }, {
+      diagnosticSyncRunId: "sync_reconnect_timeout",
     });
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith(
+      "token_1",
+      "contract_1",
+      "view_equipment_state",
+      expect.any(Object),
+      { diagnosticSyncRunId: "sync_reconnect_timeout" },
+    );
     expect(store.completed[0]).toMatchObject({
       operation: { clientRequestId: "request_original" },
       result: { recordId: "event_1", result: "UNCHANGED", subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:11.000Z" },

@@ -123,6 +123,47 @@ describe("pending work sync orchestration", () => {
     });
   });
 
+  it("reuses a lifecycle syncRunId across pending engines", async () => {
+    const order: string[] = [];
+    const syncStateUpdates = vi.fn(async (input: { syncRunId: string }) => ({
+      completedAt: "2026-08-28T12:00:01.000Z",
+      operationsSelected: 1,
+      result: {
+        completed: 1,
+        conflicts: 0,
+        failed: 0,
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        retriable: 0,
+        timeoutOccurred: false,
+      },
+      startedAt: "2026-08-28T12:00:00.000Z",
+      syncRunId: input.syncRunId,
+    }));
+
+    const result = await syncPendingWork({
+      api: emptyRecordsApi(),
+      ownerKey: "org_1:user_1",
+      recordsStore: new EmptyRecordsStore(order),
+      syncRunId: "sync_lifecycle_1",
+      syncStateUpdates,
+      token: "token_1",
+      trigger: "reconnect",
+    });
+
+    expect(order).toEqual(["records"]);
+    expect(result.stateUpdate?.syncRunId).toBe("sync_lifecycle_1");
+    expect(syncStateUpdates).toHaveBeenCalledWith({
+      ownerKey: "org_1:user_1",
+      store: undefined,
+      syncRunId: "sync_lifecycle_1",
+      token: "token_1",
+      trigger: "reconnect",
+    });
+  });
+
 
   it("keeps repeated triggers delegated to engine single-flight instead of adding another queue", async () => {
     const order: string[] = [];

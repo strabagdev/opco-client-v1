@@ -42,14 +42,17 @@ Reconnect:
 
 ```mermaid
 flowchart LR
-  A[Connectivity trigger] --> B[syncPendingStateUpdatesWithTelemetry]
-  B --> C[syncPendingStateUpdatesOnce]
-  C --> D[API]
-  D --> E[result]
-  E --> F[reconcile]
-  F --> G[SQLite]
-  G --> H[refresh signal]
-  H --> I[mounted UI]
+  A[Connectivity trigger] --> B[scope ready]
+  B --> C[ready probe]
+  C --> D[syncPendingWork]
+  D --> E[RECORDS]
+  D --> F[STATE_UPDATE]
+  F --> G[API]
+  G --> H[result]
+  H --> I[reconcile]
+  I --> J[SQLite]
+  J --> K[refresh signal]
+  K --> L[mounted UI]
 ```
 
 Timeout:
@@ -161,6 +164,10 @@ Current triggers:
 The sync engine is single-flight. Failed and conflict rows are excluded from automatic retry by current policy; manual retry is explicit.
 
 Each combined pending-work execution creates a local `syncRunId`. It is not sent to Operational Core. It exists to correlate lifecycle trigger, state-update sync telemetry, request diagnostics, and visible UI diagnostics.
+
+Automatic reconnect-like triggers are gated by Operational Core readiness before POST sync begins. NetInfo `online` only says the client appears connected; it does not prove Railway/Operational Core is ready to accept authenticated business writes. For `reconnect`, `unknown-to-online`, `startup-with-pending`, and `foreground/resume`, the lifecycle hook first checks durable pending work and then probes `GET /api/v1/ready` with a short independent timeout of `2_500 ms`, at most three attempts, and bounded backoff of `500 ms` then `1_000 ms`. If readiness never confirms, the client does not send STATE_UPDATE/RECORDS POST requests, leaves pending intent durable and retryable, and records activity as `ready_failed` rather than a business sync failure.
+
+If NetInfo becomes `online` before `ownerKey`, token, and selected contract scope are ready, the scope-ready catch-up path re-checks durable pending work as soon as the missing scope becomes available. This closes the case where the online transition was consumed while `shouldSync()` was false. The catch-up is not polling; repeated renders are deduped for the active scope, and a user/session/contract change is evaluated as a new scope.
 
 ## Connectivity
 
@@ -340,7 +347,7 @@ Diagnostics distinguish:
 - last `STATE_UPDATE` activity, including snapshot reconciliation;
 - last meaningful `STATE_UPDATE` sync;
 - last visible UI error event;
-- bounded request history for recent `STATE_UPDATE`, Attendance, and health/ready diagnostics;
+- bounded request history for recent `STATE_UPDATE`, Attendance, readiness, and health diagnostics;
 - current outbox;
 - workflow local records;
 - consistency;
@@ -350,9 +357,9 @@ Telemetry is persisted in `app_metadata` under `state_update_sync_diagnostics:<f
 
 The dedicated `/diagnostics/state-update` route is an operational console. It renders compact health cards, last activity timeline, last request interpretation, non-zero current counters, request history, local operations, and explicit Attendance GET plus health/ready read actions. Mounting the route reads local diagnostics only. Attendance GET, health/ready latency checks, retry, and sync now require explicit button presses.
 
-`requestHistory` keeps the recent bounded sanitized request events, currently capped at 20. It records operation class (`SAVE`, `DAY_LOAD`, `REFRESH_AFTER_SYNC`, `SEARCH`, `PERSON_LOAD`, `RECONCILE`, `HEALTH`, or `OTHER`), HTTP method, path template, client timing milestones, timeout flag, HTTP status, sanitized request correlation id, echoed backend request id, parsed `Server-Timing`, and a derived interpretation such as `client_timeout_before_response`, `network_failure`, `http_error`, `server_slow`, or `success`. It must not persist payloads, raw IDs, query values, tokens, names, stack traces, or form values.
+`requestHistory` keeps the recent bounded sanitized request events, currently capped at 20. It records operation class (`SAVE`, `DAY_LOAD`, `REFRESH_AFTER_SYNC`, `SEARCH`, `PERSON_LOAD`, `RECONCILE`, `READY_CHECK`, `HEALTH`, or `OTHER`), HTTP method, path template, client timing milestones, timeout flag, HTTP status, local `syncRunId` when available, sanitized request correlation id, echoed backend request id, parsed `Server-Timing`, and a derived interpretation such as `client_timeout_before_response`, `network_failure`, `http_error`, `server_slow`, or `success`. It must not persist payloads, raw IDs, query values, tokens, names, stack traces, or form values.
 
-`Last STATE_UPDATE activity` is separate from `Last STATE_UPDATE sync`. A real sync engine run writes both, with activity `type=sync`. Snapshot reconciliation through `upsertStateUpdateSnapshot()` may complete pending local intent without a POST sync run; that writes activity `type=snapshot_reconciliation` and does not invent a new `Last STATE_UPDATE sync`.
+`Last STATE_UPDATE activity` is separate from `Last STATE_UPDATE sync`. A real sync engine run writes both, with activity `type=sync`. Readiness probes may write activity `type=ready_check` with `result=reconnecting` or `result=ready_failed`, but they do not invent `Last STATE_UPDATE sync`. Snapshot reconciliation through `upsertStateUpdateSnapshot()` may complete pending local intent without a POST sync run; that writes activity `type=snapshot_reconciliation` and does not invent a new `Last STATE_UPDATE sync`.
 
 `Last visible UI error` is historical. The current visible error may disappear after success, refresh, navigation, or remount, but diagnostics keep the last sanitized event with `occurredAt`, optional `clearedAt`, `operation`, HTTP method, path template, duration, timeout flag, HTTP status, error code, optional `syncRunId`, and resolution such as `unresolved`, `cleared_after_success`, or `refresh_failed`. It must not persist user-facing messages, payloads, tokens, raw IDs, names, or form values.
 

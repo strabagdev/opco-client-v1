@@ -553,6 +553,7 @@ export type OpcoNetworkDiagnostics = {
   abortControllerTriggered: boolean;
   diagnosticOperation?: OpcoDiagnosticRequestOperation;
   diagnosticRequestId?: string;
+  diagnosticSyncRunId?: string | null;
   fetchResolvedAt: string | null;
   httpStatus: number | null;
   method: string;
@@ -575,6 +576,7 @@ export type OpcoDiagnosticRequestOperation =
   | "SEARCH"
   | "PERSON_LOAD"
   | "RECONCILE"
+  | "READY_CHECK"
   | "HEALTH"
   | "OTHER";
 
@@ -586,6 +588,8 @@ export type OpcoServerTimingMetric = {
 
 type OpcoRequestInit = RequestInit & {
   diagnosticOperation?: OpcoDiagnosticRequestOperation;
+  diagnosticSyncRunId?: string | null;
+  timeoutMs?: number;
 };
 
 export class OpcoNetworkError extends Error {
@@ -667,12 +671,19 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     const requestStartedMs = Date.now();
     const diagnosticRequestId = getDiagnosticRequestId(init);
     const diagnosticOperation = init.diagnosticOperation ?? "OTHER";
+    const diagnosticSyncRunId = init.diagnosticSyncRunId ?? null;
+    const requestTimeoutMs = init.timeoutMs ?? timeoutMs;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       abortControllerTriggered = true;
       controller.abort();
-    }, timeoutMs);
-    const { diagnosticOperation: _diagnosticOperation, ...fetchInit } = init;
+    }, requestTimeoutMs);
+    const {
+      diagnosticOperation: _diagnosticOperation,
+      diagnosticSyncRunId: _diagnosticSyncRunId,
+      timeoutMs: _timeoutMs,
+      ...fetchInit
+    } = init;
 
     try {
       response = await fetcher(`${apiUrl}${path}`, {
@@ -694,6 +705,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         abortControllerTriggered,
         diagnosticOperation,
         diagnosticRequestId,
+        diagnosticSyncRunId,
         fetchResolvedAt,
         httpStatus: null,
         init,
@@ -705,7 +717,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         responseRequestId,
         responseStarted,
         serverTiming,
-        timeoutMs,
+        timeoutMs: requestTimeoutMs,
       });
       options.onRequestDiagnostics?.(diagnostics);
 
@@ -725,6 +737,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       abortControllerTriggered,
       diagnosticOperation,
       diagnosticRequestId,
+      diagnosticSyncRunId,
       fetchResolvedAt,
       httpStatus: response.status,
       init,
@@ -736,7 +749,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       responseRequestId,
       responseStarted,
       serverTiming,
-      timeoutMs,
+      timeoutMs: requestTimeoutMs,
     }));
 
     return parseApiEnvelope<T>(body, response.status);
@@ -965,6 +978,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       appViewId: string,
       query: string | AttendanceWorkflowQuery,
       diagnosticOperation?: OpcoDiagnosticRequestOperation,
+      diagnosticSyncRunId?: string | null,
     ) {
       const normalizedQuery = typeof query === "string" ? { date: query } : query;
       const searchParams = new URLSearchParams({ date: normalizedQuery.date });
@@ -984,6 +998,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
         {
           diagnosticOperation: diagnosticOperation ?? attendanceDiagnosticOperation(normalizedQuery),
+          diagnosticSyncRunId,
         },
       ).then(normalizeAttendanceResponse);
     },
@@ -992,6 +1007,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       contractId: string,
       appViewId: string,
       query: StateUpdateWorkflowQuery = {},
+      options: { diagnosticSyncRunId?: string | null } = {},
     ) {
       const searchParams = new URLSearchParams();
 
@@ -1016,6 +1032,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
         {
           diagnosticOperation: query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
+          diagnosticSyncRunId: options.diagnosticSyncRunId,
         },
       ).then(normalizeStateUpdateResponse);
     },
@@ -1024,6 +1041,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       contractId: string,
       appViewId: string,
       input: AttendanceBatchRequest,
+      options: { diagnosticSyncRunId?: string | null } = {},
     ) {
       return authenticatedRequest<AttendanceBatchResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/attendance`,
@@ -1031,6 +1049,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         {
           body: JSON.stringify(input),
           diagnosticOperation: "SAVE",
+          diagnosticSyncRunId: options.diagnosticSyncRunId,
           method: "POST",
         },
       ).then(normalizeAttendanceBatchResponse);
@@ -1040,6 +1059,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       contractId: string,
       appViewId: string,
       input: StateUpdateRequest,
+      options: { diagnosticSyncRunId?: string | null } = {},
     ) {
       return authenticatedRequest<StateUpdateApiResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update`,
@@ -1047,6 +1067,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         {
           body: JSON.stringify(serializeStateUpdateRequest(input)),
           diagnosticOperation: "SAVE",
+          diagnosticSyncRunId: options.diagnosticSyncRunId,
           method: "POST",
         },
       ).then(normalizeStateUpdateBatchResponse);
@@ -1056,9 +1077,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         diagnosticOperation: "HEALTH",
       });
     },
-    getReady() {
+    getReady(options: { diagnosticOperation?: OpcoDiagnosticRequestOperation; diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
       return request<unknown>("/api/v1/ready", {
-        diagnosticOperation: "HEALTH",
+        diagnosticOperation: options.diagnosticOperation ?? "READY_CHECK",
+        diagnosticSyncRunId: options.diagnosticSyncRunId,
+        timeoutMs: options.timeoutMs,
       });
     },
   };
@@ -1213,6 +1236,7 @@ function requestDiagnostics({
   abortControllerTriggered,
   diagnosticOperation,
   diagnosticRequestId,
+  diagnosticSyncRunId,
   fetchResolvedAt,
   httpStatus,
   init,
@@ -1229,6 +1253,7 @@ function requestDiagnostics({
   abortControllerTriggered: boolean;
   diagnosticOperation: OpcoDiagnosticRequestOperation;
   diagnosticRequestId: string;
+  diagnosticSyncRunId: string | null;
   fetchResolvedAt: Date | null;
   httpStatus: number | null;
   init: OpcoRequestInit;
@@ -1246,6 +1271,7 @@ function requestDiagnostics({
     abortControllerTriggered,
     diagnosticOperation,
     diagnosticRequestId,
+    diagnosticSyncRunId,
     fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
     httpStatus,
     method: String(init.method ?? "GET").toUpperCase(),

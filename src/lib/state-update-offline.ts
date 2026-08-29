@@ -160,6 +160,8 @@ export type StateUpdateSyncTelemetryResult =
   | "failed"
   | "noop"
   | "partial_failure"
+  | "ready_failed"
+  | "reconnecting"
   | "reconciled_success"
   | "success";
 
@@ -187,6 +189,7 @@ export type StateUpdateRequestDiagnostics = Pick<
   OpcoNetworkDiagnostics,
   | "diagnosticOperation"
   | "diagnosticRequestId"
+  | "diagnosticSyncRunId"
   | "method"
   | "responseRequestId"
   | "serverTiming"
@@ -228,8 +231,8 @@ export type StateUpdateActivityTelemetry = {
   startedAt: string;
   syncRunId: string | null;
   timeoutOccurred: boolean;
-  trigger: StateUpdateSyncTrigger | "snapshot_reconciliation";
-  type: "snapshot_reconciliation" | "sync";
+  trigger: StateUpdateSyncTrigger | "ready_check" | "reconnect" | "snapshot_reconciliation";
+  type: "ready_check" | "reconnect" | "snapshot_reconciliation" | "sync";
 };
 
 export type StateUpdateVisibleErrorResolution =
@@ -378,6 +381,7 @@ export function stateUpdateRequestDiagnosticsFromNetwork(
     abortControllerTriggered: diagnostics.abortControllerTriggered,
     diagnosticOperation: diagnostics.diagnosticOperation,
     diagnosticRequestId: diagnostics.diagnosticRequestId,
+    diagnosticSyncRunId: diagnostics.diagnosticSyncRunId ?? null,
     fetchResolvedAt: diagnostics.fetchResolvedAt,
     httpStatus: diagnostics.httpStatus,
     method: diagnostics.method,
@@ -407,6 +411,7 @@ export function appendStateUpdateRequestHistory(
     ...event,
     diagnosticOperation: event.diagnosticOperation ?? "OTHER",
     diagnosticRequestId: event.diagnosticRequestId ?? "unknown",
+    diagnosticSyncRunId: event.diagnosticSyncRunId ?? null,
     interpretation: interpretStateUpdateRequest(event),
     method: event.method ?? "UNKNOWN",
     responseRequestId: event.responseRequestId ?? null,

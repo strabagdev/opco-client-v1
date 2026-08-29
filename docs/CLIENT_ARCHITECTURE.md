@@ -410,6 +410,8 @@ Triggers:
 
 Ordering is centralized by `syncPendingWork()`: RECORDS sync first, then STATE_UPDATE sync. `SessionProvider` still decides whether session/context exists, but `use-pending-work-lifecycle.ts` owns reconnect, unknown-to-online, foreground/resume, pending checks, manual pending-work callback wiring, and stale-run guards. `SessionProvider` still owns auth/session, context refresh, selected contract, recovery UI, prewarm kick-off, pending-count state, and renderer refresh keys.
 
+Reconnect-like automatic triggers do not treat NetInfo `online` as proof that Operational Core is ready. For reconnect, unknown-to-online, startup-with-pending, and foreground/resume, the lifecycle hook first confirms owner/token/contract scope, checks durable pending work, then runs a short `GET /api/v1/ready` gate before POST sync. The ready probe uses its own `2_500 ms` timeout, at most three attempts, and bounded backoff. If the scope becomes ready after NetInfo already moved to online, the hook performs a one-time catch-up for that scope by re-checking durable pending work; this avoids waiting for a later remount or foreground event.
+
 Each engine has its own module-level single-flight promise. The reconnect controller also debounces and avoids overlapping reconnect runs. The pending-work facade does not add another queue or retry policy; it preserves the current behavior where a thrown RECORDS engine failure aborts the combined orchestration and a later trigger retries. Per-operation RECORDS failures are normally captured inside the RECORDS engine, so STATE_UPDATE still runs after ordinary retryable/failed/conflict record results. Lifecycle runs compare their starting token/owner/contract scope with the current scope before applying refresh side effects, so logout or contract switch does not apply stale refresh results.
 
 Failure isolation:
@@ -427,6 +429,8 @@ Connectivity status:
 - `unknown`: neither value is known.
 
 Connectivity is a runtime signal only. It is not proof that a backend write succeeded or failed. A timeout after a POST may still correspond to a committed Operational Core write; state-update sync attempts exact remote reconciliation where safe.
+
+`Last STATE_UPDATE sync` is written only by a real sync engine run. Readiness checks and reconnect detection may update `Last STATE_UPDATE activity` and request history, but they do not fabricate a sync run. A shared local `syncRunId` correlates reconnect/catch-up lifecycle, ready probe diagnostics, pending-work orchestration, STATE_UPDATE sync telemetry, and visible UI diagnostics without being sent to the backend.
 
 ## Prewarm
 
@@ -579,8 +583,8 @@ Error groups:
 | RECORDS search | Partial load/cache upsert only. | Search result UI; no destructive cleanup. |
 | RECORDS sync completion | Pending count and telemetry refresh. | `recordsReconnectRefreshKey` can reload mounted records. |
 | STATE_UPDATE sync completion | Operation completion/conflict/failure. | `stateUpdateReconnectRefreshKey` tells mounted workflows to reload. |
-| Reconnect | Session refresh, context/views reload, pending push. | Refresh keys and context state. |
-| Foreground/resume | Runs sync only if pending work exists and online. | Same as reconnect if work ran. |
+| Reconnect | Session refresh, context/views reload, readiness gate, pending push only when ready. | Refresh keys and context state. |
+| Foreground/resume | Runs readiness gate and sync only if pending work exists and online. | Same as reconnect if work ran. |
 | Manual refresh/retry | Renderer or diagnostics invokes load/sync. | Local component state refresh. |
 
 Parallel mechanisms exist: renderer-level manual refresh and SessionProvider reconnect refresh both reload data. The current architecture uses refresh keys to avoid requiring remounts.
@@ -684,10 +688,13 @@ sequenceDiagram
   participant DB as SQLite
   participant Session as SessionProvider
   participant Sync as STATE_UPDATE sync
+  participant API as API client
   participant Core as Operational Core
   UI->>DB: saveStateUpdateLocally in transaction
   DB-->>UI: pending visible
   Session->>Sync: reconnect trigger
+  Sync->>API: GET /ready gate
+  API-->>Sync: ready
   Sync->>DB: select pending STATE_UPDATE
   Sync->>Core: POST workflow/state-update
   Core-->>Sync: result

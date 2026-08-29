@@ -12,6 +12,8 @@ export type StateUpdateOperationFeedbackPhase =
   | "FAILED"
   | "IDLE"
   | "OFFLINE_SAVED"
+  | "PENDING"
+  | "RECONNECTING"
   | "SUCCESS"
   | "SYNCING"
   | "UNRESOLVED_ERROR";
@@ -38,6 +40,7 @@ export function resolveStateUpdateOperationFeedback({
   connectivityStatus,
   hasConflict = false,
   isSaving = false,
+  lastActivity,
   lastSync,
   pendingCount,
   successMessage,
@@ -46,6 +49,10 @@ export function resolveStateUpdateOperationFeedback({
   connectivityStatus: ConnectivityStatus;
   hasConflict?: boolean;
   isSaving?: boolean;
+  lastActivity?: {
+    result: string;
+    type: string;
+  } | null;
   lastSync?: StateUpdateLastSyncTelemetry | null;
   pendingCount: number;
   successMessage?: string | null;
@@ -71,6 +78,16 @@ export function resolveStateUpdateOperationFeedback({
     return lastSync.operationsFailed > 0
       ? { message: "No fue posible confirmar el cambio con Opco.", phase: "UNRESOLVED_ERROR" }
       : { message: "Confirmando con Opco...", phase: "CONFIRMING" };
+  }
+
+  if (connectivityStatus === "online" && pendingCount > 0 && lastActivity?.type === "ready_check") {
+    if (lastActivity.result === "reconnecting") {
+      return { message: "Reconectando con Opco...", phase: "RECONNECTING" };
+    }
+
+    if (lastActivity.result === "ready_failed") {
+      return { message: "Pendiente de sincronizacion.", phase: "PENDING" };
+    }
   }
 
   if (connectivityStatus !== "online" && pendingCount > 0) {

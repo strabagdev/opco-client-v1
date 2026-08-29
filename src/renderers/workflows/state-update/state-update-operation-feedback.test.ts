@@ -30,6 +30,34 @@ describe("state update operation feedback", () => {
     });
   });
 
+  it("shows reconnecting feedback while Operational Core readiness is being checked", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "reconnecting",
+        type: "ready_check",
+      },
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Reconectando con Opco...",
+      phase: "RECONNECTING",
+    });
+  });
+
+  it("keeps pending intent visible without a definitive write error when readiness fails", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "ready_failed",
+        type: "ready_check",
+      },
+      pendingCount: 1,
+    })).toMatchObject({
+      message: "Pendiente de sincronizacion.",
+      phase: "PENDING",
+    });
+  });
+
   it("does not show a definitive timeout error while confirmation is still pending", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",

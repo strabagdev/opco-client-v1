@@ -25,6 +25,7 @@ type SyncPendingWorkInput = {
   }): Promise<StateUpdateSyncRun>;
   token: string;
   trigger: StateUpdateSyncTrigger;
+  syncRunId?: string;
 };
 
 export type SyncPendingWorkResult = {
@@ -40,8 +41,8 @@ export async function syncPendingWork({
   syncStateUpdates,
   token,
   trigger,
+  syncRunId = createSyncRunId(),
 }: SyncPendingWorkInput): Promise<SyncPendingWorkResult> {
-  const syncRunId = createSyncRunId();
   const records = await syncPendingRecordsOnce({
     api,
     ownerKey,

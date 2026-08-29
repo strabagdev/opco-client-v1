@@ -395,6 +395,7 @@ function StateUpdateOperationalDiagnostics({
               ["timeout", request.abortControllerTriggered],
               ["interpretation", request.interpretation],
               ["requestId", request.responseRequestId ?? request.diagnosticRequestId ?? "unknown"],
+              ["syncRunId", request.diagnosticSyncRunId ?? "none"],
               ["serverTiming", formatServerTiming(request.serverTiming ?? [])],
             ]} />
           </View>
@@ -503,6 +504,7 @@ function requestRows(request: StateUpdateRequestDiagnostics): [string, string | 
     ["abortController", request.abortControllerTriggered],
     ["httpStatus", request.httpStatus ?? "none"],
     ["requestId", request.responseRequestId ?? request.diagnosticRequestId ?? "unknown"],
+    ["syncRunId", request.diagnosticSyncRunId ?? "none"],
     ["serverTiming", formatServerTiming(request.serverTiming ?? [])],
     ["clientMinusServerMs", clientMinusServerMs(request)],
   ];

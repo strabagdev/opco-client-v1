@@ -37,6 +37,7 @@ export function syncPendingStateUpdatesOnce(params: {
   api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
+  syncRunId?: string | null;
   token: string;
 }) {
   if (!syncPromise) {
@@ -52,11 +53,13 @@ async function runSync({
   api,
   ownerKey,
   store,
+  syncRunId = null,
   token,
 }: {
   api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
+  syncRunId?: string | null;
   token: string;
 }) {
   const operations = await store.listPendingStateUpdateOperations(ownerKey);
@@ -106,6 +109,8 @@ async function runSync({
           optionId: value.optionId,
         })),
         subjectRecordId: payload.subjectRecordId,
+      }, {
+        diagnosticSyncRunId: syncRunId,
       });
       const operationResult = response.results[0];
 
@@ -148,6 +153,7 @@ async function runSync({
           operation,
           payload,
           store,
+          syncRunId,
           token,
         });
 
@@ -195,12 +201,14 @@ async function completeOperationIfRemoteStateMatches({
   operation,
   payload,
   store,
+  syncRunId,
   token,
 }: {
   api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
   operation: PendingOperation;
   payload: OfflineStateUpdatePayload;
   store: StateUpdateSyncStore;
+  syncRunId: string | null;
   token: string;
 }) {
   if (!api.getStateUpdateWorkflow) {
@@ -211,6 +219,8 @@ async function completeOperationIfRemoteStateMatches({
     const response = await api.getStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
       date: payload.date,
       subjectRecordId: payload.subjectRecordId,
+    }, {
+      diagnosticSyncRunId: syncRunId,
     });
     const item = response.items.find((candidate) => candidate.subject.id === payload.subjectRecordId);
 

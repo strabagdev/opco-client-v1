@@ -276,6 +276,7 @@ export function useSessionDiagnostics({
       api: stateUpdateApi,
       ownerKey: runOwnerKey,
       store,
+      syncRunId,
       token: runToken,
     });
     const completedAt = new Date().toISOString();
