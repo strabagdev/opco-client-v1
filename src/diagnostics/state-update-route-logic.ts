@@ -126,22 +126,32 @@ export type StateUpdateDiagnosticHealth = {
     tone: "good" | "risk" | "warn";
     value: string;
   }[];
+  currentActivity: {
+    result: string;
+    syncRunId: string | null;
+    type: string;
+  };
   interpretation: string;
   pendingState: string;
 };
 
+export const STATE_UPDATE_RECENT_TIMEOUT_WINDOW_MS = 5 * 60 * 1000;
+
 export function buildStateUpdateDiagnosticHealth({
   diagnostics,
+  now = new Date(),
   reconnect,
 }: {
   diagnostics: StateUpdateOutboxDiagnostics | null;
+  now?: Date;
   reconnect: StateUpdateSyncDiagnosticsTelemetry;
 }): StateUpdateDiagnosticHealth {
   const summary = diagnostics?.summary;
   const pending = summary
     ? summary.pendingCreate + summary.pendingUpdate + summary.syncing + summary.failed + summary.conflict
     : 0;
-  const recentTimeout = (reconnect.requestHistory ?? []).some((request) => request.abortControllerTriggered);
+  const currentActivity = resolveStateUpdateCurrentActivity({ pending, reconnect });
+  const recentTimeout = hasRecentStateUpdateTimeout({ now, reconnect });
   const hasError = Boolean(reconnect.lastVisibleErrorEvent && !reconnect.lastVisibleErrorEvent.clearedAt);
   const pendingState = summary
     ? [
@@ -166,9 +176,14 @@ export function buildStateUpdateDiagnosticHealth({
         value: summary ? String(pending) : "loading",
       },
       {
-        label: "Ultimo sync",
+        label: "Ultimo sync completado",
         tone: reconnect.lastStateUpdateSync?.result === "success" || reconnect.lastStateUpdateSync?.result === "reconciled_success" ? "good" : reconnect.lastStateUpdateSync ? "warn" : "risk",
         value: reconnect.lastStateUpdateSync?.result ?? "none",
+      },
+      {
+        label: "Actividad actual",
+        tone: currentActivity.type === "idle" ? "good" : currentActivity.result === "ready_failed" ? "warn" : "warn",
+        value: currentActivity.type,
       },
       {
         label: "Timeout reciente",
@@ -181,6 +196,7 @@ export function buildStateUpdateDiagnosticHealth({
         value: hasError ? reconnect.lastVisibleErrorEvent?.errorCode ?? "error" : "none",
       },
     ],
+    currentActivity,
     interpretation: describeStateUpdateHealth({
       hasError,
       pending,
@@ -189,6 +205,82 @@ export function buildStateUpdateDiagnosticHealth({
     }),
     pendingState,
   };
+}
+
+export function resolveStateUpdateCurrentActivity({
+  pending,
+  reconnect,
+}: {
+  pending: number;
+  reconnect: StateUpdateSyncDiagnosticsTelemetry;
+}) {
+  const activity = reconnect.lastStateUpdateActivity;
+  const lastSync = reconnect.lastStateUpdateSync;
+
+  if (pending === 0 && isSuccessfulSyncResult(lastSync?.result)) {
+    return {
+      result: "none",
+      syncRunId: null,
+      type: "idle",
+    };
+  }
+
+  if (activity?.type === "ready_check" && activity.result === "ready_failed" && activity.syncRunId) {
+    const readySucceeded = (reconnect.requestHistory ?? []).some((request) =>
+      request.diagnosticOperation === "READY_CHECK" &&
+      request.diagnosticSyncRunId === activity.syncRunId &&
+      request.httpStatus === 200 &&
+      request.abortControllerTriggered !== true
+    );
+
+    if (readySucceeded) {
+      return {
+        result: "ready_confirmed",
+        syncRunId: activity.syncRunId,
+        type: "ready_check",
+      };
+    }
+  }
+
+  if (activity) {
+    return {
+      result: activity.result,
+      syncRunId: activity.syncRunId,
+      type: activity.type,
+    };
+  }
+
+  return {
+    result: lastSync?.result ?? "none",
+    syncRunId: lastSync?.syncRunId ?? null,
+    type: lastSync ? "sync" : "idle",
+  };
+}
+
+export function hasRecentStateUpdateTimeout({
+  now = new Date(),
+  reconnect,
+  windowMs = STATE_UPDATE_RECENT_TIMEOUT_WINDOW_MS,
+}: {
+  now?: Date;
+  reconnect: StateUpdateSyncDiagnosticsTelemetry;
+  windowMs?: number;
+}) {
+  const nowMs = now.getTime();
+
+  return (reconnect.requestHistory ?? []).some((request) => {
+    if (!request.abortControllerTriggered) {
+      return false;
+    }
+
+    const completedAtMs = Date.parse(request.requestCompletedAt);
+
+    return Number.isFinite(completedAtMs) && nowMs - completedAtMs >= 0 && nowMs - completedAtMs <= windowMs;
+  });
+}
+
+function isSuccessfulSyncResult(result: string | null | undefined) {
+  return result === "success" || result === "reconciled_success";
 }
 
 function describeStateUpdateHealth({

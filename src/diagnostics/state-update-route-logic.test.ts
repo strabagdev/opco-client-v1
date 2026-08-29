@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PendingOperation } from "../lib/offline-records";
 import { OpcoApi, OpcoApiError } from "../lib/opco-api";
-import { StateUpdateOutboxDiagnostics } from "../lib/state-update-offline";
+import { StateUpdateOutboxDiagnostics, StateUpdateSyncDiagnosticsTelemetry } from "../lib/state-update-offline";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 import {
   buildStateUpdateDiagnosticHealth,
@@ -11,6 +11,8 @@ import {
   createStateUpdateDiagnosticStore,
   getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
+  hasRecentStateUpdateTimeout,
+  resolveStateUpdateCurrentActivity,
   summarizeAttendanceGetResponse,
 } from "./state-update-route-logic";
 
@@ -108,6 +110,7 @@ describe("state update diagnostics route readiness", () => {
           pendingCreate: 1,
         },
       },
+      now: new Date("2026-08-29T10:01:00.000Z"),
       reconnect: {
         currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
         lastReconnect: {
@@ -147,6 +150,116 @@ describe("state update diagnostics route readiness", () => {
       expect.objectContaining({ label: "Timeout reciente", tone: "warn", value: "si" }),
     ]));
     expect(JSON.stringify(health)).not.toContain("contract_");
+  });
+
+  it("does not summarize a successful READY_CHECK as ready_failed for the same syncRunId", () => {
+    const reconnect = reconnectDiagnostics({
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T10:00:02.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 1,
+        result: "ready_failed",
+        startedAt: "2026-08-29T10:00:00.000Z",
+        syncRunId: "sync_ready_1",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      requestHistory: [requestHistoryEvent({
+        abortControllerTriggered: false,
+        diagnosticOperation: "READY_CHECK",
+        diagnosticSyncRunId: "sync_ready_1",
+        httpStatus: 200,
+        requestCompletedAt: "2026-08-29T10:00:01.000Z",
+      })],
+    });
+
+    expect(resolveStateUpdateCurrentActivity({ pending: 1, reconnect })).toEqual({
+      result: "ready_confirmed",
+      syncRunId: "sync_ready_1",
+      type: "ready_check",
+    });
+  });
+
+  it("summarizes current activity as idle after successful sync with no pending work", () => {
+    const health = buildStateUpdateDiagnosticHealth({
+      diagnostics: {
+        consistency: "OK",
+        localRecords: [],
+        operations: [],
+        summary: emptyStateUpdateDiagnosticsSummary(),
+      },
+      now: new Date("2026-08-29T10:10:00.000Z"),
+      reconnect: reconnectDiagnostics({
+        lastStateUpdateActivity: {
+          completedAt: "2026-08-29T10:00:02.000Z",
+          lastRequestDiagnostics: null,
+          operationsCompleted: 0,
+          operationsFailed: 1,
+          result: "ready_failed",
+          startedAt: "2026-08-29T10:00:00.000Z",
+          syncRunId: "sync_ready_1",
+          timeoutOccurred: false,
+          trigger: "ready_check",
+          type: "ready_check",
+        },
+        lastStateUpdateSync: {
+          completedAt: "2026-08-29T10:01:00.000Z",
+          lastRequestDiagnostics: null,
+          operationsAttempted: 1,
+          operationsCompleted: 1,
+          operationsFailed: 0,
+          operationsSelected: 1,
+          reconciledAfterTimeout: false,
+          result: "success",
+          startedAt: "2026-08-29T10:00:50.000Z",
+          syncRunId: "sync_ready_1",
+          timeoutOccurred: false,
+          trigger: "reconnect",
+        },
+      }),
+    });
+
+    expect(health.currentActivity).toEqual({
+      result: "none",
+      syncRunId: null,
+      type: "idle",
+    });
+    expect(health.cards).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Ultimo sync completado", value: "success" }),
+      expect.objectContaining({ label: "Actividad actual", tone: "good", value: "idle" }),
+      expect.objectContaining({ label: "Timeout reciente", tone: "good", value: "no" }),
+    ]));
+  });
+
+  it("keeps historical timeouts but excludes them from the recent timeout summary after the window", () => {
+    const reconnect = reconnectDiagnostics({
+      requestHistory: [requestHistoryEvent({
+        abortControllerTriggered: true,
+        diagnosticOperation: "AUTH_REFRESH",
+        requestCompletedAt: "2026-08-29T10:00:00.000Z",
+      })],
+    });
+
+    expect(reconnect.requestHistory).toHaveLength(1);
+    expect(hasRecentStateUpdateTimeout({
+      now: new Date("2026-08-29T10:05:01.000Z"),
+      reconnect,
+    })).toBe(false);
+  });
+
+  it("summarizes a timeout inside the current window as recent", () => {
+    expect(hasRecentStateUpdateTimeout({
+      now: new Date("2026-08-29T10:04:59.000Z"),
+      reconnect: reconnectDiagnostics({
+        requestHistory: [requestHistoryEvent({
+          abortControllerTriggered: true,
+          diagnosticOperation: "SAVE",
+          requestCompletedAt: "2026-08-29T10:00:00.000Z",
+        })],
+      }),
+    })).toBe(true);
   });
 });
 
@@ -363,6 +476,52 @@ function emptyStateUpdateDiagnosticsSummary(): StateUpdateOutboxDiagnostics["sum
     remoteSnapshotRepairable: 0,
     stateUpdateTotalLocal: 0,
     syncing: 0,
+  };
+}
+
+function reconnectDiagnostics(
+  overrides: Partial<StateUpdateSyncDiagnosticsTelemetry> = {},
+): StateUpdateSyncDiagnosticsTelemetry {
+  return {
+    currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+    lastReconnect: {
+      detected: false,
+      detectedAt: null,
+      previousConnectivityStatus: null,
+      resultingConnectivityStatus: null,
+    },
+    lastStateUpdateActivity: null,
+    lastStateUpdateSync: null,
+    lastVisibleErrorEvent: null,
+    requestHistory: [],
+    ...overrides,
+  };
+}
+
+function requestHistoryEvent(
+  overrides: Partial<NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number]> = {},
+): NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number] {
+  return {
+    abortControllerTriggered: false,
+    diagnosticOperation: "SAVE",
+    diagnosticRequestId: "opco_diag_123",
+    diagnosticSyncRunId: "sync_1",
+    errorCode: null,
+    fetchResolvedAt: "2026-08-29T10:00:00.100Z",
+    httpStatus: 200,
+    interpretation: "success",
+    method: "POST",
+    pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+    requestCompletedAt: "2026-08-29T10:00:00.300Z",
+    requestDurationMs: 300,
+    requestStartedAt: "2026-08-29T10:00:00.000Z",
+    responseBodyStartedAt: "2026-08-29T10:00:00.200Z",
+    responseParsedAt: "2026-08-29T10:00:00.300Z",
+    responseRequestId: "opco_diag_123",
+    responseStarted: true,
+    serverTiming: [],
+    timeoutMs: 12000,
+    ...overrides,
   };
 }
 

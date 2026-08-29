@@ -366,16 +366,16 @@ function StateUpdateOperationalDiagnostics({
         ))}
       </View>
       <Text style={styles.interpretation}>{health.interpretation}</Text>
-      <Section title="Ultima actividad">
+      <Section title="Actividad actual">
         <DiagnosticsRows rows={[
           ["connectivity", reconnect.currentConnectivity.status],
           ["connectivityUpdatedAt", reconnect.currentConnectivity.updatedAt ?? "none"],
           ["lastReconnect", reconnect.lastReconnect.detectedAt ?? "none"],
           ["reconnect", reconnect.lastReconnect.detected ? `${reconnect.lastReconnect.previousConnectivityStatus} -> ${reconnect.lastReconnect.resultingConnectivityStatus}` : "none"],
-          ["activityType", reconnect.lastStateUpdateActivity?.type ?? "none"],
-          ["trigger", reconnect.lastStateUpdateActivity?.trigger ?? reconnect.lastStateUpdateSync?.trigger ?? "none"],
-          ["result", reconnect.lastStateUpdateActivity?.result ?? reconnect.lastStateUpdateSync?.result ?? "none"],
-          ["syncRunId", reconnect.lastStateUpdateActivity?.syncRunId ?? reconnect.lastStateUpdateSync?.syncRunId ?? "none"],
+          ["activityType", health.currentActivity.type],
+          ["trigger", health.currentActivity.type === "idle" ? "none" : reconnect.lastStateUpdateActivity?.trigger ?? reconnect.lastStateUpdateSync?.trigger ?? "none"],
+          ["result", health.currentActivity.result],
+          ["syncRunId", health.currentActivity.syncRunId ?? "none"],
           ["T reconnect->activity ms", elapsedMs(reconnect.lastReconnect.detectedAt, reconnect.lastStateUpdateActivity?.startedAt ?? reconnect.lastStateUpdateSync?.startedAt)],
         ]} />
       </Section>

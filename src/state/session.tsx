@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
@@ -697,6 +698,10 @@ export function StateUpdateDiagnosticsPanel({
   variant?: "embedded" | "overlay";
 }) {
   const summary = diagnostics?.summary;
+  const pending = summary
+    ? summary.pendingCreate + summary.pendingUpdate + summary.syncing + summary.failed + summary.conflict
+    : 0;
+  const currentActivity = resolveStateUpdateCurrentActivity({ pending, reconnect });
   const currentConnectivityRows: [string, string | number | boolean | null][] = [
     ["status", reconnect.currentConnectivity.status],
     ["updatedAt", reconnect.currentConnectivity.updatedAt ?? "none"],
@@ -750,27 +755,8 @@ export function StateUpdateDiagnosticsPanel({
     ["pathTemplate", "none"],
     ["result", "none"],
   ];
-  const lastStateUpdateActivityRows: [string, string | number | boolean | null][] = reconnect.lastStateUpdateActivity ? [
-    ["type", reconnect.lastStateUpdateActivity.type],
-    ["trigger", reconnect.lastStateUpdateActivity.trigger],
-    ["syncRunId", reconnect.lastStateUpdateActivity.syncRunId ?? "none"],
-    ["startedAt", reconnect.lastStateUpdateActivity.startedAt],
-    ["completedAt", reconnect.lastStateUpdateActivity.completedAt ?? "none"],
-    ["operationsCompleted", reconnect.lastStateUpdateActivity.operationsCompleted],
-    ["operationsFailed", reconnect.lastStateUpdateActivity.operationsFailed],
-    ["timeoutOccurred", reconnect.lastStateUpdateActivity.timeoutOccurred],
-    ["requestStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestStartedAt ?? "none"],
-    ["fetchResolvedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.fetchResolvedAt ?? "none"],
-    ["responseBodyStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseBodyStartedAt ?? "none"],
-    ["responseParsedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseParsedAt ?? "none"],
-    ["requestDurationMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestDurationMs ?? "none"],
-    ["timeoutMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.timeoutMs ?? "none"],
-    ["abortControllerTriggered", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.abortControllerTriggered ?? "none"],
-    ["httpStatus", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.httpStatus ?? "none"],
-    ["pathTemplate", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.pathTemplate ?? "none"],
-    ["result", reconnect.lastStateUpdateActivity.result],
-  ] : [
-    ["type", "none"],
+  const lastStateUpdateActivityRows: [string, string | number | boolean | null][] = currentActivity.type === "idle" ? [
+    ["type", "idle"],
     ["trigger", "none"],
     ["syncRunId", "none"],
     ["startedAt", "none"],
@@ -788,6 +774,44 @@ export function StateUpdateDiagnosticsPanel({
     ["httpStatus", "none"],
     ["pathTemplate", "none"],
     ["result", "none"],
+  ] : reconnect.lastStateUpdateActivity ? [
+    ["type", currentActivity.type],
+    ["trigger", reconnect.lastStateUpdateActivity.trigger],
+    ["syncRunId", currentActivity.syncRunId ?? "none"],
+    ["startedAt", reconnect.lastStateUpdateActivity.startedAt],
+    ["completedAt", reconnect.lastStateUpdateActivity.completedAt ?? "none"],
+    ["operationsCompleted", reconnect.lastStateUpdateActivity.operationsCompleted],
+    ["operationsFailed", reconnect.lastStateUpdateActivity.operationsFailed],
+    ["timeoutOccurred", reconnect.lastStateUpdateActivity.timeoutOccurred],
+    ["requestStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestStartedAt ?? "none"],
+    ["fetchResolvedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.fetchResolvedAt ?? "none"],
+    ["responseBodyStartedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseBodyStartedAt ?? "none"],
+    ["responseParsedAt", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.responseParsedAt ?? "none"],
+    ["requestDurationMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.requestDurationMs ?? "none"],
+    ["timeoutMs", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.timeoutMs ?? "none"],
+    ["abortControllerTriggered", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.abortControllerTriggered ?? "none"],
+    ["httpStatus", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.httpStatus ?? "none"],
+    ["pathTemplate", reconnect.lastStateUpdateActivity.lastRequestDiagnostics?.pathTemplate ?? "none"],
+    ["result", currentActivity.result],
+  ] : [
+    ["type", currentActivity.type],
+    ["trigger", reconnect.lastStateUpdateSync?.trigger ?? "none"],
+    ["syncRunId", currentActivity.syncRunId ?? "none"],
+    ["startedAt", reconnect.lastStateUpdateSync?.startedAt ?? "none"],
+    ["completedAt", reconnect.lastStateUpdateSync?.completedAt ?? "none"],
+    ["operationsCompleted", reconnect.lastStateUpdateSync?.operationsCompleted ?? 0],
+    ["operationsFailed", reconnect.lastStateUpdateSync?.operationsFailed ?? 0],
+    ["timeoutOccurred", reconnect.lastStateUpdateSync?.timeoutOccurred ?? false],
+    ["requestStartedAt", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.requestStartedAt ?? "none"],
+    ["fetchResolvedAt", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.fetchResolvedAt ?? "none"],
+    ["responseBodyStartedAt", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.responseBodyStartedAt ?? "none"],
+    ["responseParsedAt", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.responseParsedAt ?? "none"],
+    ["requestDurationMs", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.requestDurationMs ?? "none"],
+    ["timeoutMs", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.timeoutMs ?? "none"],
+    ["abortControllerTriggered", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.abortControllerTriggered ?? "none"],
+    ["httpStatus", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.httpStatus ?? "none"],
+    ["pathTemplate", reconnect.lastStateUpdateSync?.lastRequestDiagnostics?.pathTemplate ?? "none"],
+    ["result", currentActivity.result],
   ];
   const lastVisibleErrorRows: [string, string | number | boolean | null][] = reconnect.lastVisibleErrorEvent ? [
     ["operation", reconnect.lastVisibleErrorEvent.operation],
