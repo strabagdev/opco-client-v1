@@ -3883,16 +3883,20 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
       return null;
     }
 
+    const detectedAt = typeof parsed.lastReconnect.detectedAt === "string" ? parsed.lastReconnect.detectedAt : null;
+    const previousConnectivityStatus = normalizeNullableConnectivityStatus(parsed.lastReconnect.previousConnectivityStatus);
+    const resultingConnectivityStatus = normalizeNullableConnectivityStatus(parsed.lastReconnect.resultingConnectivityStatus);
+
     return {
       currentConnectivity: {
         status: normalizeConnectivityStatus(parsed.currentConnectivity.status),
         updatedAt: typeof parsed.currentConnectivity.updatedAt === "string" ? parsed.currentConnectivity.updatedAt : null,
       },
       lastReconnect: {
-        detected: parsed.lastReconnect.detected === true,
-        detectedAt: typeof parsed.lastReconnect.detectedAt === "string" ? parsed.lastReconnect.detectedAt : null,
-        previousConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.previousConnectivityStatus),
-        resultingConnectivityStatus: normalizeNullableConnectivityStatus(parsed.lastReconnect.resultingConnectivityStatus),
+        detected: Boolean(detectedAt && previousConnectivityStatus && resultingConnectivityStatus),
+        detectedAt,
+        previousConnectivityStatus,
+        resultingConnectivityStatus,
       },
       lastStateUpdateActivity: normalizeLastStateUpdateActivityTelemetry(parsed.lastStateUpdateActivity),
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),

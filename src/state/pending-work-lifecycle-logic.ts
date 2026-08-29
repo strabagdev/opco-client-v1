@@ -31,3 +31,26 @@ export function shouldRunForegroundPendingSync({
     connectivityStatus === "online" &&
     !hasInFlightSync;
 }
+
+export function shouldRunOnlinePendingSyncForReadyScope({
+  connectivityStatus,
+  hasInFlightSync,
+  ownerKey,
+  selectedContractId,
+  status,
+  token,
+}: {
+  connectivityStatus: ConnectivityStatus;
+  hasInFlightSync: boolean;
+  ownerKey: string | null;
+  selectedContractId: string | null;
+  status: "loading" | "anonymous" | "authenticated" | "offline";
+  token: string | null;
+}) {
+  return (status === "authenticated" || status === "offline") &&
+    connectivityStatus === "online" &&
+    Boolean(ownerKey) &&
+    Boolean(selectedContractId) &&
+    Boolean(token) &&
+    !hasInFlightSync;
+}

@@ -17,6 +17,7 @@ import * as tokenStorage from "../lib/token-storage";
 import {
   isSessionLifecycleScopeCurrent,
   SessionLifecycleScope,
+  shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
 } from "./pending-work-lifecycle-logic";
 
@@ -86,6 +87,8 @@ export function usePendingWorkLifecycle({
   const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
   const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
+  const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
+  const lastOnlineReadyScopeSyncKeyRef = useRef<string | null>(null);
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     ownerKey,
     selectedContractId: selectedContractIdState,
@@ -272,6 +275,45 @@ export function usePendingWorkLifecycle({
   }, [hasReconnectPendingWork]);
 
   useEffect(() => {
+    const scopeKey = ownerKey && selectedContractIdState && token
+      ? `${ownerKey}:${selectedContractIdState}:${token}`
+      : null;
+
+    if (!shouldRunOnlinePendingSyncForReadyScope({
+      connectivityStatus,
+      hasInFlightSync: Boolean(onlineReadyScopeSyncPromiseRef.current),
+      ownerKey,
+      selectedContractId: selectedContractIdState,
+      status,
+      token,
+    }) || !scopeKey || lastOnlineReadyScopeSyncKeyRef.current === scopeKey) {
+      return;
+    }
+
+    const runScope = {
+      ownerKey,
+      selectedContractId: selectedContractIdState,
+      token,
+    };
+
+    onlineReadyScopeSyncPromiseRef.current = reconnectShouldSyncRef.current()
+      .then((shouldSync) => {
+        if (!shouldSync) {
+          return undefined;
+        }
+
+        lastOnlineReadyScopeSyncKeyRef.current = scopeKey;
+        return reconnectSessionAndRecordsRef.current("startup-with-pending");
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+          onlineReadyScopeSyncPromiseRef.current = null;
+        }
+      });
+  }, [connectivityStatus, ownerKey, selectedContractIdState, status, token]);
+
+  useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {
       return;
     }
@@ -322,7 +364,7 @@ export function usePendingWorkLifecycle({
             updatedAt: detectedAt,
           },
           lastReconnect: {
-            detected: trigger === "reconnect",
+            detected: true,
             detectedAt,
             previousConnectivityStatus,
             resultingConnectivityStatus,

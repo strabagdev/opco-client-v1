@@ -238,7 +238,7 @@ describe("local database singleton", () => {
 
     await expect(store.getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1")).resolves.toMatchObject({
       currentConnectivity: { status: "online" },
-      lastReconnect: { detected: false, previousConnectivityStatus: "unknown", resultingConnectivityStatus: "online" },
+      lastReconnect: { detected: true, previousConnectivityStatus: "unknown", resultingConnectivityStatus: "online" },
       lastStateUpdateActivity: null,
       lastStateUpdateSync: {
         lastRequestDiagnostics: { httpStatus: 200, requestDurationMs: 2000 },
