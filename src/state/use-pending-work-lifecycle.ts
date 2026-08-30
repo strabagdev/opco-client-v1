@@ -8,7 +8,7 @@ import { selectContractId } from "../lib/contract-selection";
 import { LocalDatabase } from "../lib/local-db";
 import { AUTH_REFRESH_TIMEOUT_MS, ContextResponse, MeResponse, OpcoApi, OpcoNetworkError } from "../lib/opco-api";
 import { readPersistedContractId } from "../lib/session-persistence";
-import { StateUpdateSyncTrigger } from "../lib/state-update-offline";
+import { StateUpdateSyncTrigger, upsertStateUpdateReconnectRunHistory } from "../lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "./reconnect-sync";
 import { StateUpdateReconnectDiagnostics } from "./use-session-diagnostics";
 import { createSyncRunId, syncPendingWork } from "../sync/pending-work-sync";
@@ -216,9 +216,12 @@ export function usePendingWorkLifecycle({
         trigger: "other",
       };
 
+      const nextPreflight = updater(base);
+
       return {
         ...current,
-        lastReconnectPreflight: updater(base),
+        lastReconnectPreflight: nextPreflight,
+        reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, nextPreflight),
       };
     });
   }, []);
@@ -910,19 +913,8 @@ export function usePendingWorkLifecycle({
           trigger,
         };
 
-        void persistStateUpdateReconnectDiagnosticsRef.current((current) => ({
-          ...current,
-          currentConnectivity: {
-            status: resultingConnectivityStatus,
-            updatedAt: detectedAt,
-          },
-          lastReconnect: {
-            detected: true,
-            detectedAt,
-            previousConnectivityStatus,
-            resultingConnectivityStatus,
-          },
-          lastReconnectPreflight: {
+        void persistStateUpdateReconnectDiagnosticsRef.current((current) => {
+          const lastReconnectPreflight = {
             authDecision: null,
             authRefreshCompletedAt: null,
             authRefreshStartedAt: null,
@@ -950,8 +942,24 @@ export function usePendingWorkLifecycle({
             syncPendingWorkStartedAt: null,
             syncRunId,
             trigger,
-          },
-        }));
+          } satisfies NonNullable<StateUpdateReconnectDiagnostics["lastReconnectPreflight"]>;
+
+          return {
+            ...current,
+            currentConnectivity: {
+              status: resultingConnectivityStatus,
+              updatedAt: detectedAt,
+            },
+            lastReconnect: {
+              detected: true,
+              detectedAt,
+              previousConnectivityStatus,
+              resultingConnectivityStatus,
+            },
+            lastReconnectPreflight,
+            reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, lastReconnectPreflight),
+          };
+        });
       },
       onSynced() {
         setRecordsReconnectRefreshKeyRef.current((key) => key + 1);

@@ -10,6 +10,8 @@ import {
   stateUpdateIntentsEqual,
   stateUpdateRemoteItemMatchesPayload,
   resolveStateUpdateSyncTelemetryResult,
+  STATE_UPDATE_REQUEST_HISTORY_LIMIT,
+  upsertStateUpdateReconnectRunHistory,
 } from "./state-update-offline";
 import type { StateUpdateSyncDiagnosticsTelemetry } from "./state-update-offline";
 
@@ -103,6 +105,68 @@ describe("state-update offline identity", () => {
     expect(second).not.toBe(first);
   });
 });
+
+function reconnectPreflight(
+  overrides: Partial<NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]>> = {},
+): NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]> {
+  return {
+    authDecision: null,
+    authRefreshCompletedAt: null,
+    authRefreshStartedAt: null,
+    completedAt: null,
+    countPendingOperationsCount: null,
+    countPendingOperationsDurationMs: null,
+    debounceCompletedAt: null,
+    debounceDurationMs: null,
+    debounceStartedAt: null,
+    listPendingStateUpdateOperationsCount: null,
+    listPendingStateUpdateOperationsDurationMs: null,
+    readinessAttempts: null,
+    readinessCompletedAt: null,
+    readinessConfirmedAt: null,
+    readinessDurationMs: null,
+    readinessStartedAt: null,
+    reconnectDetectedAt: null,
+    runSyncStartedAt: null,
+    scopeCheckAfterReadiness: null,
+    shouldSyncCompletedAt: null,
+    shouldSyncDurationMs: null,
+    shouldSyncResult: null,
+    shouldSyncStartedAt: null,
+    syncPendingWorkCompletedAt: null,
+    syncPendingWorkStartedAt: null,
+    syncRunId: "sync_1",
+    trigger: "reconnect",
+    ...overrides,
+  };
+}
+
+function requestDiagnostics(
+  overrides: Partial<NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number]> = {},
+): NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number] {
+  return {
+    abortControllerTriggered: false,
+    diagnosticOperation: "SAVE",
+    diagnosticRequestId: "opco_diag_1",
+    diagnosticSyncRunId: "sync_1",
+    errorCode: null,
+    fetchResolvedAt: "2026-08-29T10:00:00.100Z",
+    httpStatus: 200,
+    interpretation: "success",
+    method: "POST",
+    pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+    requestCompletedAt: "2026-08-29T10:00:00.300Z",
+    requestDurationMs: 300,
+    requestStartedAt: "2026-08-29T10:00:00.000Z",
+    responseBodyStartedAt: "2026-08-29T10:00:00.200Z",
+    responseParsedAt: "2026-08-29T10:00:00.300Z",
+    responseRequestId: "opco_diag_1",
+    responseStarted: true,
+    serverTiming: [],
+    timeoutMs: 12000,
+    ...overrides,
+  };
+}
 
 describe("state-update exact intention matching", () => {
   it("compares requested states and extras without display labels", () => {
@@ -440,6 +504,38 @@ describe("state-update sync diagnostics telemetry", () => {
     expect(JSON.stringify(next)).not.toContain("contract_1");
   });
 
+  it("keeps exactly the 50 most recent request history events when event 51 arrives", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastSessionTermination: null,
+      lastVisibleErrorEvent: null,
+      requestHistory: Array.from({ length: STATE_UPDATE_REQUEST_HISTORY_LIMIT }, (_, index) => requestDiagnostics({
+        diagnosticRequestId: `opco_diag_${index + 1}`,
+        requestCompletedAt: `2026-08-29T10:${String(index + 1).padStart(2, "0")}:00.000Z`,
+        requestStartedAt: `2026-08-29T10:${String(index + 1).padStart(2, "0")}:00.000Z`,
+      })),
+    };
+
+    const next = appendStateUpdateRequestHistory(current, requestDiagnostics({
+      diagnosticRequestId: "opco_diag_51",
+      requestCompletedAt: "2026-08-29T10:51:00.000Z",
+      requestStartedAt: "2026-08-29T10:51:00.000Z",
+    }));
+
+    expect(next.requestHistory).toHaveLength(STATE_UPDATE_REQUEST_HISTORY_LIMIT);
+    expect(next.requestHistory?.[0]?.diagnosticRequestId).toBe("opco_diag_2");
+    expect(next.requestHistory?.at(-1)?.diagnosticRequestId).toBe("opco_diag_51");
+    expect(next.requestHistory?.map((event) => event.diagnosticRequestId)).not.toContain("opco_diag_1");
+  });
+
   it("keeps AUTH_REFRESH diagnostics with error codes in request history", () => {
     const current: StateUpdateSyncDiagnosticsTelemetry = {
       currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:00.000Z" },
@@ -543,6 +639,24 @@ describe("state-update sync diagnostics telemetry", () => {
     expect(saved.requestHistory?.map((request) => request.diagnosticOperation)).toEqual(["READY_CHECK", "SAVE"]);
     expect(saved.requestHistory?.map((request) => request.diagnosticSyncRunId)).toEqual(["sync_reconnect_1", "sync_reconnect_1"]);
     expect(saved.requestHistory?.[0]?.attemptNumber).toBe(1);
+  });
+
+  it("keeps a bounded reconnect run history keyed by syncRunId", () => {
+    const history = Array.from({ length: 5 }, (_, index) => reconnectPreflight({
+      syncRunId: `sync_${index + 1}`,
+    }));
+    const updated = upsertStateUpdateReconnectRunHistory(history, reconnectPreflight({
+      authDecision: "token_valid",
+      syncRunId: "sync_3",
+    }));
+    const extended = upsertStateUpdateReconnectRunHistory(updated, reconnectPreflight({
+      syncRunId: "sync_6",
+    }));
+
+    expect(updated).toHaveLength(5);
+    expect(updated.filter((entry) => entry.syncRunId === "sync_3")).toHaveLength(1);
+    expect(updated.at(-1)).toMatchObject({ authDecision: "token_valid", syncRunId: "sync_3" });
+    expect(extended.map((entry) => entry.syncRunId)).toEqual(["sync_2", "sync_4", "sync_5", "sync_3", "sync_6"]);
   });
 
   it("ignores non-workflow request diagnostics and classifies timeout/network cases", () => {

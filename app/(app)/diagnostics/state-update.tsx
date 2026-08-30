@@ -384,8 +384,27 @@ function StateUpdateOperationalDiagnostics({
       <Section title="Ultimo run">
         <DiagnosticsRows rows={[
           ["syncRunId", latestRun.syncRunId ?? "none"],
+          ["trigger", latestRun.trigger ?? "none"],
           ["phase", latestRun.phase],
           ["terminalResult", latestRun.terminalResult],
+          ["reconnectDetectedAt", latestRun.reconnectDetectedAt ?? "none"],
+          ["runSyncStartedAt", latestRun.runSyncStartedAt ?? "none"],
+          ["readinessStartedAt", latestRun.readinessStartedAt ?? "none"],
+          ["readinessConfirmedAt", latestRun.readinessConfirmedAt ?? "none"],
+          ["readinessCompletedAt", latestRun.readinessCompletedAt ?? "none"],
+          ["readinessAttempts", latestRun.readinessAttempts ?? "none"],
+          ["authDecision", latestRun.authDecision ?? "none"],
+          ["authRefreshStartedAt", latestRun.authRefreshStartedAt ?? "none"],
+          ["authRefreshCompletedAt", latestRun.authRefreshCompletedAt ?? "none"],
+          ["scopeCheckAfterReadiness", latestRun.scopeCheckAfterReadiness ?? "none"],
+          ["syncPendingWorkStartedAt", latestRun.syncPendingWorkStartedAt ?? "none"],
+          ["syncPendingWorkCompletedAt", latestRun.syncPendingWorkCompletedAt ?? "none"],
+          ["countPendingOperationsCount", latestRun.countPendingOperationsCount ?? "none"],
+          ["listPendingStateUpdateOperationsCount", latestRun.listPendingStateUpdateOperationsCount ?? "none"],
+          ["operationsSelected", latestRun.operationsSelected ?? "none"],
+          ["operationsAttempted", latestRun.operationsAttempted ?? "none"],
+          ["operationsCompleted", latestRun.operationsCompleted ?? "none"],
+          ["operationsFailed", latestRun.operationsFailed ?? "none"],
         ]} />
       </Section>
       <Section title="Ultimo request">

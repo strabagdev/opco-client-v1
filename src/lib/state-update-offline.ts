@@ -308,10 +308,12 @@ export type StateUpdateSyncDiagnosticsTelemetry = {
   lastStateUpdateSync: StateUpdateLastSyncTelemetry | null;
   lastSessionTermination?: StateUpdateSessionTerminationTelemetry | null;
   lastVisibleErrorEvent: StateUpdateVisibleErrorTelemetry | null;
+  reconnectRunHistory?: StateUpdateReconnectPreflightTelemetry[];
   requestHistory?: StateUpdateRequestHistoryEvent[];
 };
 
-export const STATE_UPDATE_REQUEST_HISTORY_LIMIT = 20;
+export const STATE_UPDATE_REQUEST_HISTORY_LIMIT = 50;
+export const STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT = 5;
 
 export function resolveStateUpdateSyncTelemetryResult({
   operationsFailed,
@@ -470,6 +472,17 @@ export function appendStateUpdateRequestHistory(
     ...current,
     requestHistory: [...(current.requestHistory ?? []), nextEvent].slice(-limit),
   };
+}
+
+export function upsertStateUpdateReconnectRunHistory(
+  history: StateUpdateReconnectPreflightTelemetry[] | null | undefined,
+  next: StateUpdateReconnectPreflightTelemetry,
+  limit = STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT,
+) {
+  return [
+    ...(history ?? []).filter((entry) => entry.syncRunId !== next.syncRunId),
+    next,
+  ].slice(-limit);
 }
 
 export function interpretStateUpdateRequest(event: StateUpdateRequestDiagnostics): StateUpdateRequestInterpretation {

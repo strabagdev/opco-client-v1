@@ -10,6 +10,7 @@ import {
   retryLocalDatabaseInitialization,
 } from "./local-db";
 import { PendingOperation } from "./offline-records";
+import { STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
 
 const sqliteMock = vi.hoisted(() => ({
   deleteDatabaseAsync: vi.fn(),
@@ -258,6 +259,37 @@ describe("local database singleton", () => {
               timeoutOccurred: false,
               trigger: "unknown-to-online",
             },
+            reconnectRunHistory: [
+              {
+                authDecision: "token_valid",
+                authRefreshCompletedAt: null,
+                authRefreshStartedAt: null,
+                completedAt: "2026-08-27T10:00:02.500Z",
+                countPendingOperationsCount: 0,
+                countPendingOperationsDurationMs: 12,
+                debounceCompletedAt: "2026-08-27T10:00:00.300Z",
+                debounceDurationMs: 300,
+                debounceStartedAt: "2026-08-27T10:00:00.000Z",
+                listPendingStateUpdateOperationsCount: 1,
+                listPendingStateUpdateOperationsDurationMs: 18,
+                readinessAttempts: 2,
+                readinessCompletedAt: "2026-08-27T10:00:02.500Z",
+                readinessConfirmedAt: "2026-08-27T10:00:02.500Z",
+                readinessDurationMs: 2200,
+                readinessStartedAt: "2026-08-27T10:00:00.300Z",
+                reconnectDetectedAt: "2026-08-27T10:00:00.000Z",
+                runSyncStartedAt: "2026-08-27T10:00:00.300Z",
+                scopeCheckAfterReadiness: "current",
+                shouldSyncCompletedAt: "2026-08-27T10:00:00.320Z",
+                shouldSyncDurationMs: 20,
+                shouldSyncResult: true,
+                shouldSyncStartedAt: "2026-08-27T10:00:00.300Z",
+                syncPendingWorkCompletedAt: "2026-08-27T10:00:02.900Z",
+                syncPendingWorkStartedAt: "2026-08-27T10:00:02.600Z",
+                syncRunId: "sync_unknown_1",
+                trigger: "unknown-to-online",
+              },
+            ],
           }),
         };
       }
@@ -292,6 +324,13 @@ describe("local database singleton", () => {
         trigger: "unknown-to-online",
       },
       lastVisibleErrorEvent: null,
+      reconnectRunHistory: [
+        expect.objectContaining({
+          readinessConfirmedAt: "2026-08-27T10:00:02.500Z",
+          syncPendingWorkStartedAt: "2026-08-27T10:00:02.600Z",
+          syncRunId: "sync_unknown_1",
+        }),
+      ],
     });
   });
 
@@ -390,6 +429,39 @@ describe("local database singleton", () => {
       expect.stringContaining("FROM app_metadata"),
       expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
     );
+  });
+
+  it("hydrates the same 50 most recent STATE_UPDATE request history events persisted by writes", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            currentConnectivity: { status: "online", updatedAt: "2026-08-29T10:00:03.000Z" },
+            lastReconnect: {
+              detectedAt: "2026-08-29T10:00:00.000Z",
+              previousConnectivityStatus: "offline",
+              resultingConnectivityStatus: "online",
+            },
+            lastStateUpdateActivity: null,
+            lastStateUpdateSync: null,
+            lastVisibleErrorEvent: null,
+            requestHistory: Array.from({ length: STATE_UPDATE_REQUEST_HISTORY_LIMIT + 1 }, (_, index) => stateUpdateRequestHistoryEvent({
+              diagnosticRequestId: `opco_diag_${index + 1}`,
+              requestCompletedAt: `2026-08-29T10:${String(index + 1).padStart(2, "0")}:00.000Z`,
+              requestStartedAt: `2026-08-29T10:${String(index + 1).padStart(2, "0")}:00.000Z`,
+            })),
+          }),
+        };
+      }
+
+      return null;
+    });
+
+    const telemetry = await getLocalDatabase().getStateUpdateSyncDiagnosticsTelemetry("org_1:user_1");
+
+    expect(telemetry?.requestHistory).toHaveLength(STATE_UPDATE_REQUEST_HISTORY_LIMIT);
+    expect(telemetry?.requestHistory?.[0]?.diagnosticRequestId).toBe("opco_diag_2");
+    expect(telemetry?.requestHistory?.at(-1)?.diagnosticRequestId).toBe("opco_diag_51");
   });
 
   it("persists the last visible STATE_UPDATE UI error with the same sanitized owner scope", async () => {
@@ -2128,6 +2200,33 @@ function stateUpdatePendingOperationRow(overrides: Record<string, unknown>) {
     }),
     server_record_id: null,
     updated_at: "2026-08-27T10:00:12.000Z",
+    ...overrides,
+  };
+}
+
+function stateUpdateRequestHistoryEvent(
+  overrides: Partial<StateUpdateRequestHistoryEvent> = {},
+): StateUpdateRequestHistoryEvent {
+  return {
+    abortControllerTriggered: false,
+    diagnosticOperation: "SAVE",
+    diagnosticRequestId: "opco_diag_1",
+    diagnosticSyncRunId: "sync_1",
+    errorCode: null,
+    fetchResolvedAt: "2026-08-29T10:00:00.100Z",
+    httpStatus: 200,
+    interpretation: "success",
+    method: "POST",
+    pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",
+    requestCompletedAt: "2026-08-29T10:00:00.300Z",
+    requestDurationMs: 300,
+    requestStartedAt: "2026-08-29T10:00:00.000Z",
+    responseBodyStartedAt: "2026-08-29T10:00:00.200Z",
+    responseParsedAt: "2026-08-29T10:00:00.300Z",
+    responseRequestId: "opco_diag_1",
+    responseStarted: true,
+    serverTiming: [],
+    timeoutMs: 12000,
     ...overrides,
   };
 }

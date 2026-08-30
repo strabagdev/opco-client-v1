@@ -136,9 +136,28 @@ export type StateUpdateDiagnosticHealth = {
 };
 
 export type StateUpdateRunSummary = {
+  authDecision: string | null;
+  authRefreshCompletedAt: string | null;
+  authRefreshStartedAt: string | null;
+  countPendingOperationsCount: number | null;
   phase: "activity" | "request" | "sync" | "none";
+  listPendingStateUpdateOperationsCount: number | null;
+  operationsAttempted: number | null;
+  operationsCompleted: number | null;
+  operationsFailed: number | null;
+  operationsSelected: number | null;
+  readinessAttempts: number | null;
+  readinessCompletedAt: string | null;
+  readinessConfirmedAt: string | null;
+  readinessStartedAt: string | null;
+  reconnectDetectedAt: string | null;
+  runSyncStartedAt: string | null;
+  scopeCheckAfterReadiness: string | null;
+  syncPendingWorkCompletedAt: string | null;
+  syncPendingWorkStartedAt: string | null;
   syncRunId: string | null;
   terminalResult: string;
+  trigger: string | null;
 };
 
 export const STATE_UPDATE_RECENT_TIMEOUT_WINDOW_MS = 5 * 60 * 1000;
@@ -311,6 +330,7 @@ export function resolveLatestStateUpdateRunSummary(
     syncRunId: string | null;
     terminalResult: string;
     timestampMs: number | null;
+    trigger: string | null;
   }[] = [];
 
   const lastRequest = (reconnect.requestHistory ?? []).reduce<NonNullable<StateUpdateSyncDiagnosticsTelemetry["requestHistory"]>[number] | null>((latest, request) => {
@@ -332,6 +352,7 @@ export function resolveLatestStateUpdateRunSummary(
       syncRunId: lastRequest.diagnosticSyncRunId ?? null,
       terminalResult: requestTerminalResult(lastRequest),
       timestampMs: parseTelemetryTimestampMs(lastRequest.requestCompletedAt ?? lastRequest.requestStartedAt),
+      trigger: null,
     });
   }
 
@@ -343,6 +364,7 @@ export function resolveLatestStateUpdateRunSummary(
       timestampMs: parseTelemetryTimestampMs(
         reconnect.lastStateUpdateActivity.completedAt ?? reconnect.lastStateUpdateActivity.startedAt,
       ),
+      trigger: reconnect.lastStateUpdateActivity.trigger,
     });
   }
 
@@ -354,6 +376,7 @@ export function resolveLatestStateUpdateRunSummary(
       timestampMs: parseTelemetryTimestampMs(
         reconnect.lastStateUpdateSync.completedAt ?? reconnect.lastStateUpdateSync.startedAt,
       ),
+      trigger: reconnect.lastStateUpdateSync.trigger,
     });
   }
 
@@ -367,17 +390,49 @@ export function resolveLatestStateUpdateRunSummary(
       : current;
   }, null);
 
-  return latest
-    ? {
-        phase: latest.phase,
-        syncRunId: latest.syncRunId,
-        terminalResult: latest.terminalResult,
-      }
-    : {
-        phase: "none",
-        syncRunId: null,
-        terminalResult: "none",
-      };
+  const preflight = latest?.syncRunId ? findReconnectPreflightForRun(reconnect, latest.syncRunId) : null;
+  const sync = latest?.syncRunId && reconnect.lastStateUpdateSync?.syncRunId === latest.syncRunId
+    ? reconnect.lastStateUpdateSync
+    : null;
+  const activity = latest?.syncRunId && reconnect.lastStateUpdateActivity?.syncRunId === latest.syncRunId
+    ? reconnect.lastStateUpdateActivity
+    : null;
+
+  return {
+    authDecision: preflight?.authDecision ?? null,
+    authRefreshCompletedAt: preflight?.authRefreshCompletedAt ?? null,
+    authRefreshStartedAt: preflight?.authRefreshStartedAt ?? null,
+    countPendingOperationsCount: preflight?.countPendingOperationsCount ?? null,
+    phase: latest?.phase ?? "none",
+    listPendingStateUpdateOperationsCount: preflight?.listPendingStateUpdateOperationsCount ?? null,
+    operationsAttempted: sync?.operationsAttempted ?? null,
+    operationsCompleted: sync?.operationsCompleted ?? activity?.operationsCompleted ?? null,
+    operationsFailed: sync?.operationsFailed ?? activity?.operationsFailed ?? null,
+    operationsSelected: sync?.operationsSelected ?? null,
+    readinessAttempts: preflight?.readinessAttempts ?? null,
+    readinessCompletedAt: preflight?.readinessCompletedAt ?? null,
+    readinessConfirmedAt: preflight?.readinessConfirmedAt ?? null,
+    readinessStartedAt: preflight?.readinessStartedAt ?? null,
+    reconnectDetectedAt: preflight?.reconnectDetectedAt ?? null,
+    runSyncStartedAt: preflight?.runSyncStartedAt ?? null,
+    scopeCheckAfterReadiness: preflight?.scopeCheckAfterReadiness ?? null,
+    syncPendingWorkCompletedAt: preflight?.syncPendingWorkCompletedAt ?? null,
+    syncPendingWorkStartedAt: preflight?.syncPendingWorkStartedAt ?? null,
+    syncRunId: latest?.syncRunId ?? null,
+    terminalResult: latest?.terminalResult ?? "none",
+    trigger: preflight?.trigger ?? latest?.trigger ?? null,
+  };
+}
+
+function findReconnectPreflightForRun(
+  reconnect: StateUpdateSyncDiagnosticsTelemetry,
+  syncRunId: string,
+) {
+  if (reconnect.lastReconnectPreflight?.syncRunId === syncRunId) {
+    return reconnect.lastReconnectPreflight;
+  }
+
+  return (reconnect.reconnectRunHistory ?? []).find((entry) => entry.syncRunId === syncRunId) ?? null;
 }
 
 function getLatestRequestHistoryEvent(

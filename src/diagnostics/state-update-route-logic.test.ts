@@ -340,10 +340,63 @@ describe("state update diagnostics route readiness", () => {
       ],
     });
 
-    expect(resolveLatestStateUpdateRunSummary(reconnect)).toEqual({
+    expect(resolveLatestStateUpdateRunSummary(reconnect)).toMatchObject({
       phase: "request",
       syncRunId: "sync_latest_ready",
       terminalResult: "success",
+    });
+  });
+
+  it("correlates the latest run with historical preflight when lastReconnectPreflight was overwritten", () => {
+    const reconnect = reconnectDiagnostics({
+      lastReconnectPreflight: reconnectPreflight({
+        reconnectDetectedAt: "2026-08-29T09:07:00.000Z",
+        syncRunId: "sync_newer_recovery",
+      }),
+      reconnectRunHistory: [
+        reconnectPreflight({
+          authDecision: "token_valid",
+          countPendingOperationsCount: 0,
+          listPendingStateUpdateOperationsCount: 1,
+          readinessAttempts: 1,
+          readinessCompletedAt: "2026-08-29T09:06:15.475Z",
+          readinessConfirmedAt: "2026-08-29T09:06:15.475Z",
+          readinessStartedAt: "2026-08-29T09:06:15.000Z",
+          reconnectDetectedAt: "2026-08-29T09:06:14.857Z",
+          runSyncStartedAt: "2026-08-29T09:06:15.000Z",
+          scopeCheckAfterReadiness: "current",
+          syncPendingWorkCompletedAt: null,
+          syncPendingWorkStartedAt: "2026-08-29T09:06:15.500Z",
+          syncRunId: "sync_latest_ready",
+          trigger: "reconnect",
+        }),
+        reconnectPreflight({
+          reconnectDetectedAt: "2026-08-29T09:07:00.000Z",
+          syncRunId: "sync_newer_recovery",
+        }),
+      ],
+      requestHistory: [requestHistoryEvent({
+        abortControllerTriggered: false,
+        diagnosticOperation: "READY_CHECK",
+        diagnosticSyncRunId: "sync_latest_ready",
+        httpStatus: 200,
+        requestCompletedAt: "2026-08-29T09:06:15.475Z",
+        requestStartedAt: "2026-08-29T09:06:15.000Z",
+      })],
+    });
+
+    expect(resolveLatestStateUpdateRunSummary(reconnect)).toMatchObject({
+      authDecision: "token_valid",
+      countPendingOperationsCount: 0,
+      listPendingStateUpdateOperationsCount: 1,
+      phase: "request",
+      readinessConfirmedAt: "2026-08-29T09:06:15.475Z",
+      scopeCheckAfterReadiness: "current",
+      syncPendingWorkCompletedAt: null,
+      syncPendingWorkStartedAt: "2026-08-29T09:06:15.500Z",
+      syncRunId: "sync_latest_ready",
+      terminalResult: "success",
+      trigger: "reconnect",
     });
   });
 });
@@ -606,6 +659,41 @@ function requestHistoryEvent(
     responseStarted: true,
     serverTiming: [],
     timeoutMs: 12000,
+    ...overrides,
+  };
+}
+
+function reconnectPreflight(
+  overrides: Partial<NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]>> = {},
+): NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]> {
+  return {
+    authDecision: null,
+    authRefreshCompletedAt: null,
+    authRefreshStartedAt: null,
+    completedAt: null,
+    countPendingOperationsCount: null,
+    countPendingOperationsDurationMs: null,
+    debounceCompletedAt: null,
+    debounceDurationMs: null,
+    debounceStartedAt: null,
+    listPendingStateUpdateOperationsCount: null,
+    listPendingStateUpdateOperationsDurationMs: null,
+    readinessAttempts: null,
+    readinessCompletedAt: null,
+    readinessConfirmedAt: null,
+    readinessDurationMs: null,
+    readinessStartedAt: null,
+    reconnectDetectedAt: null,
+    runSyncStartedAt: null,
+    scopeCheckAfterReadiness: null,
+    shouldSyncCompletedAt: null,
+    shouldSyncDurationMs: null,
+    shouldSyncResult: null,
+    shouldSyncStartedAt: null,
+    syncPendingWorkCompletedAt: null,
+    syncPendingWorkStartedAt: null,
+    syncRunId: "sync_1",
+    trigger: "reconnect",
     ...overrides,
   };
 }

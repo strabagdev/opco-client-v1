@@ -18,6 +18,8 @@ import {
   StateUpdateOfflineStore,
   StateUpdateRequestDiagnostics,
   StateUpdateRequestHistoryEvent,
+  STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT,
+  STATE_UPDATE_REQUEST_HISTORY_LIMIT,
   StateUpdateScope,
   StateUpdateSessionTerminationTelemetry,
   StateUpdateSnapshotReconcileResult,
@@ -3835,6 +3837,7 @@ async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: State
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
     lastSessionTermination: current?.lastSessionTermination ?? null,
     lastVisibleErrorEvent: event,
+    reconnectRunHistory: current?.reconnectRunHistory ?? [],
     requestHistory: current?.requestHistory ?? [],
   });
 }
@@ -3858,6 +3861,7 @@ async function recordStateUpdateSessionTermination(ownerKey: string, event: Stat
     lastStateUpdateSync: current?.lastStateUpdateSync ?? null,
     lastSessionTermination: event,
     lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
+    reconnectRunHistory: current?.reconnectRunHistory ?? [],
     requestHistory: current?.requestHistory ?? [],
   });
 }
@@ -3934,6 +3938,7 @@ function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyn
       lastStateUpdateSync: normalizeLastStateUpdateSyncTelemetry(parsed.lastStateUpdateSync),
       lastSessionTermination: normalizeStateUpdateSessionTerminationTelemetry(parsed.lastSessionTermination),
       lastVisibleErrorEvent: normalizeLastVisibleErrorEventTelemetry(parsed.lastVisibleErrorEvent),
+      reconnectRunHistory: normalizeStateUpdateReconnectRunHistory(parsed.reconnectRunHistory),
       requestHistory: normalizeStateUpdateRequestHistory(parsed.requestHistory),
     };
   } catch {
@@ -3978,6 +3983,7 @@ async function markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
     lastStateUpdateSync: previousRun ?? null,
     lastSessionTermination: current?.lastSessionTermination ?? null,
     lastVisibleErrorEvent: current?.lastVisibleErrorEvent ?? null,
+    reconnectRunHistory: current?.reconnectRunHistory ?? [],
     requestHistory: current?.requestHistory ?? [],
   });
 }
@@ -4086,6 +4092,19 @@ function normalizeStateUpdateReconnectPreflightTelemetry(
     syncRunId: normalizeDiagnosticToken(telemetry.syncRunId),
     trigger,
   };
+}
+
+function normalizeStateUpdateReconnectRunHistory(
+  telemetry: Partial<StateUpdateSyncDiagnosticsTelemetry>["reconnectRunHistory"],
+): StateUpdateSyncDiagnosticsTelemetry["reconnectRunHistory"] {
+  if (!Array.isArray(telemetry)) {
+    return [];
+  }
+
+  return telemetry
+    .map((entry) => normalizeStateUpdateReconnectPreflightTelemetry(entry))
+    .filter((entry): entry is NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]> => Boolean(entry?.syncRunId))
+    .slice(-STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT);
 }
 
 function normalizeLastVisibleErrorEventTelemetry(
@@ -4206,7 +4225,7 @@ function normalizeStateUpdateRequestHistory(value: unknown): StateUpdateRequestH
         interpretation: normalizeRequestInterpretation(interpretation),
       }];
     })
-    .slice(-20);
+    .slice(-STATE_UPDATE_REQUEST_HISTORY_LIMIT);
 }
 
 function normalizeServerTiming(value: unknown) {

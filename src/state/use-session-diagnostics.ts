@@ -29,6 +29,7 @@ export type StateUpdateReconnectDiagnostics = {
   lastStateUpdateSync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
   lastSessionTermination?: StateUpdateSyncDiagnosticsTelemetry["lastSessionTermination"];
   lastVisibleErrorEvent: StateUpdateSyncDiagnosticsTelemetry["lastVisibleErrorEvent"];
+  reconnectRunHistory?: StateUpdateSyncDiagnosticsTelemetry["reconnectRunHistory"];
   requestHistory?: StateUpdateSyncDiagnosticsTelemetry["requestHistory"];
 };
 
@@ -74,6 +75,7 @@ export const emptyStateUpdateReconnectDiagnostics: StateUpdateReconnectDiagnosti
   lastStateUpdateSync: null,
   lastSessionTermination: null,
   lastVisibleErrorEvent: null,
+  reconnectRunHistory: [],
   requestHistory: [],
 };
 
