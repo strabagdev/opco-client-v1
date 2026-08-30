@@ -12,6 +12,8 @@ import {
   getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
   hasRecentStateUpdateTimeout,
+  resolveCurrentStateUpdateRunSummary,
+  resolveLastFinishedStateUpdateRunSummary,
   resolveLatestStateUpdateRunSummary,
   resolveStateUpdateCurrentActivity,
   summarizeAttendanceGetResponse,
@@ -397,6 +399,107 @@ describe("state update diagnostics route readiness", () => {
       syncRunId: "sync_latest_ready",
       terminalResult: "success",
       trigger: "reconnect",
+    });
+  });
+
+  it("keeps the active run separate from the last finished run", () => {
+    const reconnect = reconnectDiagnostics({
+      lastReconnectPreflight: reconnectPreflight({
+        reconnectDetectedAt: "2026-08-29T09:07:00.000Z",
+        runSyncStartedAt: "2026-08-29T09:07:01.000Z",
+        syncRunId: "sync_current",
+        trigger: "startup-with-pending",
+      }),
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T09:07:01.100Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "reconnecting",
+        startedAt: "2026-08-29T09:07:01.000Z",
+        syncRunId: "sync_current",
+        timeoutOccurred: false,
+        trigger: "ready_check",
+        type: "ready_check",
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-29T09:06:20.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-29T09:06:15.000Z",
+        syncRunId: "sync_finished",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+      reconnectRunHistory: [
+        reconnectPreflight({
+          syncPendingWorkCompletedAt: "2026-08-29T09:06:20.000Z",
+          syncPendingWorkStartedAt: "2026-08-29T09:06:16.000Z",
+          syncRunId: "sync_finished",
+        }),
+        reconnectPreflight({
+          reconnectDetectedAt: "2026-08-29T09:07:00.000Z",
+          runSyncStartedAt: "2026-08-29T09:07:01.000Z",
+          syncRunId: "sync_current",
+          trigger: "startup-with-pending",
+        }),
+      ],
+    });
+
+    expect(resolveCurrentStateUpdateRunSummary(reconnect)).toMatchObject({
+      syncRunId: "sync_current",
+      terminalResult: "reconnecting",
+    });
+    expect(resolveLastFinishedStateUpdateRunSummary(reconnect)).toMatchObject({
+      operationsCompleted: 1,
+      operationsSelected: 1,
+      syncRunId: "sync_finished",
+      terminalResult: "success",
+    });
+  });
+
+  it("exposes pending-work phase diagnostics on the correlated run summary", () => {
+    const reconnect = reconnectDiagnostics({
+      lastReconnectPreflight: reconnectPreflight({
+        recordsOperationsCompleted: 0,
+        recordsOperationsFailed: 0,
+        recordsPhaseCompletedAt: "2026-08-29T09:06:16.000Z",
+        recordsPhaseResult: "completed",
+        recordsPhaseStartedAt: "2026-08-29T09:06:15.500Z",
+        stateUpdateOperationsSelected: 1,
+        stateUpdatePhaseCompletedAt: "2026-08-29T09:06:20.000Z",
+        stateUpdatePhaseResult: "completed",
+        stateUpdatePhaseStartedAt: "2026-08-29T09:06:16.001Z",
+        syncPendingWorkCompletedAt: "2026-08-29T09:06:20.000Z",
+        syncPendingWorkStartedAt: "2026-08-29T09:06:15.500Z",
+        syncRunId: "sync_phases",
+      }),
+      lastStateUpdateSync: {
+        completedAt: "2026-08-29T09:06:20.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-29T09:06:15.000Z",
+        syncRunId: "sync_phases",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+    });
+
+    expect(resolveLatestStateUpdateRunSummary(reconnect)).toMatchObject({
+      recordsPhaseResult: "completed",
+      stateUpdateOperationsSelected: 1,
+      stateUpdatePhaseResult: "completed",
+      syncRunId: "sync_phases",
     });
   });
 });

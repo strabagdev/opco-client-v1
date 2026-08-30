@@ -10,6 +10,8 @@ import {
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
   getStateUpdateDiagnosticsRouteState,
+  resolveCurrentStateUpdateRunSummary,
+  resolveLastFinishedStateUpdateRunSummary,
   resolveLatestStateUpdateRunSummary,
   summarizeAttendanceGetResponse,
 } from "@/diagnostics/state-update-route-logic";
@@ -334,6 +336,8 @@ function StateUpdateOperationalDiagnostics({
   run: StateUpdateDiagnosticRun | null;
 }) {
   const health = buildStateUpdateDiagnosticHealth({ diagnostics, reconnect });
+  const currentRun = resolveCurrentStateUpdateRunSummary(reconnect);
+  const lastFinishedRun = resolveLastFinishedStateUpdateRunSummary(reconnect);
   const latestRun = resolveLatestStateUpdateRunSummary(reconnect);
   const requestHistory = reconnect.requestHistory ?? [];
   const lastRequest = requestHistory.at(-1) ?? reconnect.lastStateUpdateActivity?.lastRequestDiagnostics ?? reconnect.lastStateUpdateSync?.lastRequestDiagnostics ?? null;
@@ -382,30 +386,13 @@ function StateUpdateOperationalDiagnostics({
         ]} />
       </Section>
       <Section title="Ultimo run">
-        <DiagnosticsRows rows={[
-          ["syncRunId", latestRun.syncRunId ?? "none"],
-          ["trigger", latestRun.trigger ?? "none"],
-          ["phase", latestRun.phase],
-          ["terminalResult", latestRun.terminalResult],
-          ["reconnectDetectedAt", latestRun.reconnectDetectedAt ?? "none"],
-          ["runSyncStartedAt", latestRun.runSyncStartedAt ?? "none"],
-          ["readinessStartedAt", latestRun.readinessStartedAt ?? "none"],
-          ["readinessConfirmedAt", latestRun.readinessConfirmedAt ?? "none"],
-          ["readinessCompletedAt", latestRun.readinessCompletedAt ?? "none"],
-          ["readinessAttempts", latestRun.readinessAttempts ?? "none"],
-          ["authDecision", latestRun.authDecision ?? "none"],
-          ["authRefreshStartedAt", latestRun.authRefreshStartedAt ?? "none"],
-          ["authRefreshCompletedAt", latestRun.authRefreshCompletedAt ?? "none"],
-          ["scopeCheckAfterReadiness", latestRun.scopeCheckAfterReadiness ?? "none"],
-          ["syncPendingWorkStartedAt", latestRun.syncPendingWorkStartedAt ?? "none"],
-          ["syncPendingWorkCompletedAt", latestRun.syncPendingWorkCompletedAt ?? "none"],
-          ["countPendingOperationsCount", latestRun.countPendingOperationsCount ?? "none"],
-          ["listPendingStateUpdateOperationsCount", latestRun.listPendingStateUpdateOperationsCount ?? "none"],
-          ["operationsSelected", latestRun.operationsSelected ?? "none"],
-          ["operationsAttempted", latestRun.operationsAttempted ?? "none"],
-          ["operationsCompleted", latestRun.operationsCompleted ?? "none"],
-          ["operationsFailed", latestRun.operationsFailed ?? "none"],
-        ]} />
+        <DiagnosticsRows rows={runRows(latestRun)} />
+      </Section>
+      <Section title="Run actual">
+        <DiagnosticsRows rows={runRows(currentRun)} />
+      </Section>
+      <Section title="Ultimo run terminado">
+        <DiagnosticsRows rows={runRows(lastFinishedRun)} />
       </Section>
       <Section title="Ultimo request">
         {lastRequest ? <DiagnosticsRows rows={requestRows(lastRequest)} /> : <Text style={styles.empty}>Sin requests STATE_UPDATE/Attendance registrados.</Text>}
@@ -531,6 +518,44 @@ function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | 
   );
 }
 
+function runRows(run: ReturnType<typeof resolveLatestStateUpdateRunSummary>): [string, string | number | boolean | null][] {
+  return [
+    ["syncRunId", run.syncRunId ?? "none"],
+    ["trigger", run.trigger ?? "none"],
+    ["phase", run.phase],
+    ["terminalResult", run.terminalResult],
+    ["reconnectDetectedAt", run.reconnectDetectedAt ?? "none"],
+    ["runSyncStartedAt", run.runSyncStartedAt ?? "none"],
+    ["readinessStartedAt", run.readinessStartedAt ?? "none"],
+    ["readinessConfirmedAt", run.readinessConfirmedAt ?? "none"],
+    ["readinessCompletedAt", run.readinessCompletedAt ?? "none"],
+    ["readinessAttempts", run.readinessAttempts ?? "none"],
+    ["authDecision", run.authDecision ?? "none"],
+    ["authRefreshStartedAt", run.authRefreshStartedAt ?? "none"],
+    ["authRefreshCompletedAt", run.authRefreshCompletedAt ?? "none"],
+    ["scopeCheckAfterReadiness", run.scopeCheckAfterReadiness ?? "none"],
+    ["syncPendingWorkStartedAt", run.syncPendingWorkStartedAt ?? "none"],
+    ["syncPendingWorkCompletedAt", run.syncPendingWorkCompletedAt ?? "none"],
+    ["recordsPhaseStartedAt", run.recordsPhaseStartedAt ?? "none"],
+    ["recordsPhaseCompletedAt", run.recordsPhaseCompletedAt ?? "none"],
+    ["recordsPhaseFailedAt", run.recordsPhaseFailedAt ?? "none"],
+    ["recordsPhaseResult", run.recordsPhaseResult ?? "none"],
+    ["recordsOperationsCompleted", run.recordsOperationsCompleted ?? "none"],
+    ["recordsOperationsFailed", run.recordsOperationsFailed ?? "none"],
+    ["stateUpdatePhaseStartedAt", run.stateUpdatePhaseStartedAt ?? "none"],
+    ["stateUpdatePhaseCompletedAt", run.stateUpdatePhaseCompletedAt ?? "none"],
+    ["stateUpdatePhaseFailedAt", run.stateUpdatePhaseFailedAt ?? "none"],
+    ["stateUpdatePhaseResult", run.stateUpdatePhaseResult ?? "none"],
+    ["stateUpdateOperationsSelected", run.stateUpdateOperationsSelected ?? "none"],
+    ["countPendingOperationsCount", run.countPendingOperationsCount ?? "none"],
+    ["listPendingStateUpdateOperationsCount", run.listPendingStateUpdateOperationsCount ?? "none"],
+    ["operationsSelected", run.operationsSelected ?? "none"],
+    ["operationsAttempted", run.operationsAttempted ?? "none"],
+    ["operationsCompleted", run.operationsCompleted ?? "none"],
+    ["operationsFailed", run.operationsFailed ?? "none"],
+  ];
+}
+
 function requestRows(request: StateUpdateRequestDiagnostics): [string, string | number | boolean | null][] {
   return [
     ["operation", request.diagnosticOperation ?? "OTHER"],
@@ -591,6 +616,17 @@ function preflightRows(
     ["scopeCheckAfterReadiness", preflight.scopeCheckAfterReadiness ?? "none"],
     ["syncPendingWorkStartedAt", preflight.syncPendingWorkStartedAt ?? "none"],
     ["syncPendingWorkCompletedAt", preflight.syncPendingWorkCompletedAt ?? "none"],
+    ["recordsPhaseStartedAt", preflight.recordsPhaseStartedAt ?? "none"],
+    ["recordsPhaseCompletedAt", preflight.recordsPhaseCompletedAt ?? "none"],
+    ["recordsPhaseFailedAt", preflight.recordsPhaseFailedAt ?? "none"],
+    ["recordsPhaseResult", preflight.recordsPhaseResult ?? "none"],
+    ["recordsOperationsCompleted", preflight.recordsOperationsCompleted ?? "none"],
+    ["recordsOperationsFailed", preflight.recordsOperationsFailed ?? "none"],
+    ["stateUpdatePhaseStartedAt", preflight.stateUpdatePhaseStartedAt ?? "none"],
+    ["stateUpdatePhaseCompletedAt", preflight.stateUpdatePhaseCompletedAt ?? "none"],
+    ["stateUpdatePhaseFailedAt", preflight.stateUpdatePhaseFailedAt ?? "none"],
+    ["stateUpdatePhaseResult", preflight.stateUpdatePhaseResult ?? "none"],
+    ["stateUpdateOperationsSelected", preflight.stateUpdateOperationsSelected ?? "none"],
     ["completedAt", preflight.completedAt ?? "none"],
   ];
 }

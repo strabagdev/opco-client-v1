@@ -168,6 +168,7 @@ export type StateUpdateSyncTelemetryResult =
   | "ready_confirmed"
   | "ready_failed"
   | "reconnecting"
+  | "records_failed_before_state_update"
   | "reconciled_success"
   | "sync_started"
   | "success";
@@ -199,6 +200,17 @@ export type StateUpdateReconnectPreflightTelemetry = {
   reconnectDetectedAt: string | null;
   runSyncStartedAt: string | null;
   scopeCheckAfterReadiness: "contract_changed" | "current" | "owner_changed" | "token_changed" | null;
+  recordsPhaseCompletedAt?: string | null;
+  recordsPhaseFailedAt?: string | null;
+  recordsPhaseStartedAt?: string | null;
+  recordsPhaseResult?: "completed" | "failed" | null;
+  recordsOperationsCompleted?: number | null;
+  recordsOperationsFailed?: number | null;
+  stateUpdatePhaseCompletedAt?: string | null;
+  stateUpdatePhaseFailedAt?: string | null;
+  stateUpdatePhaseStartedAt?: string | null;
+  stateUpdatePhaseResult?: "completed" | "failed" | null;
+  stateUpdateOperationsSelected?: number | null;
   shouldSyncCompletedAt: string | null;
   shouldSyncDurationMs: number | null;
   shouldSyncResult: boolean | null;

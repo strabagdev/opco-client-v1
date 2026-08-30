@@ -11,7 +11,7 @@ import { readPersistedContractId } from "../lib/session-persistence";
 import { StateUpdateSyncTrigger, upsertStateUpdateReconnectRunHistory } from "../lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "./reconnect-sync";
 import { StateUpdateReconnectDiagnostics } from "./use-session-diagnostics";
-import { createSyncRunId, syncPendingWork } from "../sync/pending-work-sync";
+import { createSyncRunId, syncPendingWork, SyncPendingWorkPhaseEvent } from "../sync/pending-work-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 import * as tokenStorage from "../lib/token-storage";
 import {
@@ -97,6 +97,9 @@ export function usePendingWorkLifecycle({
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const activePendingWorkRunKeyRef = useRef<string | null>(null);
   const persistStateUpdateReconnectDiagnosticsRef = useRef(persistStateUpdateReconnectDiagnostics);
+  const reconnectDiagnosticsQueueActiveRef = useRef(true);
+  const reconnectDiagnosticsQueueScopeRef = useRef("none");
+  const reconnectDiagnosticsWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const reconnectPreflightRef = useRef<{
     debounceStartedAt: string;
     reconnectDetectedAt: string;
@@ -132,17 +135,45 @@ export function usePendingWorkLifecycle({
   }, [persistStateUpdateReconnectDiagnostics]);
 
   useEffect(() => {
+    reconnectDiagnosticsQueueActiveRef.current = true;
+    reconnectDiagnosticsQueueScopeRef.current = `${ownerKey ?? "none"}:${selectedContractIdState ?? "none"}:${token ?? "none"}`;
+
+    return () => {
+      reconnectDiagnosticsQueueActiveRef.current = false;
+      reconnectDiagnosticsWriteQueueRef.current = Promise.resolve();
+    };
+  }, [ownerKey, selectedContractIdState, token]);
+
+  useEffect(() => {
     setRecordsReconnectRefreshKeyRef.current = setRecordsReconnectRefreshKey;
   }, [setRecordsReconnectRefreshKey]);
 
-  const markStateUpdateActivity = useCallback(async ({
+  const queueReconnectDiagnosticsUpdate = useCallback((
+    updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,
+  ) => {
+    const persist = persistStateUpdateReconnectDiagnosticsRef.current;
+    const scopeKey = reconnectDiagnosticsQueueScopeRef.current;
+
+    reconnectDiagnosticsWriteQueueRef.current = reconnectDiagnosticsWriteQueueRef.current
+      .catch(() => undefined)
+      .then(() => {
+        if (!reconnectDiagnosticsQueueActiveRef.current || reconnectDiagnosticsQueueScopeRef.current !== scopeKey) {
+          return undefined;
+        }
+
+        return persist(updater);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const markStateUpdateActivity = useCallback(({
     result,
     startedAt,
     syncRunId,
     trigger,
     type,
   }: {
-    result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "failed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "sync_started";
+    result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "failed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "records_failed_before_state_update" | "sync_started";
     startedAt: string;
     syncRunId: string;
     trigger: StateUpdateSyncTrigger | "auth_refresh" | "ready_check" | "reconnect";
@@ -150,42 +181,42 @@ export function usePendingWorkLifecycle({
   }) => {
     const completedAt = new Date().toISOString();
 
-    await persistStateUpdateReconnectDiagnostics((current) => {
-      const lastRequestDiagnostics = (current.requestHistory ?? [])
-        .slice()
-        .reverse()
-        .find((request) => request.diagnosticSyncRunId === syncRunId) ?? null;
+    queueReconnectDiagnosticsUpdate((current) => {
+        const lastRequestDiagnostics = (current.requestHistory ?? [])
+          .slice()
+          .reverse()
+          .find((request) => request.diagnosticSyncRunId === syncRunId) ?? null;
 
-      return {
-        ...current,
-        currentConnectivity: {
-          status: connectivityStatus,
-          updatedAt: completedAt,
-        },
-        lastStateUpdateActivity: {
-          completedAt,
-          lastRequestDiagnostics,
-          operationsCompleted: 0,
-          operationsFailed: result === "ready_failed" ? 1 : 0,
-          result,
-          startedAt,
-          syncRunId,
-          timeoutOccurred: lastRequestDiagnostics?.abortControllerTriggered === true,
-          trigger,
-          type,
-        },
-      };
-    });
-  }, [connectivityStatus, persistStateUpdateReconnectDiagnostics]);
+        return {
+          ...current,
+          currentConnectivity: {
+            status: connectivityStatus,
+            updatedAt: completedAt,
+          },
+          lastStateUpdateActivity: {
+            completedAt,
+            lastRequestDiagnostics,
+            operationsCompleted: 0,
+            operationsFailed: result === "ready_failed" ? 1 : 0,
+            result,
+            startedAt,
+            syncRunId,
+            timeoutOccurred: lastRequestDiagnostics?.abortControllerTriggered === true,
+            trigger,
+            type,
+          },
+        };
+      });
+  }, [connectivityStatus, queueReconnectDiagnosticsUpdate]);
 
   const updateReconnectPreflight = useCallback((
     syncRunId: string,
     updater: (current: NonNullable<StateUpdateReconnectDiagnostics["lastReconnectPreflight"]>) => NonNullable<StateUpdateReconnectDiagnostics["lastReconnectPreflight"]>,
   ) => {
-    void persistStateUpdateReconnectDiagnosticsRef.current((current) => {
+    queueReconnectDiagnosticsUpdate((current) => {
       const previous = current.lastReconnectPreflight?.syncRunId === syncRunId
         ? current.lastReconnectPreflight
-        : null;
+        : (current.reconnectRunHistory ?? []).find((entry) => entry.syncRunId === syncRunId) ?? null;
       const base = previous ?? {
         authDecision: null,
         authRefreshCompletedAt: null,
@@ -206,6 +237,17 @@ export function usePendingWorkLifecycle({
         reconnectDetectedAt: null,
         runSyncStartedAt: null,
         scopeCheckAfterReadiness: null,
+        recordsOperationsCompleted: null,
+        recordsOperationsFailed: null,
+        recordsPhaseCompletedAt: null,
+        recordsPhaseFailedAt: null,
+        recordsPhaseResult: null,
+        recordsPhaseStartedAt: null,
+        stateUpdateOperationsSelected: null,
+        stateUpdatePhaseCompletedAt: null,
+        stateUpdatePhaseFailedAt: null,
+        stateUpdatePhaseResult: null,
+        stateUpdatePhaseStartedAt: null,
         shouldSyncCompletedAt: null,
         shouldSyncDurationMs: null,
         shouldSyncResult: null,
@@ -224,7 +266,7 @@ export function usePendingWorkLifecycle({
         reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, nextPreflight),
       };
     });
-  }, []);
+  }, [queueReconnectDiagnosticsUpdate]);
 
   const clearReadinessRecoveryTimer = useCallback(({ resetAttempts = false }: { resetAttempts?: boolean } = {}) => {
     const recovery = readinessRecoveryRef.current;
@@ -354,7 +396,7 @@ export function usePendingWorkLifecycle({
       if (shouldGatePendingSyncWithOperationalCoreReady(trigger)) {
         const startedAt = new Date().toISOString();
 
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           readinessStartedAt: startedAt,
         }));
@@ -367,7 +409,7 @@ export function usePendingWorkLifecycle({
         });
 
         if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
-          updateReconnectPreflight(syncRunId, (current) => ({
+          await updateReconnectPreflight(syncRunId, (current) => ({
             ...current,
             scopeCheckAfterReadiness: getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current),
           }));
@@ -387,7 +429,7 @@ export function usePendingWorkLifecycle({
           readiness = await probeOperationalCoreReadiness({ api, syncRunId });
         } catch {
           const completedAt = new Date().toISOString();
-          updateReconnectPreflight(syncRunId, (current) => ({
+          await updateReconnectPreflight(syncRunId, (current) => ({
             ...current,
             completedAt,
             readinessCompletedAt: completedAt,
@@ -406,7 +448,7 @@ export function usePendingWorkLifecycle({
         }
 
         const readinessCompletedAt = new Date().toISOString();
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           completedAt: readinessCompletedAt,
           readinessAttempts: readiness.attempts,
@@ -437,7 +479,7 @@ export function usePendingWorkLifecycle({
           runScope,
           token: syncToken,
         });
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           authDecision: postReadinessPlan.authDecision,
           readinessConfirmedAt: readinessCompletedAt,
@@ -457,7 +499,7 @@ export function usePendingWorkLifecycle({
 
         if (postReadinessPlan.authDecision === "refresh_required") {
           const authRefreshStartedAt = new Date().toISOString();
-          updateReconnectPreflight(syncRunId, (current) => ({
+          await updateReconnectPreflight(syncRunId, (current) => ({
             ...current,
             authRefreshStartedAt,
           }));
@@ -482,12 +524,12 @@ export function usePendingWorkLifecycle({
               token: syncToken,
             };
             setToken(syncToken);
-            updateReconnectPreflight(syncRunId, (current) => ({
+            await updateReconnectPreflight(syncRunId, (current) => ({
               ...current,
               authRefreshCompletedAt: new Date().toISOString(),
             }));
           } catch (error) {
-            updateReconnectPreflight(syncRunId, (current) => ({
+            await updateReconnectPreflight(syncRunId, (current) => ({
               ...current,
               authRefreshCompletedAt: new Date().toISOString(),
             }));
@@ -520,7 +562,7 @@ export function usePendingWorkLifecycle({
         }
 
         const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current);
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           scopeCheckAfterReadiness,
         }));
@@ -545,11 +587,12 @@ export function usePendingWorkLifecycle({
         });
       }
 
-      updateReconnectPreflight(syncRunId, (current) => ({
+      await updateReconnectPreflight(syncRunId, (current) => ({
         ...current,
         syncPendingWorkStartedAt: new Date().toISOString(),
       }));
       setIsPendingWorkSyncing(true);
+      let recordsFailedBeforeStateUpdate = false;
       try {
         await syncPendingWork({
           api,
@@ -559,20 +602,29 @@ export function usePendingWorkLifecycle({
           syncStateUpdates: syncPendingStateUpdatesWithTelemetry,
           token: syncToken,
           trigger,
+          onPhase(event) {
+            if (event.phase === "records" && event.result === "failed") {
+              recordsFailedBeforeStateUpdate = true;
+            }
+            return updateReconnectPreflight(syncRunId, (current) => ({
+              ...current,
+              ...syncPendingWorkPhaseToReconnectPreflight(event),
+            }));
+          },
         });
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           syncPendingWorkCompletedAt: new Date().toISOString(),
         }));
         clearReadinessRecoveryTimer({ resetAttempts: true });
         return "completed";
       } catch (error) {
-        updateReconnectPreflight(syncRunId, (current) => ({
+        await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           syncPendingWorkCompletedAt: new Date().toISOString(),
         }));
         await markStateUpdateActivity({
-          result: "failed",
+          result: recordsFailedBeforeStateUpdate ? "records_failed_before_state_update" : "failed",
           startedAt: new Date().toISOString(),
           syncRunId,
           trigger,
@@ -794,7 +846,7 @@ export function usePendingWorkLifecycle({
     const shouldSync = recordsResult.count > 0 || stateUpdateResult.operations.length > 0;
 
     if (preflight) {
-      updateReconnectPreflight(preflight.syncRunId, (current) => ({
+      await updateReconnectPreflight(preflight.syncRunId, (current) => ({
         ...current,
         countPendingOperationsCount: recordsResult.count,
         countPendingOperationsDurationMs: recordsResult.durationMs,
@@ -1014,5 +1066,26 @@ export function usePendingWorkLifecycle({
     isPendingWorkSyncing,
     reconnectSessionAndRecords,
     syncPendingRecords,
+  };
+}
+
+function syncPendingWorkPhaseToReconnectPreflight(event: SyncPendingWorkPhaseEvent) {
+  if (event.phase === "records") {
+    return {
+      ...(event.recordsOperationsCompleted === undefined ? {} : { recordsOperationsCompleted: event.recordsOperationsCompleted }),
+      ...(event.recordsOperationsFailed === undefined ? {} : { recordsOperationsFailed: event.recordsOperationsFailed }),
+      ...(event.completedAt === undefined ? {} : { recordsPhaseCompletedAt: event.completedAt }),
+      ...(event.failedAt === undefined ? {} : { recordsPhaseFailedAt: event.failedAt }),
+      recordsPhaseResult: event.result === "completed" || event.result === "failed" ? event.result : null,
+      ...(event.startedAt === undefined ? {} : { recordsPhaseStartedAt: event.startedAt }),
+    };
+  }
+
+  return {
+    ...(event.stateUpdateOperationsSelected === undefined ? {} : { stateUpdateOperationsSelected: event.stateUpdateOperationsSelected }),
+    ...(event.completedAt === undefined ? {} : { stateUpdatePhaseCompletedAt: event.completedAt }),
+    ...(event.failedAt === undefined ? {} : { stateUpdatePhaseFailedAt: event.failedAt }),
+    stateUpdatePhaseResult: event.result === "completed" || event.result === "failed" ? event.result : null,
+    ...(event.startedAt === undefined ? {} : { stateUpdatePhaseStartedAt: event.startedAt }),
   };
 }

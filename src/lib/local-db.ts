@@ -4083,6 +4083,21 @@ function normalizeStateUpdateReconnectPreflightTelemetry(
       telemetry.scopeCheckAfterReadiness === "token_changed"
       ? telemetry.scopeCheckAfterReadiness
       : null,
+    recordsOperationsCompleted: normalizeNullableDiagnosticCount(telemetry.recordsOperationsCompleted),
+    recordsOperationsFailed: normalizeNullableDiagnosticCount(telemetry.recordsOperationsFailed),
+    recordsPhaseCompletedAt: normalizeDiagnosticTimestamp(telemetry.recordsPhaseCompletedAt),
+    recordsPhaseFailedAt: normalizeDiagnosticTimestamp(telemetry.recordsPhaseFailedAt),
+    recordsPhaseResult: telemetry.recordsPhaseResult === "completed" || telemetry.recordsPhaseResult === "failed"
+      ? telemetry.recordsPhaseResult
+      : null,
+    recordsPhaseStartedAt: normalizeDiagnosticTimestamp(telemetry.recordsPhaseStartedAt),
+    stateUpdateOperationsSelected: normalizeNullableDiagnosticCount(telemetry.stateUpdateOperationsSelected),
+    stateUpdatePhaseCompletedAt: normalizeDiagnosticTimestamp(telemetry.stateUpdatePhaseCompletedAt),
+    stateUpdatePhaseFailedAt: normalizeDiagnosticTimestamp(telemetry.stateUpdatePhaseFailedAt),
+    stateUpdatePhaseResult: telemetry.stateUpdatePhaseResult === "completed" || telemetry.stateUpdatePhaseResult === "failed"
+      ? telemetry.stateUpdatePhaseResult
+      : null,
+    stateUpdatePhaseStartedAt: normalizeDiagnosticTimestamp(telemetry.stateUpdatePhaseStartedAt),
     shouldSyncCompletedAt: normalizeDiagnosticTimestamp(telemetry.shouldSyncCompletedAt),
     shouldSyncDurationMs: normalizeNullableDiagnosticDuration(telemetry.shouldSyncDurationMs),
     shouldSyncResult: typeof telemetry.shouldSyncResult === "boolean" ? telemetry.shouldSyncResult : null,
@@ -4332,6 +4347,7 @@ function normalizeStateUpdateSyncTelemetryResult(value: unknown) {
     value === "ready_confirmed" ||
     value === "ready_failed" ||
     value === "reconnecting" ||
+    value === "records_failed_before_state_update" ||
     value === "reconciled_success" ||
     value === "sync_started" ||
     value === "success"

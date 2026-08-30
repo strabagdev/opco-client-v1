@@ -150,9 +150,20 @@ export type StateUpdateRunSummary = {
   readinessCompletedAt: string | null;
   readinessConfirmedAt: string | null;
   readinessStartedAt: string | null;
+  recordsOperationsCompleted: number | null;
+  recordsOperationsFailed: number | null;
+  recordsPhaseCompletedAt: string | null;
+  recordsPhaseFailedAt: string | null;
+  recordsPhaseResult: string | null;
+  recordsPhaseStartedAt: string | null;
   reconnectDetectedAt: string | null;
   runSyncStartedAt: string | null;
   scopeCheckAfterReadiness: string | null;
+  stateUpdateOperationsSelected: number | null;
+  stateUpdatePhaseCompletedAt: string | null;
+  stateUpdatePhaseFailedAt: string | null;
+  stateUpdatePhaseResult: string | null;
+  stateUpdatePhaseStartedAt: string | null;
   syncPendingWorkCompletedAt: string | null;
   syncPendingWorkStartedAt: string | null;
   syncRunId: string | null;
@@ -413,15 +424,76 @@ export function resolveLatestStateUpdateRunSummary(
     readinessCompletedAt: preflight?.readinessCompletedAt ?? null,
     readinessConfirmedAt: preflight?.readinessConfirmedAt ?? null,
     readinessStartedAt: preflight?.readinessStartedAt ?? null,
+    recordsOperationsCompleted: preflight?.recordsOperationsCompleted ?? null,
+    recordsOperationsFailed: preflight?.recordsOperationsFailed ?? null,
+    recordsPhaseCompletedAt: preflight?.recordsPhaseCompletedAt ?? null,
+    recordsPhaseFailedAt: preflight?.recordsPhaseFailedAt ?? null,
+    recordsPhaseResult: preflight?.recordsPhaseResult ?? null,
+    recordsPhaseStartedAt: preflight?.recordsPhaseStartedAt ?? null,
     reconnectDetectedAt: preflight?.reconnectDetectedAt ?? null,
     runSyncStartedAt: preflight?.runSyncStartedAt ?? null,
     scopeCheckAfterReadiness: preflight?.scopeCheckAfterReadiness ?? null,
+    stateUpdateOperationsSelected: preflight?.stateUpdateOperationsSelected ?? null,
+    stateUpdatePhaseCompletedAt: preflight?.stateUpdatePhaseCompletedAt ?? null,
+    stateUpdatePhaseFailedAt: preflight?.stateUpdatePhaseFailedAt ?? null,
+    stateUpdatePhaseResult: preflight?.stateUpdatePhaseResult ?? null,
+    stateUpdatePhaseStartedAt: preflight?.stateUpdatePhaseStartedAt ?? null,
     syncPendingWorkCompletedAt: preflight?.syncPendingWorkCompletedAt ?? null,
     syncPendingWorkStartedAt: preflight?.syncPendingWorkStartedAt ?? null,
     syncRunId: latest?.syncRunId ?? null,
     terminalResult: latest?.terminalResult ?? "none",
     trigger: preflight?.trigger ?? latest?.trigger ?? null,
   };
+}
+
+export function resolveCurrentStateUpdateRunSummary(
+  reconnect: StateUpdateSyncDiagnosticsTelemetry,
+): StateUpdateRunSummary {
+  const preflight = reconnect.lastReconnectPreflight;
+
+  if (!preflight?.syncRunId || isFinishedPreflight(preflight)) {
+    return emptyRunSummary();
+  }
+
+  return buildStateUpdateRunSummary({
+    activity: reconnect.lastStateUpdateActivity?.syncRunId === preflight.syncRunId ? reconnect.lastStateUpdateActivity : null,
+    latest: {
+      phase: "activity",
+      syncRunId: preflight.syncRunId,
+      terminalResult: reconnect.lastStateUpdateActivity?.syncRunId === preflight.syncRunId
+        ? reconnect.lastStateUpdateActivity.result
+        : "reconnecting",
+      timestampMs: parseTelemetryTimestampMs(preflight.runSyncStartedAt ?? preflight.reconnectDetectedAt),
+      trigger: preflight.trigger,
+    },
+    preflight,
+    sync: null,
+  });
+}
+
+export function resolveLastFinishedStateUpdateRunSummary(
+  reconnect: StateUpdateSyncDiagnosticsTelemetry,
+): StateUpdateRunSummary {
+  if (reconnect.lastStateUpdateSync?.syncRunId) {
+    const syncRunId = reconnect.lastStateUpdateSync.syncRunId;
+
+    return buildStateUpdateRunSummary({
+      activity: reconnect.lastStateUpdateActivity?.syncRunId === syncRunId ? reconnect.lastStateUpdateActivity : null,
+      latest: {
+        phase: "sync",
+        syncRunId,
+        terminalResult: reconnect.lastStateUpdateSync.result,
+        timestampMs: parseTelemetryTimestampMs(
+          reconnect.lastStateUpdateSync.completedAt ?? reconnect.lastStateUpdateSync.startedAt,
+        ),
+        trigger: reconnect.lastStateUpdateSync.trigger,
+      },
+      preflight: findReconnectPreflightForRun(reconnect, syncRunId),
+      sync: reconnect.lastStateUpdateSync,
+    });
+  }
+
+  return emptyRunSummary();
 }
 
 function findReconnectPreflightForRun(
@@ -433,6 +505,73 @@ function findReconnectPreflightForRun(
   }
 
   return (reconnect.reconnectRunHistory ?? []).find((entry) => entry.syncRunId === syncRunId) ?? null;
+}
+
+function isFinishedPreflight(preflight: NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]>) {
+  return Boolean(preflight.completedAt || preflight.syncPendingWorkCompletedAt || preflight.stateUpdatePhaseCompletedAt || preflight.stateUpdatePhaseFailedAt);
+}
+
+function buildStateUpdateRunSummary({
+  activity,
+  latest,
+  preflight,
+  sync,
+}: {
+  activity: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateActivity"];
+  latest: {
+    phase: StateUpdateRunSummary["phase"];
+    syncRunId: string | null;
+    terminalResult: string;
+    timestampMs: number | null;
+    trigger: string | null;
+  } | null;
+  preflight: StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"];
+  sync: StateUpdateSyncDiagnosticsTelemetry["lastStateUpdateSync"];
+}): StateUpdateRunSummary {
+  return {
+    authDecision: preflight?.authDecision ?? null,
+    authRefreshCompletedAt: preflight?.authRefreshCompletedAt ?? null,
+    authRefreshStartedAt: preflight?.authRefreshStartedAt ?? null,
+    countPendingOperationsCount: preflight?.countPendingOperationsCount ?? null,
+    phase: latest?.phase ?? "none",
+    listPendingStateUpdateOperationsCount: preflight?.listPendingStateUpdateOperationsCount ?? null,
+    operationsAttempted: sync?.operationsAttempted ?? null,
+    operationsCompleted: sync?.operationsCompleted ?? activity?.operationsCompleted ?? null,
+    operationsFailed: sync?.operationsFailed ?? activity?.operationsFailed ?? null,
+    operationsSelected: sync?.operationsSelected ?? null,
+    readinessAttempts: preflight?.readinessAttempts ?? null,
+    readinessCompletedAt: preflight?.readinessCompletedAt ?? null,
+    readinessConfirmedAt: preflight?.readinessConfirmedAt ?? null,
+    readinessStartedAt: preflight?.readinessStartedAt ?? null,
+    recordsOperationsCompleted: preflight?.recordsOperationsCompleted ?? null,
+    recordsOperationsFailed: preflight?.recordsOperationsFailed ?? null,
+    recordsPhaseCompletedAt: preflight?.recordsPhaseCompletedAt ?? null,
+    recordsPhaseFailedAt: preflight?.recordsPhaseFailedAt ?? null,
+    recordsPhaseResult: preflight?.recordsPhaseResult ?? null,
+    recordsPhaseStartedAt: preflight?.recordsPhaseStartedAt ?? null,
+    reconnectDetectedAt: preflight?.reconnectDetectedAt ?? null,
+    runSyncStartedAt: preflight?.runSyncStartedAt ?? null,
+    scopeCheckAfterReadiness: preflight?.scopeCheckAfterReadiness ?? null,
+    stateUpdateOperationsSelected: preflight?.stateUpdateOperationsSelected ?? null,
+    stateUpdatePhaseCompletedAt: preflight?.stateUpdatePhaseCompletedAt ?? null,
+    stateUpdatePhaseFailedAt: preflight?.stateUpdatePhaseFailedAt ?? null,
+    stateUpdatePhaseResult: preflight?.stateUpdatePhaseResult ?? null,
+    stateUpdatePhaseStartedAt: preflight?.stateUpdatePhaseStartedAt ?? null,
+    syncPendingWorkCompletedAt: preflight?.syncPendingWorkCompletedAt ?? null,
+    syncPendingWorkStartedAt: preflight?.syncPendingWorkStartedAt ?? null,
+    syncRunId: latest?.syncRunId ?? null,
+    terminalResult: latest?.terminalResult ?? "none",
+    trigger: preflight?.trigger ?? latest?.trigger ?? null,
+  };
+}
+
+function emptyRunSummary(): StateUpdateRunSummary {
+  return buildStateUpdateRunSummary({
+    activity: null,
+    latest: null,
+    preflight: null,
+    sync: null,
+  });
 }
 
 function getLatestRequestHistoryEvent(
