@@ -54,6 +54,16 @@ export function formatAttendancePendingText(pendingCount: number) {
     : `${pendingCount} registros por sincronizar`;
 }
 
+export function shouldFinishAttendanceVisualRequest({
+  activeRequestId,
+  requestId,
+}: {
+  activeRequestId: number | null;
+  requestId: number;
+}) {
+  return activeRequestId === requestId;
+}
+
 export function selectDefaultCheckInStatus(statuses: AttendanceStatusOption[]) {
   return statuses.find((status) => status.isDefaultCheckIn) ?? statuses[0] ?? null;
 }

@@ -14,6 +14,7 @@ import {
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
+  shouldFinishAttendanceVisualRequest,
   shouldSearchAttendancePeople,
   shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
@@ -76,6 +77,31 @@ describe("attendance workflow logic", () => {
     expect(formatAttendancePendingText(0)).toBeNull();
     expect(formatAttendancePendingText(1)).toBe("1 registro por sincronizar");
     expect(formatAttendancePendingText(2)).toBe("2 registros por sincronizar");
+  });
+
+  it("lets the active Attendance day-load owner clear the loading spinner", () => {
+    expect(shouldFinishAttendanceVisualRequest({
+      activeRequestId: 1,
+      requestId: 1,
+    })).toBe(true);
+  });
+
+  it("keeps the loading spinner while a newer Attendance day-load is still active", () => {
+    expect(shouldFinishAttendanceVisualRequest({
+      activeRequestId: 2,
+      requestId: 1,
+    })).toBe(false);
+  });
+
+  it("does not orphan Attendance loading when search, person, or refresh requests advance data freshness", () => {
+    expect(shouldFinishAttendanceVisualRequest({
+      activeRequestId: 1,
+      requestId: 1,
+    })).toBe(true);
+    expect(shouldFinishAttendanceVisualRequest({
+      activeRequestId: null,
+      requestId: 2,
+    })).toBe(false);
   });
 
   it("classifies successful, error, and conflict batch results", () => {

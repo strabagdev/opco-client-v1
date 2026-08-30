@@ -46,6 +46,7 @@ import {
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
+  shouldFinishAttendanceVisualRequest,
   shouldSearchAttendancePeople,
   shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
@@ -108,6 +109,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const requestSequenceRef = useRef(0);
+  const loadingRequestRef = useRef<number | null>(null);
+  const searchingRequestRef = useRef<number | null>(null);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
@@ -151,6 +154,38 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     setTotalRegistered(response.summary.totalRegistered);
+  }, []);
+
+  const beginLoadingRequest = useCallback(() => {
+    const requestId = ++requestSequenceRef.current;
+
+    loadingRequestRef.current = requestId;
+    setIsLoading(true);
+
+    return requestId;
+  }, []);
+
+  const beginSearchingRequest = useCallback(() => {
+    const requestId = ++requestSequenceRef.current;
+
+    searchingRequestRef.current = requestId;
+    setIsSearching(true);
+
+    return requestId;
+  }, []);
+
+  const finishLoadingRequest = useCallback((requestId: number) => {
+    if (shouldFinishAttendanceVisualRequest({ activeRequestId: loadingRequestRef.current, requestId })) {
+      loadingRequestRef.current = null;
+      setIsLoading(false);
+    }
+  }, []);
+
+  const finishSearchingRequest = useCallback((requestId: number) => {
+    if (shouldFinishAttendanceVisualRequest({ activeRequestId: searchingRequestRef.current, requestId })) {
+      searchingRequestRef.current = null;
+      setIsSearching(false);
+    }
   }, []);
 
   const refreshLocalDayState = useCallback(async (remoteSnapshot?: {
@@ -308,9 +343,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
-    const requestId = ++requestSequenceRef.current;
-
-    setIsLoading(true);
+    const requestId = beginLoadingRequest();
     const operation = options.operation ?? "load-day";
 
     if (operation === "refresh") {
@@ -351,11 +384,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
-      if (requestId === requestSequenceRef.current) {
-        setIsLoading(false);
-      }
+      finishLoadingRequest(requestId);
     }
-  }, [api, appView.id, applyAttendanceResponse, cacheAttendanceOnlineResponse, clearVisibleError, date, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
+  }, [api, appView.id, applyAttendanceResponse, beginLoadingRequest, cacheAttendanceOnlineResponse, clearVisibleError, date, finishLoadingRequest, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
 
   const refreshAfterStateUpdateSync = useCallback(async () => {
     if (!ownerKey || !selectedContractId) {
@@ -448,9 +479,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
-    const requestId = ++requestSequenceRef.current;
-
-    setIsSearching(true);
+    const requestId = beginSearchingRequest();
     setError(null);
     setRefreshError(null);
 
@@ -498,9 +527,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
-      if (requestId === requestSequenceRef.current) {
-        setIsSearching(false);
-      }
+      finishSearchingRequest(requestId);
     }
   }, [
     api,
@@ -509,10 +536,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.targetEntityTypeId,
     appView.id,
     applyDayState,
+    beginSearchingRequest,
     cacheAttendanceOnlineResponseInBackground,
     clearVisibleError,
     date,
     definitionCache,
+    finishSearchingRequest,
     isOnline,
     ownerKey,
     recordVisibleError,
@@ -568,9 +597,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      const requestId = ++requestSequenceRef.current;
-
-      setIsLoading(true);
+      const requestId = beginLoadingRequest();
       setError(null);
       setRefreshError(null);
       setSuccessMessage(null);
@@ -599,8 +626,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           });
         }
       } finally {
-        if (isMounted && requestId === requestSequenceRef.current) {
-          setIsLoading(false);
+        if (isMounted) {
+          finishLoadingRequest(requestId);
         }
       }
     }
@@ -617,11 +644,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     appView.config.statusFieldId,
     appView.id,
     applyAttendanceResponse,
+    beginLoadingRequest,
     cacheAttendanceOnlineResponse,
     clearVisibleError,
     connectivityStatus,
     date,
     definitionCache,
+    finishLoadingRequest,
     isContractBootstrapPending,
     ownerKey,
     recordVisibleError,

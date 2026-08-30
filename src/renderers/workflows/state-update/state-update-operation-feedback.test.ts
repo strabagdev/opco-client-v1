@@ -168,6 +168,47 @@ describe("state update operation feedback", () => {
     });
   });
 
+  it("returns non-loading feedback after terminal reconnect outcomes when no runtime operation is active", () => {
+    for (const result of ["ready_failed", "cancelled_scope_changed", "interrupted", "ready_confirmed", "sync_started"]) {
+      expect(resolveStateUpdateOperationFeedback({
+        connectivityStatus: "online",
+        lastActivity: {
+          result,
+          type: "ready_check",
+        },
+        pendingCount: 1,
+      })).toMatchObject({
+        message: "Pendiente de sincronizacion.",
+        phase: "PENDING",
+      });
+    }
+  });
+
+  it("does not keep auth, sync, or readiness loading feedback after their active flags are false", () => {
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      lastActivity: {
+        result: "auth_timeout",
+        type: "auth_refresh",
+      },
+      pendingCount: 1,
+    }).phase).toBe("PENDING");
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      isReadinessChecking: false,
+      lastActivity: {
+        result: "reconnecting",
+        type: "ready_check",
+      },
+      pendingCount: 1,
+    }).phase).toBe("PENDING");
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      isSyncing: false,
+      pendingCount: 1,
+    }).phase).toBe("PENDING");
+  });
+
   it("shows unresolved error when timeout could not be confirmed", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "online",
