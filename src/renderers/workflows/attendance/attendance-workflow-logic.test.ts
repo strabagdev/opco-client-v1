@@ -16,7 +16,10 @@ import {
   selectDefaultCheckInStatus,
   shouldFinishAttendanceVisualRequest,
   shouldRefreshAttendanceLatestAfterSync,
+  shouldRenderAttendanceInlineFeedback,
   shouldSearchAttendancePeople,
+  shouldShowAttendanceStatusActions,
+  shouldShowAttendanceSubtitle,
   shiftLocalDate,
   splitStatusButtons,
 } from "./attendance-workflow-logic";
@@ -74,6 +77,33 @@ describe("attendance workflow logic", () => {
     expect(formatAttendancePendingText(0)).toBeNull();
     expect(formatAttendancePendingText(1)).toBe("1 registro por sincronizar");
     expect(formatAttendancePendingText(2)).toBe("2 registros por sincronizar");
+  });
+
+  it("keeps global offline and pending feedback out of the Attendance content flow", () => {
+    expect(shouldRenderAttendanceInlineFeedback("OFFLINE_SAVED")).toBe(false);
+    expect(shouldRenderAttendanceInlineFeedback("PENDING")).toBe(false);
+    expect(shouldRenderAttendanceInlineFeedback("SYNCING")).toBe(false);
+    expect(shouldRenderAttendanceInlineFeedback("RECONNECTING")).toBe(false);
+    expect(shouldRenderAttendanceInlineFeedback("RESTORING_SESSION")).toBe(false);
+    expect(shouldRenderAttendanceInlineFeedback("FAILED")).toBe(true);
+    expect(shouldRenderAttendanceInlineFeedback("SUCCESS")).toBe(true);
+  });
+
+  it("shows status actions only when Attendance has an active selected person", () => {
+    expect(shouldShowAttendanceStatusActions({ hasSelectedItem: false, statusesCount: statuses.length })).toBe(false);
+    expect(shouldShowAttendanceStatusActions({ hasSelectedItem: true, statusesCount: 0 })).toBe(false);
+    expect(shouldShowAttendanceStatusActions({ hasSelectedItem: true, statusesCount: statuses.length })).toBe(true);
+  });
+
+  it("removes the redundant Attendance subtitle when it duplicates the screen title", () => {
+    expect(shouldShowAttendanceSubtitle({
+      subtitle: "Registro de Asistencia",
+      title: "Registro de Asistencia",
+    })).toBe(false);
+    expect(shouldShowAttendanceSubtitle({
+      subtitle: "Asistencia Faena Norte",
+      title: "Registro de Asistencia",
+    })).toBe(true);
   });
 
   it("lets the active Attendance day-load owner clear the loading spinner", () => {

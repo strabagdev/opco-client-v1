@@ -478,7 +478,7 @@ Definition readiness and data readiness are separate:
 - `OFFLINE_READY`: both definition and required data are ready.
 - `PARTIAL_OFFLINE`: definition exists, but required data has never been authoritatively hydrated.
 
-Home advertises `Disponible sin conexion` only for `OFFLINE_READY`. If only the definition is available, it shows `Configuracion disponible; datos aun no descargados`. If no prepared definition exists, it shows `Requiere conexion para preparar datos`.
+The global app shell communicates normal offline availability. Home omits per-experience `Disponible sin conexion` labels for `OFFLINE_READY`; it only shows per-experience exception labels such as `Configuracion disponible; datos aun no descargados` or `Requiere conexion para preparar datos`.
 
 Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness.
 

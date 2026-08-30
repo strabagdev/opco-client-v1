@@ -68,6 +68,33 @@ export function shouldRefreshAttendanceLatestAfterSync(
   );
 }
 
+export function shouldRenderAttendanceInlineFeedback(phase: string) {
+  return phase === "FAILED" ||
+    phase === "UNRESOLVED_ERROR" ||
+    phase === "CONFLICT" ||
+    phase === "SUCCESS";
+}
+
+export function shouldShowAttendanceStatusActions({
+  hasSelectedItem,
+  statusesCount,
+}: {
+  hasSelectedItem: boolean;
+  statusesCount: number;
+}) {
+  return hasSelectedItem && statusesCount > 0;
+}
+
+export function shouldShowAttendanceSubtitle({
+  subtitle,
+  title,
+}: {
+  subtitle: string;
+  title: string;
+}) {
+  return subtitle.trim().toLocaleLowerCase() !== title.trim().toLocaleLowerCase();
+}
+
 export function selectDefaultCheckInStatus(statuses: AttendanceStatusOption[]) {
   return statuses.find((status) => status.isDefaultCheckIn) ?? statuses[0] ?? null;
 }

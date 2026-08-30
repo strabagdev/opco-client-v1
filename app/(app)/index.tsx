@@ -11,9 +11,8 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { getOfflineAvailabilityText } from "@/lib/app-view-offline-readiness";
-import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
+import { getHomeExperienceCards } from "@/lib/home-experiences";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
@@ -36,8 +35,6 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const [views, setViews] = useState<AppView[]>([]);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
-  const [viewsFromCache, setViewsFromCache] = useState(false);
-  const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
@@ -45,6 +42,10 @@ export default function HomeScreen() {
   const selectedContract = useMemo(
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
     [context?.contracts, selectedContractId],
+  );
+  const experienceCards = useMemo(
+    () => getHomeExperienceCards(views, offlineAvailabilityByViewId),
+    [offlineAvailabilityByViewId, views],
   );
 
   useEffect(() => {
@@ -112,8 +113,6 @@ export default function HomeScreen() {
     async function loadViews() {
       if (!token || !selectedContractId || !ownerKey) {
         setViews([]);
-        setViewsFromCache(false);
-        setViewsSyncedAt(null);
         return;
       }
 
@@ -131,8 +130,6 @@ export default function HomeScreen() {
 
         if (isMounted) {
           setViews(data.views);
-          setViewsFromCache(data.fromCache);
-          setViewsSyncedAt(data.syncedAt);
         }
 
         if (!data.offline) {
@@ -154,8 +151,6 @@ export default function HomeScreen() {
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
-          setViewsFromCache(false);
-          setViewsSyncedAt(null);
         }
       } finally {
         if (isMounted) {
@@ -230,35 +225,29 @@ export default function HomeScreen() {
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Experiencias</Text>
       {isLoadingViews ? <ActivityIndicator /> : null}
-      {viewsFromCache ? (
-        <View style={styles.cacheBanner}>
-          <Text style={styles.cacheText}>Sin conexion. Experiencias guardadas localmente.</Text>
-          {viewsSyncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {viewsSyncedAt}</Text> : null}
-        </View>
-      ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
       <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
-        {views.map((appView) => (
-          <Link href={buildAppViewHref(appView.id)} key={appView.id} asChild>
-            <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
-              <View style={styles.viewIcon}>
-                <AppIcon icon={appView.icon} size={22} />
-              </View>
-              <View style={styles.viewText}>
-                <Text style={styles.viewName}>{appView.name}</Text>
-                <View style={styles.typeBadge}>
-                  <Text style={styles.typeBadgeText}>{getAppViewCardMetadata(appView)}</Text>
+        {experienceCards.map(({ appView, availabilityLabel, href, metadata }) => {
+          return (
+            <Link href={href} key={appView.id} asChild>
+              <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
+                <View style={styles.viewIcon}>
+                  <AppIcon icon={appView.icon} size={22} />
                 </View>
-                <Text style={styles.availabilityText}>
-                  {getOfflineAvailabilityText(offlineAvailabilityByViewId[appView.id] ?? "definition-missing")}
-                </Text>
-              </View>
-            </Pressable>
-          </Link>
-        ))}
+                <View style={styles.viewText}>
+                  <Text style={styles.viewName}>{appView.name}</Text>
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeBadgeText}>{metadata}</Text>
+                  </View>
+                  {availabilityLabel ? <Text style={styles.availabilityText}>{availabilityLabel}</Text> : null}
+                </View>
+              </Pressable>
+            </Link>
+          );
+        })}
       </View>
     </View>
   );
@@ -317,22 +306,6 @@ const styles = StyleSheet.create({
   contractListWide: {
     flexDirection: "row",
     flexWrap: "wrap",
-  },
-  cacheBanner: {
-    backgroundColor: "#fff7e0",
-    borderColor: "#f0c36d",
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 4,
-    padding: 12,
-  },
-  cacheMeta: {
-    color: "#6f4f08",
-    fontSize: 12,
-  },
-  cacheText: {
-    color: "#6f4f08",
-    fontWeight: "700",
   },
   contractName: {
     color: "#17363c",

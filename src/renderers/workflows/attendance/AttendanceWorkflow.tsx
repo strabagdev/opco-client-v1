@@ -40,7 +40,6 @@ import {
   firstBlockingAttendanceResult,
   formatDisplayDate,
   formatLocalDateInput,
-  formatAttendancePendingText,
   hasSuccessfulAttendanceResult,
   isAttendanceRemoteSnapshotComplete,
   mergeAttendanceLatestWithLocalOverlay,
@@ -48,7 +47,10 @@ import {
   normalizeAttendanceSearch,
   shouldFinishAttendanceVisualRequest,
   shouldRefreshAttendanceLatestAfterSync,
+  shouldRenderAttendanceInlineFeedback,
   shouldSearchAttendancePeople,
+  shouldShowAttendanceStatusActions,
+  shouldShowAttendanceSubtitle,
   shiftLocalDate,
   splitStatusButtons,
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
@@ -114,9 +116,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
-  const pendingText = formatAttendancePendingText(pendingCount);
+  const screenTitle = "Registro de Asistencia";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
+  const showSubtitle = shouldShowAttendanceSubtitle({ subtitle: appView.name, title: screenTitle });
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const lastStateUpdateSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
@@ -931,8 +934,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           <AppIcon icon={appView.icon} size={26} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>Registro de Asistencia</Text>
-          <Text style={styles.meta}>{appView.name}</Text>
+          <Text style={styles.title}>{screenTitle}</Text>
+          {showSubtitle ? <Text style={styles.meta}>{appView.name}</Text> : null}
           <Text style={styles.meta}>{formatDisplayDate(date)}</Text>
         </View>
       </View>
@@ -952,13 +955,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <Text style={styles.summaryValue}>{totalRegistered}</Text>
       </View>
 
-      {operationFeedback.message ? (
+      {operationFeedback.message && shouldRenderAttendanceInlineFeedback(operationFeedback.phase) ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}
         </Text>
-      ) : null}
-      {pendingText ? (
-        <Text style={styles.offline}>{pendingText}</Text>
       ) : null}
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
       {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (
@@ -1007,16 +1007,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       {isLoading ? <ActivityIndicator /> : null}
-
-      {connectivityStatus !== "online" && statuses.length > 0 ? (
-        <View style={styles.statusGrid}>
-          {statuses.map((status) => (
-            <View key={status.optionId} style={styles.offlineStatusPill}>
-              <Text style={styles.secondaryStatusText}>{status.label}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
 
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
@@ -1077,7 +1067,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             <Text style={styles.error}>No hay estados de asistencia configurados.</Text>
           )}
 
-          {otherStatuses.length > 0 ? (
+          {shouldShowAttendanceStatusActions({ hasSelectedItem: Boolean(selectedItem), statusesCount: otherStatuses.length }) ? (
             <View style={styles.statusGrid}>
               {otherStatuses.map((status) => (
                 <Pressable
@@ -1265,11 +1255,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     justifyContent: "space-between",
+    maxWidth: "100%",
+    minWidth: 0,
   },
   dateButton: {
     alignItems: "center",
     backgroundColor: "#e4f1f2",
     borderRadius: 8,
+    flexShrink: 1,
     minHeight: 42,
     paddingHorizontal: 12,
     justifyContent: "center",
@@ -1280,6 +1273,7 @@ const styles = StyleSheet.create({
   },
   dateLabel: {
     color: "#0f3036",
+    flexShrink: 1,
     fontWeight: "800",
   },
   diagnostic: {
@@ -1303,9 +1297,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 14,
+    maxWidth: "100%",
+    minWidth: 0,
   },
   headerText: {
     flex: 1,
+    minWidth: 0,
   },
   icon: {
     alignItems: "center",
@@ -1326,10 +1323,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: "row",
     gap: 10,
+    maxWidth: "100%",
+    minWidth: 0,
     padding: 12,
   },
   latestTime: {
     color: "#587078",
+    flexShrink: 0,
     fontWeight: "700",
   },
   list: {
@@ -1402,6 +1402,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     color: "#0f3036",
+    fontSize: 16,
     minHeight: 72,
     padding: 10,
     textAlignVertical: "top",
@@ -1441,17 +1442,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 12,
   },
-  offlineStatusPill: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
   personText: {
     flex: 1,
     gap: 4,
+    minWidth: 0,
   },
   primaryStatusButton: {
     alignItems: "center",
@@ -1473,6 +1467,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 10,
+    maxWidth: "100%",
+    minWidth: 0,
   },
   searchInput: {
     backgroundColor: "#ffffff",
@@ -1481,7 +1477,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     color: "#0f3036",
     flex: 1,
+    fontSize: 16,
     minHeight: 44,
+    minWidth: 0,
     paddingHorizontal: 12,
   },
   secondaryStatusButton: {
@@ -1532,6 +1530,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
+    maxWidth: "100%",
   },
   statusMeta: {
     color: "#587078",
@@ -1563,5 +1562,6 @@ const styles = StyleSheet.create({
     color: "#0f3036",
     fontSize: 24,
     fontWeight: "800",
+    flexShrink: 1,
   },
 });

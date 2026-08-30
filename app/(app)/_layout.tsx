@@ -197,7 +197,7 @@ export default function AppLayout() {
           ) : null}
           <View style={styles.titleBlock}>
             <View style={styles.titleRow}>
-              <Text style={styles.title}>Opco Client</Text>
+              <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
               <Animated.View accessible accessibilityLabel={shellStatusIndicator.accessibilityLabel} style={[
                 styles.statusDot,
                 shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
@@ -571,6 +571,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
+    minHeight: 56,
+    overflow: "hidden",
     width: "100%",
   },
   headerActions: {
@@ -578,10 +580,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     maxWidth: "56%",
+    minWidth: 0,
   },
   headerCompact: {
-    padding: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingBottom: 0,
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
+    paddingVertical: 10,
   },
   headerWide: {
     paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
@@ -725,6 +728,7 @@ const styles = StyleSheet.create({
   shell: {
     backgroundColor: "#eef4f4",
     flex: 1,
+    overflow: "hidden",
   },
   statusDot: {
     borderRadius: 5,
@@ -747,6 +751,9 @@ const styles = StyleSheet.create({
     color: "#0f3036",
     fontSize: 26,
     fontWeight: "800",
+  },
+  titleCompact: {
+    fontSize: 22,
   },
   titleBlock: {
     flexShrink: 1,
@@ -785,14 +792,11 @@ const styles = StyleSheet.create({
   },
   userButton: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
     flexDirection: "row",
     gap: 8,
     maxWidth: 220,
     minHeight: 40,
+    minWidth: 0,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
