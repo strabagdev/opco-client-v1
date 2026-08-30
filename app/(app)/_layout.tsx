@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import {
   resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
@@ -11,7 +12,8 @@ import {
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
-import { useSession } from "@/state/session";
+import { getSyncDiagnosticsRows } from "@/renderers/records/sync-diagnostics";
+import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
 
 const APP_SHELL_TOAST_DURATION_MS = 3500;
 
@@ -20,6 +22,7 @@ export default function AppLayout() {
     connectivityStatus,
     context,
     isAuthSessionRestoring,
+    diagnosticsStateUpdate,
     isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     localDatabaseStorageState,
@@ -37,13 +40,13 @@ export default function AppLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const { width } = useWindowDimensions();
-  const [isPwaDiagnosticsOpen, setIsPwaDiagnosticsOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("pwa");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
-  const showPwaDiagnostics = shouldShowPwaDiagnostics();
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
@@ -63,6 +66,7 @@ export default function AppLayout() {
     pendingCount: pendingRecordsCount,
   });
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
+  const refreshStateUpdateDiagnostics = diagnosticsStateUpdate.onRefresh;
 
   useEffect(() => {
     if (!lastSync?.completedAt) {
@@ -101,9 +105,19 @@ export default function AppLayout() {
     return () => clearTimeout(timeout);
   }, [toast]);
 
+  useEffect(() => {
+    if (isDiagnosticsOpen && selectedDiagnosticsTab === "state-update") {
+      void refreshStateUpdateDiagnostics();
+    }
+  }, [isDiagnosticsOpen, refreshStateUpdateDiagnostics, selectedDiagnosticsTab]);
+
   const feedback = persistentFeedback ?? toast;
   const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
+  const recordsDiagnosticsRows = getSyncDiagnosticsRows({
+    summary: recordsSyncSummary,
+    telemetry: null,
+  });
 
   function goBack() {
     if (router.canGoBack()) {
@@ -141,16 +155,14 @@ export default function AppLayout() {
           </View>
         </View>
         <View style={styles.headerActions}>
-          {showPwaDiagnostics ? (
-            <Pressable
-              accessibilityLabel="Diagnostico PWA"
-              accessibilityRole="button"
-              onPress={() => setIsPwaDiagnosticsOpen(true)}
-              style={styles.diagnosticsIconButton}
-            >
-              <AppIcon icon="settings" size={18} />
-            </Pressable>
-          ) : null}
+          <Pressable
+            accessibilityLabel={GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel}
+            accessibilityRole="button"
+            onPress={() => setIsDiagnosticsOpen(true)}
+            style={styles.diagnosticsIconButton}
+          >
+            <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} />
+          </Pressable>
           <Pressable
             accessibilityLabel="Menu de usuario"
             accessibilityRole="button"
@@ -207,25 +219,63 @@ export default function AppLayout() {
 
       <Modal
         animationType="fade"
-        onRequestClose={() => setIsPwaDiagnosticsOpen(false)}
+        onRequestClose={() => setIsDiagnosticsOpen(false)}
         transparent
-        visible={isPwaDiagnosticsOpen}
+        visible={isDiagnosticsOpen}
       >
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalPanel, isWideLayout ? styles.modalPanelWide : styles.modalPanelCompact]}>
+          <View style={[styles.modalPanel, isWideLayout ? styles.diagnosticsModalPanelWide : styles.modalPanelCompact]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Diagnostico PWA</Text>
+              <Text style={styles.modalTitle}>Diagnostico</Text>
               <Pressable
-                accessibilityLabel="Cerrar diagnostico PWA"
+                accessibilityLabel="Cerrar diagnostico"
                 accessibilityRole="button"
-                onPress={() => setIsPwaDiagnosticsOpen(false)}
+                onPress={() => setIsDiagnosticsOpen(false)}
                 style={styles.modalCloseButton}
               >
                 <Text style={styles.modalCloseText}>Cerrar</Text>
               </Pressable>
             </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.diagnosticsTabs}>
+              <View style={styles.diagnosticsTabList}>
+                {GLOBAL_DIAGNOSTIC_TABS.map((tab) => {
+                  const isSelected = selectedDiagnosticsTab === tab.id;
+
+                  return (
+                    <Pressable
+                      accessibilityRole="button"
+                      key={tab.id}
+                      onPress={() => setSelectedDiagnosticsTab(normalizeDiagnosticTabId(tab.id))}
+                      style={[styles.diagnosticsTab, isSelected ? styles.diagnosticsTabSelected : null]}
+                    >
+                      <Text style={[styles.diagnosticsTabText, isSelected ? styles.diagnosticsTabTextSelected : null]}>
+                        {tab.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </ScrollView>
             <ScrollView style={styles.modalScroll}>
-              <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
+              {selectedDiagnosticsTab === "pwa" ? (
+                <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
+              ) : null}
+              {selectedDiagnosticsTab === "state-update" ? (
+                <StateUpdateDiagnosticsPanel
+                  diagnostics={diagnosticsStateUpdate.diagnostics}
+                  error={diagnosticsStateUpdate.error}
+                  isSyncing={diagnosticsStateUpdate.isSyncing}
+                  onRefresh={diagnosticsStateUpdate.onRefresh}
+                  onRetryFailed={diagnosticsStateUpdate.onRetryFailed}
+                  onSyncNow={diagnosticsStateUpdate.onSyncNow}
+                  reconnect={stateUpdateReconnectDiagnostics}
+                  run={diagnosticsStateUpdate.run}
+                  variant="embedded"
+                />
+              ) : null}
+              {selectedDiagnosticsTab === "records" ? (
+                <RecordsGlobalDiagnostics rows={recordsDiagnosticsRows} />
+              ) : null}
             </ScrollView>
           </View>
         </View>
@@ -274,18 +324,6 @@ export default function AppLayout() {
   );
 }
 
-function shouldShowPwaDiagnostics() {
-  if (typeof __DEV__ !== "undefined" && __DEV__) {
-    return true;
-  }
-
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return new URLSearchParams(window.location.search).has("pwaDiagnostics");
-}
-
 function PwaDiagnostics({
   diagnostics,
   offlinePreparationDiagnostics,
@@ -323,6 +361,20 @@ function PwaDiagnostics({
         <View key={label} style={styles.diagnosticsRow}>
           <Text style={styles.diagnosticsLabel}>{label}</Text>
           <Text style={styles.diagnosticsValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function RecordsGlobalDiagnostics({ rows }: { rows: [string, string | number | boolean | null][] }) {
+  return (
+    <View style={styles.diagnostics}>
+      <Text style={styles.diagnosticsTitle}>RECORDS</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.diagnosticsRow}>
+          <Text style={styles.diagnosticsLabel}>{label}</Text>
+          <Text style={styles.diagnosticsValue}>{String(value)}</Text>
         </View>
       ))}
     </View>
@@ -415,6 +467,39 @@ const styles = StyleSheet.create({
   diagnosticsRow: {
     flexDirection: "row",
     gap: 8,
+  },
+  diagnosticsModalPanelWide: {
+    maxWidth: 920,
+  },
+  diagnosticsTab: {
+    alignItems: "center",
+    backgroundColor: "#eef4f4",
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 14,
+  },
+  diagnosticsTabList: {
+    flexDirection: "row",
+    gap: 8,
+    paddingBottom: 2,
+  },
+  diagnosticsTabSelected: {
+    backgroundColor: "#135d66",
+    borderColor: "#135d66",
+  },
+  diagnosticsTabs: {
+    flexGrow: 0,
+  },
+  diagnosticsTabText: {
+    color: "#17363c",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  diagnosticsTabTextSelected: {
+    color: "#ffffff",
   },
   diagnosticsTitle: {
     color: "#17363c",

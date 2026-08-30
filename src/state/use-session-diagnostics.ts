@@ -196,7 +196,7 @@ export function useSessionDiagnostics({
     useState<StateUpdateReconnectDiagnostics>(emptyStateUpdateReconnectDiagnostics);
 
   const refreshStateUpdateDiagnostics = useCallback(async () => {
-    if (!showStateUpdateDiagnostics || !ownerKey) {
+    if (!ownerKey) {
       setStateUpdateDiagnostics(null);
       setStateUpdateDiagnosticsError(ownerKey ? null : "owner unavailable");
       return;
@@ -211,7 +211,7 @@ export function useSessionDiagnostics({
       setStateUpdateDiagnostics(null);
       setStateUpdateDiagnosticsError("diagnostics unavailable");
     }
-  }, [definitionCache, ownerKey, showStateUpdateDiagnostics]);
+  }, [definitionCache, ownerKey]);
 
   const persistStateUpdateReconnectDiagnostics = useCallback(async (
     updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,

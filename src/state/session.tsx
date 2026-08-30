@@ -64,6 +64,15 @@ type SessionContextValue = {
   connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
+  diagnosticsStateUpdate: {
+    diagnostics: StateUpdateOutboxDiagnostics | null;
+    error: string | null;
+    isSyncing: boolean;
+    onRefresh(): Promise<void>;
+    onRetryFailed(manualRetryToken?: string | null): Promise<void>;
+    onSyncNow(): Promise<void>;
+    run: StateUpdateDiagnosticRun | null;
+  };
   isAuthSessionRestoring: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
@@ -289,6 +298,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
     showStateUpdateDiagnostics,
     token,
   });
+  const diagnosticsStateUpdate = useMemo(
+    () => ({
+      diagnostics: stateUpdateDiagnostics,
+      error: stateUpdateDiagnosticsError,
+      isSyncing: isStateUpdateDiagnosticSyncing,
+      onRefresh: refreshStateUpdateDiagnostics,
+      onRetryFailed: retryFailedStateUpdateDiagnostics,
+      onSyncNow: runStateUpdateDiagnosticSync,
+      run: stateUpdateDiagnosticRun,
+    }),
+    [
+      isStateUpdateDiagnosticSyncing,
+      refreshStateUpdateDiagnostics,
+      retryFailedStateUpdateDiagnostics,
+      runStateUpdateDiagnosticSync,
+      stateUpdateDiagnosticRun,
+      stateUpdateDiagnostics,
+      stateUpdateDiagnosticsError,
+    ],
+  );
 
   useEffect(() => {
     return setStateUpdateNetworkDiagnosticsRecorder((diagnostics) => {
@@ -510,6 +539,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         connectivityStatus,
         context,
         definitionCache,
+        diagnosticsStateUpdate,
         isAuthSessionRestoring,
         isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
@@ -545,18 +575,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
       ) : (
         <>
           {children}
-          {showStateUpdateDiagnostics ? (
-            <StateUpdateDiagnosticsPanel
-              diagnostics={stateUpdateDiagnostics}
-              error={stateUpdateDiagnosticsError}
-              isSyncing={isStateUpdateDiagnosticSyncing}
-              onRefresh={refreshStateUpdateDiagnostics}
-              onRetryFailed={retryFailedStateUpdateDiagnostics}
-              onSyncNow={runStateUpdateDiagnosticSync}
-              reconnect={stateUpdateReconnectDiagnostics}
-              run={stateUpdateDiagnosticRun}
-            />
-          ) : null}
         </>
       )}
     </SessionContext.Provider>

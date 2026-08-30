@@ -18,7 +18,7 @@ export function getSyncDiagnosticsRows({
 }: {
   summary: RecordsSyncDiagnosticsSummary;
   telemetry: SyncTelemetry | null;
-}) {
+}): [string, string | number | boolean | null][] {
   return [
     ["Estado actual", telemetry?.syncPhase ?? "idle"],
     ["Entity scope", telemetry ? abbreviateScopeValue(telemetry.entityTypeId) : "none"],
