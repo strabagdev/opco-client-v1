@@ -3,10 +3,9 @@ import { useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
-
-const APP_SHELL_WIDE_BREAKPOINT = 900;
 
 export default function AppLayout() {
   const {
@@ -174,15 +173,11 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   backRowCompact: {
-    alignSelf: "center",
-    maxWidth: 620,
-    paddingHorizontal: 20,
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingTop: 12,
   },
   backRowWide: {
-    alignSelf: "center",
-    maxWidth: 1180,
-    paddingHorizontal: 28,
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingTop: 14,
   },
   backText: {
@@ -243,15 +238,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerCompact: {
-    alignSelf: "center",
-    maxWidth: 620,
-    padding: 20,
+    padding: APP_SHELL_HORIZONTAL_GUTTER,
     paddingBottom: 0,
   },
   headerWide: {
-    alignSelf: "center",
-    maxWidth: 1180,
-    paddingHorizontal: 28,
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingTop: 20,
   },
   kicker: {

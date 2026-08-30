@@ -1,0 +1,2 @@
+export const APP_SHELL_HORIZONTAL_GUTTER = 20;
+export const APP_SHELL_WIDE_BREAKPOINT = 900;

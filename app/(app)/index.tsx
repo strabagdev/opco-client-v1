@@ -16,12 +16,11 @@ import { buildAppViewHref, getAppViewCardMetadata } from "@/lib/app-views";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
+import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
-
-const HOME_WIDE_BREAKPOINT = 900;
 
 export default function HomeScreen() {
   const {
@@ -44,7 +43,7 @@ export default function HomeScreen() {
   const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
-  const isWideLayout = width >= HOME_WIDE_BREAKPOINT;
+  const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId && views.length > 0),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
@@ -390,18 +389,16 @@ function getUserInitials(value: string | null | undefined) {
 const styles = StyleSheet.create({
   content: {
     gap: 18,
-    padding: 20,
+    padding: APP_SHELL_HORIZONTAL_GUTTER,
     paddingBottom: 36,
     width: "100%",
   },
   contentCompact: {
-    alignSelf: "center",
-    maxWidth: 620,
+    alignSelf: "stretch",
   },
   contentWide: {
-    alignSelf: "center",
-    maxWidth: 1180,
-    paddingHorizontal: 28,
+    alignSelf: "stretch",
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
   },
   contractButton: {
     backgroundColor: "#ffffff",
@@ -526,8 +523,7 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   experiencesColumnWide: {
-    flexBasis: 520,
-    flexGrow: 2,
+    width: "100%",
   },
   homeGrid: {
     gap: 18,
