@@ -71,23 +71,60 @@ describe("records renderer state", () => {
 
   it("does not keep a sync problem visible after telemetry returns to idle", () => {
     expect(shouldShowRecordsSyncProblem({
-      ...baseTelemetry,
-      lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
-      lastSyncErrorCode: "NETWORK",
-      lastSyncErrorPhase: "refreshing",
-      lastSuccessfulSyncAt: "2026-08-30T08:01:00.000Z",
-      syncPhase: "idle",
+      connectivityStatus: "online",
+      telemetry: {
+        ...baseTelemetry,
+        lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
+        lastSyncErrorCode: "NETWORK",
+        lastSyncErrorPhase: "refreshing",
+        lastSuccessfulSyncAt: "2026-08-30T08:01:00.000Z",
+        syncPhase: "idle",
+      },
     })).toBe(false);
   });
 
-  it("shows a sync problem only for a current unresolved records sync error", () => {
-    expect(shouldShowRecordsSyncProblem({
+  it("shows a sync problem only for a current online records sync error", () => {
+    const errorTelemetry = {
       ...baseTelemetry,
       lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
-      lastSyncErrorCode: "NETWORK",
-      lastSyncErrorPhase: "refreshing",
-      syncPhase: "error",
+      lastSyncErrorCode: "NETWORK" as const,
+      lastSyncErrorPhase: "refreshing" as const,
+      syncPhase: "error" as const,
+    };
+
+    expect(shouldShowRecordsSyncProblem({
+      connectivityStatus: "online",
+      telemetry: errorTelemetry,
     })).toBe(true);
+    expect(shouldShowRecordsSyncProblem({
+      connectivityStatus: "offline",
+      telemetry: errorTelemetry,
+    })).toBe(false);
+    expect(shouldShowRecordsSyncProblem({
+      connectivityStatus: "unknown",
+      telemetry: errorTelemetry,
+    })).toBe(false);
+  });
+
+  it("keeps offline cache and pending status primary even when records telemetry has an error", () => {
+    const offlineBanner = getRecordsCacheBannerMessage({
+      connectivityStatus: "offline",
+      fromCache: true,
+      isLoading: false,
+    });
+    const syncProblem = shouldShowRecordsSyncProblem({
+      connectivityStatus: "offline",
+      telemetry: {
+        ...baseTelemetry,
+        lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
+        lastSyncErrorCode: "NETWORK",
+        lastSyncErrorPhase: "refreshing",
+        syncPhase: "error",
+      },
+    });
+
+    expect(offlineBanner).toBe("Sin conexion. Datos guardados localmente.");
+    expect(syncProblem).toBe(false);
   });
 
   it("converges after reconnect success without requiring a remount", () => {
@@ -102,12 +139,15 @@ describe("records renderer state", () => {
       isLoading: false,
     });
     const staleHistoricalError = shouldShowRecordsSyncProblem({
-      ...baseTelemetry,
-      lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
-      lastSyncErrorCode: "NETWORK",
-      lastSyncErrorPhase: "refreshing",
-      lastSuccessfulSyncAt: "2026-08-30T08:01:00.000Z",
-      syncPhase: "idle",
+      connectivityStatus: "online",
+      telemetry: {
+        ...baseTelemetry,
+        lastSyncErrorAt: "2026-08-30T08:00:00.000Z",
+        lastSyncErrorCode: "NETWORK",
+        lastSyncErrorPhase: "refreshing",
+        lastSuccessfulSyncAt: "2026-08-30T08:01:00.000Z",
+        syncPhase: "idle",
+      },
     });
 
     expect(offlineBanner).toBe("Sin conexion. Datos guardados localmente.");

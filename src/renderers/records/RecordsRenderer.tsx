@@ -342,7 +342,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         </View>
       ) : null}
 
-      <SyncTelemetrySummary telemetry={recordsSyncTelemetry} />
+      <SyncTelemetrySummary connectivityStatus={connectivityStatus} telemetry={recordsSyncTelemetry} />
 
       {hasSyncActivity ? (
         <View style={styles.syncBar}>
@@ -438,12 +438,18 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 }
 
 
-function SyncTelemetrySummary({ telemetry }: { telemetry: SyncTelemetry | null }) {
+function SyncTelemetrySummary({
+  connectivityStatus,
+  telemetry,
+}: {
+  connectivityStatus: ReturnType<typeof useSession>["connectivityStatus"];
+  telemetry: SyncTelemetry | null;
+}) {
   if (!telemetry) {
     return null;
   }
 
-  if (shouldShowRecordsSyncProblem(telemetry)) {
+  if (shouldShowRecordsSyncProblem({ connectivityStatus, telemetry })) {
     return <Text style={styles.syncProblemText}>Problema de sincronizacion</Text>;
   }
 

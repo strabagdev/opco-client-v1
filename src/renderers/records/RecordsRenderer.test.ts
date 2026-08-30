@@ -37,6 +37,35 @@ describe("records sync diagnostics", () => {
     expect(rendered).not.toContain("record_");
     expect(rendered).not.toContain("payload");
   });
+
+  it("keeps sync error telemetry available for diagnostics", () => {
+    const rows = getSyncDiagnosticsRows({
+      summary: {
+        conflictCount: 0,
+        failedCount: 0,
+        pendingCount: 1,
+        syncingCount: 0,
+      },
+      telemetry: {
+        contractId: "contract_1",
+        entityTypeId: "entity_sensitive_abcdef",
+        lastFullRefreshCompletedAt: null,
+        lastPushCompletedAt: null,
+        lastReconcileCompletedAt: null,
+        lastSuccessfulSyncAt: null,
+        lastSyncAttemptAt: "2026-08-30T08:00:00.000Z",
+        lastSyncErrorAt: "2026-08-30T08:00:01.000Z",
+        lastSyncErrorCode: "NETWORK",
+        lastSyncErrorPhase: "refreshing",
+        ownerKey: "org_secret:user_secret",
+        syncPhase: "error",
+      },
+    });
+
+    expect(rows).toContainEqual(["Estado actual", "error"]);
+    expect(rows).toContainEqual(["Ultimo error", "NETWORK"]);
+    expect(rows).toContainEqual(["Fase del error", "refreshing"]);
+  });
 });
 
 describe("records diagnostics", () => {

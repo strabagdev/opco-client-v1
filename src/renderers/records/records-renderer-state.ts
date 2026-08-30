@@ -53,6 +53,12 @@ export function getRecordsCacheBannerMessage({
   return isLoading ? "Actualizando datos..." : "Datos guardados localmente.";
 }
 
-export function shouldShowRecordsSyncProblem(telemetry: SyncTelemetry | null) {
-  return telemetry?.syncPhase === "error";
+export function shouldShowRecordsSyncProblem({
+  connectivityStatus,
+  telemetry,
+}: {
+  connectivityStatus: ConnectivityStatus;
+  telemetry: SyncTelemetry | null;
+}) {
+  return connectivityStatus === "online" && telemetry?.syncPhase === "error";
 }
