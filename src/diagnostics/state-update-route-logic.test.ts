@@ -9,6 +9,8 @@ import {
   createStateUpdateDiagnosticApi,
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
+  formatStateUpdatePreflightRows,
+  formatStateUpdateRunRows,
   getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
   hasRecentStateUpdateTimeout,
@@ -501,6 +503,131 @@ describe("state update diagnostics route readiness", () => {
       stateUpdatePhaseResult: "completed",
       syncRunId: "sync_phases",
     });
+  });
+
+  it("presents three readiness checks as one successful sync run", () => {
+    const run = resolveLatestStateUpdateRunSummary(reconnectDiagnostics({
+      lastReconnectPreflight: reconnectPreflight({
+        readinessAttempts: 3,
+        readinessCompletedAt: "2026-08-29T09:06:15.739Z",
+        readinessConfirmedAt: "2026-08-29T09:06:15.739Z",
+        readinessDurationMs: 739,
+        readinessStartedAt: "2026-08-29T09:06:15.000Z",
+        syncPendingWorkCompletedAt: "2026-08-29T09:06:20.000Z",
+        syncPendingWorkStartedAt: "2026-08-29T09:06:16.000Z",
+        syncRunId: "sync_ready_3",
+      }),
+      lastStateUpdateSync: {
+        completedAt: "2026-08-29T09:06:20.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-29T09:06:16.000Z",
+        syncRunId: "sync_ready_3",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+      requestHistory: [
+        requestHistoryEvent({
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_ready_3",
+          attemptNumber: 1,
+          requestCompletedAt: "2026-08-29T09:06:15.200Z",
+        }),
+        requestHistoryEvent({
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_ready_3",
+          attemptNumber: 2,
+          requestCompletedAt: "2026-08-29T09:06:15.500Z",
+        }),
+        requestHistoryEvent({
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_ready_3",
+          attemptNumber: 3,
+          requestCompletedAt: "2026-08-29T09:06:15.739Z",
+        }),
+        requestHistoryEvent({
+          diagnosticOperation: "SAVE",
+          diagnosticSyncRunId: "sync_ready_3",
+          requestCompletedAt: "2026-08-29T09:06:19.000Z",
+        }),
+      ],
+    }));
+
+    const rows = formatStateUpdateRunRows(run);
+
+    expect(rows).toEqual(expect.arrayContaining([
+      ["estado", "Sincronizacion completada"],
+      ["operaciones", "1 operacion sincronizada"],
+      ["readiness", "Readiness confirmado en 3 intentos"],
+      ["readinessAttempts", 3],
+      ["operationsAttempted", 1],
+      ["operationsCompleted", 1],
+    ]));
+  });
+
+  it("uses singular readiness wording for a one-attempt run", () => {
+    const run = resolveLatestStateUpdateRunSummary(reconnectDiagnostics({
+      lastReconnectPreflight: reconnectPreflight({
+        readinessAttempts: 1,
+        readinessCompletedAt: "2026-08-29T09:06:15.300Z",
+        readinessConfirmedAt: "2026-08-29T09:06:15.300Z",
+        readinessStartedAt: "2026-08-29T09:06:15.000Z",
+        syncRunId: "sync_ready_1",
+      }),
+      lastStateUpdateSync: {
+        completedAt: "2026-08-29T09:06:20.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-29T09:06:16.000Z",
+        syncRunId: "sync_ready_1",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+    }));
+
+    expect(formatStateUpdateRunRows(run)).toContainEqual(["readiness", "Readiness confirmado en 1 intento"]);
+  });
+
+  it("formats optional run fields without presenting none as a meaningful state", () => {
+    const rows = formatStateUpdateRunRows(resolveLatestStateUpdateRunSummary(reconnectDiagnostics()));
+
+    expect(rows).toContainEqual(["estado", "-"]);
+    expect(rows).toContainEqual(["syncRunId", "-"]);
+    expect(rows).not.toContainEqual(expect.arrayContaining(["none"]));
+  });
+
+  it("summarizes reconnect readiness while keeping technical fields available", () => {
+    const rows = formatStateUpdatePreflightRows(reconnectPreflight({
+      readinessAttempts: 3,
+      readinessCompletedAt: "2026-08-29T09:06:15.739Z",
+      readinessConfirmedAt: "2026-08-29T09:06:15.739Z",
+      readinessDurationMs: 739,
+      readinessStartedAt: "2026-08-29T09:06:15.000Z",
+      syncRunId: "sync_ready_3",
+    }));
+
+    expect(rows.slice(0, 5)).toEqual([
+      ["syncRunId", "sync_ready_3"],
+      ["trigger", "reconnect"],
+      ["Readiness", "Confirmado"],
+      ["Intentos", "3 intentos"],
+      ["Duracion", "739 ms"],
+    ]);
+    expect(rows).toEqual(expect.arrayContaining([
+      ["readinessStartedAt", "2026-08-29T09:06:15.000Z"],
+      ["readinessCompletedAt", "2026-08-29T09:06:15.739Z"],
+      ["readinessConfirmedAt", "2026-08-29T09:06:15.739Z"],
+    ]));
   });
 });
 

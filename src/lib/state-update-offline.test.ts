@@ -6,6 +6,7 @@ import {
   interpretStateUpdateRequest,
   isStateUpdateCompatibleWorkflow,
   isValidStateUpdateRemoteUpdatedAt,
+  mergeStateUpdateReconnectPreflightTelemetryPatch,
   mergeStateUpdateSyncDiagnosticsTelemetry,
   stateUpdateIntentsEqual,
   stateUpdateRemoteItemMatchesPayload,
@@ -657,6 +658,360 @@ describe("state-update sync diagnostics telemetry", () => {
     expect(updated.filter((entry) => entry.syncRunId === "sync_3")).toHaveLength(1);
     expect(updated.at(-1)).toMatchObject({ authDecision: "token_valid", syncRunId: "sync_3" });
     expect(extended.map((entry) => entry.syncRunId)).toEqual(["sync_2", "sync_4", "sync_5", "sync_3", "sync_6"]);
+  });
+
+  it("preserves previous reconnect preflight fields when a patch is partial", () => {
+    const previous = reconnectPreflight({
+      readinessCompletedAt: "2026-08-29T10:00:02.000Z",
+      readinessConfirmedAt: "2026-08-29T10:00:02.000Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+    });
+
+    expect(mergeStateUpdateReconnectPreflightTelemetryPatch(previous, {
+      runSyncStartedAt: "2026-08-29T10:00:02.100Z",
+    })).toMatchObject({
+      readinessCompletedAt: "2026-08-29T10:00:02.000Z",
+      readinessConfirmedAt: "2026-08-29T10:00:02.000Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+      runSyncStartedAt: "2026-08-29T10:00:02.100Z",
+    });
+  });
+
+  it("does not let a late null reconnect preflight patch erase previous timestamps", () => {
+    const previous = reconnectPreflight({
+      readinessCompletedAt: "2026-08-29T10:00:02.000Z",
+      readinessConfirmedAt: "2026-08-29T10:00:02.000Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+      syncPendingWorkStartedAt: "2026-08-29T10:00:02.100Z",
+    });
+
+    expect(mergeStateUpdateReconnectPreflightTelemetryPatch(previous, reconnectPreflight({
+      readinessCompletedAt: null,
+      readinessConfirmedAt: null,
+      readinessStartedAt: null,
+      runSyncStartedAt: "2026-08-29T10:00:02.050Z",
+      syncPendingWorkStartedAt: null,
+    }))).toMatchObject({
+      readinessCompletedAt: "2026-08-29T10:00:02.000Z",
+      readinessConfirmedAt: "2026-08-29T10:00:02.000Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+      runSyncStartedAt: "2026-08-29T10:00:02.050Z",
+      syncPendingWorkStartedAt: "2026-08-29T10:00:02.100Z",
+    });
+  });
+
+  it("closes the reconnect preflight when the matching sync run succeeds", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastReconnectPreflight: reconnectPreflight({
+        completedAt: null,
+        readinessAttempts: null,
+        readinessCompletedAt: null,
+        readinessConfirmedAt: null,
+        readinessStartedAt: "2026-08-29T10:00:00.100Z",
+        runSyncStartedAt: "2026-08-29T10:00:00.050Z",
+        syncPendingWorkStartedAt: "2026-08-29T10:00:00.600Z",
+        syncRunId: "sync_1",
+      }),
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      reconnectRunHistory: [],
+      requestHistory: [
+        requestDiagnostics({
+          attemptNumber: 1,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_1",
+          method: "GET",
+          pathTemplate: "/api/v1/ready",
+          requestCompletedAt: "2026-08-29T10:00:00.500Z",
+          requestStartedAt: "2026-08-29T10:00:00.100Z",
+          timeoutMs: 2500,
+        }),
+        requestDiagnostics({
+          diagnosticOperation: "SAVE",
+          diagnosticSyncRunId: "sync_1",
+        }),
+      ],
+    };
+
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-29T10:00:01.000Z",
+      current,
+      currentConnectivityStatus: "online",
+      operationsAttempted: 1,
+      operationsCompleted: 1,
+      operationsFailed: 0,
+      operationsSelected: 1,
+      reconciledAfterTimeout: false,
+      startedAt: "2026-08-29T10:00:00.600Z",
+      syncRunId: "sync_1",
+      trigger: "reconnect",
+    });
+
+    expect(next.lastReconnectPreflight).toMatchObject({
+      completedAt: "2026-08-29T10:00:01.000Z",
+      readinessAttempts: 1,
+      readinessCompletedAt: "2026-08-29T10:00:00.500Z",
+      readinessConfirmedAt: "2026-08-29T10:00:00.500Z",
+      readinessStartedAt: "2026-08-29T10:00:00.100Z",
+      syncPendingWorkCompletedAt: "2026-08-29T10:00:01.000Z",
+      syncPendingWorkStartedAt: "2026-08-29T10:00:00.600Z",
+      syncRunId: "sync_1",
+    });
+    expect(next.reconnectRunHistory).toEqual([
+      expect.objectContaining({
+        completedAt: "2026-08-29T10:00:01.000Z",
+        syncRunId: "sync_1",
+      }),
+    ]);
+  });
+
+  it("sets readinessAttempts to one from one READY_CHECK request", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastReconnectPreflight: reconnectPreflight({
+        syncRunId: "sync_1",
+      }),
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      reconnectRunHistory: [],
+      requestHistory: [],
+    };
+
+    const next = appendStateUpdateRequestHistory(current, requestDiagnostics({
+      attemptNumber: 1,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_1",
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:00.300Z",
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      timeoutMs: 2500,
+    }));
+
+    expect(next.lastReconnectPreflight).toMatchObject({
+      readinessAttempts: 1,
+      readinessCompletedAt: "2026-08-29T10:00:00.300Z",
+      readinessConfirmedAt: "2026-08-29T10:00:00.300Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+      syncRunId: "sync_1",
+    });
+  });
+
+  it("counts three READY_CHECK requests for the same syncRunId", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastReconnectPreflight: reconnectPreflight({
+        syncRunId: "sync_1",
+      }),
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      reconnectRunHistory: [],
+      requestHistory: [],
+    };
+    const withFirst = appendStateUpdateRequestHistory(current, requestDiagnostics({
+      abortControllerTriggered: true,
+      attemptNumber: 1,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_1",
+      fetchResolvedAt: null,
+      httpStatus: null,
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:02.500Z",
+      requestStartedAt: "2026-08-29T10:00:00.000Z",
+      responseBodyStartedAt: null,
+      responseParsedAt: null,
+      responseStarted: false,
+      timeoutMs: 2500,
+    }));
+    const withSecond = appendStateUpdateRequestHistory(withFirst, requestDiagnostics({
+      abortControllerTriggered: true,
+      attemptNumber: 2,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_1",
+      fetchResolvedAt: null,
+      httpStatus: null,
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:03.500Z",
+      requestStartedAt: "2026-08-29T10:00:03.000Z",
+      responseBodyStartedAt: null,
+      responseParsedAt: null,
+      responseStarted: false,
+      timeoutMs: 2500,
+    }));
+    const withThird = appendStateUpdateRequestHistory(withSecond, requestDiagnostics({
+      attemptNumber: 3,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_1",
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:04.500Z",
+      requestStartedAt: "2026-08-29T10:00:04.000Z",
+      timeoutMs: 2500,
+    }));
+
+    expect(withThird.lastReconnectPreflight).toMatchObject({
+      readinessAttempts: 3,
+      readinessCompletedAt: "2026-08-29T10:00:04.500Z",
+      readinessConfirmedAt: "2026-08-29T10:00:04.500Z",
+      readinessStartedAt: "2026-08-29T10:00:00.000Z",
+      syncRunId: "sync_1",
+    });
+    expect(withThird.requestHistory?.filter((request) => request.diagnosticOperation === "READY_CHECK")).toHaveLength(3);
+  });
+
+  it("does not count READY_CHECK requests from a different syncRunId", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastReconnectPreflight: reconnectPreflight({
+        readinessAttempts: 1,
+        syncRunId: "sync_1",
+      }),
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      reconnectRunHistory: [reconnectPreflight({
+        readinessAttempts: 1,
+        syncRunId: "sync_1",
+      })],
+      requestHistory: [
+        requestDiagnostics({
+          attemptNumber: 1,
+          diagnosticOperation: "READY_CHECK",
+          diagnosticSyncRunId: "sync_1",
+          pathTemplate: "/api/v1/ready",
+        }),
+      ],
+    };
+
+    const next = appendStateUpdateRequestHistory(current, requestDiagnostics({
+      attemptNumber: 1,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_2",
+      method: "GET",
+      pathTemplate: "/api/v1/ready",
+      requestCompletedAt: "2026-08-29T10:00:01.000Z",
+      requestStartedAt: "2026-08-29T10:00:00.500Z",
+      timeoutMs: 2500,
+    }));
+
+    expect(next.lastReconnectPreflight).toMatchObject({
+      readinessAttempts: 1,
+      syncRunId: "sync_1",
+    });
+    expect(next.reconnectRunHistory).toEqual([
+      expect.objectContaining({
+        readinessAttempts: 1,
+        syncRunId: "sync_1",
+      }),
+    ]);
+  });
+
+  it("does not reduce readinessAttempts when a later preflight patch is stale", () => {
+    const history = upsertStateUpdateReconnectRunHistory([
+      reconnectPreflight({
+        readinessAttempts: 3,
+        readinessCompletedAt: "2026-08-29T10:00:04.500Z",
+        readinessConfirmedAt: "2026-08-29T10:00:04.500Z",
+        syncRunId: "sync_1",
+      }),
+    ], reconnectPreflight({
+      readinessAttempts: 1,
+      readinessCompletedAt: null,
+      readinessConfirmedAt: null,
+      syncRunId: "sync_1",
+    }));
+
+    expect(history).toEqual([
+      expect.objectContaining({
+        readinessAttempts: 3,
+        readinessCompletedAt: "2026-08-29T10:00:04.500Z",
+        readinessConfirmedAt: "2026-08-29T10:00:04.500Z",
+        syncRunId: "sync_1",
+      }),
+    ]);
+  });
+
+  it("does not merge reconnect preflight data across different syncRunIds", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: null },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-29T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastReconnectPreflight: reconnectPreflight({
+        readinessConfirmedAt: "2026-08-29T10:00:00.500Z",
+        syncRunId: "sync_1",
+      }),
+      lastStateUpdateActivity: null,
+      lastStateUpdateSync: null,
+      lastVisibleErrorEvent: null,
+      reconnectRunHistory: [reconnectPreflight({
+        readinessConfirmedAt: "2026-08-29T10:00:00.500Z",
+        syncRunId: "sync_1",
+      })],
+      requestHistory: [],
+    };
+
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-29T10:00:01.000Z",
+      current,
+      currentConnectivityStatus: "online",
+      operationsAttempted: 1,
+      operationsCompleted: 1,
+      operationsFailed: 0,
+      operationsSelected: 1,
+      reconciledAfterTimeout: false,
+      startedAt: "2026-08-29T10:00:00.600Z",
+      syncRunId: "sync_2",
+      trigger: "reconnect",
+    });
+
+    expect(next.lastReconnectPreflight).toMatchObject({
+      readinessConfirmedAt: "2026-08-29T10:00:00.500Z",
+      syncRunId: "sync_1",
+    });
+    expect(next.lastStateUpdateSync).toMatchObject({
+      completedAt: "2026-08-29T10:00:01.000Z",
+      syncRunId: "sync_2",
+    });
+    expect(next.reconnectRunHistory).toEqual([
+      expect.objectContaining({
+        readinessConfirmedAt: "2026-08-29T10:00:00.500Z",
+        syncRunId: "sync_1",
+      }),
+    ]);
   });
 
   it("ignores non-workflow request diagnostics and classifies timeout/network cases", () => {

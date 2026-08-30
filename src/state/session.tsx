@@ -9,7 +9,12 @@ import {
 } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
+import {
+  formatStateUpdatePreflightRows,
+  formatStateUpdateRunRows,
+  resolveLatestStateUpdateRunSummary,
+  resolveStateUpdateCurrentActivity,
+} from "@/diagnostics/state-update-route-logic";
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import {
   OfflinePreparationDiagnostics,
@@ -762,6 +767,7 @@ export function StateUpdateDiagnosticsPanel({
     ? summary.pendingCreate + summary.pendingUpdate + summary.syncing + summary.failed + summary.conflict
     : 0;
   const currentActivity = resolveStateUpdateCurrentActivity({ pending, reconnect });
+  const latestRun = resolveLatestStateUpdateRunSummary(reconnect);
   const currentConnectivityRows: [string, string | number | boolean | null][] = [
     ["status", reconnect.currentConnectivity.status],
     ["updatedAt", reconnect.currentConnectivity.updatedAt ?? "none"],
@@ -772,39 +778,7 @@ export function StateUpdateDiagnosticsPanel({
     ["from", reconnect.lastReconnect.previousConnectivityStatus ?? "none"],
     ["to", reconnect.lastReconnect.resultingConnectivityStatus ?? "none"],
   ];
-  const preflight = reconnect.lastReconnectPreflight;
-  const reconnectPreflightRows: [string, string | number | boolean | null][] = preflight ? [
-    ["syncRunId", preflight.syncRunId ?? "none"],
-    ["trigger", preflight.trigger],
-    ["reconnectDetectedAt", preflight.reconnectDetectedAt ?? "none"],
-    ["debounceStartedAt", preflight.debounceStartedAt ?? "none"],
-    ["debounceCompletedAt", preflight.debounceCompletedAt ?? "none"],
-    ["debounceDurationMs", preflight.debounceDurationMs ?? "none"],
-    ["shouldSyncStartedAt", preflight.shouldSyncStartedAt ?? "none"],
-    ["shouldSyncCompletedAt", preflight.shouldSyncCompletedAt ?? "none"],
-    ["shouldSyncDurationMs", preflight.shouldSyncDurationMs ?? "none"],
-    ["countPendingOperationsCount", preflight.countPendingOperationsCount ?? "none"],
-    ["countPendingOperationsDurationMs", preflight.countPendingOperationsDurationMs ?? "none"],
-    ["listPendingStateUpdateOperationsCount", preflight.listPendingStateUpdateOperationsCount ?? "none"],
-    ["listPendingStateUpdateOperationsDurationMs", preflight.listPendingStateUpdateOperationsDurationMs ?? "none"],
-    ["shouldSyncResult", preflight.shouldSyncResult ?? "none"],
-    ["runSyncStartedAt", preflight.runSyncStartedAt ?? "none"],
-    ["readinessStartedAt", preflight.readinessStartedAt ?? "none"],
-    ["readinessCompletedAt", preflight.readinessCompletedAt ?? "none"],
-    ["readinessConfirmedAt", preflight.readinessConfirmedAt ?? "none"],
-    ["readinessDurationMs", preflight.readinessDurationMs ?? "none"],
-    ["readinessAttempts", preflight.readinessAttempts ?? "none"],
-    ["authDecision", preflight.authDecision ?? "none"],
-    ["authRefreshStartedAt", preflight.authRefreshStartedAt ?? "none"],
-    ["authRefreshCompletedAt", preflight.authRefreshCompletedAt ?? "none"],
-    ["scopeCheckAfterReadiness", preflight.scopeCheckAfterReadiness ?? "none"],
-    ["syncPendingWorkStartedAt", preflight.syncPendingWorkStartedAt ?? "none"],
-    ["syncPendingWorkCompletedAt", preflight.syncPendingWorkCompletedAt ?? "none"],
-    ["completedAt", preflight.completedAt ?? "none"],
-  ] : [
-    ["syncRunId", "none"],
-    ["trigger", "none"],
-  ];
+  const reconnectPreflightRows = formatStateUpdatePreflightRows(reconnect.lastReconnectPreflight);
   const lastStateUpdateSyncRows: [string, string | number | boolean | null][] = reconnect.lastStateUpdateSync ? [
     ["trigger", reconnect.lastStateUpdateSync.trigger],
     ["syncRunId", reconnect.lastStateUpdateSync.syncRunId ?? "none"],
@@ -977,6 +951,8 @@ export function StateUpdateDiagnosticsPanel({
         <DiagnosticsRows rows={currentConnectivityRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Last reconnect</Text>
         <DiagnosticsRows rows={lastReconnectRows} />
+        <Text style={diagnosticsPanelStyles.sectionTitle}>Ultimo run</Text>
+        <DiagnosticsRows rows={formatStateUpdateRunRows(latestRun)} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Reconnect preflight</Text>
         <DiagnosticsRows rows={reconnectPreflightRows} />
         <Text style={diagnosticsPanelStyles.sectionTitle}>Actividad actual</Text>

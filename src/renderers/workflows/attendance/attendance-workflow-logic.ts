@@ -59,6 +59,15 @@ export function shouldFinishAttendanceVisualRequest({
   return activeRequestId === requestId;
 }
 
+export function shouldRefreshAttendanceLatestAfterSync(
+  lastSync: { completedAt?: string | null; result?: string | null } | null | undefined,
+) {
+  return Boolean(
+    lastSync?.completedAt &&
+    (lastSync.result === "success" || lastSync.result === "reconciled_success"),
+  );
+}
+
 export function selectDefaultCheckInStatus(statuses: AttendanceStatusOption[]) {
   return statuses.find((status) => status.isDefaultCheckIn) ?? statuses[0] ?? null;
 }

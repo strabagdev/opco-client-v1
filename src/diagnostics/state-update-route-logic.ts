@@ -171,6 +171,8 @@ export type StateUpdateRunSummary = {
   trigger: string | null;
 };
 
+export type StateUpdateDiagnosticDisplayRow = [string, string | number | boolean | null];
+
 export const STATE_UPDATE_RECENT_TIMEOUT_WINDOW_MS = 5 * 60 * 1000;
 
 export function buildStateUpdateDiagnosticHealth({
@@ -496,6 +498,105 @@ export function resolveLastFinishedStateUpdateRunSummary(
   return emptyRunSummary();
 }
 
+export function formatStateUpdateRunRows(run: StateUpdateRunSummary): StateUpdateDiagnosticDisplayRow[] {
+  return [
+    ["estado", describeStateUpdateRunStatus(run)],
+    ["operaciones", describeStateUpdateRunOperations(run)],
+    ["readiness", describeStateUpdateRunReadiness(run)],
+    ["syncRunId", formatDiagnosticValue(run.syncRunId)],
+    ["trigger", formatDiagnosticValue(run.trigger)],
+    ["phase", formatDiagnosticValue(run.phase)],
+    ["terminalResult", formatDiagnosticValue(run.terminalResult)],
+    ["reconnectDetectedAt", formatDiagnosticValue(run.reconnectDetectedAt)],
+    ["runSyncStartedAt", formatDiagnosticValue(run.runSyncStartedAt)],
+    ["readinessStartedAt", formatDiagnosticValue(run.readinessStartedAt)],
+    ["readinessConfirmedAt", formatDiagnosticValue(run.readinessConfirmedAt)],
+    ["readinessCompletedAt", formatDiagnosticValue(run.readinessCompletedAt)],
+    ["readinessAttempts", formatDiagnosticValue(run.readinessAttempts)],
+    ["authDecision", formatDiagnosticValue(run.authDecision)],
+    ["authRefreshStartedAt", formatDiagnosticValue(run.authRefreshStartedAt)],
+    ["authRefreshCompletedAt", formatDiagnosticValue(run.authRefreshCompletedAt)],
+    ["scopeCheckAfterReadiness", formatDiagnosticValue(run.scopeCheckAfterReadiness)],
+    ["syncPendingWorkStartedAt", formatDiagnosticValue(run.syncPendingWorkStartedAt)],
+    ["syncPendingWorkCompletedAt", formatDiagnosticValue(run.syncPendingWorkCompletedAt)],
+    ["recordsPhaseStartedAt", formatDiagnosticValue(run.recordsPhaseStartedAt)],
+    ["recordsPhaseCompletedAt", formatDiagnosticValue(run.recordsPhaseCompletedAt)],
+    ["recordsPhaseFailedAt", formatDiagnosticValue(run.recordsPhaseFailedAt)],
+    ["recordsPhaseResult", formatDiagnosticValue(run.recordsPhaseResult)],
+    ["recordsOperationsCompleted", formatDiagnosticValue(run.recordsOperationsCompleted)],
+    ["recordsOperationsFailed", formatDiagnosticValue(run.recordsOperationsFailed)],
+    ["stateUpdatePhaseStartedAt", formatDiagnosticValue(run.stateUpdatePhaseStartedAt)],
+    ["stateUpdatePhaseCompletedAt", formatDiagnosticValue(run.stateUpdatePhaseCompletedAt)],
+    ["stateUpdatePhaseFailedAt", formatDiagnosticValue(run.stateUpdatePhaseFailedAt)],
+    ["stateUpdatePhaseResult", formatDiagnosticValue(run.stateUpdatePhaseResult)],
+    ["stateUpdateOperationsSelected", formatDiagnosticValue(run.stateUpdateOperationsSelected)],
+    ["countPendingOperationsCount", formatDiagnosticValue(run.countPendingOperationsCount)],
+    ["listPendingStateUpdateOperationsCount", formatDiagnosticValue(run.listPendingStateUpdateOperationsCount)],
+    ["operationsSelected", formatDiagnosticValue(run.operationsSelected)],
+    ["operationsAttempted", formatDiagnosticValue(run.operationsAttempted)],
+    ["operationsCompleted", formatDiagnosticValue(run.operationsCompleted)],
+    ["operationsFailed", formatDiagnosticValue(run.operationsFailed)],
+  ];
+}
+
+export function formatStateUpdatePreflightRows(
+  preflight: StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"],
+): StateUpdateDiagnosticDisplayRow[] {
+  if (!preflight) {
+    return [
+      ["syncRunId", "-"],
+      ["trigger", "-"],
+      ["Readiness", "-"],
+      ["Intentos", "-"],
+      ["Duracion", "-"],
+    ];
+  }
+
+  return [
+    ["syncRunId", formatDiagnosticValue(preflight.syncRunId)],
+    ["trigger", preflight.trigger],
+    ["Readiness", describePreflightReadiness(preflight)],
+    ["Intentos", formatAttemptCount(preflight.readinessAttempts)],
+    ["Duracion", formatDurationMs(preflight.readinessDurationMs ?? elapsedTelemetryMs(preflight.readinessStartedAt, preflight.readinessCompletedAt))],
+    ["reconnectDetectedAt", formatDiagnosticValue(preflight.reconnectDetectedAt)],
+    ["debounceStartedAt", formatDiagnosticValue(preflight.debounceStartedAt)],
+    ["debounceCompletedAt", formatDiagnosticValue(preflight.debounceCompletedAt)],
+    ["debounceDurationMs", formatDiagnosticValue(preflight.debounceDurationMs)],
+    ["shouldSyncStartedAt", formatDiagnosticValue(preflight.shouldSyncStartedAt)],
+    ["shouldSyncCompletedAt", formatDiagnosticValue(preflight.shouldSyncCompletedAt)],
+    ["shouldSyncDurationMs", formatDiagnosticValue(preflight.shouldSyncDurationMs)],
+    ["countPendingOperationsCount", formatDiagnosticValue(preflight.countPendingOperationsCount)],
+    ["countPendingOperationsDurationMs", formatDiagnosticValue(preflight.countPendingOperationsDurationMs)],
+    ["listPendingStateUpdateOperationsCount", formatDiagnosticValue(preflight.listPendingStateUpdateOperationsCount)],
+    ["listPendingStateUpdateOperationsDurationMs", formatDiagnosticValue(preflight.listPendingStateUpdateOperationsDurationMs)],
+    ["shouldSyncResult", formatDiagnosticValue(preflight.shouldSyncResult)],
+    ["runSyncStartedAt", formatDiagnosticValue(preflight.runSyncStartedAt)],
+    ["readinessStartedAt", formatDiagnosticValue(preflight.readinessStartedAt)],
+    ["readinessCompletedAt", formatDiagnosticValue(preflight.readinessCompletedAt)],
+    ["readinessConfirmedAt", formatDiagnosticValue(preflight.readinessConfirmedAt)],
+    ["readinessDurationMs", formatDiagnosticValue(preflight.readinessDurationMs)],
+    ["readinessAttempts", formatDiagnosticValue(preflight.readinessAttempts)],
+    ["authDecision", formatDiagnosticValue(preflight.authDecision)],
+    ["authRefreshStartedAt", formatDiagnosticValue(preflight.authRefreshStartedAt)],
+    ["authRefreshCompletedAt", formatDiagnosticValue(preflight.authRefreshCompletedAt)],
+    ["scopeCheckAfterReadiness", formatDiagnosticValue(preflight.scopeCheckAfterReadiness)],
+    ["syncPendingWorkStartedAt", formatDiagnosticValue(preflight.syncPendingWorkStartedAt)],
+    ["syncPendingWorkCompletedAt", formatDiagnosticValue(preflight.syncPendingWorkCompletedAt)],
+    ["recordsPhaseStartedAt", formatDiagnosticValue(preflight.recordsPhaseStartedAt)],
+    ["recordsPhaseCompletedAt", formatDiagnosticValue(preflight.recordsPhaseCompletedAt)],
+    ["recordsPhaseFailedAt", formatDiagnosticValue(preflight.recordsPhaseFailedAt)],
+    ["recordsPhaseResult", formatDiagnosticValue(preflight.recordsPhaseResult)],
+    ["recordsOperationsCompleted", formatDiagnosticValue(preflight.recordsOperationsCompleted)],
+    ["recordsOperationsFailed", formatDiagnosticValue(preflight.recordsOperationsFailed)],
+    ["stateUpdatePhaseStartedAt", formatDiagnosticValue(preflight.stateUpdatePhaseStartedAt)],
+    ["stateUpdatePhaseCompletedAt", formatDiagnosticValue(preflight.stateUpdatePhaseCompletedAt)],
+    ["stateUpdatePhaseFailedAt", formatDiagnosticValue(preflight.stateUpdatePhaseFailedAt)],
+    ["stateUpdatePhaseResult", formatDiagnosticValue(preflight.stateUpdatePhaseResult)],
+    ["stateUpdateOperationsSelected", formatDiagnosticValue(preflight.stateUpdateOperationsSelected)],
+    ["completedAt", formatDiagnosticValue(preflight.completedAt)],
+  ];
+}
+
 function findReconnectPreflightForRun(
   reconnect: StateUpdateSyncDiagnosticsTelemetry,
   syncRunId: string,
@@ -628,6 +729,106 @@ function parseTelemetryTimestampMs(value: string | null | undefined) {
 
 function isSuccessfulSyncResult(result: string | null | undefined) {
   return result === "success" || result === "reconciled_success";
+}
+
+function describeStateUpdateRunStatus(run: StateUpdateRunSummary) {
+  if ((run.operationsSelected ?? 0) === 0 && run.terminalResult === "success") {
+    return "Sin pendientes";
+  }
+
+  if (isSuccessfulSyncResult(run.terminalResult)) {
+    return "Sincronizacion completada";
+  }
+
+  if (run.terminalResult === "timeout") {
+    return "Timeout";
+  }
+
+  if (run.terminalResult === "ready_failed" || run.terminalResult.includes("failed") || run.terminalResult.includes("error")) {
+    return "Fallido";
+  }
+
+  if (run.terminalResult === "none" && run.phase === "none") {
+    return "-";
+  }
+
+  return run.terminalResult;
+}
+
+function describeStateUpdateRunOperations(run: StateUpdateRunSummary) {
+  const completed = run.operationsCompleted ?? 0;
+  const attempted = run.operationsAttempted ?? 0;
+  const selected = run.operationsSelected ?? 0;
+  const failed = run.operationsFailed ?? 0;
+
+  if (selected === 0 && attempted === 0 && completed === 0 && failed === 0) {
+    return "Sin pendientes";
+  }
+
+  if (isSuccessfulSyncResult(run.terminalResult) && failed === 0 && completed === attempted && attempted > 0) {
+    return completed === 1 ? "1 operacion sincronizada" : `${completed} operaciones sincronizadas`;
+  }
+
+  return `${completed}/${attempted} completadas${failed ? `, ${failed} fallidas` : ""}`;
+}
+
+function describeStateUpdateRunReadiness(run: StateUpdateRunSummary) {
+  if (run.readinessConfirmedAt) {
+    return `Readiness confirmado en ${formatAttemptCount(run.readinessAttempts)}`;
+  }
+
+  if (run.readinessStartedAt && run.readinessCompletedAt) {
+    return `Readiness fallido en ${formatAttemptCount(run.readinessAttempts)}`;
+  }
+
+  if (run.readinessStartedAt) {
+    return `Readiness en curso (${formatAttemptCount(run.readinessAttempts)})`;
+  }
+
+  return "-";
+}
+
+function describePreflightReadiness(preflight: NonNullable<StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"]>) {
+  if (preflight.readinessConfirmedAt) {
+    return "Confirmado";
+  }
+
+  if (preflight.readinessStartedAt && preflight.readinessCompletedAt) {
+    return "Fallido";
+  }
+
+  if (preflight.readinessStartedAt) {
+    return "Comprobando";
+  }
+
+  return "-";
+}
+
+function formatAttemptCount(attempts: number | null | undefined) {
+  if (!attempts) {
+    return "-";
+  }
+
+  return `${attempts} ${attempts === 1 ? "intento" : "intentos"}`;
+}
+
+function formatDurationMs(value: number | null | undefined) {
+  return typeof value === "number" ? `${value} ms` : "-";
+}
+
+function formatDiagnosticValue(value: string | number | boolean | null | undefined) {
+  return value === "none" ? "-" : value ?? "-";
+}
+
+function elapsedTelemetryMs(start: string | null | undefined, end: string | null | undefined) {
+  const startMs = parseTelemetryTimestampMs(start);
+  const endMs = parseTelemetryTimestampMs(end);
+
+  if (startMs === null || endMs === null || endMs < startMs) {
+    return null;
+  }
+
+  return endMs - startMs;
 }
 
 function describeStateUpdateHealth({

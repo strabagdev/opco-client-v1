@@ -9,6 +9,8 @@ import {
   createStateUpdateDiagnosticApi,
   createStateUpdateDiagnosticEvents,
   createStateUpdateDiagnosticStore,
+  formatStateUpdatePreflightRows,
+  formatStateUpdateRunRows,
   getStateUpdateDiagnosticsRouteState,
   resolveCurrentStateUpdateRunSummary,
   resolveLastFinishedStateUpdateRunSummary,
@@ -17,7 +19,7 @@ import {
 } from "@/diagnostics/state-update-route-logic";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { AppView, OpcoApiError } from "@/lib/opco-api";
-import { StateUpdateOutboxDiagnostics, StateUpdateRequestDiagnostics, StateUpdateRequestHistoryEvent, StateUpdateSyncDiagnosticsTelemetry } from "@/lib/state-update-offline";
+import { StateUpdateOutboxDiagnostics, StateUpdateRequestDiagnostics, StateUpdateRequestHistoryEvent } from "@/lib/state-update-offline";
 import {
   StateUpdateDiagnosticRun,
   StateUpdateReconnectDiagnostics,
@@ -386,13 +388,13 @@ function StateUpdateOperationalDiagnostics({
         ]} />
       </Section>
       <Section title="Ultimo run">
-        <DiagnosticsRows rows={runRows(latestRun)} />
+        <DiagnosticsRows rows={formatStateUpdateRunRows(latestRun)} />
       </Section>
       <Section title="Run actual">
-        <DiagnosticsRows rows={runRows(currentRun)} />
+        <DiagnosticsRows rows={formatStateUpdateRunRows(currentRun)} />
       </Section>
       <Section title="Ultimo run terminado">
-        <DiagnosticsRows rows={runRows(lastFinishedRun)} />
+        <DiagnosticsRows rows={formatStateUpdateRunRows(lastFinishedRun)} />
       </Section>
       <Section title="Ultimo request">
         {lastRequest ? <DiagnosticsRows rows={requestRows(lastRequest)} /> : <Text style={styles.empty}>Sin requests STATE_UPDATE/Attendance registrados.</Text>}
@@ -438,7 +440,7 @@ function StateUpdateOperationalDiagnostics({
         ]} />
       </Section>
       <Section title="Preflight reconnect">
-        <DiagnosticsRows rows={preflightRows(reconnect.lastReconnectPreflight)} />
+        <DiagnosticsRows rows={formatStateUpdatePreflightRows(reconnect.lastReconnectPreflight)} />
       </Section>
       {healthCheck ? (
         <Section title="Health manual">
@@ -519,44 +521,6 @@ function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | 
   );
 }
 
-function runRows(run: ReturnType<typeof resolveLatestStateUpdateRunSummary>): [string, string | number | boolean | null][] {
-  return [
-    ["syncRunId", run.syncRunId ?? "none"],
-    ["trigger", run.trigger ?? "none"],
-    ["phase", run.phase],
-    ["terminalResult", run.terminalResult],
-    ["reconnectDetectedAt", run.reconnectDetectedAt ?? "none"],
-    ["runSyncStartedAt", run.runSyncStartedAt ?? "none"],
-    ["readinessStartedAt", run.readinessStartedAt ?? "none"],
-    ["readinessConfirmedAt", run.readinessConfirmedAt ?? "none"],
-    ["readinessCompletedAt", run.readinessCompletedAt ?? "none"],
-    ["readinessAttempts", run.readinessAttempts ?? "none"],
-    ["authDecision", run.authDecision ?? "none"],
-    ["authRefreshStartedAt", run.authRefreshStartedAt ?? "none"],
-    ["authRefreshCompletedAt", run.authRefreshCompletedAt ?? "none"],
-    ["scopeCheckAfterReadiness", run.scopeCheckAfterReadiness ?? "none"],
-    ["syncPendingWorkStartedAt", run.syncPendingWorkStartedAt ?? "none"],
-    ["syncPendingWorkCompletedAt", run.syncPendingWorkCompletedAt ?? "none"],
-    ["recordsPhaseStartedAt", run.recordsPhaseStartedAt ?? "none"],
-    ["recordsPhaseCompletedAt", run.recordsPhaseCompletedAt ?? "none"],
-    ["recordsPhaseFailedAt", run.recordsPhaseFailedAt ?? "none"],
-    ["recordsPhaseResult", run.recordsPhaseResult ?? "none"],
-    ["recordsOperationsCompleted", run.recordsOperationsCompleted ?? "none"],
-    ["recordsOperationsFailed", run.recordsOperationsFailed ?? "none"],
-    ["stateUpdatePhaseStartedAt", run.stateUpdatePhaseStartedAt ?? "none"],
-    ["stateUpdatePhaseCompletedAt", run.stateUpdatePhaseCompletedAt ?? "none"],
-    ["stateUpdatePhaseFailedAt", run.stateUpdatePhaseFailedAt ?? "none"],
-    ["stateUpdatePhaseResult", run.stateUpdatePhaseResult ?? "none"],
-    ["stateUpdateOperationsSelected", run.stateUpdateOperationsSelected ?? "none"],
-    ["countPendingOperationsCount", run.countPendingOperationsCount ?? "none"],
-    ["listPendingStateUpdateOperationsCount", run.listPendingStateUpdateOperationsCount ?? "none"],
-    ["operationsSelected", run.operationsSelected ?? "none"],
-    ["operationsAttempted", run.operationsAttempted ?? "none"],
-    ["operationsCompleted", run.operationsCompleted ?? "none"],
-    ["operationsFailed", run.operationsFailed ?? "none"],
-  ];
-}
-
 function requestRows(request: StateUpdateRequestDiagnostics): [string, string | number | boolean | null][] {
   return [
     ["operation", request.diagnosticOperation ?? "OTHER"],
@@ -578,58 +542,6 @@ function requestRows(request: StateUpdateRequestDiagnostics): [string, string | 
     ["syncRunId", request.diagnosticSyncRunId ?? "none"],
     ["serverTiming", formatServerTiming(request.serverTiming ?? [])],
     ["clientMinusServerMs", clientMinusServerMs(request)],
-  ];
-}
-
-function preflightRows(
-  preflight: StateUpdateSyncDiagnosticsTelemetry["lastReconnectPreflight"],
-): [string, string | number | boolean | null][] {
-  if (!preflight) {
-    return [
-      ["syncRunId", "none"],
-      ["trigger", "none"],
-    ];
-  }
-
-  return [
-    ["syncRunId", preflight.syncRunId ?? "none"],
-    ["trigger", preflight.trigger],
-    ["reconnectDetectedAt", preflight.reconnectDetectedAt ?? "none"],
-    ["debounceStartedAt", preflight.debounceStartedAt ?? "none"],
-    ["debounceCompletedAt", preflight.debounceCompletedAt ?? "none"],
-    ["debounceDurationMs", preflight.debounceDurationMs ?? "none"],
-    ["shouldSyncStartedAt", preflight.shouldSyncStartedAt ?? "none"],
-    ["shouldSyncCompletedAt", preflight.shouldSyncCompletedAt ?? "none"],
-    ["shouldSyncDurationMs", preflight.shouldSyncDurationMs ?? "none"],
-    ["countPendingOperationsCount", preflight.countPendingOperationsCount ?? "none"],
-    ["countPendingOperationsDurationMs", preflight.countPendingOperationsDurationMs ?? "none"],
-    ["listPendingStateUpdateOperationsCount", preflight.listPendingStateUpdateOperationsCount ?? "none"],
-    ["listPendingStateUpdateOperationsDurationMs", preflight.listPendingStateUpdateOperationsDurationMs ?? "none"],
-    ["shouldSyncResult", preflight.shouldSyncResult ?? "none"],
-    ["runSyncStartedAt", preflight.runSyncStartedAt ?? "none"],
-    ["readinessStartedAt", preflight.readinessStartedAt ?? "none"],
-    ["readinessCompletedAt", preflight.readinessCompletedAt ?? "none"],
-    ["readinessConfirmedAt", preflight.readinessConfirmedAt ?? "none"],
-    ["readinessDurationMs", preflight.readinessDurationMs ?? "none"],
-    ["readinessAttempts", preflight.readinessAttempts ?? "none"],
-    ["authDecision", preflight.authDecision ?? "none"],
-    ["authRefreshStartedAt", preflight.authRefreshStartedAt ?? "none"],
-    ["authRefreshCompletedAt", preflight.authRefreshCompletedAt ?? "none"],
-    ["scopeCheckAfterReadiness", preflight.scopeCheckAfterReadiness ?? "none"],
-    ["syncPendingWorkStartedAt", preflight.syncPendingWorkStartedAt ?? "none"],
-    ["syncPendingWorkCompletedAt", preflight.syncPendingWorkCompletedAt ?? "none"],
-    ["recordsPhaseStartedAt", preflight.recordsPhaseStartedAt ?? "none"],
-    ["recordsPhaseCompletedAt", preflight.recordsPhaseCompletedAt ?? "none"],
-    ["recordsPhaseFailedAt", preflight.recordsPhaseFailedAt ?? "none"],
-    ["recordsPhaseResult", preflight.recordsPhaseResult ?? "none"],
-    ["recordsOperationsCompleted", preflight.recordsOperationsCompleted ?? "none"],
-    ["recordsOperationsFailed", preflight.recordsOperationsFailed ?? "none"],
-    ["stateUpdatePhaseStartedAt", preflight.stateUpdatePhaseStartedAt ?? "none"],
-    ["stateUpdatePhaseCompletedAt", preflight.stateUpdatePhaseCompletedAt ?? "none"],
-    ["stateUpdatePhaseFailedAt", preflight.stateUpdatePhaseFailedAt ?? "none"],
-    ["stateUpdatePhaseResult", preflight.stateUpdatePhaseResult ?? "none"],
-    ["stateUpdateOperationsSelected", preflight.stateUpdateOperationsSelected ?? "none"],
-    ["completedAt", preflight.completedAt ?? "none"],
   ];
 }
 

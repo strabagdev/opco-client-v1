@@ -8,7 +8,7 @@ import { selectContractId } from "../lib/contract-selection";
 import { LocalDatabase } from "../lib/local-db";
 import { AUTH_REFRESH_TIMEOUT_MS, ContextResponse, MeResponse, OpcoApi, OpcoNetworkError } from "../lib/opco-api";
 import { readPersistedContractId } from "../lib/session-persistence";
-import { StateUpdateSyncTrigger, upsertStateUpdateReconnectRunHistory } from "../lib/state-update-offline";
+import { mergeStateUpdateReconnectPreflightTelemetryPatch, StateUpdateSyncTrigger, upsertStateUpdateReconnectRunHistory } from "../lib/state-update-offline";
 import { createReconnectSyncController, ReconnectSyncController } from "./reconnect-sync";
 import { StateUpdateReconnectDiagnostics } from "./use-session-diagnostics";
 import { createSyncRunId, syncPendingWork, SyncPendingWorkPhaseEvent } from "../sync/pending-work-sync";
@@ -258,7 +258,7 @@ export function usePendingWorkLifecycle({
         trigger: "other",
       };
 
-      const nextPreflight = updater(base);
+      const nextPreflight = mergeStateUpdateReconnectPreflightTelemetryPatch(base, updater(base));
 
       return {
         ...current,

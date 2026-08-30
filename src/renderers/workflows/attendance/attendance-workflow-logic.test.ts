@@ -15,6 +15,7 @@ import {
   normalizeAttendanceSearch,
   selectDefaultCheckInStatus,
   shouldFinishAttendanceVisualRequest,
+  shouldRefreshAttendanceLatestAfterSync,
   shouldSearchAttendancePeople,
   shiftLocalDate,
   splitStatusButtons,
@@ -98,6 +99,29 @@ describe("attendance workflow logic", () => {
       activeRequestId: null,
       requestId: 2,
     })).toBe(false);
+  });
+
+  it("refreshes latest from local cache after a successful STATE_UPDATE sync", () => {
+    expect(shouldRefreshAttendanceLatestAfterSync({
+      completedAt: "2026-08-29T10:00:00.000Z",
+      result: "success",
+    })).toBe(true);
+    expect(shouldRefreshAttendanceLatestAfterSync({
+      completedAt: "2026-08-29T10:00:00.000Z",
+      result: "reconciled_success",
+    })).toBe(true);
+  });
+
+  it("does not refresh latest for pending or failed sync states", () => {
+    expect(shouldRefreshAttendanceLatestAfterSync({
+      completedAt: null,
+      result: "success",
+    })).toBe(false);
+    expect(shouldRefreshAttendanceLatestAfterSync({
+      completedAt: "2026-08-29T10:00:00.000Z",
+      result: "failed",
+    })).toBe(false);
+    expect(shouldRefreshAttendanceLatestAfterSync(null)).toBe(false);
   });
 
   it("classifies successful, error, and conflict batch results", () => {
@@ -282,5 +306,28 @@ describe("attendance workflow logic", () => {
 
     expect(visible).toHaveLength(5);
     expect(visible.filter((item) => item.person.id === "person_5")).toHaveLength(1);
+  });
+
+  it("uses the refreshed local latest state after a pending row becomes synced", () => {
+    const remoteLatest = [{
+      attendanceRecordId: "remote_attendance_1",
+      person: { displayName: "Persona 1", id: "person_1" },
+      statusLabel: "Presente",
+      statusOptionId: "present_option",
+      updatedAt: "2026-08-28T12:00:00.000Z",
+    }];
+    const syncedLocal = {
+      attendanceRecordId: "local_attendance_2",
+      person: { displayName: "Persona 2", id: "person_2" },
+      statusLabel: "Presente",
+      statusOptionId: "present_option",
+      updatedAt: "2026-08-28T12:01:00.000Z",
+    };
+
+    const visible = mergeAttendanceLatestWithLocalOverlay(remoteLatest, [syncedLocal]);
+
+    expect(visible).toEqual(expect.arrayContaining([syncedLocal]));
+    expect(visible.find((item) => item.person.id === "person_2")?.statusLabel).toBe("Presente");
+    expect(JSON.stringify(visible)).not.toContain("por sincronizar");
   });
 });

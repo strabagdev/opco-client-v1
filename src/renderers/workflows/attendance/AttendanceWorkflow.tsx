@@ -47,6 +47,7 @@ import {
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
   shouldFinishAttendanceVisualRequest,
+  shouldRefreshAttendanceLatestAfterSync,
   shouldSearchAttendancePeople,
   shiftLocalDate,
   splitStatusButtons,
@@ -118,13 +119,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
+  const lastStateUpdateSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const currentStateUpdateSyncRunId =
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
-    stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ??
+    lastStateUpdateSync?.syncRunId ??
     null;
   const visibleError = hideStateUpdateTimeoutAfterConfirmedSync({
     error,
-    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    lastSync: lastStateUpdateSync,
     pendingCount,
   }) ? null : error;
   const operationFeedback = resolveStateUpdateOperationFeedback({
@@ -135,7 +137,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     isSaving,
     isSyncing: isPendingWorkSyncing,
     lastActivity: stateUpdateReconnectDiagnostics.lastStateUpdateActivity,
-    lastSync: stateUpdateReconnectDiagnostics.lastStateUpdateSync,
+    lastSync: lastStateUpdateSync,
     pendingCount,
     successMessage,
     visibleError,
@@ -463,14 +465,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
+      if (shouldRefreshAttendanceLatestAfterSync(lastStateUpdateSync)) {
+        void refreshLocalDayState();
+        return;
+      }
+
       void refreshLocalSyncIndicators();
     }, 0);
 
     return () => clearTimeout(timeoutId);
   }, [
+    refreshLocalDayState,
     refreshLocalSyncIndicators,
+    lastStateUpdateSync,
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.completedAt,
-    stateUpdateReconnectDiagnostics.lastStateUpdateSync?.completedAt,
   ]);
 
   const searchPeople = useCallback(async (search: string) => {

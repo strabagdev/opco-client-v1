@@ -408,6 +408,25 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
     timeoutOccurred,
     trigger,
   };
+  const preflight = findStateUpdateReconnectPreflightForSyncRun(current, syncRunId);
+  let closedReconnectPreflight: StateUpdateReconnectPreflightTelemetry | null = null;
+
+  if (preflight) {
+    closedReconnectPreflight = closeStateUpdateReconnectPreflightFromSyncResult({
+      completedAt,
+      current,
+      operationsCompleted,
+      operationsFailed,
+      operationsSelected,
+      preflight,
+      syncRunId,
+    });
+  }
+
+  const nextReconnectPreflight = closedReconnectPreflight ?? current.lastReconnectPreflight ?? null;
+  const reconnectRunHistory = closedReconnectPreflight
+    ? upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, closedReconnectPreflight)
+    : current.reconnectRunHistory;
 
   return {
     ...current,
@@ -425,8 +444,148 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
       type: "sync",
     },
     lastStateUpdateSync,
+    lastReconnectPreflight: nextReconnectPreflight,
+    reconnectRunHistory,
     requestHistory: current.requestHistory ?? [],
   };
+}
+
+export function mergeStateUpdateReconnectPreflightTelemetryPatch(
+  previous: StateUpdateReconnectPreflightTelemetry,
+  patch: Partial<StateUpdateReconnectPreflightTelemetry>,
+): StateUpdateReconnectPreflightTelemetry {
+  return (Object.keys(previous) as (keyof StateUpdateReconnectPreflightTelemetry)[]).reduce(
+    (merged, key) => {
+      const value = patch[key];
+
+      if (key === "readinessAttempts" && typeof value === "number" && typeof previous.readinessAttempts === "number") {
+        return {
+          ...merged,
+          readinessAttempts: Math.max(previous.readinessAttempts, value),
+        };
+      }
+
+      return {
+        ...merged,
+        [key]: value === undefined || value === null ? previous[key] : value,
+      };
+    },
+    { ...previous },
+  );
+}
+
+function findStateUpdateReconnectPreflightForSyncRun(
+  current: StateUpdateSyncDiagnosticsTelemetry,
+  syncRunId: string | null,
+) {
+  if (!syncRunId) {
+    return null;
+  }
+
+  if (current.lastReconnectPreflight?.syncRunId === syncRunId) {
+    return current.lastReconnectPreflight;
+  }
+
+  return (current.reconnectRunHistory ?? []).find((entry) => entry.syncRunId === syncRunId) ?? null;
+}
+
+function closeStateUpdateReconnectPreflightFromSyncResult({
+  completedAt,
+  current,
+  operationsCompleted,
+  operationsFailed,
+  operationsSelected,
+  preflight,
+  syncRunId,
+}: {
+  completedAt: string;
+  current: StateUpdateSyncDiagnosticsTelemetry;
+  operationsCompleted: number;
+  operationsFailed: number;
+  operationsSelected: number;
+  preflight: StateUpdateReconnectPreflightTelemetry;
+  syncRunId: string | null;
+}) {
+  const readyRequests = (current.requestHistory ?? []).filter((request) =>
+    request.diagnosticSyncRunId === syncRunId && request.diagnosticOperation === "READY_CHECK"
+  );
+  const confirmedReadyRequest = readyRequests.findLast((request) => request.interpretation === "success") ?? null;
+  const readinessCompletedAt = preflight.readinessCompletedAt ?? confirmedReadyRequest?.requestCompletedAt ?? null;
+  const readinessAttempts = getStateUpdateReadinessAttemptsForSyncRun(current, syncRunId);
+
+  return mergeStateUpdateReconnectPreflightTelemetryPatch(preflight, {
+    completedAt,
+    readinessAttempts: Math.max(preflight.readinessAttempts ?? 0, readinessAttempts ?? 0) || null,
+    readinessCompletedAt,
+    readinessConfirmedAt: preflight.readinessConfirmedAt ?? confirmedReadyRequest?.requestCompletedAt ?? null,
+    stateUpdateOperationsSelected: operationsSelected,
+    stateUpdatePhaseCompletedAt: preflight.stateUpdatePhaseCompletedAt ?? completedAt,
+    stateUpdatePhaseResult: operationsFailed > 0 ? "failed" : "completed",
+    syncPendingWorkCompletedAt: preflight.syncPendingWorkCompletedAt ?? completedAt,
+    syncRunId,
+    trigger: preflight.trigger,
+    recordsOperationsCompleted: preflight.recordsOperationsCompleted ?? 0,
+    recordsOperationsFailed: preflight.recordsOperationsFailed ?? 0,
+    recordsPhaseCompletedAt: preflight.recordsPhaseCompletedAt ?? completedAt,
+    recordsPhaseResult: preflight.recordsPhaseResult ?? "completed",
+    recordsPhaseStartedAt: preflight.recordsPhaseStartedAt ?? preflight.syncPendingWorkStartedAt,
+  });
+}
+
+function syncStateUpdateReconnectPreflightReadinessFromRequestHistory(
+  current: StateUpdateSyncDiagnosticsTelemetry,
+  event: StateUpdateRequestHistoryEvent,
+): StateUpdateSyncDiagnosticsTelemetry {
+  const syncRunId = event.diagnosticSyncRunId ?? null;
+
+  if (event.diagnosticOperation !== "READY_CHECK" || !syncRunId) {
+    return current;
+  }
+
+  const preflight = findStateUpdateReconnectPreflightForSyncRun(current, syncRunId);
+
+  if (!preflight) {
+    return current;
+  }
+
+  const readyRequests = getStateUpdateReadyRequestsForSyncRun(current, syncRunId);
+  const readinessAttempts = getStateUpdateReadinessAttemptsForSyncRun(current, syncRunId);
+  const latestReadyRequest = readyRequests.at(-1) ?? null;
+  const confirmedReadyRequest = readyRequests.findLast((request) => request.interpretation === "success") ?? null;
+  const nextPreflight = mergeStateUpdateReconnectPreflightTelemetryPatch(preflight, {
+    readinessAttempts: Math.max(preflight.readinessAttempts ?? 0, readinessAttempts ?? 0) || null,
+    readinessCompletedAt: confirmedReadyRequest
+      ? confirmedReadyRequest.requestCompletedAt
+      : preflight.readinessCompletedAt ?? latestReadyRequest?.requestCompletedAt,
+    readinessConfirmedAt: confirmedReadyRequest?.requestCompletedAt ?? preflight.readinessConfirmedAt,
+    readinessStartedAt: preflight.readinessStartedAt ?? readyRequests[0]?.requestStartedAt ?? null,
+  });
+
+  return {
+    ...current,
+    lastReconnectPreflight: current.lastReconnectPreflight?.syncRunId === syncRunId
+      ? nextPreflight
+      : current.lastReconnectPreflight ?? null,
+    reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, nextPreflight),
+  };
+}
+
+function getStateUpdateReadyRequestsForSyncRun(
+  current: StateUpdateSyncDiagnosticsTelemetry,
+  syncRunId: string | null,
+) {
+  return (current.requestHistory ?? []).filter((request) =>
+    request.diagnosticSyncRunId === syncRunId && request.diagnosticOperation === "READY_CHECK"
+  );
+}
+
+function getStateUpdateReadinessAttemptsForSyncRun(
+  current: StateUpdateSyncDiagnosticsTelemetry,
+  syncRunId: string | null,
+) {
+  const attempts = getStateUpdateReadyRequestsForSyncRun(current, syncRunId).length;
+
+  return attempts > 0 ? attempts : null;
 }
 
 export function stateUpdateRequestDiagnosticsFromNetwork(
@@ -481,10 +640,13 @@ export function appendStateUpdateRequestHistory(
     serverTiming: event.serverTiming ?? [],
   };
 
-  return {
+  const requestHistory = [...(current.requestHistory ?? []), nextEvent].slice(-limit);
+  const withRequestHistory = {
     ...current,
-    requestHistory: [...(current.requestHistory ?? []), nextEvent].slice(-limit),
+    requestHistory,
   };
+
+  return syncStateUpdateReconnectPreflightReadinessFromRequestHistory(withRequestHistory, nextEvent);
 }
 
 export function upsertStateUpdateReconnectRunHistory(
@@ -492,9 +654,12 @@ export function upsertStateUpdateReconnectRunHistory(
   next: StateUpdateReconnectPreflightTelemetry,
   limit = STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT,
 ) {
+  const previous = (history ?? []).find((entry) => entry.syncRunId === next.syncRunId) ?? null;
+  const merged = previous ? mergeStateUpdateReconnectPreflightTelemetryPatch(previous, next) : next;
+
   return [
     ...(history ?? []).filter((entry) => entry.syncRunId !== next.syncRunId),
-    next,
+    merged,
   ].slice(-limit);
 }
 
