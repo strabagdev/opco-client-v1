@@ -36,6 +36,10 @@ import {
   PreparedAppViewDefinition,
   UpsertAppViewDefinitionInput,
 } from "./app-view-definitions-cache";
+import {
+  OfflinePreparationDiagnostics,
+  parseOfflinePreparationDiagnostics,
+} from "./app-view-prewarm";
 import { CachedEntityDefinition, EntityDefinitionCache } from "./definition-cache";
 import {
   LocalDatabaseRecoverySummary,
@@ -73,6 +77,7 @@ import { StateUpdateSyncStore } from "../sync/state-update-sync";
 const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "8";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
+const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -100,7 +105,9 @@ export type LocalDatabase = AppNavigationCache &
   SyncTelemetryStore &
   RecordsSyncStore &
   StateUpdateSyncStore & {
+  getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
+  setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
 };
 
@@ -125,6 +132,7 @@ export function getLocalDatabase(): LocalDatabase {
     getStateUpdateSyncDiagnosticsTelemetry,
     getSyncTelemetry,
     getEntityDefinition,
+    getOfflinePreparationDiagnostics,
     listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
@@ -156,6 +164,7 @@ export function getLocalDatabase(): LocalDatabase {
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
     setSelectedContractId,
+    setOfflinePreparationDiagnostics,
     setStateUpdateSyncDiagnosticsTelemetry,
     updateLocalRecord,
     upsertAppViews,
@@ -3808,6 +3817,30 @@ async function getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise
   return parseStateUpdateSyncDiagnosticsTelemetry(row.value);
 }
 
+async function getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    offlinePreparationDiagnosticsKey(ownerKey),
+  );
+
+  if (!row?.value) {
+    return null;
+  }
+
+  return parseOfflinePreparationDiagnostics(row.value);
+}
+
+async function setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    offlinePreparationDiagnosticsKey(ownerKey),
+    JSON.stringify(diagnostics),
+  );
+}
+
 async function setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry) {
   const db = await getDatabase();
 
@@ -3908,6 +3941,10 @@ async function setSelectedContractId(contractId: string | null, ownerKey?: strin
 
 function stateUpdateSyncDiagnosticsKey(ownerKey: string) {
   return `${STATE_UPDATE_SYNC_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
+}
+
+function offlinePreparationDiagnosticsKey(ownerKey: string) {
+  return `${OFFLINE_PREPARATION_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
 }
 
 function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyncDiagnosticsTelemetry | null {

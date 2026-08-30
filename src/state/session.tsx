@@ -11,7 +11,10 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, 
 
 import { resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
-import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
+import {
+  OfflinePreparationDiagnostics,
+  prewarmAssignedAppViewsOnce,
+} from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
 import { selectContractId } from "@/lib/contract-selection";
 import {
@@ -65,12 +68,14 @@ type SessionContextValue = {
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   me: MeResponse | null;
+  offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
   localDatabaseStorageState: LocalDatabaseStorageState;
   localStorageRecoveryNotice: string | null;
   recordsReconnectRefreshKey: number;
   recordsSyncSummary: RecordsSyncSummary;
+  recordOfflinePreparationDiagnostics(diagnostics: OfflinePreparationDiagnostics): void;
   recordStateUpdateSyncRun(input: {
     completedAt?: string;
     ownerKey?: string;
@@ -124,6 +129,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
+  const [offlinePreparationDiagnostics, setOfflinePreparationDiagnostics] = useState<OfflinePreparationDiagnostics | null>(null);
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
   const [stateUpdateReconnectRefreshKey, setStateUpdateReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
@@ -226,6 +232,39 @@ export function SessionProvider({ children }: PropsWithChildren) {
       setRecordsSyncSummary(emptyRecordsSyncSummary);
     }
   }, [definitionCache, ownerKey, selectedContractIdState]);
+
+  const recordOfflinePreparationDiagnostics = useCallback((diagnostics: OfflinePreparationDiagnostics) => {
+    setOfflinePreparationDiagnostics(diagnostics);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateOfflinePreparationDiagnostics() {
+      if (!ownerKey) {
+        setOfflinePreparationDiagnostics(null);
+        return;
+      }
+
+      try {
+        const diagnostics = await definitionCache.getOfflinePreparationDiagnostics(ownerKey);
+
+        if (isMounted) {
+          setOfflinePreparationDiagnostics(diagnostics);
+        }
+      } catch {
+        if (isMounted) {
+          setOfflinePreparationDiagnostics(null);
+        }
+      }
+    }
+
+    void hydrateOfflinePreparationDiagnostics();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [definitionCache, ownerKey]);
 
   const {
     isStateUpdateDiagnosticSyncing,
@@ -452,6 +491,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
             api,
             appViews: result.views,
             contractId,
+            onTelemetry: recordOfflinePreparationDiagnostics,
             ownerKey,
             store: definitionCache,
             token,
@@ -474,12 +514,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
         isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
         me,
+        offlinePreparationDiagnostics,
         ownerKey,
         pendingRecordsCount,
         localDatabaseStorageState,
         localStorageRecoveryNotice,
         recordsReconnectRefreshKey,
         recordsSyncSummary,
+        recordOfflinePreparationDiagnostics,
         recordStateUpdateSyncRun,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
         selectedContractId: selectedContractIdState,

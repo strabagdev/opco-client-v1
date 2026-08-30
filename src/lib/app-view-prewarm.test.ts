@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitionInput } from "./app-view-definitions-cache";
-import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
+import {
+  OFFLINE_PREPARATION_SLOW_THRESHOLD_MS,
+  OfflinePreparationDiagnostics,
+  prewarmAssignedAppViewsOnce,
+} from "./app-view-prewarm";
 import { CachedEntityRecord } from "./offline-records";
 import { EntityDefinition, EntityRecord, OpcoNetworkError } from "./opco-api";
 import { emptySyncTelemetry, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope } from "./sync-telemetry";
@@ -12,6 +16,7 @@ describe("app view prewarm", () => {
 
   beforeEach(() => {
     store = new MemoryPrewarmStore();
+    vi.useRealTimers();
   });
 
   it("prepares records definitions and attendance statuses, then prefetches attendance source records", async () => {
@@ -111,6 +116,122 @@ describe("app view prewarm", () => {
 
     expect(api.getAttendanceWorkflow).toHaveBeenCalledOnce();
     expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);
+  });
+
+  it("records sanitized prewarm telemetry from running to completed", async () => {
+    const telemetry: OfflinePreparationDiagnostics[] = [];
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[0]],
+      contractId: "contract_1",
+      onTelemetry: (diagnostics) => {
+        telemetry.push(diagnostics);
+      },
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(telemetry[0]).toMatchObject({
+      appViews: { completed: 0, failed: 0, running: 1, total: 1 },
+      status: "running",
+    });
+    expect(telemetry.at(-1)).toMatchObject({
+      appViews: { completed: 1, failed: 0, running: 0, total: 1 },
+      status: "completed",
+    });
+    expect(telemetry.at(-1)?.lastAppView?.fingerprint).toMatch(/^fp_/);
+    expect(JSON.stringify(telemetry)).not.toContain("view_records");
+    await expect(store.getOfflinePreparationDiagnostics("org_1:user_1")).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("identifies a slow AppView stage without changing prewarm behavior", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T10:00:00.000Z"));
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi.fn(async () => {
+        vi.setSystemTime(new Date(Date.now() + OFFLINE_PREPARATION_SLOW_THRESHOLD_MS + 1));
+        return { entity: entityDefinitionFixture };
+      }),
+      getEntityRecords: vi.fn(),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[0]],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(store.offlinePreparationDiagnostics?.slow).toBe(true);
+    expect(store.offlinePreparationDiagnostics?.slowestStages[0]).toMatchObject({
+      stage: "definition_load",
+    });
+  });
+
+  it("records failed AppViews without hiding completed ones", async () => {
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi
+        .fn()
+        .mockResolvedValueOnce({ entity: entityDefinitionFixture })
+        .mockRejectedValueOnce(new Error("boom")),
+      getEntityRecords: vi.fn(),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[0], { ...appViewsFixture[0], id: "view_failed" }],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(store.offlinePreparationDiagnostics).toMatchObject({
+      appViews: { completed: 2, failed: 1, running: 0, total: 2 },
+      status: "failed",
+    });
+  });
+
+  it("does not let telemetry failures block the actual prewarm", async () => {
+    store.failTelemetry = true;
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[0]],
+      contractId: "contract_1",
+      onTelemetry: () => {
+        throw new Error("diagnostics unavailable");
+      },
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", "view_records")).resolves.toMatchObject({
+      status: "ready",
+    });
   });
 
   it("marks an empty Attendance source hydration as a successful full refresh", async () => {
@@ -241,8 +362,22 @@ describe("app view prewarm", () => {
 class MemoryPrewarmStore implements AppViewDefinitionCache {
   definitions = new Map<string, CachedAppViewDefinition>();
   entityDefinitions = new Map<string, EntityDefinition>();
+  failTelemetry = false;
+  offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null = null;
   records = new Map<string, CachedEntityRecord[]>();
   telemetry = new Map<string, SyncTelemetry>();
+
+  async getOfflinePreparationDiagnostics(_ownerKey: string) {
+    return this.offlinePreparationDiagnostics;
+  }
+
+  async setOfflinePreparationDiagnostics(_ownerKey: string, diagnostics: OfflinePreparationDiagnostics) {
+    if (this.failTelemetry) {
+      throw new Error("telemetry unavailable");
+    }
+
+    this.offlinePreparationDiagnostics = diagnostics;
+  }
 
   async getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string) {
     return this.definitions.get(`${ownerKey}:${contractId}:${appViewId}`) ?? null;

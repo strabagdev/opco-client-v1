@@ -14,6 +14,7 @@ const baseInput: AppShellFeedbackInput = {
   hasConflict: false,
   hasError: false,
   isAuthSessionRestoring: false,
+  isOfflinePreparationRunning: false,
   isOperationalCoreReadinessChecking: false,
   isPendingWorkSyncing: false,
   localStorageRecoveryNotice: null,
@@ -92,6 +93,7 @@ describe("app shell feedback", () => {
   it("uses loading feedback only for active process messages", () => {
     const offlinePreparing = resolveAppShellPersistentFeedback({
       ...baseInput,
+      isOfflinePreparationRunning: true,
       offlineReadiness: "preparing",
     });
     const reconnecting = resolveAppShellPersistentFeedback({
@@ -111,6 +113,14 @@ describe("app shell feedback", () => {
     });
     expect(shouldShowAppShellFeedbackSpinner(offlinePreparing)).toBe(true);
     expect(shouldShowAppShellFeedbackSpinner(reconnecting)).toBe(true);
+  });
+
+  it("does not show offline preparation loading when no prewarm is active", () => {
+    expect(resolveAppShellPersistentFeedback({
+      ...baseInput,
+      isOfflinePreparationRunning: false,
+      offlineReadiness: "data-missing",
+    })).toBeNull();
   });
 
   it("does not show a spinner for success, warning, error, or static info feedback", () => {

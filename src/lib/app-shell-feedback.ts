@@ -16,6 +16,7 @@ export type AppShellFeedbackInput = {
   hasConflict: boolean;
   hasError: boolean;
   isAuthSessionRestoring: boolean;
+  isOfflinePreparationRunning: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   localStorageRecoveryNotice?: string | null;
@@ -28,6 +29,7 @@ export function resolveAppShellPersistentFeedback({
   hasConflict,
   hasError,
   isAuthSessionRestoring,
+  isOfflinePreparationRunning,
   isOperationalCoreReadinessChecking,
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
@@ -106,7 +108,7 @@ export function resolveAppShellPersistentFeedback({
     };
   }
 
-  if (offlineReadiness !== "ready" && offlineReadiness !== "unsupported") {
+  if (isOfflinePreparationRunning && offlineReadiness !== "ready" && offlineReadiness !== "unsupported") {
     return {
       id: "offline-preparing",
       message: "Preparando uso sin conexion...",

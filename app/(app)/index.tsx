@@ -27,6 +27,7 @@ export default function HomeScreen() {
     context,
     definitionCache,
     ownerKey,
+    recordOfflinePreparationDiagnostics,
     selectedContractId,
     setSelectedContractId,
     status,
@@ -139,6 +140,7 @@ export default function HomeScreen() {
             api,
             appViews: data.views,
             contractId: selectedContractId,
+            onTelemetry: recordOfflinePreparationDiagnostics,
             ownerKey,
             store: definitionCache,
             token,
@@ -167,7 +169,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, ownerKey, selectedContractId, token]);
+  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, selectedContractId, token]);
 
   const contractSelector = context && context.contracts.length > 1 ? (
     <View style={[styles.contractList, isWideLayout ? styles.contractListWide : null]}>

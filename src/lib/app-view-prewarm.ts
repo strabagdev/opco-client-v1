@@ -17,11 +17,58 @@ import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
 import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 
-const PREWARM_CONCURRENCY = 4;
+export const PREWARM_CONCURRENCY = 4;
+export const OFFLINE_PREPARATION_SLOW_THRESHOLD_MS = 10_000;
 
 const activePrewarms = new Map<string, Promise<void>>();
 
+type PrewarmStageKey = "definitionLoad" | "sourceRecordsFetch" | "sqliteWrite" | "snapshot";
+
+export type OfflinePreparationStageTelemetry = {
+  completedAt: string | null;
+  durationMs: number | null;
+  result: "success" | "failed" | "skipped";
+  sourceRecordsCount?: number;
+  stage: "definition_load" | "source_records_fetch" | "sqlite_write" | "snapshot";
+  startedAt: string | null;
+};
+
+export type OfflinePreparationAppViewTelemetry = {
+  appViewCompletedAt: string | null;
+  appViewStartedAt: string;
+  appViewType: AppView["type"];
+  durationMs: number | null;
+  errorCode: string | null;
+  fingerprint: string;
+  result: "success" | "skipped" | "failed";
+  slow: boolean;
+  stage: OfflinePreparationStageTelemetry["stage"] | "idle";
+  workflowKey: string | null;
+  definitionLoad?: OfflinePreparationStageTelemetry;
+  sourceRecordsFetch?: OfflinePreparationStageTelemetry;
+  sqliteWrite?: OfflinePreparationStageTelemetry;
+  snapshot?: OfflinePreparationStageTelemetry;
+};
+
+export type OfflinePreparationDiagnostics = {
+  appViews: {
+    completed: number;
+    failed: number;
+    running: number;
+    total: number;
+  };
+  lastAppView: OfflinePreparationAppViewTelemetry | null;
+  prewarmCompletedAt: string | null;
+  prewarmDurationMs: number | null;
+  prewarmStartedAt: string | null;
+  slow: boolean;
+  slowestStages: OfflinePreparationStageTelemetry[];
+  status: "idle" | "running" | "completed" | "failed";
+};
+
 export type AppViewPrewarmStore = AppViewDefinitionCache & {
+  getOfflinePreparationDiagnostics?(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
+  setOfflinePreparationDiagnostics?(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string): Promise<{
     definition: PreparedAppViewDefinition;
     status: string;
@@ -34,6 +81,7 @@ export function prewarmAssignedAppViewsOnce(params: {
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
+  onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
@@ -51,6 +99,7 @@ export async function prewarmAssignedAppViews({
   api,
   appViews,
   contractId,
+  onTelemetry,
   ownerKey,
   store,
   token,
@@ -58,14 +107,95 @@ export async function prewarmAssignedAppViews({
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
+  onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
 }) {
-  await store.reconcileAppViewDefinitions(ownerKey, contractId, appViews.map((view) => view.id));
-  await runWithConcurrency(appViews, PREWARM_CONCURRENCY, (appView) =>
-    prewarmOneAppView({ api, appView, contractId, ownerKey, store, token }),
-  );
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.now();
+  const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
+
+  await recordOfflinePreparationTelemetry({
+    diagnostics: buildOfflinePreparationDiagnostics({
+      appViewTelemetry,
+      startedAt,
+      startedMs,
+      status: "running",
+      total: appViews.length,
+    }),
+    onTelemetry,
+    ownerKey,
+    store,
+  });
+
+  try {
+    await store.reconcileAppViewDefinitions(ownerKey, contractId, appViews.map((view) => view.id));
+    await runWithConcurrency(appViews, PREWARM_CONCURRENCY, async (appView) => {
+      const initial = createAppViewTelemetry(appView);
+
+      appViewTelemetry.set(appView.id, initial);
+      await recordOfflinePreparationTelemetry({
+        diagnostics: buildOfflinePreparationDiagnostics({
+          appViewTelemetry,
+          startedAt,
+          startedMs,
+          status: "running",
+          total: appViews.length,
+        }),
+        onTelemetry,
+        ownerKey,
+        store,
+      });
+
+      const nextTelemetry = await prewarmOneAppView({ api, appView, contractId, ownerKey, store, token });
+
+      appViewTelemetry.set(appView.id, nextTelemetry);
+      await recordOfflinePreparationTelemetry({
+        diagnostics: buildOfflinePreparationDiagnostics({
+          appViewTelemetry,
+          startedAt,
+          startedMs,
+          status: "running",
+          total: appViews.length,
+        }),
+        onTelemetry,
+        ownerKey,
+        store,
+      });
+    });
+
+    await recordOfflinePreparationTelemetry({
+      diagnostics: buildOfflinePreparationDiagnostics({
+        appViewTelemetry,
+        completedAt: new Date().toISOString(),
+        completedMs: Date.now(),
+        startedAt,
+        startedMs,
+        status: hasFailedAppViews(appViewTelemetry) ? "failed" : "completed",
+        total: appViews.length,
+      }),
+      onTelemetry,
+      ownerKey,
+      store,
+    });
+  } catch (error) {
+    await recordOfflinePreparationTelemetry({
+      diagnostics: buildOfflinePreparationDiagnostics({
+        appViewTelemetry,
+        completedAt: new Date().toISOString(),
+        completedMs: Date.now(),
+        startedAt,
+        startedMs,
+        status: "failed",
+        total: appViews.length,
+      }),
+      onTelemetry,
+      ownerKey,
+      store,
+    });
+    throw error;
+  }
 }
 
 async function prewarmOneAppView({
@@ -82,27 +212,33 @@ async function prewarmOneAppView({
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
-}) {
+}): Promise<OfflinePreparationAppViewTelemetry> {
   const lastPreparedAt = new Date().toISOString();
+  const telemetry = createAppViewTelemetry(appView);
+  const appStartedMs = Date.now();
 
   try {
     if (appView.type === "RECORDS") {
-      const response = await api.getEntityDefinition(token, contractId, appView.config.entityTypeId);
+      const response = await measurePrewarmStage(telemetry, "definitionLoad", () =>
+        api.getEntityDefinition(token, contractId, appView.config.entityTypeId),
+      );
 
-      await store.upsertEntityDefinition(contractId, appView.config.entityTypeId, response.entity, lastPreparedAt);
-      await store.upsertAppViewDefinition(baseDefinitionInput({
-        appView,
-        contractId,
-        definition: {
+      await measurePrewarmStage(telemetry, "sqliteWrite", async () => {
+        await store.upsertEntityDefinition(contractId, appView.config.entityTypeId, response.entity, lastPreparedAt);
+        await store.upsertAppViewDefinition(baseDefinitionInput({
           appView,
-          entityDefinition: response.entity,
-          kind: "records",
-        },
-        lastPreparedAt,
-        ownerKey,
-        status: "ready",
-      }));
-      return;
+          contractId,
+          definition: {
+            appView,
+            entityDefinition: response.entity,
+            kind: "records",
+          },
+          lastPreparedAt,
+          ownerKey,
+          status: "ready",
+        }));
+      });
+      return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
 
     if (
@@ -111,41 +247,57 @@ async function prewarmOneAppView({
       appView.config.workflowKey === "attendance"
     ) {
       const attendanceConfig = appView.config as AttendanceWorkflowConfig;
-      const response = await api.getAttendanceWorkflow(token, contractId, appView.id, {
-        date: formatLocalDateInput(new Date()),
-      });
-      const sourceDefinition = await api.getEntityDefinition(token, contractId, response.sourceEntityType.id);
+      const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
+        const workflow = await api.getAttendanceWorkflow(token, contractId, appView.id, {
+          date: formatLocalDateInput(new Date()),
+        });
+        const definition = await api.getEntityDefinition(token, contractId, workflow.sourceEntityType.id);
 
-      await store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt);
-      await refreshEntityRecordsCache({
+        return { response: workflow, sourceDefinition: definition };
+      });
+
+      await measurePrewarmStage(telemetry, "sqliteWrite", () =>
+        store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt),
+      );
+      const sourceRecords = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => refreshEntityRecordsCache({
         api,
         contractId,
         entityTypeId: response.sourceEntityType.id,
         ownerKey,
         store,
         token,
-      });
-
-      await store.upsertAppViewDefinition(baseDefinitionInput({
-        appView,
-        contractId,
-        definition: {
-          appView,
-          dateFieldId: attendanceConfig.dateFieldId,
-          extraFields: [],
-          historyMode: "update-current",
-          kind: "state-update",
-          sourceEntityTypeId: response.sourceEntityType.id,
-          stateFields: attendanceStateFields(response.statuses, attendanceConfig),
-          subjectFieldId: attendanceConfig.personFieldId,
-          targetEntityTypeId: response.targetEntityType.id,
-          uniqueness: "subject-date",
-        },
-        lastPreparedAt,
-        ownerKey,
-        status: "ready",
       }));
-      return;
+      telemetry.sourceRecordsFetch = {
+        ...telemetry.sourceRecordsFetch!,
+        sourceRecordsCount: sourceRecords.pagination.total,
+      };
+      telemetry.snapshot = {
+        ...telemetry.sourceRecordsFetch,
+        stage: "snapshot",
+      };
+
+      await measurePrewarmStage(telemetry, "sqliteWrite", () =>
+        store.upsertAppViewDefinition(baseDefinitionInput({
+          appView,
+          contractId,
+          definition: {
+            appView,
+            dateFieldId: attendanceConfig.dateFieldId,
+            extraFields: [],
+            historyMode: "update-current",
+            kind: "state-update",
+            sourceEntityTypeId: response.sourceEntityType.id,
+            stateFields: attendanceStateFields(response.statuses, attendanceConfig),
+            subjectFieldId: attendanceConfig.personFieldId,
+            targetEntityTypeId: response.targetEntityType.id,
+            uniqueness: "subject-date",
+          },
+          lastPreparedAt,
+          ownerKey,
+          status: "ready",
+        })),
+      );
+      return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
 
     if (
@@ -153,43 +305,62 @@ async function prewarmOneAppView({
       isStateUpdateCompatibleWorkflow(appView.config.workflowKey) &&
       appView.config.workflowKey === "state-update"
     ) {
-      const response = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
-        date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
-      });
-      const sourceDefinition = await api.getEntityDefinition(token, contractId, response.sourceEntityType.id);
+      const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
+        const workflow = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
+          date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
+        });
+        const definition = await api.getEntityDefinition(token, contractId, workflow.sourceEntityType.id);
 
-      await store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt);
-      await refreshEntityRecordsCache({
+        return { response: workflow, sourceDefinition: definition };
+      });
+
+      await measurePrewarmStage(telemetry, "sqliteWrite", () =>
+        store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt),
+      );
+      const sourceRecords = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => refreshEntityRecordsCache({
         api,
         contractId,
         entityTypeId: response.sourceEntityType.id,
         ownerKey,
         store,
         token,
-      });
+      }));
+      telemetry.sourceRecordsFetch = {
+        ...telemetry.sourceRecordsFetch!,
+        sourceRecordsCount: sourceRecords.pagination.total,
+      };
+      telemetry.snapshot = {
+        ...telemetry.sourceRecordsFetch,
+        stage: "snapshot",
+      };
 
-      await store.upsertAppViewDefinition(baseDefinitionInput({
+      await measurePrewarmStage(telemetry, "sqliteWrite", () =>
+        store.upsertAppViewDefinition(baseDefinitionInput({
+          appView,
+          contractId,
+          definition: stateUpdatePreparedDefinition(appView, response),
+          lastPreparedAt,
+          ownerKey,
+          status: "ready",
+        })),
+      );
+      return completeAppViewTelemetry(telemetry, appStartedMs, "success");
+    }
+
+    await measurePrewarmStage(telemetry, "sqliteWrite", () =>
+      store.upsertAppViewDefinition(baseDefinitionInput({
         appView,
         contractId,
-        definition: stateUpdatePreparedDefinition(appView, response),
+        definition: {
+          appView,
+          kind: "unsupported",
+        },
         lastPreparedAt,
         ownerKey,
         status: "ready",
-      }));
-      return;
-    }
-
-    await store.upsertAppViewDefinition(baseDefinitionInput({
-      appView,
-      contractId,
-      definition: {
-        appView,
-        kind: "unsupported",
-      },
-      lastPreparedAt,
-      ownerKey,
-      status: "ready",
-    }));
+      })),
+    );
+    return completeAppViewTelemetry(telemetry, appStartedMs, "skipped");
   } catch (error) {
     await preserveOrMarkPrewarmFailure({
       appView,
@@ -199,6 +370,7 @@ async function prewarmOneAppView({
       ownerKey,
       store,
     });
+    return completeAppViewTelemetry(telemetry, appStartedMs, "failed", error);
   }
 }
 
@@ -276,6 +448,305 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
   });
 
   await Promise.all(runners);
+}
+
+function createAppViewTelemetry(appView: AppView): OfflinePreparationAppViewTelemetry {
+  return {
+    appViewCompletedAt: null,
+    appViewStartedAt: new Date().toISOString(),
+    appViewType: appView.type,
+    durationMs: null,
+    errorCode: null,
+    fingerprint: fingerprintPrewarmValue(appView.id),
+    result: "success",
+    slow: false,
+    stage: "idle",
+    workflowKey: getWorkflowKey(appView),
+  };
+}
+
+async function measurePrewarmStage<T>(
+  telemetry: OfflinePreparationAppViewTelemetry,
+  key: PrewarmStageKey,
+  task: () => Promise<T>,
+): Promise<T> {
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.now();
+  const stage = prewarmStageName(key);
+
+  telemetry.stage = stage;
+  telemetry[key] = {
+    completedAt: null,
+    durationMs: null,
+    result: "success",
+    stage,
+    startedAt,
+  };
+
+  try {
+    const result = await task();
+    const completedAt = new Date().toISOString();
+
+    telemetry[key] = {
+      ...telemetry[key]!,
+      completedAt,
+      durationMs: Date.now() - startedMs,
+      result: "success",
+    };
+    return result;
+  } catch (error) {
+    const completedAt = new Date().toISOString();
+
+    telemetry[key] = {
+      ...telemetry[key]!,
+      completedAt,
+      durationMs: Date.now() - startedMs,
+      result: "failed",
+    };
+    throw error;
+  }
+}
+
+function prewarmStageName(key: PrewarmStageKey): OfflinePreparationStageTelemetry["stage"] {
+  if (key === "definitionLoad") {
+    return "definition_load";
+  }
+
+  if (key === "sourceRecordsFetch") {
+    return "source_records_fetch";
+  }
+
+  if (key === "sqliteWrite") {
+    return "sqlite_write";
+  }
+
+  return "snapshot";
+}
+
+function completeAppViewTelemetry(
+  telemetry: OfflinePreparationAppViewTelemetry,
+  startedMs: number,
+  result: OfflinePreparationAppViewTelemetry["result"],
+  error?: unknown,
+) {
+  const durationMs = Date.now() - startedMs;
+
+  telemetry.appViewCompletedAt = new Date().toISOString();
+  telemetry.durationMs = durationMs;
+  telemetry.errorCode = error ? sanitizePrewarmError(error) : null;
+  telemetry.result = result;
+  telemetry.slow = durationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS;
+  return telemetry;
+}
+
+function buildOfflinePreparationDiagnostics({
+  appViewTelemetry,
+  completedAt = null,
+  completedMs,
+  startedAt,
+  startedMs,
+  status,
+  total,
+}: {
+  appViewTelemetry: Map<string, OfflinePreparationAppViewTelemetry>;
+  completedAt?: string | null;
+  completedMs?: number;
+  startedAt: string;
+  startedMs: number;
+  status: OfflinePreparationDiagnostics["status"];
+  total: number;
+}): OfflinePreparationDiagnostics {
+  const appViews = [...appViewTelemetry.values()];
+  const completed = appViews.filter((appView) => appView.appViewCompletedAt).length;
+  const failed = appViews.filter((appView) => appView.result === "failed").length;
+  const prewarmDurationMs = completedMs ? completedMs - startedMs : null;
+  const slowestStages = appViews
+    .flatMap((appView) => [
+      appView.definitionLoad,
+      appView.sourceRecordsFetch,
+      appView.sqliteWrite,
+      appView.snapshot,
+    ])
+    .filter((stage): stage is OfflinePreparationStageTelemetry => Boolean(stage?.durationMs))
+    .sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0))
+    .slice(0, 3);
+
+  return {
+    appViews: {
+      completed,
+      failed,
+      running: status === "running" ? Math.max(0, total - completed) : 0,
+      total,
+    },
+    lastAppView: findLastAppViewTelemetry(appViews),
+    prewarmCompletedAt: completedAt,
+    prewarmDurationMs,
+    prewarmStartedAt: startedAt,
+    slow: Boolean((prewarmDurationMs && prewarmDurationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS) || appViews.some((appView) => appView.slow)),
+    slowestStages,
+    status,
+  };
+}
+
+function findLastAppViewTelemetry(appViews: OfflinePreparationAppViewTelemetry[]) {
+  for (let index = appViews.length - 1; index >= 0; index -= 1) {
+    if (appViews[index].appViewCompletedAt) {
+      return appViews[index];
+    }
+  }
+
+  return appViews[appViews.length - 1] ?? null;
+}
+
+function hasFailedAppViews(appViewTelemetry: Map<string, OfflinePreparationAppViewTelemetry>) {
+  return [...appViewTelemetry.values()].some((appView) => appView.result === "failed");
+}
+
+async function recordOfflinePreparationTelemetry({
+  diagnostics,
+  onTelemetry,
+  ownerKey,
+  store,
+}: {
+  diagnostics: OfflinePreparationDiagnostics;
+  onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
+  ownerKey: string;
+  store: AppViewPrewarmStore;
+}) {
+  try {
+    await store.setOfflinePreparationDiagnostics?.(ownerKey, diagnostics);
+  } catch {
+    // Offline preparation telemetry is observational and must not block prewarm.
+  }
+
+  try {
+    await onTelemetry?.(diagnostics);
+  } catch {
+    // UI telemetry listeners are best-effort; prewarm owns the real work.
+  }
+}
+
+function sanitizePrewarmError(error: unknown) {
+  return error instanceof Error && error.name ? error.name : "UNKNOWN";
+}
+
+function fingerprintPrewarmValue(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+
+  return `fp_${Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8)}`;
+}
+
+export function parseOfflinePreparationDiagnostics(value: string): OfflinePreparationDiagnostics | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<OfflinePreparationDiagnostics>;
+
+    return normalizeOfflinePreparationDiagnostics(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeOfflinePreparationDiagnostics(
+  value: Partial<OfflinePreparationDiagnostics> | null | undefined,
+): OfflinePreparationDiagnostics | null {
+  if (!value || !isOfflinePreparationStatus(value.status)) {
+    return null;
+  }
+
+  return {
+    appViews: {
+      completed: normalizeCount(value.appViews?.completed),
+      failed: normalizeCount(value.appViews?.failed),
+      running: normalizeCount(value.appViews?.running),
+      total: normalizeCount(value.appViews?.total),
+    },
+    lastAppView: normalizeAppViewTelemetry(value.lastAppView),
+    prewarmCompletedAt: normalizeNullableString(value.prewarmCompletedAt),
+    prewarmDurationMs: normalizeNullableNumber(value.prewarmDurationMs),
+    prewarmStartedAt: normalizeNullableString(value.prewarmStartedAt),
+    slow: Boolean(value.slow),
+    slowestStages: Array.isArray(value.slowestStages)
+      ? value.slowestStages.map(normalizeStageTelemetry).filter((stage): stage is OfflinePreparationStageTelemetry => Boolean(stage)).slice(0, 3)
+      : [],
+    status: value.status,
+  };
+}
+
+function normalizeAppViewTelemetry(
+  value: OfflinePreparationAppViewTelemetry | null | undefined,
+): OfflinePreparationAppViewTelemetry | null {
+  if (!value) {
+    return null;
+  }
+
+  return {
+    appViewCompletedAt: normalizeNullableString(value.appViewCompletedAt),
+    appViewStartedAt: normalizeNullableString(value.appViewStartedAt) ?? new Date(0).toISOString(),
+    appViewType: value.appViewType,
+    definitionLoad: normalizeStageTelemetry(value.definitionLoad) ?? undefined,
+    durationMs: normalizeNullableNumber(value.durationMs),
+    errorCode: normalizeNullableString(value.errorCode),
+    fingerprint: typeof value.fingerprint === "string" && value.fingerprint.startsWith("fp_") ? value.fingerprint : "fp_unknown",
+    result: isAppViewResult(value.result) ? value.result : "failed",
+    slow: Boolean(value.slow),
+    sourceRecordsFetch: normalizeStageTelemetry(value.sourceRecordsFetch) ?? undefined,
+    sqliteWrite: normalizeStageTelemetry(value.sqliteWrite) ?? undefined,
+    snapshot: normalizeStageTelemetry(value.snapshot) ?? undefined,
+    stage: isStageName(value.stage) || value.stage === "idle" ? value.stage : "idle",
+    workflowKey: normalizeNullableString(value.workflowKey),
+  };
+}
+
+function normalizeStageTelemetry(
+  value: OfflinePreparationStageTelemetry | null | undefined,
+): OfflinePreparationStageTelemetry | null {
+  if (!value || !isStageName(value.stage)) {
+    return null;
+  }
+
+  return {
+    completedAt: normalizeNullableString(value.completedAt),
+    durationMs: normalizeNullableNumber(value.durationMs),
+    result: isStageResult(value.result) ? value.result : "failed",
+    sourceRecordsCount: typeof value.sourceRecordsCount === "number" ? value.sourceRecordsCount : undefined,
+    stage: value.stage,
+    startedAt: normalizeNullableString(value.startedAt),
+  };
+}
+
+function isOfflinePreparationStatus(value: unknown): value is OfflinePreparationDiagnostics["status"] {
+  return value === "idle" || value === "running" || value === "completed" || value === "failed";
+}
+
+function isAppViewResult(value: unknown): value is OfflinePreparationAppViewTelemetry["result"] {
+  return value === "success" || value === "skipped" || value === "failed";
+}
+
+function isStageResult(value: unknown): value is OfflinePreparationStageTelemetry["result"] {
+  return value === "success" || value === "skipped" || value === "failed";
+}
+
+function isStageName(value: unknown): value is OfflinePreparationStageTelemetry["stage"] {
+  return value === "definition_load" ||
+    value === "source_records_fetch" ||
+    value === "sqlite_write" ||
+    value === "snapshot";
+}
+
+function normalizeNullableString(value: unknown) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function normalizeNullableNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): PreparedAppViewDefinition {

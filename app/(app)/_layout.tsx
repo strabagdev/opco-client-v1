@@ -8,6 +8,7 @@ import {
   resolveAppShellSuccessToast,
   shouldShowAppShellFeedbackSpinner,
 } from "@/lib/app-shell-feedback";
+import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
@@ -24,6 +25,7 @@ export default function AppLayout() {
     localDatabaseStorageState,
     localStorageRecoveryNotice,
     me,
+    offlinePreparationDiagnostics,
     ownerKey,
     pendingRecordsCount,
     recordsSyncSummary,
@@ -53,6 +55,7 @@ export default function AppLayout() {
     hasConflict: recordsSyncSummary.conflictCount > 0,
     hasError: recordsSyncSummary.failedCount > 0 || Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved"),
     isAuthSessionRestoring,
+    isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
     isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     localStorageRecoveryNotice,
@@ -222,7 +225,7 @@ export default function AppLayout() {
               </Pressable>
             </View>
             <ScrollView style={styles.modalScroll}>
-              <PwaDiagnostics diagnostics={offlineReadiness} showTitle={false} />
+              <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
             </ScrollView>
           </View>
         </View>
@@ -285,9 +288,11 @@ function shouldShowPwaDiagnostics() {
 
 function PwaDiagnostics({
   diagnostics,
+  offlinePreparationDiagnostics,
   showTitle = true,
 }: {
   diagnostics: ReturnType<typeof useOfflineReadiness>;
+  offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
   showTitle?: boolean;
 }) {
   const rows = [
@@ -302,6 +307,7 @@ function PwaDiagnostics({
     ["navigationCachePresent", diagnostics.navigationCachePresent ? "yes" : "no"],
     ["SQLiteReady", diagnostics.sqliteReady ? "yes" : "no"],
   ];
+  const preparationRows = getOfflinePreparationRows(offlinePreparationDiagnostics);
 
   return (
     <View style={styles.diagnostics}>
@@ -312,8 +318,39 @@ function PwaDiagnostics({
           <Text style={styles.diagnosticsValue}>{value}</Text>
         </View>
       ))}
+      <Text style={styles.diagnosticsTitle}>Preparacion offline</Text>
+      {preparationRows.map(([label, value]) => (
+        <View key={label} style={styles.diagnosticsRow}>
+          <Text style={styles.diagnosticsLabel}>{label}</Text>
+          <Text style={styles.diagnosticsValue}>{value}</Text>
+        </View>
+      ))}
     </View>
   );
+}
+
+function getOfflinePreparationRows(diagnostics: OfflinePreparationDiagnostics | null) {
+  if (!diagnostics) {
+    return [
+      ["Estado", "idle"],
+      ["AppViews", "0/0"],
+      ["Ultima AppView", "none"],
+      ["Top lento", "none"],
+    ];
+  }
+
+  return [
+    ["Estado", diagnostics.status],
+    ["startedAt", diagnostics.prewarmStartedAt ?? "none"],
+    ["completedAt", diagnostics.prewarmCompletedAt ?? "none"],
+    ["durationMs", String(diagnostics.prewarmDurationMs ?? "none")],
+    ["slow", diagnostics.slow ? "yes" : "no"],
+    ["AppViews", `${diagnostics.appViews.completed}/${diagnostics.appViews.total}`],
+    ["failed", String(diagnostics.appViews.failed)],
+    ["running", String(diagnostics.appViews.running)],
+    ["Ultima AppView", diagnostics.lastAppView ? `${diagnostics.lastAppView.fingerprint} ${diagnostics.lastAppView.stage} ${diagnostics.lastAppView.result}` : "none"],
+    ["Top lento", diagnostics.slowestStages.map((stage) => `${stage.stage}:${stage.durationMs ?? "none"}ms`).join(", ") || "none"],
+  ];
 }
 
 function getUserInitials(value: string | null | undefined) {

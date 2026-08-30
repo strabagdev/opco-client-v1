@@ -191,6 +191,93 @@ describe("local database singleton", () => {
     expect(db.runAsync.mock.calls.some((call) => call[1] === "state_update_sync_diagnostics:org_1:user_1")).toBe(false);
   });
 
+  it("persists offline preparation diagnostics without raw owner ids in the metadata key", async () => {
+    const store = getLocalDatabase();
+
+    await store.setOfflinePreparationDiagnostics("org_1:user_1", {
+      appViews: {
+        completed: 1,
+        failed: 0,
+        running: 0,
+        total: 1,
+      },
+      lastAppView: null,
+      prewarmCompletedAt: "2026-08-30T10:00:02.000Z",
+      prewarmDurationMs: 2000,
+      prewarmStartedAt: "2026-08-30T10:00:00.000Z",
+      slow: false,
+      slowestStages: [],
+      status: "completed",
+    });
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+      expect.stringMatching(/^offline_preparation_diagnostics:fp_[a-f0-9]{8}$/),
+      expect.stringContaining('"status":"completed"'),
+    );
+    expect(db.runAsync.mock.calls.some((call) => call[1] === "offline_preparation_diagnostics:org_1:user_1")).toBe(false);
+  });
+
+  it("hydrates offline preparation diagnostics from app_metadata", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            appViews: {
+              completed: 1,
+              failed: 0,
+              running: 0,
+              total: 1,
+            },
+            lastAppView: {
+              appViewCompletedAt: "2026-08-30T10:00:02.000Z",
+              appViewStartedAt: "2026-08-30T10:00:00.000Z",
+              appViewType: "RECORDS",
+              durationMs: 2000,
+              errorCode: null,
+              fingerprint: "fp_12345678",
+              result: "success",
+              slow: false,
+              stage: "sqlite_write",
+              workflowKey: null,
+            },
+            prewarmCompletedAt: "2026-08-30T10:00:02.000Z",
+            prewarmDurationMs: 2000,
+            prewarmStartedAt: "2026-08-30T10:00:00.000Z",
+            slow: false,
+            slowestStages: [{
+              completedAt: "2026-08-30T10:00:01.000Z",
+              durationMs: 1000,
+              result: "success",
+              stage: "definition_load",
+              startedAt: "2026-08-30T10:00:00.000Z",
+            }],
+            status: "completed",
+          }),
+        };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.getOfflinePreparationDiagnostics("org_1:user_1")).resolves.toMatchObject({
+      appViews: {
+        completed: 1,
+        failed: 0,
+        running: 0,
+        total: 1,
+      },
+      lastAppView: {
+        fingerprint: "fp_12345678",
+      },
+      slowestStages: [{
+        stage: "definition_load",
+      }],
+      status: "completed",
+    });
+  });
+
   it("hydrates persisted STATE_UPDATE diagnostics telemetry from app_metadata", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM app_metadata")) {
