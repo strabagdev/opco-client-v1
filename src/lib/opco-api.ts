@@ -560,6 +560,7 @@ export type OpcoNetworkDiagnostics = {
   fetchResolvedAt: string | null;
   httpStatus: number | null;
   method: string;
+  operationResult?: OpcoDiagnosticOperationResult;
   pathTemplate: string;
   requestCompletedAt: string;
   requestDurationMs: number;
@@ -571,6 +572,16 @@ export type OpcoNetworkDiagnostics = {
   serverTiming?: OpcoServerTimingMetric[];
   timeoutMs: number;
 };
+
+export type OpcoDiagnosticOperationResult =
+  | "diagnostics_error"
+  | "http_error"
+  | "network_error"
+  | "response_parse_error"
+  | "response_validation_error"
+  | "success"
+  | "transport_timeout"
+  | "unknown";
 
 export type OpcoDiagnosticRequestOperation =
   | "SAVE"
@@ -604,6 +615,8 @@ type OpcoRequestInit = RequestInit & {
   diagnosticSyncRunId?: string | null;
   timeoutMs?: number;
 };
+
+type OpcoResponseParser<T> = (body: unknown, status: number, diagnosticRequestId?: string | null) => T;
 
 export class OpcoNetworkError extends Error {
   constructor(
@@ -663,6 +676,28 @@ export function parseApiEnvelope<T>(body: unknown, status = 200, diagnosticReque
   return body.data;
 }
 
+function parseReadyResponse(body: unknown, status = 200, diagnosticRequestId?: string | null) {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const readyBody = body as { reason?: unknown; status?: unknown };
+
+    if (readyBody.status === "ready") {
+      return readyBody;
+    }
+
+    if (readyBody.status === "not_ready") {
+      throw new OpcoApiError(
+        "Operational Core no esta listo.",
+        readyBody.reason === "database" ? "DB_UNAVAILABLE" : "NOT_READY",
+        status,
+        undefined,
+        diagnosticRequestId,
+      );
+    }
+  }
+
+  throw new OpcoApiError("Respuesta inesperada de Opco.", "INVALID_READY_RESPONSE", status, undefined, diagnosticRequestId);
+}
+
 export function createOpcoApi(options: ApiClientOptions = {}) {
   const apiUrl = trimTrailingSlash(options.apiUrl ?? config.apiUrl);
   const clientId = options.clientId ?? config.clientId;
@@ -672,7 +707,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   let refreshPromise: Promise<RefreshResponse> | null = null;
 
-  async function request<T>(path: string, init: OpcoRequestInit = {}) {
+  async function request<T>(path: string, init: OpcoRequestInit = {}, parser: OpcoResponseParser<T> = parseApiEnvelope<T>) {
     let response: Response;
     let abortControllerTriggered = false;
     let fetchResolvedAt: Date | null = null;
@@ -727,6 +762,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         fetchResolvedAt,
         httpStatus: null,
         init,
+        operationResult: isAbortError(error) ? "transport_timeout" : "network_error",
         path,
         requestStartedAt,
         requestStartedMs,
@@ -737,7 +773,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         serverTiming,
         timeoutMs: requestTimeoutMs,
       });
-      options.onRequestDiagnostics?.(diagnostics);
+      safeRequestDiagnostics(options.onRequestDiagnostics, diagnostics);
 
       if (isAbortError(error)) {
         throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", diagnostics);
@@ -749,31 +785,70 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     }
 
     responseBodyStartedAt = new Date();
-    const body = await response.json().catch(() => null);
+    let body: unknown = null;
+    let responseParseFailed = false;
+
+    try {
+      body = await response.json();
+    } catch {
+      responseParseFailed = true;
+    }
+
     responseParsedAt = new Date();
     const errorCode = apiEnvelopeErrorCode(body);
-    options.onRequestDiagnostics?.(requestDiagnostics({
-      abortControllerTriggered,
-      attemptNumber: diagnosticAttemptNumber,
-      diagnosticOperation,
-      diagnosticRequestId,
-      diagnosticSyncRunId,
-      errorCode,
-      fetchResolvedAt,
-      httpStatus: response.status,
-      init,
-      path,
-      requestStartedAt,
-      requestStartedMs,
-      responseBodyStartedAt,
-      responseParsedAt,
-      responseRequestId,
-      responseStarted,
-      serverTiming,
-      timeoutMs: requestTimeoutMs,
-    }));
 
-    return parseApiEnvelope<T>(body, response.status, diagnosticRequestId);
+    try {
+      const parsed = responseParseFailed
+        ? parseApiEnvelope<T>(body, response.status, diagnosticRequestId)
+        : parser(body, response.status, diagnosticRequestId);
+      safeRequestDiagnostics(options.onRequestDiagnostics, requestDiagnostics({
+        abortControllerTriggered,
+        attemptNumber: diagnosticAttemptNumber,
+        diagnosticOperation,
+        diagnosticRequestId,
+        diagnosticSyncRunId,
+        errorCode,
+        fetchResolvedAt,
+        httpStatus: response.status,
+        init,
+        operationResult: response.status >= 400 ? "http_error" : "success",
+        path,
+        requestStartedAt,
+        requestStartedMs,
+        responseBodyStartedAt,
+        responseParsedAt,
+        responseRequestId,
+        responseStarted,
+        serverTiming,
+        timeoutMs: requestTimeoutMs,
+      }));
+
+      return parsed;
+    } catch (error) {
+      safeRequestDiagnostics(options.onRequestDiagnostics, requestDiagnostics({
+        abortControllerTriggered,
+        attemptNumber: diagnosticAttemptNumber,
+        diagnosticOperation,
+        diagnosticRequestId,
+        diagnosticSyncRunId,
+        errorCode: error instanceof OpcoApiError ? error.code : errorCode,
+        fetchResolvedAt,
+        httpStatus: response.status,
+        init,
+        operationResult: classifyResponseOperationResult({ error, responseParseFailed, status: response.status }),
+        path,
+        requestStartedAt,
+        requestStartedMs,
+        responseBodyStartedAt,
+        responseParsedAt,
+        responseRequestId,
+        responseStarted,
+        serverTiming,
+        timeoutMs: requestTimeoutMs,
+      }));
+
+      throw error;
+    }
   }
 
   async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}) {
@@ -1122,7 +1197,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         diagnosticOperation: options.diagnosticOperation ?? "READY_CHECK",
         diagnosticSyncRunId: options.diagnosticSyncRunId,
         timeoutMs: options.timeoutMs,
-      });
+      }, parseReadyResponse);
     },
   };
 }
@@ -1282,6 +1357,7 @@ function requestDiagnostics({
   fetchResolvedAt,
   httpStatus,
   init,
+  operationResult,
   path,
   requestStartedAt,
   requestStartedMs,
@@ -1301,6 +1377,7 @@ function requestDiagnostics({
   fetchResolvedAt: Date | null;
   httpStatus: number | null;
   init: OpcoRequestInit;
+  operationResult: OpcoDiagnosticOperationResult;
   path: string;
   requestStartedAt: Date;
   requestStartedMs: number;
@@ -1321,6 +1398,7 @@ function requestDiagnostics({
     fetchResolvedAt: fetchResolvedAt?.toISOString() ?? null,
     httpStatus,
     method: String(init.method ?? "GET").toUpperCase(),
+    operationResult,
     pathTemplate: templateApiPath(path),
     requestCompletedAt: new Date().toISOString(),
     requestDurationMs: Date.now() - requestStartedMs,
@@ -1332,6 +1410,41 @@ function requestDiagnostics({
     serverTiming,
     timeoutMs,
   };
+}
+
+function safeRequestDiagnostics(
+  recorder: ApiClientOptions["onRequestDiagnostics"],
+  diagnostics: OpcoNetworkDiagnostics,
+) {
+  try {
+    recorder?.(diagnostics);
+  } catch {
+    // Request diagnostics are observational and must never reject API calls.
+  }
+}
+
+function classifyResponseOperationResult({
+  error,
+  responseParseFailed,
+  status,
+}: {
+  error: unknown;
+  responseParseFailed: boolean;
+  status: number;
+}): OpcoDiagnosticOperationResult {
+  if (responseParseFailed) {
+    return "response_parse_error";
+  }
+
+  if (status >= 400) {
+    return "http_error";
+  }
+
+  if (error instanceof OpcoApiError) {
+    return "response_validation_error";
+  }
+
+  return "unknown";
 }
 
 function normalizeDiagnosticAttemptNumber(value: unknown) {

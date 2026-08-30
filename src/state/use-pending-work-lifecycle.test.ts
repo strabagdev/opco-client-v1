@@ -18,7 +18,7 @@ import {
   shouldRunOnlinePendingSyncForReadyScope,
   shouldRunForegroundPendingSync,
 } from "./pending-work-lifecycle-logic";
-import { OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { createOpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 
 describe("pending work lifecycle guards", () => {
   it("runs foreground sync only when returning active online without an in-flight sync", () => {
@@ -212,6 +212,24 @@ describe("pending work lifecycle guards", () => {
       diagnosticSyncRunId: "sync_reconnect_1",
       timeoutMs: OPERATIONAL_CORE_READY_PROBE_TIMEOUT_MS,
     });
+  });
+
+  it("treats a real /ready 200 body as ready on the first attempt even when diagnostics reject", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => new Response(JSON.stringify({ status: "ready" }), { status: 200 }),
+      onRequestDiagnostics: () => {
+        throw new Error("diagnostics unavailable");
+      },
+    });
+
+    const result = await probeOperationalCoreReadiness({
+      api,
+      syncRunId: "sync_ready_real_body",
+    });
+
+    expect(result).toEqual({ attempts: 1, ready: true });
   });
 
   it("bounds readiness retries before allowing business sync", async () => {

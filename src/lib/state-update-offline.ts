@@ -228,6 +228,7 @@ export type StateUpdateRequestDiagnostics = Pick<
   | "errorCode"
   | "fetchResolvedAt"
   | "httpStatus"
+  | "operationResult"
   | "pathTemplate"
   | "requestCompletedAt"
   | "requestDurationMs"

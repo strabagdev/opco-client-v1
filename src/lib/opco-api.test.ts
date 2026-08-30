@@ -621,11 +621,8 @@ describe("createOpcoApi", () => {
       clientId: "opco_app_123",
       fetcher: async () => jsonResponse(
         {
-          error: {
-            code: "DB_UNAVAILABLE",
-            message: "Base de datos no disponible.",
-          },
-          ok: false,
+          reason: "database",
+          status: "not_ready",
         },
         503,
       ),
@@ -721,17 +718,17 @@ describe("createOpcoApi", () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
       clientId: "opco_app_123",
-      fetcher: async () => jsonResponse({ data: { ready: true }, ok: true }),
+      fetcher: async () => jsonResponse({ status: "ready" }),
       onRequestDiagnostics: diagnostics,
       timeoutMs: 12_000,
     });
 
-    await api.getReady({
+    await expect(api.getReady({
       diagnosticAttemptNumber: 2,
       diagnosticOperation: "READY_CHECK",
       diagnosticSyncRunId: "sync_reconnect_1",
       timeoutMs: 2_500,
-    });
+    })).resolves.toEqual({ status: "ready" });
 
     expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
       attemptNumber: 2,
@@ -739,8 +736,54 @@ describe("createOpcoApi", () => {
       diagnosticSyncRunId: "sync_reconnect_1",
       httpStatus: 200,
       method: "GET",
+      operationResult: "success",
       pathTemplate: "/api/v1/ready",
       timeoutMs: 2_500,
+    }));
+  });
+
+  it("does not reject a valid /ready 200 when diagnostics recording throws", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse({ status: "ready" }),
+      onRequestDiagnostics: () => {
+        throw new Error("diagnostics unavailable");
+      },
+      timeoutMs: 12_000,
+    });
+
+    await expect(api.getReady({
+      diagnosticAttemptNumber: 1,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_ready_200",
+      timeoutMs: 2_500,
+    })).resolves.toEqual({ status: "ready" });
+  });
+
+  it("separates HTTP 200 from operation validation failure diagnostics", async () => {
+    const diagnostics = vi.fn();
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () => jsonResponse({ ready: true }),
+      onRequestDiagnostics: diagnostics,
+      timeoutMs: 12_000,
+    });
+
+    await expect(api.getReady({
+      diagnosticAttemptNumber: 1,
+      diagnosticOperation: "READY_CHECK",
+      diagnosticSyncRunId: "sync_ready_invalid",
+      timeoutMs: 2_500,
+    })).rejects.toMatchObject({ code: "INVALID_READY_RESPONSE", status: 200 });
+
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      diagnosticOperation: "READY_CHECK",
+      errorCode: "INVALID_READY_RESPONSE",
+      httpStatus: 200,
+      operationResult: "response_validation_error",
+      pathTemplate: "/api/v1/ready",
     }));
   });
 

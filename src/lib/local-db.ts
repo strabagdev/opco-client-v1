@@ -4207,6 +4207,7 @@ function normalizeStateUpdateRequestDiagnostics(value: unknown): StateUpdateRequ
     fetchResolvedAt: typeof diagnostics.fetchResolvedAt === "string" ? diagnostics.fetchResolvedAt : null,
     httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : null,
     method: typeof diagnostics.method === "string" ? diagnostics.method : "UNKNOWN",
+    operationResult: normalizeDiagnosticOperationResult(diagnostics.operationResult),
     pathTemplate,
     requestCompletedAt,
     requestDurationMs,
@@ -4241,6 +4242,19 @@ function normalizeStateUpdateRequestHistory(value: unknown): StateUpdateRequestH
       }];
     })
     .slice(-STATE_UPDATE_REQUEST_HISTORY_LIMIT);
+}
+
+function normalizeDiagnosticOperationResult(value: unknown) {
+  return value === "diagnostics_error" ||
+    value === "http_error" ||
+    value === "network_error" ||
+    value === "response_parse_error" ||
+    value === "response_validation_error" ||
+    value === "success" ||
+    value === "transport_timeout" ||
+    value === "unknown"
+    ? value
+    : undefined;
 }
 
 function normalizeServerTiming(value: unknown) {
