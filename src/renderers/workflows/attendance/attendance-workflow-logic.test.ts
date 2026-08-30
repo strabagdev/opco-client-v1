@@ -16,7 +16,6 @@ import {
   selectDefaultCheckInStatus,
   shouldFinishAttendanceVisualRequest,
   shouldSearchAttendancePeople,
-  shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
   splitStatusButtons,
 } from "./attendance-workflow-logic";
@@ -70,10 +69,7 @@ describe("attendance workflow logic", () => {
     expect(shouldSearchAttendancePeople("ana")).toBe(true);
   });
 
-  it("derives offline and pending UI copy from canonical runtime state", () => {
-    expect(shouldShowAttendanceOfflineNotice("online")).toBe(false);
-    expect(shouldShowAttendanceOfflineNotice("offline")).toBe(true);
-    expect(shouldShowAttendanceOfflineNotice("unknown")).toBe(true);
+  it("derives pending UI copy from canonical runtime state", () => {
     expect(formatAttendancePendingText(0)).toBeNull();
     expect(formatAttendancePendingText(1)).toBe("1 registro por sincronizar");
     expect(formatAttendancePendingText(2)).toBe("2 registros por sincronizar");

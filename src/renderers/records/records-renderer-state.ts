@@ -47,7 +47,7 @@ export function getRecordsCacheBannerMessage({
   }
 
   if (connectivityStatus !== "online") {
-    return "Sin conexion. Datos guardados localmente.";
+    return null;
   }
 
   return isLoading ? "Actualizando datos..." : "Datos guardados localmente.";

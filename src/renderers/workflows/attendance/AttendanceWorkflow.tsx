@@ -48,7 +48,6 @@ import {
   normalizeAttendanceSearch,
   shouldFinishAttendanceVisualRequest,
   shouldSearchAttendancePeople,
-  shouldShowAttendanceOfflineNotice,
   shiftLocalDate,
   splitStatusButtons,
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
@@ -945,9 +944,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <Text style={styles.summaryValue}>{totalRegistered}</Text>
       </View>
 
-      {shouldShowAttendanceOfflineNotice(connectivityStatus) ? (
-        <Text style={styles.offline}>Sin conexion. Los registros se guardan en este dispositivo.</Text>
-      ) : null}
       {operationFeedback.message ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}

@@ -1,12 +1,13 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
 import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import {
   resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
+  resolveAppShellStatusIndicator,
   shouldShowAppShellFeedbackSpinner,
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
@@ -44,6 +45,7 @@ export default function AppLayout() {
   const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("pwa");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
+  const [statusPulseOpacity] = useState(() => new Animated.Value(1));
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
@@ -65,8 +67,52 @@ export default function AppLayout() {
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,
   });
+  const shellStatusIndicator = resolveAppShellStatusIndicator({
+    connectivityStatus,
+    hasConflict: recordsSyncSummary.conflictCount > 0,
+    hasError: recordsSyncSummary.failedCount > 0 || Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved"),
+    isAuthSessionRestoring,
+    isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
+    isOperationalCoreReadinessChecking,
+    isPendingWorkSyncing,
+    localStorageRecoveryNotice,
+    offlineReadiness: offlineReadiness.offlineReadiness,
+    pendingCount: pendingRecordsCount,
+  });
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const refreshStateUpdateDiagnostics = diagnosticsStateUpdate.onRefresh;
+
+  useEffect(() => {
+    if (shellStatusIndicator.state !== "working") {
+      statusPulseOpacity.stopAnimation();
+      statusPulseOpacity.setValue(1);
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(statusPulseOpacity, {
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          toValue: 0.45,
+          useNativeDriver: true,
+        }),
+        Animated.timing(statusPulseOpacity, {
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          toValue: 1,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+      statusPulseOpacity.setValue(1);
+    };
+  }, [shellStatusIndicator.state, statusPulseOpacity]);
 
   useEffect(() => {
     if (!lastSync?.completedAt) {
@@ -150,8 +196,17 @@ export default function AppLayout() {
             </Pressable>
           ) : null}
           <View style={styles.titleBlock}>
-            <Text style={styles.kicker}>Sesion activa</Text>
-            <Text style={styles.title}>Opco Client</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>Opco Client</Text>
+              <Animated.View accessible accessibilityLabel={shellStatusIndicator.accessibilityLabel} style={[
+                styles.statusDot,
+                shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
+                shellStatusIndicator.state === "working" ? styles.statusDotWorking : null,
+                shellStatusIndicator.state === "offline" ? styles.statusDotOffline : null,
+                shellStatusIndicator.state === "error" ? styles.statusDotError : null,
+                shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null,
+              ]} />
+            </View>
           </View>
         </View>
         <View style={styles.headerActions}>
@@ -604,12 +659,6 @@ const styles = StyleSheet.create({
   feedbackTextWarning: {
     color: "#6f4f08",
   },
-  kicker: {
-    color: "#587078",
-    fontSize: 13,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
   logoutButton: {
     alignItems: "center",
     backgroundColor: "#135d66",
@@ -677,14 +726,36 @@ const styles = StyleSheet.create({
     backgroundColor: "#eef4f4",
     flex: 1,
   },
+  statusDot: {
+    borderRadius: 5,
+    height: 10,
+    width: 10,
+  },
+  statusDotError: {
+    backgroundColor: "#b42318",
+  },
+  statusDotOffline: {
+    backgroundColor: "#8a9aa0",
+  },
+  statusDotOnline: {
+    backgroundColor: "#13795b",
+  },
+  statusDotWorking: {
+    backgroundColor: "#b7791f",
+  },
   title: {
     color: "#0f3036",
     fontSize: 26,
     fontWeight: "800",
-    marginTop: 4,
   },
   titleBlock: {
     flexShrink: 1,
+    minWidth: 0,
+  },
+  titleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
     minWidth: 0,
   },
   userAvatar: {

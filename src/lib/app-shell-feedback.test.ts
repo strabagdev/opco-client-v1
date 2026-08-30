@@ -4,6 +4,7 @@ import {
   formatPendingWorkMessage,
   resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
+  resolveAppShellStatusIndicator,
   shouldRenderAppShellFeedbackBand,
   shouldShowAppShellFeedbackSpinner,
   type AppShellFeedbackInput,
@@ -169,5 +170,64 @@ describe("app shell feedback", () => {
       operationsCompleted: 0,
       result: "success",
     })).toBeNull();
+  });
+
+  it("resolves the header status indicator for online idle state", () => {
+    expect(resolveAppShellStatusIndicator(baseInput)).toEqual({
+      accessibilityLabel: "Online",
+      state: "online",
+    });
+  });
+
+  it("resolves the header status indicator for offline connectivity", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      connectivityStatus: "offline",
+    })).toEqual({
+      accessibilityLabel: "Sin conexion",
+      state: "offline",
+    });
+  });
+
+  it("resolves active preparation, reconnect, sync, and auth restore as working", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      isOfflinePreparationRunning: true,
+    }).state).toBe("working");
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      isOperationalCoreReadinessChecking: true,
+    }).state).toBe("working");
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      isPendingWorkSyncing: true,
+    }).state).toBe("working");
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      isAuthSessionRestoring: true,
+    }).state).toBe("working");
+  });
+
+  it("prioritizes working over offline when an active process is running", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      connectivityStatus: "offline",
+      isPendingWorkSyncing: true,
+    })).toEqual({
+      accessibilityLabel: "Sincronizando",
+      state: "working",
+    });
+  });
+
+  it("prioritizes active errors over every other indicator state", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      connectivityStatus: "offline",
+      hasError: true,
+      isPendingWorkSyncing: true,
+    })).toEqual({
+      accessibilityLabel: "Problema de conexion o sincronizacion",
+      state: "error",
+    });
   });
 });

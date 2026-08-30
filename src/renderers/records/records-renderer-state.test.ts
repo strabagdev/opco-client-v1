@@ -46,12 +46,20 @@ describe("records renderer state", () => {
     });
   });
 
-  it("shows the offline cache notice only from current connectivity", () => {
+  it("leaves offline cache status to global shell feedback", () => {
     expect(getRecordsCacheBannerMessage({
       connectivityStatus: "offline",
       fromCache: true,
       isLoading: false,
-    })).toBe("Sin conexion. Datos guardados localmente.");
+    })).toBeNull();
+    expect(getRecordsCacheBannerMessage({
+      connectivityStatus: "unknown",
+      fromCache: true,
+      isLoading: false,
+    })).toBeNull();
+  });
+
+  it("shows online cache refresh status without duplicating offline feedback", () => {
     expect(getRecordsCacheBannerMessage({
       connectivityStatus: "online",
       fromCache: true,
@@ -123,7 +131,7 @@ describe("records renderer state", () => {
       },
     });
 
-    expect(offlineBanner).toBe("Sin conexion. Datos guardados localmente.");
+    expect(offlineBanner).toBeNull();
     expect(syncProblem).toBe(false);
   });
 
@@ -150,7 +158,7 @@ describe("records renderer state", () => {
       },
     });
 
-    expect(offlineBanner).toBe("Sin conexion. Datos guardados localmente.");
+    expect(offlineBanner).toBeNull();
     expect(onlineBanner).toBeNull();
     expect(staleHistoricalError).toBe(false);
   });

@@ -11,6 +11,13 @@ export type AppShellFeedbackMessage = {
   visual: AppShellFeedbackVisual;
 };
 
+export type AppShellStatusIndicatorState = "online" | "working" | "offline" | "error";
+
+export type AppShellStatusIndicator = {
+  accessibilityLabel: string;
+  state: AppShellStatusIndicatorState;
+};
+
 export type AppShellFeedbackInput = {
   connectivityStatus: ConnectivityStatus;
   hasConflict: boolean;
@@ -118,6 +125,48 @@ export function resolveAppShellPersistentFeedback({
   }
 
   return null;
+}
+
+export function resolveAppShellStatusIndicator({
+  connectivityStatus,
+  hasConflict,
+  hasError,
+  isAuthSessionRestoring,
+  isOfflinePreparationRunning,
+  isOperationalCoreReadinessChecking,
+  isPendingWorkSyncing,
+  localStorageRecoveryNotice,
+}: AppShellFeedbackInput): AppShellStatusIndicator {
+  if (localStorageRecoveryNotice || hasError || hasConflict) {
+    return {
+      accessibilityLabel: "Problema de conexion o sincronizacion",
+      state: "error",
+    };
+  }
+
+  if (
+    isAuthSessionRestoring ||
+    isOfflinePreparationRunning ||
+    isOperationalCoreReadinessChecking ||
+    isPendingWorkSyncing
+  ) {
+    return {
+      accessibilityLabel: "Sincronizando",
+      state: "working",
+    };
+  }
+
+  if (connectivityStatus !== "online") {
+    return {
+      accessibilityLabel: "Sin conexion",
+      state: "offline",
+    };
+  }
+
+  return {
+    accessibilityLabel: "Online",
+    state: "online",
+  };
 }
 
 export function resolveAppShellSuccessToast({

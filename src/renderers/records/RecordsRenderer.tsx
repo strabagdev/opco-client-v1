@@ -332,17 +332,15 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           <Text style={styles.meta}>
             {definition?.name ? `${definition.name} · ${pagination ? `${pagination.total} registros` : "Registros"}` : "Registros"}
           </Text>
+          <SyncTelemetrySummary connectivityStatus={connectivityStatus} fallbackSyncedAt={syncedAt} telemetry={recordsSyncTelemetry} />
         </View>
       </View>
 
       {cacheBannerMessage ? (
         <View style={styles.cacheBanner}>
           <Text style={styles.cacheText}>{cacheBannerMessage}</Text>
-          {syncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {syncedAt}</Text> : null}
         </View>
       ) : null}
-
-      <SyncTelemetrySummary connectivityStatus={connectivityStatus} telemetry={recordsSyncTelemetry} />
 
       {hasSyncActivity ? (
         <View style={styles.syncBar}>
@@ -440,20 +438,18 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
 function SyncTelemetrySummary({
   connectivityStatus,
+  fallbackSyncedAt,
   telemetry,
 }: {
   connectivityStatus: ReturnType<typeof useSession>["connectivityStatus"];
+  fallbackSyncedAt: string | null;
   telemetry: SyncTelemetry | null;
 }) {
-  if (!telemetry) {
-    return null;
-  }
-
   if (shouldShowRecordsSyncProblem({ connectivityStatus, telemetry })) {
     return <Text style={styles.syncProblemText}>Problema de sincronizacion</Text>;
   }
 
-  const formatted = formatLastSuccessfulSyncAt(telemetry.lastSuccessfulSyncAt);
+  const formatted = formatLastSuccessfulSyncAt(telemetry?.lastSuccessfulSyncAt ?? null) ?? fallbackSyncedAt;
 
   if (!formatted) {
     return null;
