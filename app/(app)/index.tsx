@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -20,6 +21,8 @@ import { AppView } from "@/lib/opco-api";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
 
+const HOME_WIDE_BREAKPOINT = 900;
+
 export default function HomeScreen() {
   const {
     api,
@@ -31,16 +34,17 @@ export default function HomeScreen() {
     ownerKey,
     selectedContractId,
     setSelectedContractId,
-    signOut,
     status,
     token,
   } = useSession();
+  const { width } = useWindowDimensions();
   const [views, setViews] = useState<AppView[]>([]);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
   const [viewsFromCache, setViewsFromCache] = useState(false);
   const [viewsSyncedAt, setViewsSyncedAt] = useState<string | null>(null);
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
+  const isWideLayout = width >= HOME_WIDE_BREAKPOINT;
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId && views.length > 0),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
@@ -51,6 +55,19 @@ export default function HomeScreen() {
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
     [context?.contracts, selectedContractId],
   );
+  const notifications = useMemo(() => {
+    const items: { id: string; message: string; tone: "error" | "info" }[] = [];
+
+    if (localStorageRecoveryNotice) {
+      items.push({
+        id: "local-storage-recovery",
+        message: localStorageRecoveryNotice,
+        tone: "error",
+      });
+    }
+
+    return items;
+  }, [localStorageRecoveryNotice]);
 
   useEffect(() => {
     if (!context) {
@@ -175,19 +192,39 @@ export default function HomeScreen() {
     };
   }, [api, definitionCache, ownerKey, selectedContractId, token]);
 
-  return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.kicker}>Sesion activa</Text>
-          <Text style={styles.title}>{me?.app.name ?? "Opco"}</Text>
-        </View>
-        <Pressable onPress={signOut} style={styles.logoutButton}>
-          <Text style={styles.logoutText}>Logout</Text>
-        </Pressable>
-      </View>
+  const contractSelector = context && context.contracts.length > 1 ? (
+    <View style={[styles.contractList, isWideLayout ? styles.contractListWide : null]}>
+      {context.contracts.map((contract) => {
+        const isSelected = contract.id === selectedContractId;
 
-      <View style={styles.section}>
+        return (
+          <Pressable
+            key={contract.id}
+            onPress={() => setSelectedContractId(contract.id)}
+            style={[
+              styles.contractButton,
+              isWideLayout ? styles.contractButtonWide : null,
+              isSelected ? styles.contractButtonSelected : null,
+            ]}
+          >
+            <Text style={[styles.contractName, isSelected ? styles.contractNameSelected : null]}>
+              {contract.name}
+            </Text>
+            <Text style={[styles.contractRole, isSelected ? styles.contractRoleSelected : null]}>
+              {contract.role}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  ) : null;
+
+  const userSection = (
+    <View style={styles.userSection}>
+      <View style={styles.userMark}>
+        <Text style={styles.userMarkText}>{getUserInitials(me?.user.name ?? me?.user.email)}</Text>
+      </View>
+      <View style={styles.userText}>
         <Text style={styles.label}>Usuario</Text>
         <Text style={styles.value}>{me?.user.name ?? me?.user.email ?? "Sesion conservada"}</Text>
         <Text style={styles.meta}>
@@ -198,87 +235,123 @@ export default function HomeScreen() {
         <Text style={offlineReadiness.offlineReadiness === "ready" ? styles.readyText : styles.meta}>
           {getOfflineReadinessText(offlineReadiness.offlineReadiness)}
         </Text>
-        {localStorageRecoveryNotice ? <Text style={styles.error}>{localStorageRecoveryNotice}</Text> : null}
       </View>
+    </View>
+  );
 
-      <View style={styles.section}>
-        <Text style={styles.label}>Organizacion</Text>
-        <Text style={styles.value}>
-          {context?.organization.name ??
-            (status === "offline" ? "Contexto no disponible sin red" : "Cargando contexto...")}
-        </Text>
-        {status === "offline" && !context ? (
-          <Text style={styles.error}>No hay datos guardados en este dispositivo. Conectate al menos una vez.</Text>
-        ) : null}
+  const operationalContextSection = (
+    <View style={styles.operationalContext}>
+      <View style={[styles.contextPair, isWideLayout ? styles.contextPairWide : null]}>
+        <View style={styles.contextItem}>
+          <Text style={styles.label}>Organizacion</Text>
+          <Text style={styles.value}>
+            {context?.organization.name ??
+              (status === "offline" ? "Contexto no disponible sin red" : "Cargando contexto...")}
+          </Text>
+        </View>
+        <View style={styles.contextItem}>
+          <Text style={styles.label}>Contrato</Text>
+          {!context && status !== "offline" ? <ActivityIndicator /> : null}
+          {context?.contracts.length === 0 ? (
+            <Text style={styles.empty}>No hay contratos activos para este usuario.</Text>
+          ) : null}
+          <Text style={styles.value}>
+            {selectedContract?.name ?? (context ? "Selecciona un contrato" : "Cargando contexto...")}
+          </Text>
+        </View>
       </View>
+      {status === "offline" && !context ? (
+        <Text style={styles.error}>No hay datos guardados en este dispositivo. Conectate al menos una vez.</Text>
+      ) : null}
+      {contractSelector}
+    </View>
+  );
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Contrato</Text>
-        {!context && status !== "offline" ? <ActivityIndicator /> : null}
-        {context?.contracts.length === 0 ? (
-          <Text style={styles.empty}>No hay contratos activos para este usuario.</Text>
-        ) : null}
-        {context && context.contracts.length === 1 && selectedContract ? (
-          <Text style={styles.value}>{selectedContract.name}</Text>
-        ) : null}
-        {context && context.contracts.length > 1 ? (
-          <View style={styles.contractList}>
-            {context.contracts.map((contract) => {
-              const isSelected = contract.id === selectedContractId;
-
-              return (
-                <Pressable
-                  key={contract.id}
-                  onPress={() => setSelectedContractId(contract.id)}
-                  style={[styles.contractButton, isSelected && styles.contractButtonSelected]}
-                >
-                  <Text style={[styles.contractName, isSelected && styles.contractNameSelected]}>
-                    {contract.name}
-                  </Text>
-                  <Text style={[styles.contractRole, isSelected && styles.contractRoleSelected]}>
-                    {contract.role}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        ) : null}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Experiencias</Text>
-        {isLoadingViews ? <ActivityIndicator /> : null}
-        {viewsFromCache ? (
-          <View style={styles.cacheBanner}>
-            <Text style={styles.cacheText}>Sin conexion. Experiencias guardadas localmente.</Text>
-            {viewsSyncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {viewsSyncedAt}</Text> : null}
-          </View>
-        ) : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
-          <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
-        ) : null}
-        <View style={styles.viewList}>
-          {views.map((appView) => (
-            <Link href={buildAppViewHref(appView.id)} key={appView.id} asChild>
-              <Pressable style={styles.viewButton}>
-                <View style={styles.viewIcon}>
-                  <AppIcon icon={appView.icon} size={22} />
-                </View>
-                <View style={styles.viewText}>
-                  <Text style={styles.viewName}>{appView.name}</Text>
-                  <View style={styles.typeBadge}>
-                    <Text style={styles.typeBadgeText}>{getAppViewCardMetadata(appView)}</Text>
-                  </View>
-                  <Text style={styles.availabilityText}>
-                    {getOfflineAvailabilityText(offlineAvailabilityByViewId[appView.id] ?? "definition-missing")}
-                  </Text>
-                </View>
-              </Pressable>
-            </Link>
+  const notificationsSection = (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Notificaciones</Text>
+      {notifications.length > 0 ? (
+        <View style={styles.notificationList}>
+          {notifications.map((notification) => (
+            <View
+              key={notification.id}
+              style={[
+                styles.notificationItem,
+                notification.tone === "error" ? styles.notificationItemError : null,
+              ]}
+            >
+              <Text style={notification.tone === "error" ? styles.error : styles.meta}>{notification.message}</Text>
+            </View>
           ))}
         </View>
-        {shouldShowPwaDiagnostics() ? <PwaDiagnostics diagnostics={offlineReadiness} /> : null}
+      ) : (
+        <Text style={styles.empty}>No hay notificaciones.</Text>
+      )}
+    </View>
+  );
+
+  const experiencesSection = (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Experiencias</Text>
+      {isLoadingViews ? <ActivityIndicator /> : null}
+      {viewsFromCache ? (
+        <View style={styles.cacheBanner}>
+          <Text style={styles.cacheText}>Sin conexion. Experiencias guardadas localmente.</Text>
+          {viewsSyncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {viewsSyncedAt}</Text> : null}
+        </View>
+      ) : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
+        <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
+      ) : null}
+      <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
+        {views.map((appView) => (
+          <Link href={buildAppViewHref(appView.id)} key={appView.id} asChild>
+            <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
+              <View style={styles.viewIcon}>
+                <AppIcon icon={appView.icon} size={22} />
+              </View>
+              <View style={styles.viewText}>
+                <Text style={styles.viewName}>{appView.name}</Text>
+                <View style={styles.typeBadge}>
+                  <Text style={styles.typeBadgeText}>{getAppViewCardMetadata(appView)}</Text>
+                </View>
+                <Text style={styles.availabilityText}>
+                  {getOfflineAvailabilityText(offlineAvailabilityByViewId[appView.id] ?? "definition-missing")}
+                </Text>
+              </View>
+            </Pressable>
+          </Link>
+        ))}
+      </View>
+    </View>
+  );
+
+  return (
+    <ScrollView
+      contentContainerStyle={[
+        styles.content,
+        isWideLayout ? styles.contentWide : styles.contentCompact,
+      ]}
+      style={styles.screen}
+    >
+      <View style={styles.bodyStack}>
+        <View style={[styles.contextPanel, isWideLayout ? styles.contextPanelWide : null]}>
+          {userSection}
+          {operationalContextSection}
+        </View>
+
+        {isWideLayout ? (
+          <View style={styles.mainGridWide}>
+            <View style={styles.experiencesColumnWide}>{experiencesSection}</View>
+            <View style={styles.notificationsColumnWide}>{notificationsSection}</View>
+          </View>
+        ) : (
+          <>
+            {notificationsSection}
+            {experiencesSection}
+          </>
+        )}
       </View>
     </ScrollView>
   );
@@ -300,43 +373,18 @@ function getOfflineReadinessText(readiness: ReturnType<typeof useOfflineReadines
   }
 }
 
-function shouldShowPwaDiagnostics() {
-  if (typeof __DEV__ !== "undefined" && __DEV__) {
-    return true;
+function getUserInitials(value: string | null | undefined) {
+  if (!value) {
+    return "?";
   }
 
-  if (typeof window === "undefined") {
-    return false;
-  }
+  const parts = value
+    .replace(/@.*/, "")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 
-  return new URLSearchParams(window.location.search).has("pwaDiagnostics");
-}
-
-function PwaDiagnostics({ diagnostics }: { diagnostics: ReturnType<typeof useOfflineReadiness> }) {
-  const rows = [
-    ["runningMode", diagnostics.runningMode],
-    ["serviceWorkerSupported", diagnostics.serviceWorkerSupported ? "yes" : "no"],
-    ["registrationScope", diagnostics.registrationScope ?? "none"],
-    ["controllerPresent", diagnostics.controllerPresent ? "yes" : "no"],
-    ["activeScriptURL", diagnostics.activeScriptURL ? new URL(diagnostics.activeScriptURL).pathname : "none"],
-    ["shellCacheVersion", diagnostics.shellCacheVersion ?? "none"],
-    ["shellReady", diagnostics.shellReady ? "yes" : "no"],
-    ["sessionSnapshotPresent", diagnostics.sessionSnapshotPresent ? "yes" : "no"],
-    ["navigationCachePresent", diagnostics.navigationCachePresent ? "yes" : "no"],
-    ["SQLiteReady", diagnostics.sqliteReady ? "yes" : "no"],
-  ];
-
-  return (
-    <View style={styles.diagnostics}>
-      <Text style={styles.diagnosticsTitle}>Diagnostico PWA</Text>
-      {rows.map(([label, value]) => (
-        <View key={label} style={styles.diagnosticsRow}>
-          <Text style={styles.diagnosticsLabel}>{label}</Text>
-          <Text style={styles.diagnosticsValue}>{value}</Text>
-        </View>
-      ))}
-    </View>
-  );
+  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
 const styles = StyleSheet.create({
@@ -344,6 +392,16 @@ const styles = StyleSheet.create({
     gap: 18,
     padding: 20,
     paddingBottom: 36,
+    width: "100%",
+  },
+  contentCompact: {
+    alignSelf: "center",
+    maxWidth: 620,
+  },
+  contentWide: {
+    alignSelf: "center",
+    maxWidth: 1180,
+    paddingHorizontal: 28,
   },
   contractButton: {
     backgroundColor: "#ffffff",
@@ -353,12 +411,20 @@ const styles = StyleSheet.create({
     gap: 4,
     padding: 14,
   },
+  contractButtonWide: {
+    flexBasis: 220,
+    flexGrow: 1,
+  },
   contractButtonSelected: {
     backgroundColor: "#135d66",
     borderColor: "#135d66",
   },
   contractList: {
     gap: 10,
+  },
+  contractListWide: {
+    flexDirection: "row",
+    flexWrap: "wrap",
   },
   cacheBanner: {
     backgroundColor: "#fff7e0",
@@ -399,6 +465,9 @@ const styles = StyleSheet.create({
     color: "#587078",
     fontSize: 12,
   },
+  bodyStack: {
+    gap: 18,
+  },
   viewButton: {
     alignItems: "center",
     backgroundColor: "#ffffff",
@@ -410,6 +479,11 @@ const styles = StyleSheet.create({
     minHeight: 64,
     padding: 12,
   },
+  viewButtonWide: {
+    flexBasis: 260,
+    flexGrow: 1,
+    maxWidth: 360,
+  },
   viewIcon: {
     alignItems: "center",
     backgroundColor: "#e4f1f2",
@@ -420,6 +494,11 @@ const styles = StyleSheet.create({
   },
   viewList: {
     gap: 10,
+  },
+  viewListWide: {
+    alignItems: "stretch",
+    flexDirection: "row",
+    flexWrap: "wrap",
   },
   viewName: {
     color: "#17363c",
@@ -435,46 +514,51 @@ const styles = StyleSheet.create({
     color: "#b42318",
     lineHeight: 20,
   },
-  diagnostics: {
+  contextColumn: {
+    gap: 18,
+  },
+  contextColumnWide: {
+    flexBasis: 320,
+    flexGrow: 1,
+    maxWidth: 420,
+  },
+  experiencesColumn: {
+    gap: 18,
+  },
+  experiencesColumnWide: {
+    flexBasis: 520,
+    flexGrow: 2,
+  },
+  homeGrid: {
+    gap: 18,
+  },
+  homeGridCompact: {
+    flexDirection: "column",
+  },
+  homeGridWide: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+  },
+  contextItem: {
+    flex: 1,
+    gap: 6,
+    minWidth: 0,
+  },
+  contextPair: {
+    gap: 14,
+  },
+  contextPairWide: {
+    flexDirection: "row",
+  },
+  contextPanel: {
+    gap: 16,
+  },
+  contextPanelWide: {
     backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    borderColor: "#d7e4e7",
     borderRadius: 8,
     borderWidth: 1,
-    gap: 6,
-    marginTop: 8,
-    padding: 12,
-  },
-  diagnosticsLabel: {
-    color: "#587078",
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  diagnosticsRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  diagnosticsTitle: {
-    color: "#17363c",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  diagnosticsValue: {
-    color: "#17363c",
-    flex: 1,
-    fontSize: 12,
-    textAlign: "right",
-  },
-  header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  kicker: {
-    color: "#587078",
-    fontSize: 13,
-    fontWeight: "700",
-    textTransform: "uppercase",
+    padding: 14,
   },
   label: {
     color: "#587078",
@@ -482,25 +566,40 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
   },
-  logoutButton: {
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  logoutText: {
-    color: "#17363c",
-    fontWeight: "700",
-  },
   meta: {
     color: "#587078",
     marginTop: 3,
+  },
+  mainGridWide: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 20,
   },
   readyText: {
     color: "#13795b",
     fontWeight: "800",
     marginTop: 3,
+  },
+  notificationItem: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
+  },
+  notificationItemError: {
+    borderColor: "#f1b8b8",
+  },
+  notificationList: {
+    gap: 10,
+  },
+  notificationsColumnWide: {
+    flexBasis: 280,
+    flexGrow: 1,
+    maxWidth: 340,
+  },
+  operationalContext: {
+    gap: 12,
   },
   screen: {
     backgroundColor: "#eef4f4",
@@ -513,12 +612,6 @@ const styles = StyleSheet.create({
     color: "#17363c",
     fontSize: 18,
     fontWeight: "800",
-  },
-  title: {
-    color: "#0f3036",
-    fontSize: 26,
-    fontWeight: "800",
-    marginTop: 4,
   },
   typeBadge: {
     alignSelf: "flex-start",
@@ -533,6 +626,27 @@ const styles = StyleSheet.create({
     color: "#2f5e66",
     fontSize: 12,
     fontWeight: "800",
+  },
+  userMark: {
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 8,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  userMarkText: {
+    color: "#135d66",
+    fontWeight: "900",
+  },
+  userSection: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+  },
+  userText: {
+    flex: 1,
+    minWidth: 0,
   },
   value: {
     color: "#17363c",
