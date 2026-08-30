@@ -3,7 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { resolveAppShellPersistentFeedback, resolveAppShellSuccessToast } from "@/lib/app-shell-feedback";
+import {
+  resolveAppShellPersistentFeedback,
+  resolveAppShellSuccessToast,
+  shouldShowAppShellFeedbackSpinner,
+} from "@/lib/app-shell-feedback";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
@@ -95,6 +99,7 @@ export default function AppLayout() {
   }, [toast]);
 
   const feedback = persistentFeedback ?? toast;
+  const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
 
   function goBack() {
@@ -121,9 +126,16 @@ export default function AppLayout() {
   return (
     <View style={styles.shell}>
       <View style={[styles.header, isWideLayout ? styles.headerWide : styles.headerCompact]}>
-        <View>
-          <Text style={styles.kicker}>Sesion activa</Text>
-          <Text style={styles.title}>Opco Client</Text>
+        <View style={styles.headerIdentity}>
+          {!isHome ? (
+            <Pressable accessibilityRole="button" onPress={goBack} style={styles.backButton}>
+              <Text style={styles.backText}>←</Text>
+            </Pressable>
+          ) : null}
+          <View style={styles.titleBlock}>
+            <Text style={styles.kicker}>Sesion activa</Text>
+            <Text style={styles.title}>Opco Client</Text>
+          </View>
         </View>
         <View style={styles.headerActions}>
           {showPwaDiagnostics ? (
@@ -158,6 +170,12 @@ export default function AppLayout() {
             feedback.tone === "success" ? styles.feedbackBannerSuccess : null,
             feedback.tone === "warning" ? styles.feedbackBannerWarning : null,
           ]}>
+            {showFeedbackSpinner ? <ActivityIndicator color="#135d66" size="small" /> : null}
+            {feedback.visual === "success" ? (
+              <View style={styles.feedbackSuccessIcon}>
+                <AppIcon color="#13795b" icon="clipboard-check" size={16} />
+              </View>
+            ) : null}
             <Text style={[
               styles.feedbackText,
               feedback.tone === "error" ? styles.feedbackTextError : null,
@@ -177,14 +195,6 @@ export default function AppLayout() {
               </Pressable>
             ) : null}
           </View>
-        </View>
-      ) : null}
-
-      {!isHome ? (
-        <View style={[styles.backRow, isWideLayout ? styles.backRowWide : styles.backRowCompact]}>
-          <Pressable accessibilityRole="button" onPress={goBack} style={styles.backButton}>
-            <Text style={styles.backText}>←</Text>
-          </Pressable>
         </View>
       ) : null}
 
@@ -332,17 +342,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 48,
   },
-  backRow: {
-    width: "100%",
-  },
-  backRowCompact: {
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingTop: 12,
-  },
-  backRowWide: {
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingTop: 14,
-  },
   backText: {
     color: "#135d66",
     fontSize: 24,
@@ -411,6 +410,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingTop: 20,
   },
+  headerIdentity: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 12,
+    minWidth: 0,
+  },
   feedbackBanner: {
     alignItems: "center",
     backgroundColor: "#ffffff",
@@ -443,6 +449,12 @@ const styles = StyleSheet.create({
   feedbackCloseText: {
     color: "#135d66",
     fontWeight: "800",
+  },
+  feedbackSuccessIcon: {
+    alignItems: "center",
+    height: 20,
+    justifyContent: "center",
+    width: 20,
   },
   feedbackRow: {
     width: "100%",
@@ -548,6 +560,10 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: "800",
     marginTop: 4,
+  },
+  titleBlock: {
+    flexShrink: 1,
+    minWidth: 0,
   },
   userAvatar: {
     alignItems: "center",

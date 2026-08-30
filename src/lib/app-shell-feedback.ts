@@ -2,11 +2,13 @@ import type { ConnectivityStatus } from "./connectivity";
 import type { OfflineReadiness } from "./pwa";
 
 export type AppShellFeedbackTone = "error" | "warning" | "info" | "success";
+export type AppShellFeedbackVisual = "error" | "warning" | "info" | "success" | "loading";
 
 export type AppShellFeedbackMessage = {
   id: string;
   message: string;
   tone: AppShellFeedbackTone;
+  visual: AppShellFeedbackVisual;
 };
 
 export type AppShellFeedbackInput = {
@@ -37,6 +39,7 @@ export function resolveAppShellPersistentFeedback({
       id: "local-storage-recovery",
       message: localStorageRecoveryNotice,
       tone: "error",
+      visual: "error",
     };
   }
 
@@ -45,6 +48,7 @@ export function resolveAppShellPersistentFeedback({
       id: "sync-error",
       message: "Hay un error pendiente de revisar.",
       tone: "error",
+      visual: "error",
     };
   }
 
@@ -53,6 +57,7 @@ export function resolveAppShellPersistentFeedback({
       id: "sync-conflict",
       message: "Hay un conflicto pendiente de resolver.",
       tone: "error",
+      visual: "error",
     };
   }
 
@@ -61,6 +66,7 @@ export function resolveAppShellPersistentFeedback({
       id: "syncing",
       message: "Sincronizando con Opco...",
       tone: "info",
+      visual: "loading",
     };
   }
 
@@ -69,6 +75,7 @@ export function resolveAppShellPersistentFeedback({
       id: "auth-restoring",
       message: "Restableciendo sesion con Opco...",
       tone: "info",
+      visual: "loading",
     };
   }
 
@@ -77,6 +84,7 @@ export function resolveAppShellPersistentFeedback({
       id: "reconnecting",
       message: "Reconectando con Opco...",
       tone: "info",
+      visual: "loading",
     };
   }
 
@@ -85,6 +93,7 @@ export function resolveAppShellPersistentFeedback({
       id: "pending-work",
       message: formatPendingWorkMessage(pendingCount),
       tone: "warning",
+      visual: "warning",
     };
   }
 
@@ -93,6 +102,7 @@ export function resolveAppShellPersistentFeedback({
       id: "offline",
       message: "Sin conexion. Los registros se guardan en este dispositivo.",
       tone: "warning",
+      visual: "warning",
     };
   }
 
@@ -101,6 +111,7 @@ export function resolveAppShellPersistentFeedback({
       id: "offline-preparing",
       message: "Preparando uso sin conexion...",
       tone: "info",
+      visual: "loading",
     };
   }
 
@@ -122,9 +133,18 @@ export function resolveAppShellSuccessToast({
     id: "sync-success",
     message: "Sincronizacion completada.",
     tone: "success",
+    visual: "success",
   };
 }
 
 export function formatPendingWorkMessage(count: number) {
   return `${count} ${count === 1 ? "registro" : "registros"} por sincronizar`;
+}
+
+export function shouldRenderAppShellFeedbackBand(feedback: AppShellFeedbackMessage | null) {
+  return feedback !== null;
+}
+
+export function shouldShowAppShellFeedbackSpinner(feedback: AppShellFeedbackMessage | null) {
+  return feedback?.visual === "loading";
 }
