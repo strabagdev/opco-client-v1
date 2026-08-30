@@ -1,26 +1,40 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { resolveAppShellPersistentFeedback, resolveAppShellSuccessToast } from "@/lib/app-shell-feedback";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
 
+const APP_SHELL_TOAST_DURATION_MS = 3500;
+
 export default function AppLayout() {
   const {
+    connectivityStatus,
     context,
+    isAuthSessionRestoring,
+    isOperationalCoreReadinessChecking,
+    isPendingWorkSyncing,
     localDatabaseStorageState,
+    localStorageRecoveryNotice,
     me,
     ownerKey,
+    pendingRecordsCount,
+    recordsSyncSummary,
     selectedContractId,
     signOut,
+    stateUpdateReconnectDiagnostics,
     status,
   } = useSession();
   const router = useRouter();
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const [isPwaDiagnosticsOpen, setIsPwaDiagnosticsOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
+  const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
   const showPwaDiagnostics = shouldShowPwaDiagnostics();
@@ -29,6 +43,59 @@ export default function AppLayout() {
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
     sqliteReady: localDatabaseStorageState.status === "ready",
   });
+  const userDisplayName = me?.user.name ?? me?.user.email ?? "Sesion conservada";
+  const persistentFeedback = resolveAppShellPersistentFeedback({
+    connectivityStatus,
+    hasConflict: recordsSyncSummary.conflictCount > 0,
+    hasError: recordsSyncSummary.failedCount > 0 || Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved"),
+    isAuthSessionRestoring,
+    isOperationalCoreReadinessChecking,
+    isPendingWorkSyncing,
+    localStorageRecoveryNotice,
+    offlineReadiness: offlineReadiness.offlineReadiness,
+    pendingCount: pendingRecordsCount,
+  });
+  const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
+
+  useEffect(() => {
+    if (!lastSync?.completedAt) {
+      return;
+    }
+
+    const toastKey = `${lastSync.syncRunId ?? "sync"}:${lastSync.completedAt}`;
+
+    if (lastToastSyncKeyRef.current === toastKey) {
+      return;
+    }
+
+    lastToastSyncKeyRef.current = toastKey;
+
+    const nextToast = resolveAppShellSuccessToast({
+      operationsCompleted: lastSync.operationsCompleted,
+      result: lastSync.result,
+    });
+
+    const timeout = nextToast ? setTimeout(() => setToast(nextToast), 0) : null;
+
+    return () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
+  }, [lastSync?.completedAt, lastSync?.operationsCompleted, lastSync?.result, lastSync?.syncRunId]);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeout = setTimeout(() => setToast(null), APP_SHELL_TOAST_DURATION_MS);
+
+    return () => clearTimeout(timeout);
+  }, [toast]);
+
+  const feedback = persistentFeedback ?? toast;
+  const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
 
   function goBack() {
     if (router.canGoBack()) {
@@ -69,16 +136,54 @@ export default function AppLayout() {
               <AppIcon icon="settings" size={18} />
             </Pressable>
           ) : null}
-          <Pressable onPress={signOut} style={styles.logoutButton}>
-            <Text style={styles.logoutText}>Logout</Text>
+          <Pressable
+            accessibilityLabel="Menu de usuario"
+            accessibilityRole="button"
+            onPress={() => setIsUserMenuOpen(true)}
+            style={styles.userButton}
+          >
+            <View style={styles.userAvatar}>
+              <Text style={styles.userAvatarText}>{userInitials}</Text>
+            </View>
+            <Text numberOfLines={1} style={styles.userButtonText}>{userDisplayName}</Text>
           </Pressable>
         </View>
       </View>
 
+      {feedback ? (
+        <View style={[styles.feedbackRow, isWideLayout ? styles.feedbackRowWide : styles.feedbackRowCompact]}>
+          <View style={[
+            styles.feedbackBanner,
+            feedback.tone === "error" ? styles.feedbackBannerError : null,
+            feedback.tone === "success" ? styles.feedbackBannerSuccess : null,
+            feedback.tone === "warning" ? styles.feedbackBannerWarning : null,
+          ]}>
+            <Text style={[
+              styles.feedbackText,
+              feedback.tone === "error" ? styles.feedbackTextError : null,
+              feedback.tone === "success" ? styles.feedbackTextSuccess : null,
+              feedback.tone === "warning" ? styles.feedbackTextWarning : null,
+            ]}>
+              {feedback.message}
+            </Text>
+            {!persistentFeedback ? (
+              <Pressable
+                accessibilityLabel="Cerrar mensaje"
+                accessibilityRole="button"
+                onPress={() => setToast(null)}
+                style={styles.feedbackCloseButton}
+              >
+                <Text style={styles.feedbackCloseText}>Cerrar</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
       {!isHome ? (
         <View style={[styles.backRow, isWideLayout ? styles.backRowWide : styles.backRowCompact]}>
           <Pressable accessibilityRole="button" onPress={goBack} style={styles.backButton}>
-            <Text style={styles.backText}>← Volver</Text>
+            <Text style={styles.backText}>←</Text>
           </Pressable>
         </View>
       ) : null}
@@ -109,6 +214,46 @@ export default function AppLayout() {
             <ScrollView style={styles.modalScroll}>
               <PwaDiagnostics diagnostics={offlineReadiness} showTitle={false} />
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsUserMenuOpen(false)}
+        transparent
+        visible={isUserMenuOpen}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.userMenuPanel, isWideLayout ? styles.userMenuPanelWide : styles.userMenuPanelCompact]}>
+            <View style={styles.userMenuHeader}>
+              <View style={styles.userAvatarLarge}>
+                <Text style={styles.userAvatarLargeText}>{userInitials}</Text>
+              </View>
+              <View style={styles.userMenuText}>
+                <Text style={styles.userMenuName}>{userDisplayName}</Text>
+                {me?.user.email ? <Text style={styles.userMenuEmail}>{me.user.email}</Text> : null}
+              </View>
+            </View>
+            <View style={styles.userMenuActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsUserMenuOpen(false)}
+                style={styles.modalCloseButton}
+              >
+                <Text style={styles.modalCloseText}>Cerrar</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setIsUserMenuOpen(false);
+                  void signOut();
+                }}
+                style={styles.logoutButton}
+              >
+                <Text style={styles.logoutText}>Cerrar sesion</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -161,13 +306,31 @@ function PwaDiagnostics({
   );
 }
 
+function getUserInitials(value: string | null | undefined) {
+  if (!value) {
+    return "?";
+  }
+
+  const parts = value
+    .replace(/@.*/, "")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
+}
+
 const styles = StyleSheet.create({
   backButton: {
     alignItems: "center",
     alignSelf: "flex-start",
+    backgroundColor: "#ffffff",
+    borderColor: "#b8c7ca",
+    borderRadius: 24,
+    borderWidth: 1,
+    height: 48,
     justifyContent: "center",
-    minHeight: 40,
-    paddingRight: 10,
+    width: 48,
   },
   backRow: {
     width: "100%",
@@ -182,7 +345,9 @@ const styles = StyleSheet.create({
   },
   backText: {
     color: "#135d66",
+    fontSize: 24,
     fontWeight: "800",
+    lineHeight: 26,
   },
   center: {
     alignItems: "center",
@@ -236,6 +401,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 8,
+    maxWidth: "56%",
   },
   headerCompact: {
     padding: APP_SHELL_HORIZONTAL_GUTTER,
@@ -245,6 +411,65 @@ const styles = StyleSheet.create({
     paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingTop: 20,
   },
+  feedbackBanner: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
+    minHeight: 42,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  feedbackBannerError: {
+    backgroundColor: "#fff7f7",
+    borderColor: "#f1b8b8",
+  },
+  feedbackBannerSuccess: {
+    backgroundColor: "#eefbf4",
+    borderColor: "#b9e4c9",
+  },
+  feedbackBannerWarning: {
+    backgroundColor: "#fff7e0",
+    borderColor: "#f0c36d",
+  },
+  feedbackCloseButton: {
+    minHeight: 32,
+    justifyContent: "center",
+  },
+  feedbackCloseText: {
+    color: "#135d66",
+    fontWeight: "800",
+  },
+  feedbackRow: {
+    width: "100%",
+  },
+  feedbackRowCompact: {
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
+    paddingTop: 10,
+  },
+  feedbackRowWide: {
+    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
+    paddingTop: 12,
+  },
+  feedbackText: {
+    color: "#17363c",
+    flex: 1,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  feedbackTextError: {
+    color: "#b42318",
+  },
+  feedbackTextSuccess: {
+    color: "#13795b",
+  },
+  feedbackTextWarning: {
+    color: "#6f4f08",
+  },
   kicker: {
     color: "#587078",
     fontSize: 13,
@@ -252,15 +477,19 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   logoutButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
     borderColor: "#b8c7ca",
     borderRadius: 8,
     borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 40,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   logoutText: {
-    color: "#17363c",
-    fontWeight: "700",
+    color: "#ffffff",
+    fontWeight: "800",
   },
   modalBackdrop: {
     alignItems: "center",
@@ -319,5 +548,85 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: "800",
     marginTop: 4,
+  },
+  userAvatar: {
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 16,
+    height: 32,
+    justifyContent: "center",
+    width: 32,
+  },
+  userAvatarLarge: {
+    alignItems: "center",
+    backgroundColor: "#e4f1f2",
+    borderRadius: 24,
+    height: 48,
+    justifyContent: "center",
+    width: 48,
+  },
+  userAvatarLargeText: {
+    color: "#135d66",
+    fontWeight: "900",
+  },
+  userAvatarText: {
+    color: "#135d66",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  userButton: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#b8c7ca",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    maxWidth: 220,
+    minHeight: 40,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  userButtonText: {
+    color: "#17363c",
+    flexShrink: 1,
+    fontWeight: "800",
+  },
+  userMenuActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "flex-end",
+  },
+  userMenuEmail: {
+    color: "#587078",
+    marginTop: 2,
+  },
+  userMenuHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+  },
+  userMenuName: {
+    color: "#17363c",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  userMenuPanel: {
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    gap: 18,
+    padding: 16,
+    width: "100%",
+  },
+  userMenuPanelCompact: {
+    maxWidth: 420,
+  },
+  userMenuPanelWide: {
+    maxWidth: 460,
+  },
+  userMenuText: {
+    flex: 1,
+    minWidth: 0,
   },
 });

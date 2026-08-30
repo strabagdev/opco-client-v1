@@ -19,7 +19,6 @@ import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
-import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { useSession } from "@/state/session";
 
 export default function HomeScreen() {
@@ -27,9 +26,6 @@ export default function HomeScreen() {
     api,
     context,
     definitionCache,
-    localDatabaseStorageState,
-    localStorageRecoveryNotice,
-    me,
     ownerKey,
     selectedContractId,
     setSelectedContractId,
@@ -44,29 +40,11 @@ export default function HomeScreen() {
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
-  const offlineReadiness = useOfflineReadiness({
-    navigationCachePresent: Boolean(selectedContractId && views.length > 0),
-    sessionSnapshotPresent: Boolean(ownerKey && me && context),
-    sqliteReady: localDatabaseStorageState.status === "ready",
-  });
 
   const selectedContract = useMemo(
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
     [context?.contracts, selectedContractId],
   );
-  const notifications = useMemo(() => {
-    const items: { id: string; message: string; tone: "error" | "info" }[] = [];
-
-    if (localStorageRecoveryNotice) {
-      items.push({
-        id: "local-storage-recovery",
-        message: localStorageRecoveryNotice,
-        tone: "error",
-      });
-    }
-
-    return items;
-  }, [localStorageRecoveryNotice]);
 
   useEffect(() => {
     if (!context) {
@@ -218,26 +196,6 @@ export default function HomeScreen() {
     </View>
   ) : null;
 
-  const userSection = (
-    <View style={styles.userSection}>
-      <View style={styles.userMark}>
-        <Text style={styles.userMarkText}>{getUserInitials(me?.user.name ?? me?.user.email)}</Text>
-      </View>
-      <View style={styles.userText}>
-        <Text style={styles.label}>Usuario</Text>
-        <Text style={styles.value}>{me?.user.name ?? me?.user.email ?? "Sesion conservada"}</Text>
-        <Text style={styles.meta}>
-          {status === "offline"
-            ? "Sin conexion. Datos guardados localmente."
-            : me?.user.email}
-        </Text>
-        <Text style={offlineReadiness.offlineReadiness === "ready" ? styles.readyText : styles.meta}>
-          {getOfflineReadinessText(offlineReadiness.offlineReadiness)}
-        </Text>
-      </View>
-    </View>
-  );
-
   const operationalContextSection = (
     <View style={styles.operationalContext}>
       <View style={[styles.contextPair, isWideLayout ? styles.contextPairWide : null]}>
@@ -263,29 +221,6 @@ export default function HomeScreen() {
         <Text style={styles.error}>No hay datos guardados en este dispositivo. Conectate al menos una vez.</Text>
       ) : null}
       {contractSelector}
-    </View>
-  );
-
-  const notificationsSection = (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Notificaciones</Text>
-      {notifications.length > 0 ? (
-        <View style={styles.notificationList}>
-          {notifications.map((notification) => (
-            <View
-              key={notification.id}
-              style={[
-                styles.notificationItem,
-                notification.tone === "error" ? styles.notificationItemError : null,
-              ]}
-            >
-              <Text style={notification.tone === "error" ? styles.error : styles.meta}>{notification.message}</Text>
-            </View>
-          ))}
-        </View>
-      ) : (
-        <Text style={styles.empty}>No hay notificaciones.</Text>
-      )}
     </View>
   );
 
@@ -336,54 +271,12 @@ export default function HomeScreen() {
     >
       <View style={styles.bodyStack}>
         <View style={[styles.contextPanel, isWideLayout ? styles.contextPanelWide : null]}>
-          {userSection}
           {operationalContextSection}
         </View>
-
-        {isWideLayout ? (
-          <View style={styles.mainGridWide}>
-            <View style={styles.experiencesColumnWide}>{experiencesSection}</View>
-            <View style={styles.notificationsColumnWide}>{notificationsSection}</View>
-          </View>
-        ) : (
-          <>
-            {notificationsSection}
-            {experiencesSection}
-          </>
-        )}
+        <View style={isWideLayout ? styles.experiencesColumnWide : null}>{experiencesSection}</View>
       </View>
     </ScrollView>
   );
-}
-
-function getOfflineReadinessText(readiness: ReturnType<typeof useOfflineReadiness>["offlineReadiness"]) {
-  switch (readiness) {
-    case "ready":
-      return "Disponible sin conexion";
-    case "data-missing":
-      return "Abre al menos una experiencia con conexion para usarla offline.";
-    case "shell-missing":
-      return "Preparando uso sin conexion...";
-    case "unsupported":
-      return "Uso sin conexion no disponible en este navegador.";
-    case "preparing":
-    default:
-      return "Preparando uso sin conexion...";
-  }
-}
-
-function getUserInitials(value: string | null | undefined) {
-  if (!value) {
-    return "?";
-  }
-
-  const parts = value
-    .replace(/@.*/, "")
-    .split(/\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
 const styles = StyleSheet.create({
@@ -511,29 +404,8 @@ const styles = StyleSheet.create({
     color: "#b42318",
     lineHeight: 20,
   },
-  contextColumn: {
-    gap: 18,
-  },
-  contextColumnWide: {
-    flexBasis: 320,
-    flexGrow: 1,
-    maxWidth: 420,
-  },
-  experiencesColumn: {
-    gap: 18,
-  },
   experiencesColumnWide: {
     width: "100%",
-  },
-  homeGrid: {
-    gap: 18,
-  },
-  homeGridCompact: {
-    flexDirection: "column",
-  },
-  homeGridWide: {
-    alignItems: "flex-start",
-    flexDirection: "row",
   },
   contextItem: {
     flex: 1,
@@ -566,34 +438,6 @@ const styles = StyleSheet.create({
     color: "#587078",
     marginTop: 3,
   },
-  mainGridWide: {
-    alignItems: "flex-start",
-    flexDirection: "row",
-    gap: 20,
-  },
-  readyText: {
-    color: "#13795b",
-    fontWeight: "800",
-    marginTop: 3,
-  },
-  notificationItem: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 12,
-  },
-  notificationItemError: {
-    borderColor: "#f1b8b8",
-  },
-  notificationList: {
-    gap: 10,
-  },
-  notificationsColumnWide: {
-    flexBasis: 280,
-    flexGrow: 1,
-    maxWidth: 340,
-  },
   operationalContext: {
     gap: 12,
   },
@@ -622,27 +466,6 @@ const styles = StyleSheet.create({
     color: "#2f5e66",
     fontSize: 12,
     fontWeight: "800",
-  },
-  userMark: {
-    alignItems: "center",
-    backgroundColor: "#e4f1f2",
-    borderRadius: 8,
-    height: 44,
-    justifyContent: "center",
-    width: 44,
-  },
-  userMarkText: {
-    color: "#135d66",
-    fontWeight: "900",
-  },
-  userSection: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 12,
-  },
-  userText: {
-    flex: 1,
-    minWidth: 0,
   },
   value: {
     color: "#17363c",
