@@ -31,7 +31,11 @@ import {
   getRecordsDiagnosticsRows,
   getSyncDiagnosticsRows,
 } from "@/renderers/records/sync-diagnostics";
-import { resolveRecordsSearchForScopeChange } from "@/renderers/records/records-renderer-state";
+import {
+  getRecordsCacheBannerMessage,
+  resolveRecordsSearchForScopeChange,
+  shouldShowRecordsSyncProblem,
+} from "@/renderers/records/records-renderer-state";
 import { AppViewRendererProps } from "@/renderers/types";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
@@ -41,7 +45,7 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
+  const { api, connectivityStatus, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
@@ -70,6 +74,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.syncingCount > 0 ||
     recordsSyncSummary.failedCount > 0 ||
     recordsSyncSummary.conflictCount > 0;
+  const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading });
 
   useEffect(() => {
     const nextScope = { appViewId: appView.id, entityTypeId };
@@ -135,7 +140,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setSyncedAt(null);
       setRecordsDiagnostics({
         appViewId: appView.id,
-        connectivityStatus: status === "offline" ? "offline" : "online",
+        connectivityStatus,
         contractId: selectedContractId,
         entityTypeId,
         error: null,
@@ -182,7 +187,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
                 setRecordsDiagnostics({
                   appViewId: appView.id,
-                  connectivityStatus: status === "offline" ? "offline" : "online",
+                  connectivityStatus,
                   contractId: selectedContractId,
                   entityTypeId,
                   error: null,
@@ -225,7 +230,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           setPagination(recordsResult.pagination);
           setRecordsDiagnostics((current) => ({
             appViewId: current?.appViewId ?? appView.id,
-            connectivityStatus: current?.connectivityStatus ?? (status === "offline" ? "offline" : "online"),
+            connectivityStatus,
             contractId: current?.contractId ?? selectedContractId,
             entityTypeId: current?.entityTypeId ?? entityTypeId,
             error: null,
@@ -267,6 +272,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     debouncedSearch,
     definitionCache,
     entityTypeId,
+    connectivityStatus,
     ownerKey,
     recordsReconnectRefreshKey,
     refreshCurrentSyncTelemetry,
@@ -329,11 +335,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         </View>
       </View>
 
-      {fromCache ? (
+      {cacheBannerMessage ? (
         <View style={styles.cacheBanner}>
-          <Text style={styles.cacheText}>
-            {isOfflineData ? "Sin conexion. Datos guardados localmente." : "Datos guardados localmente."}
-          </Text>
+          <Text style={styles.cacheText}>{cacheBannerMessage}</Text>
           {syncedAt ? <Text style={styles.cacheMeta}>Ultima sincronizacion: {syncedAt}</Text> : null}
         </View>
       ) : null}
@@ -439,7 +443,7 @@ function SyncTelemetrySummary({ telemetry }: { telemetry: SyncTelemetry | null }
     return null;
   }
 
-  if (telemetry.syncPhase === "error" || telemetry.lastSyncErrorAt) {
+  if (shouldShowRecordsSyncProblem(telemetry)) {
     return <Text style={styles.syncProblemText}>Problema de sincronizacion</Text>;
   }
 

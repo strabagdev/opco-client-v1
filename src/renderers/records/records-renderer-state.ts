@@ -1,3 +1,6 @@
+import type { ConnectivityStatus } from "@/lib/connectivity";
+import type { SyncTelemetry } from "@/lib/sync-telemetry";
+
 export type RecordsRendererScope = {
   appViewId: string;
   entityTypeId: string;
@@ -28,4 +31,28 @@ export function resolveRecordsSearchForScopeChange({
     debouncedSearch: "",
     searchText: "",
   };
+}
+
+export function getRecordsCacheBannerMessage({
+  connectivityStatus,
+  fromCache,
+  isLoading,
+}: {
+  connectivityStatus: ConnectivityStatus;
+  fromCache: boolean;
+  isLoading: boolean;
+}) {
+  if (!fromCache) {
+    return null;
+  }
+
+  if (connectivityStatus !== "online") {
+    return "Sin conexion. Datos guardados localmente.";
+  }
+
+  return isLoading ? "Actualizando datos..." : "Datos guardados localmente.";
+}
+
+export function shouldShowRecordsSyncProblem(telemetry: SyncTelemetry | null) {
+  return telemetry?.syncPhase === "error";
 }

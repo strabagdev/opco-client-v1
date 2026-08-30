@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { SyncTelemetry } from "@/lib/sync-telemetry";
-
 import { getRecordsDiagnosticsRows, getSyncDiagnosticsRows } from "./sync-diagnostics";
 
 describe("records sync diagnostics", () => {
   it("shows sync timestamps without exposing owner keys or payloads", () => {
-    const telemetry: SyncTelemetry = {
+    const telemetry = {
       contractId: "contract_1",
       entityTypeId: "entity_sensitive_abcdef",
       lastFullRefreshCompletedAt: "2026-08-24T16:03:00.000Z",
@@ -19,7 +17,7 @@ describe("records sync diagnostics", () => {
       lastSyncErrorPhase: null,
       ownerKey: "org_secret:user_secret",
       syncPhase: "idle",
-    };
+    } as const;
 
     const rows = getSyncDiagnosticsRows({
       summary: {
