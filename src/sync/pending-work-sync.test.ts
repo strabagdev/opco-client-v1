@@ -468,7 +468,7 @@ class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
     this.operations = this.operations.filter((item) => item.id !== operation.id);
   }
 
-  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
+  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string, _details?: unknown) {
     this.failed.push({ code, message, operation });
   }
 

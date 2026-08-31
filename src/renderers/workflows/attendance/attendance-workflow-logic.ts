@@ -1,4 +1,14 @@
-import { AttendanceBatchResult, AttendanceContextField, AttendanceContextValues, AttendanceLatestItem, AttendanceResponse, AttendanceStatusOption, StateUpdateItem } from "@/lib/opco-api";
+import {
+  AttendanceBatchEntry,
+  AttendanceBatchResult,
+  AttendanceContextField,
+  AttendanceContextValues,
+  AttendanceLatestItem,
+  AttendanceResponse,
+  AttendanceStatusOption,
+  AttendanceWorkflowConfig,
+  StateUpdateItem,
+} from "@/lib/opco-api";
 
 export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
 // Mirrors the backend Attendance latest take=10 contract used to infer full-day snapshots.
@@ -230,9 +240,28 @@ export function attendanceContextValidationErrors(
   fields: AttendanceContextField[],
   values: Record<string, string | null | undefined>,
 ) {
-  return fields
-    .filter((field) => field.required && !values[field.id])
-    .map((field) => ({ fieldId: field.id, message: `${field.name} es obligatorio.` }));
+  const errors: { fieldId: string; message: string }[] = [];
+
+  for (const field of fields) {
+    const optionId = values[field.id] ?? null;
+
+    if (field.required && !optionId) {
+      errors.push({ fieldId: field.id, message: `${field.name} es obligatorio.` });
+      continue;
+    }
+
+    if (!optionId) {
+      continue;
+    }
+
+    const option = field.options.find((item) => item.optionId === optionId || item.value === optionId);
+
+    if (!option?.value) {
+      errors.push({ fieldId: field.id, message: `${field.name} no tiene una opcion valida.` });
+    }
+  }
+
+  return errors;
 }
 
 export function attendanceContextExtraValues(
@@ -242,10 +271,45 @@ export function attendanceContextExtraValues(
   return Object.fromEntries(fields
     .map((field) => {
       const optionId = values[field.id] ?? null;
-      const option = optionId ? field.options.find((item) => item.optionId === optionId) : null;
-      return [field.id, option?.value ?? optionId] as const;
+      const option = optionId ? field.options.find((item) => item.optionId === optionId || item.value === optionId) : null;
+      return [field.id, option?.value ?? null] as const;
     })
     .filter(([, value]) => value !== null));
+}
+
+export function attendanceEntryToStateUpdateEntry(
+  entry: AttendanceBatchEntry,
+  config: AttendanceWorkflowConfig,
+  contextFields: AttendanceContextField[],
+) {
+  return {
+    expectedUpdatedAt: entry.expectedUpdatedAt,
+    extraValues: attendanceEntryExtraValues(entry, config, contextFields),
+    overwrite: entry.overwrite,
+    stateValues: [{ fieldId: config.statusFieldId, optionId: entry.statusOptionId }],
+    subjectRecordId: entry.personRecordId,
+  };
+}
+
+export function attendanceEntryExtraValues(
+  entry: AttendanceBatchEntry,
+  config: AttendanceWorkflowConfig,
+  contextFields: AttendanceContextField[],
+) {
+  const extraValues: Record<string, string | null> = {};
+  const fieldsById = new Map(contextFields.map((field) => [field.id, field]));
+
+  for (const [fieldId, optionId] of Object.entries(entry.contextValues ?? {})) {
+    if ((config.contextFieldIds ?? []).includes(fieldId)) {
+      extraValues[fieldId] = canonicalAttendanceContextValue(fieldsById.get(fieldId), optionId);
+    }
+  }
+
+  if (config.observationFieldId && entry.observation !== undefined) {
+    extraValues[config.observationFieldId] = entry.observation;
+  }
+
+  return Object.keys(extraValues).length > 0 ? extraValues : undefined;
 }
 
 function attendanceCurrentExtraValues(
@@ -280,9 +344,23 @@ function contextValueToCanonicalValue(
 
   const optionId = typeof value === "string" ? value : value.optionId;
   const field = fields.find((item) => item.id === fieldId);
-  const option = field?.options.find((item) => item.optionId === optionId);
+  const option = field?.options.find((item) => item.optionId === optionId || item.value === optionId);
 
-  return option?.value ?? optionId;
+  return option?.value ?? null;
+}
+
+function canonicalAttendanceContextValue(field: AttendanceContextField | undefined, optionId: string | null) {
+  if (!optionId) {
+    return null;
+  }
+
+  const option = field?.options.find((item) => item.optionId === optionId || item.value === optionId);
+
+  if (!option?.value) {
+    throw new Error(`${field?.name ?? "Campo de contexto"} no tiene una opcion valida.`);
+  }
+
+  return option.value;
 }
 
 function attendanceLatestDedupeKey(item: AttendanceLatestItem) {

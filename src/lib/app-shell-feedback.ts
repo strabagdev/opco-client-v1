@@ -1,5 +1,6 @@
 import type { ConnectivityStatus } from "./connectivity";
 import type { OfflineReadiness } from "./pwa";
+import { formatPendingSyncErrorNotice } from "./pending-sync-errors";
 
 export type AppShellFeedbackTone = "error" | "warning" | "info" | "success";
 export type AppShellFeedbackVisual = "error" | "warning" | "info" | "success" | "loading";
@@ -29,6 +30,7 @@ export type AppShellFeedbackInput = {
   localStorageRecoveryNotice?: string | null;
   offlineReadiness: OfflineReadiness;
   pendingCount: number;
+  pendingSyncErrorCount?: number;
 };
 
 export function resolveAppShellPersistentFeedback({
@@ -42,6 +44,7 @@ export function resolveAppShellPersistentFeedback({
   localStorageRecoveryNotice,
   offlineReadiness,
   pendingCount,
+  pendingSyncErrorCount = 1,
 }: AppShellFeedbackInput): AppShellFeedbackMessage | null {
   if (localStorageRecoveryNotice) {
     return {
@@ -55,7 +58,7 @@ export function resolveAppShellPersistentFeedback({
   if (hasError) {
     return {
       id: "sync-error",
-      message: "Hay un error pendiente de revisar.",
+      message: formatPendingSyncErrorNotice(pendingSyncErrorCount),
       tone: "error",
       visual: "error",
     };

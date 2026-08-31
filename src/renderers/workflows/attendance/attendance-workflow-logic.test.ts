@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { AttendanceBatchResult, AttendanceStatusOption } from "@/lib/opco-api";
+import { AttendanceBatchResult, AttendanceContextField, AttendanceStatusOption, AttendanceWorkflowConfig } from "@/lib/opco-api";
 
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
   attendanceContextExtraValues,
   attendanceContextValidationErrors,
+  attendanceEntryExtraValues,
+  attendanceEntryToStateUpdateEntry,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatAttendancePendingText,
@@ -31,6 +33,40 @@ const statuses: AttendanceStatusOption[] = [
   { isDefaultCheckIn: false, label: "Ausente", optionId: "absent_option" },
   { isDefaultCheckIn: true, label: "Presente", optionId: "present_option" },
   { isDefaultCheckIn: false, label: "Atraso", optionId: "late_option" },
+];
+
+const attendanceConfig: AttendanceWorkflowConfig = {
+  contextFieldIds: ["shift_field", "group_field"],
+  dateFieldId: "date_field",
+  observationFieldId: "observation_field",
+  personFieldId: "person_field",
+  sourceEntityTypeId: "people",
+  statusFieldId: "status_field",
+  targetEntityTypeId: "attendance",
+  workflowKey: "attendance",
+};
+
+const contextFields: AttendanceContextField[] = [
+  {
+    id: "shift_field",
+    name: "Turno",
+    options: [
+      { label: "Turno A", optionId: "shift_a", value: "turno_a" },
+      { label: "Turno B", optionId: "shift_b", value: "turno_b" },
+    ],
+    required: true,
+    type: "SELECT",
+  },
+  {
+    id: "group_field",
+    name: "Grupo",
+    options: [
+      { label: "Grupo 1", optionId: "group_1", value: "grupo_1" },
+      { label: "Grupo 2", optionId: "group_2", value: "grupo_2" },
+    ],
+    required: true,
+    type: "SELECT",
+  },
 ];
 
 describe("attendance workflow logic", () => {
@@ -332,6 +368,75 @@ describe("attendance workflow logic", () => {
       sector_field: null,
       shift_field: "shift_day",
     })).toEqual({ shift_field: "dia" });
+  });
+
+  it("builds offline Attendance extraValues with canonical SELECT values and intact observation", () => {
+    expect(attendanceEntryExtraValues({
+      contextValues: {
+        group_field: "group_1",
+        shift_field: "shift_a",
+      },
+      observation: "Sin novedad",
+      personRecordId: "person_1",
+      statusOptionId: "present_option",
+    }, attendanceConfig, contextFields)).toEqual({
+      group_field: "grupo_1",
+      observation_field: "Sin novedad",
+      shift_field: "turno_a",
+    });
+  });
+
+  it("does not use optionId as a persistable SELECT context value", () => {
+    const extraValues = attendanceEntryExtraValues({
+      contextValues: {
+        group_field: "group_1",
+        shift_field: "shift_a",
+      },
+      personRecordId: "person_1",
+      statusOptionId: "present_option",
+    }, attendanceConfig, contextFields);
+
+    expect(extraValues).toMatchObject({
+      group_field: "grupo_1",
+      shift_field: "turno_a",
+    });
+    expect(Object.values(extraValues ?? {})).not.toContain("group_1");
+    expect(Object.values(extraValues ?? {})).not.toContain("shift_a");
+  });
+
+  it("rejects unresolved context selections before creating an invalid offline payload", () => {
+    expect(attendanceContextValidationErrors(contextFields, {
+      group_field: "missing_option",
+      shift_field: "shift_a",
+    })).toEqual([
+      { fieldId: "group_field", message: "Grupo no tiene una opcion valida." },
+    ]);
+    expect(() => attendanceEntryExtraValues({
+      contextValues: {
+        group_field: "missing_option",
+        shift_field: "shift_a",
+      },
+      personRecordId: "person_1",
+      statusOptionId: "present_option",
+    }, attendanceConfig, contextFields)).toThrow("Grupo no tiene una opcion valida.");
+  });
+
+  it("keeps the offline STATE_UPDATE entry synchronizable with canonical SELECT context values", () => {
+    expect(attendanceEntryToStateUpdateEntry({
+      contextValues: {
+        group_field: "group_1",
+        shift_field: "shift_a",
+      },
+      personRecordId: "person_1",
+      statusOptionId: "present_option",
+    }, attendanceConfig, contextFields)).toMatchObject({
+      extraValues: {
+        group_field: "grupo_1",
+        shift_field: "turno_a",
+      },
+      stateValues: [{ fieldId: "status_field", optionId: "present_option" }],
+      subjectRecordId: "person_1",
+    });
   });
 
   it("prefers latest over stale roster item state when hydrating the Attendance day", () => {

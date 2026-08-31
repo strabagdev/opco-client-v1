@@ -26,6 +26,7 @@ export type OfflineStateUpdatePayload = {
   expectedUpdatedAt?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
   historyMode: "append" | "update-current";
+  lastErrorDetails?: StateUpdateSyncErrorDetails | null;
   overwrite?: boolean;
   stateValues: {
     fieldId: string;
@@ -35,6 +36,22 @@ export type OfflineStateUpdatePayload = {
   subjectDisplayName: string;
   subjectRecordId: string;
   uniqueness: "none" | "subject" | "subject-date";
+};
+
+export type StateUpdateSyncErrorFieldDetails = {
+  expectedType?: string | null;
+  expectedValues?: string[];
+  fieldId: string;
+  fieldLabel?: string | null;
+  fieldType?: string | null;
+  messages?: string[];
+  rejectedValue?: EntityRecordValue | EntityRecordValue[] | null;
+  source?: "date" | "extra" | "state" | "subject" | "unknown" | string | null;
+};
+
+export type StateUpdateSyncErrorDetails = {
+  entityTypeId?: string | null;
+  fields: StateUpdateSyncErrorFieldDetails[];
 };
 
 export type OfflineStateUpdateValues = {
@@ -92,8 +109,10 @@ export type StateUpdateOutboxDiagnosticsOperation = {
   date: string | null;
   extraValuesCount: number;
   lastBackendErrorCode: string | null;
+  lastErrorDetails: StateUpdateSyncErrorDetails | null;
   lastErrorCode: string | null;
   lastErrorPhase: string | null;
+  lastErrorMessage: string | null;
   lastHttpStatus: number | null;
   operationType: string;
   payloadSchema: "current" | "legacy-batch" | "legacy-wire-states" | "unknown";
@@ -915,6 +934,68 @@ export function isValidStateUpdateRemoteUpdatedAt(value: unknown): value is stri
   const parsed = Date.parse(value);
 
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+export function normalizeStateUpdateSyncErrorDetails(details: unknown): StateUpdateSyncErrorDetails | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const raw = details as { entityTypeId?: unknown; fields?: unknown };
+  const fields = Array.isArray(raw.fields)
+    ? raw.fields.map(normalizeStateUpdateSyncErrorFieldDetails).filter((field): field is StateUpdateSyncErrorFieldDetails => Boolean(field))
+    : [];
+
+  if (fields.length === 0) {
+    return null;
+  }
+
+  return {
+    entityTypeId: typeof raw.entityTypeId === "string" ? raw.entityTypeId : null,
+    fields,
+  };
+}
+
+function normalizeStateUpdateSyncErrorFieldDetails(field: unknown): StateUpdateSyncErrorFieldDetails | null {
+  if (!field || typeof field !== "object" || Array.isArray(field)) {
+    return null;
+  }
+
+  const raw = field as Record<string, unknown>;
+  const fieldId = raw.fieldId;
+
+  if (typeof fieldId !== "string" || !fieldId.trim()) {
+    return null;
+  }
+
+  return {
+    expectedType: typeof raw.expectedType === "string" ? raw.expectedType : null,
+    expectedValues: Array.isArray(raw.expectedValues)
+      ? raw.expectedValues.filter((value): value is string => typeof value === "string")
+      : undefined,
+    fieldId,
+    fieldLabel: typeof raw.fieldLabel === "string" ? raw.fieldLabel : null,
+    fieldType: typeof raw.fieldType === "string" ? raw.fieldType : null,
+    messages: Array.isArray(raw.messages)
+      ? raw.messages.filter((message): message is string => typeof message === "string")
+      : undefined,
+    rejectedValue: normalizeStateUpdateDiagnosticRejectedValue(raw.rejectedValue),
+    source: typeof raw.source === "string" ? raw.source : null,
+  };
+}
+
+function normalizeStateUpdateDiagnosticRejectedValue(value: unknown): StateUpdateSyncErrorFieldDetails["rejectedValue"] {
+  if (value === null || value === undefined || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeStateUpdateDiagnosticRejectedValue(item))
+      .filter((item) => item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean");
+  }
+
+  return null;
 }
 
 function stateUpdateRequestedStatesMatch(

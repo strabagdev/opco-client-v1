@@ -736,6 +736,18 @@ describe("local database singleton", () => {
               appViewId: "attendance_view_real_1",
               date: "2026-08-26",
               entries: [{ personRecordId: "person_real_2", statusOptionId: "absent_option" }],
+              lastErrorDetails: {
+                entityTypeId: "attendance_entity",
+                fields: [{
+                  expectedType: "FIELD_OPTION_VALUE",
+                  expectedValues: ["turno_a"],
+                  fieldId: "shift_field",
+                  fieldLabel: "Turno",
+                  fieldType: "SELECT",
+                  rejectedValue: "shift_option_id",
+                  source: "extra",
+                }],
+              },
             }),
             record_sync_status: "failed",
           }),
@@ -799,6 +811,14 @@ describe("local database singleton", () => {
     expect(diagnostics.operations[1]).toMatchObject({
       manualRetryToken: expect.stringMatching(/^fp_/),
       manualRetryable: true,
+      lastErrorDetails: {
+        entityTypeId: "attendance_entity",
+        fields: [expect.objectContaining({
+          expectedValues: ["turno_a"],
+          fieldId: "shift_field",
+          rejectedValue: "shift_option_id",
+        })],
+      },
       payloadSchema: "legacy-batch",
       retryable: false,
       syncStatus: "failed",
@@ -846,7 +866,7 @@ describe("local database singleton", () => {
       expect.stringContaining("sync_status = 'pending_update'"),
       "state_update_local_record_1",
     );
-    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("payload_json"))).toBe(false);
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("json_remove(payload_json, '$.lastErrorDetails')"))).toBe(true);
     expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("client_request_id"))).toBe(false);
   });
 

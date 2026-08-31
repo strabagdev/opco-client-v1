@@ -6,6 +6,7 @@ import {
   createStateUpdateLocalRecordId,
   isStateUpdateCompatibleWorkflow,
   StateUpdateLocalRecordDiagnostics,
+  normalizeStateUpdateSyncErrorDetails,
   normalizeStateUpdateRecord,
   OfflineStateUpdatePayload,
   OfflineStateUpdateValues,
@@ -2452,7 +2453,8 @@ async function markStateUpdateOperationSyncing(operationId: string) {
       SET attempts = attempts + 1,
           updated_at = ?,
           last_error_code = NULL,
-          last_error_message = NULL
+          last_error_message = NULL,
+          payload_json = json_remove(payload_json, '$.lastErrorDetails')
       WHERE id = ? AND operation = ?
     `,
     new Date().toISOString(),
@@ -2643,7 +2645,8 @@ async function retryFailedStateUpdateOperations({
         UPDATE pending_operations
         SET updated_at = ?,
             last_error_code = NULL,
-            last_error_message = NULL
+            last_error_message = NULL,
+            payload_json = json_remove(payload_json, '$.lastErrorDetails')
         WHERE id = ? AND owner_key = ? AND operation = ?
       `,
       now,
@@ -2674,10 +2677,10 @@ async function failPendingOperation(operation: PendingOperation, code: string, m
   });
 }
 
-async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
+async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown) {
   const db = await getDatabase();
 
-  await setOperationError(db, operation, code, message, "failed");
+  await setOperationError(db, operation, code, message, "failed", details);
 }
 
 async function readRecordRemoteUpdatedAt(operation: PendingOperation) {
@@ -3190,20 +3193,29 @@ async function setOperationError(
   code: string,
   message: string,
   syncStatus: RecordSyncStatus,
+  details?: unknown,
 ) {
   const now = new Date().toISOString();
+  const payloadJson = operation.operation === STATE_UPDATE_OPERATION
+    ? JSON.stringify({
+        ...operation.payload,
+        lastErrorDetails: normalizeStateUpdateSyncErrorDetails(details),
+      })
+    : null;
 
   await db.runAsync(
     `
       UPDATE pending_operations
       SET updated_at = ?,
           last_error_code = ?,
-          last_error_message = ?
+          last_error_message = ?,
+          payload_json = COALESCE(?, payload_json)
       WHERE id = ?
     `,
     now,
     code,
     message,
+    payloadJson,
     operation.id,
   );
 
@@ -3411,8 +3423,10 @@ function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow
     date: getDiagnosticDate(payload),
     extraValuesCount: countObjectKeys(getDiagnosticExtraValues(payload)),
     lastBackendErrorCode: getDiagnosticBackendErrorCode(row.last_error_code),
+    lastErrorDetails: normalizeStateUpdateSyncErrorDetails((payload as OfflineStateUpdatePayload).lastErrorDetails),
     lastErrorCode: row.last_error_code ?? row.record_sync_error_code,
     lastErrorPhase: row.last_error_code || row.record_sync_error_code ? "pushing" : null,
+    lastErrorMessage: row.last_error_message ?? row.record_sync_error_message,
     lastHttpStatus: null,
     operationType: row.operation,
     payloadSchema: getDiagnosticPayloadSchema(payload),

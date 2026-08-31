@@ -448,6 +448,36 @@ describe("state-update sync engine", () => {
     expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastSyncErrorCode).toBe("VALIDATION");
   });
 
+  it("passes structured API error details to the failed operation", async () => {
+    const details = {
+      entityTypeId: "attendance",
+      fields: [{
+        expectedType: "FIELD_OPTION_VALUE",
+        expectedValues: ["turno_a"],
+        fieldId: "shift_field",
+        fieldLabel: "Turno",
+        fieldType: "SELECT",
+        messages: ["La opción seleccionada no es válida."],
+        rejectedValue: "shift_option_id",
+        source: "extra",
+      }],
+    };
+    store.operations = [operation()];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => {
+        throw new OpcoApiError("Uno o más campos tienen valores inválidos.", "INVALID_FIELD_VALUE", 400, details);
+      }),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(result.failed).toBe(1);
+    expect(store.failed[0]).toMatchObject({
+      code: "INVALID_FIELD_VALUE",
+      details,
+    });
+  });
+
   it("persists generic CONFLICT snapshots for explicit user resolution", async () => {
     store.operations = [operation()];
     const api = {
@@ -486,7 +516,7 @@ describe("state-update sync engine", () => {
 class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
   completed: { operation: PendingOperation; result: unknown }[] = [];
   conflicts: { operation: PendingOperation; result: unknown }[] = [];
-  failed: { code: string; message: string; operation: PendingOperation }[] = [];
+  failed: { code: string; details?: unknown; message: string; operation: PendingOperation }[] = [];
   operations: PendingOperation[] = [];
   retried: PendingOperation[] = [];
   telemetry = new Map<string, SyncTelemetry>();
@@ -496,8 +526,8 @@ class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
     this.operations = this.operations.filter((item) => item.id !== operation.id);
   }
 
-  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
-    this.failed.push({ code, message, operation });
+  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown) {
+    this.failed.push({ code, details, message, operation });
     this.operations = this.operations.filter((item) => item.id !== operation.id);
     this.operations.push({ ...operation, lastErrorCode: code, lastErrorMessage: message });
   }

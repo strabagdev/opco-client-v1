@@ -40,7 +40,7 @@ describe("app shell feedback", () => {
       pendingCount: 1,
     })).toEqual({
       id: "sync-error",
-      message: "Hay un error pendiente de revisar.",
+      message: "Un cambio no pudo sincronizarse.",
       tone: "error",
       visual: "error",
     });

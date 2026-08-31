@@ -38,8 +38,9 @@ import {
 } from "@/lib/opco-api";
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
-  attendanceContextExtraValues,
   attendanceContextValidationErrors,
+  attendanceEntryExtraValues,
+  attendanceEntryToStateUpdateEntry,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatDisplayDate,
@@ -788,7 +789,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     await saveEntry({
-      contextValues: attendanceContextExtraValues(contextFields, contextValues),
+      contextValues,
       observation: supportsObservation ? observation : undefined,
       personRecordId: selectedItem.person.id,
       statusOptionId: status.optionId,
@@ -807,7 +808,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     await saveEntry({
-      contextValues: attendanceContextExtraValues(contextFields, contextValues),
+      contextValues,
       expectedUpdatedAt: conflict.existing.updatedAt,
       observation: supportsObservation ? observation : undefined,
       overwrite: true,
@@ -828,7 +829,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     try {
       if (!isOnline) {
-        const extraValues = attendanceEntryExtraValues(entry, appView.config);
+        const extraValues = attendanceEntryExtraValues(entry, appView.config, contextFields);
 
         await definitionCache.saveStateUpdateLocally({
           appViewId: appView.id,
@@ -861,7 +862,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const response = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: createClientRequestId(),
         date,
-        ...attendanceEntryToStateUpdateEntry(entry, appView.config),
+        ...attendanceEntryToStateUpdateEntry(entry, appView.config, contextFields),
       });
       const attendanceResults = response.results.map((result) =>
         stateUpdateResultToAttendanceResult(result, appView.config.statusFieldId, statuses),
@@ -919,7 +920,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         overwrite: true,
         personRecordId: record.person.id,
         statusOptionId: record.statusOptionId,
-      }, appView.config);
+      }, appView.config, contextFields);
 
       await definitionCache.saveStateUpdateLocally({
         appViewId: appView.id,
@@ -1314,32 +1315,6 @@ function successLabel(result: AttendanceBatchResult | undefined) {
   }
 
   return "Asistencia registrada.";
-}
-
-function attendanceEntryToStateUpdateEntry(entry: AttendanceBatchEntry, config: AttendanceWorkflowConfig) {
-  return {
-    expectedUpdatedAt: entry.expectedUpdatedAt,
-    extraValues: attendanceEntryExtraValues(entry, config),
-    overwrite: entry.overwrite,
-    stateValues: [{ fieldId: config.statusFieldId, optionId: entry.statusOptionId }],
-    subjectRecordId: entry.personRecordId,
-  };
-}
-
-function attendanceEntryExtraValues(entry: AttendanceBatchEntry, config: AttendanceWorkflowConfig) {
-  const extraValues: Record<string, string | null> = {};
-
-  for (const [fieldId, optionId] of Object.entries(entry.contextValues ?? {})) {
-    if ((config.contextFieldIds ?? []).includes(fieldId)) {
-      extraValues[fieldId] = optionId;
-    }
-  }
-
-  if (config.observationFieldId && entry.observation !== undefined) {
-    extraValues[config.observationFieldId] = entry.observation;
-  }
-
-  return Object.keys(extraValues).length > 0 ? extraValues : undefined;
 }
 
 function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]) {

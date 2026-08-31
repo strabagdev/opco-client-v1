@@ -1,5 +1,5 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { LogOut, WifiOff, X } from "lucide-react-native";
+import { AlertCircle, LogOut, WifiOff, X } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
@@ -13,6 +13,11 @@ import {
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import {
+  formatPendingSyncErrorMessage,
+  getPendingStateUpdateSyncErrors,
+  getPendingSyncErrorTechnicalRows,
+} from "@/lib/pending-sync-errors";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import { getSyncDiagnosticsRows } from "@/renderers/records/sync-diagnostics";
 import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
@@ -43,6 +48,7 @@ export default function AppLayout() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isSyncErrorModalOpen, setIsSyncErrorModalOpen] = useState(false);
   const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("pwa");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
@@ -56,10 +62,16 @@ export default function AppLayout() {
     sqliteReady: localDatabaseStorageState.status === "ready",
   });
   const userDisplayName = me?.user.name ?? me?.user.email ?? "Sesion conservada";
+  const pendingStateUpdateSyncErrors = useMemo(
+    () => getPendingStateUpdateSyncErrors(diagnosticsStateUpdate.diagnostics),
+    [diagnosticsStateUpdate.diagnostics],
+  );
+  const hasStateUpdateVisibleError = Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved");
+  const hasSyncError = recordsSyncSummary.failedCount > 0 || hasStateUpdateVisibleError;
   const persistentFeedback = resolveAppShellPersistentFeedback({
     connectivityStatus,
     hasConflict: recordsSyncSummary.conflictCount > 0,
-    hasError: recordsSyncSummary.failedCount > 0 || Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved"),
+    hasError: hasSyncError,
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
     isOperationalCoreReadinessChecking,
@@ -67,11 +79,12 @@ export default function AppLayout() {
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,
+    pendingSyncErrorCount: Math.max(recordsSyncSummary.failedCount, pendingStateUpdateSyncErrors.length, 1),
   });
   const shellStatusIndicator = resolveAppShellStatusIndicator({
     connectivityStatus,
     hasConflict: recordsSyncSummary.conflictCount > 0,
-    hasError: recordsSyncSummary.failedCount > 0 || Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved"),
+    hasError: hasSyncError,
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
     isOperationalCoreReadinessChecking,
@@ -158,6 +171,12 @@ export default function AppLayout() {
     }
   }, [isDiagnosticsOpen, refreshStateUpdateDiagnostics, selectedDiagnosticsTab]);
 
+  useEffect(() => {
+    if (persistentFeedback?.id === "sync-error") {
+      void refreshStateUpdateDiagnostics();
+    }
+  }, [persistentFeedback?.id, refreshStateUpdateDiagnostics]);
+
   const feedback = persistentFeedback ?? toast;
   const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
@@ -165,6 +184,12 @@ export default function AppLayout() {
     summary: recordsSyncSummary,
     telemetry: null,
   });
+  const firstPendingSyncError = pendingStateUpdateSyncErrors[0] ?? null;
+  const syncErrorMessage = formatPendingSyncErrorMessage(firstPendingSyncError);
+  const syncErrorTechnicalRows = getPendingSyncErrorTechnicalRows(firstPendingSyncError);
+  const canRetryFirstPendingSyncError = Boolean(
+    firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
+  );
 
   function goBack() {
     if (router.canGoBack()) {
@@ -248,6 +273,11 @@ export default function AppLayout() {
                 <WifiOff color="#2f5e66" size={15} strokeWidth={2.2} />
               </View>
             ) : null}
+            {feedback.visual === "error" ? (
+              <View style={styles.feedbackErrorIcon}>
+                <AlertCircle color="#b42318" size={16} strokeWidth={2.2} />
+              </View>
+            ) : null}
             {feedback.visual === "success" ? (
               <View style={styles.feedbackSuccessIcon}>
                 <AppIcon color="#13795b" icon="clipboard-check" size={16} />
@@ -262,6 +292,16 @@ export default function AppLayout() {
             ]} numberOfLines={feedback.id === "offline" ? 1 : undefined}>
               {feedback.message}
             </Text>
+            {persistentFeedback?.id === "sync-error" ? (
+              <Pressable
+                accessibilityLabel="Ver detalle de error de sincronizacion"
+                accessibilityRole="button"
+                onPress={() => setIsSyncErrorModalOpen(true)}
+                style={styles.feedbackDetailButton}
+              >
+                <Text style={styles.feedbackDetailText}>Ver detalle</Text>
+              </Pressable>
+            ) : null}
             {!persistentFeedback ? (
               <Pressable
                 accessibilityLabel="Cerrar mensaje"
@@ -340,6 +380,76 @@ export default function AppLayout() {
                 <RecordsGlobalDiagnostics rows={recordsDiagnosticsRows} />
               ) : null}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsSyncErrorModalOpen(false)}
+        transparent
+        visible={isSyncErrorModalOpen}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalPanel, isWideLayout ? styles.modalPanelWide : styles.modalPanelCompact]}>
+            <View style={styles.modalHeader}>
+              <View style={styles.syncErrorTitleBlock}>
+                <Text style={styles.modalTitle}>Error de sincronizacion</Text>
+                <Text style={styles.syncErrorSubtitle}>
+                  {pendingStateUpdateSyncErrors.length > 1
+                    ? `${pendingStateUpdateSyncErrors.length} cambios pendientes con error`
+                    : "1 cambio pendiente con error"}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Cerrar detalle de error de sincronizacion"
+                accessibilityRole="button"
+                onPress={() => setIsSyncErrorModalOpen(false)}
+                style={styles.modalCloseButton}
+              >
+                <Text style={styles.modalCloseText}>Cerrar</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.syncErrorMessageBox}>
+                <Text style={styles.syncErrorMessage}>{syncErrorMessage}</Text>
+              </View>
+              <Text style={styles.diagnosticsTitle}>Detalle tecnico</Text>
+              {syncErrorTechnicalRows.map(([label, value]) => (
+                <View key={label} style={styles.diagnosticsRow}>
+                  <Text style={styles.diagnosticsLabel}>{label}</Text>
+                  <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.syncErrorFooter}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setIsDiagnosticsOpen(true);
+                  setSelectedDiagnosticsTab("state-update");
+                  setIsSyncErrorModalOpen(false);
+                }}
+                style={styles.secondaryModalButton}
+              >
+                <Text style={styles.secondaryModalButtonText}>Abrir diagnostico</Text>
+              </Pressable>
+              {canRetryFirstPendingSyncError ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={diagnosticsStateUpdate.isSyncing}
+                  onPress={() => {
+                    void diagnosticsStateUpdate.onRetryFailed(firstPendingSyncError?.manualRetryToken ?? null);
+                    setIsSyncErrorModalOpen(false);
+                  }}
+                  style={[styles.primaryModalButton, diagnosticsStateUpdate.isSyncing ? styles.primaryModalButtonDisabled : null]}
+                >
+                  <Text style={styles.primaryModalButtonText}>
+                    {diagnosticsStateUpdate.isSyncing ? "Reintentando" : "Reintentar"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         </View>
       </Modal>
@@ -648,6 +758,27 @@ const styles = StyleSheet.create({
     color: "#135d66",
     fontWeight: "800",
   },
+  feedbackDetailButton: {
+    alignItems: "center",
+    borderColor: "#f1b8b8",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 32,
+    paddingHorizontal: 10,
+  },
+  feedbackDetailText: {
+    color: "#b42318",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  feedbackErrorIcon: {
+    alignItems: "center",
+    flexShrink: 0,
+    height: 20,
+    justifyContent: "center",
+    width: 20,
+  },
   feedbackSuccessIcon: {
     alignItems: "center",
     height: 20,
@@ -757,6 +888,33 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "800",
   },
+  primaryModalButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 14,
+  },
+  primaryModalButtonDisabled: {
+    opacity: 0.55,
+  },
+  primaryModalButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  secondaryModalButton: {
+    alignItems: "center",
+    backgroundColor: "#eef4f4",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 14,
+  },
+  secondaryModalButtonText: {
+    color: "#135d66",
+    fontWeight: "800",
+  },
   shell: {
     backgroundColor: "#eef4f4",
     flex: 1,
@@ -778,6 +936,38 @@ const styles = StyleSheet.create({
   },
   statusDotWorking: {
     backgroundColor: "#b7791f",
+  },
+  syncErrorFooter: {
+    borderColor: "#d8e2e4",
+    borderTopWidth: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "flex-end",
+    paddingTop: 12,
+  },
+  syncErrorMessage: {
+    color: "#17363c",
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  syncErrorMessageBox: {
+    backgroundColor: "#fff7f7",
+    borderColor: "#f1b8b8",
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+    padding: 12,
+  },
+  syncErrorSubtitle: {
+    color: "#587078",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  syncErrorTitleBlock: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
   },
   title: {
     color: "#0f3036",
