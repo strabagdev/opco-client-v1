@@ -26,16 +26,20 @@ import { refreshEntityRecordsCache } from "@/lib/offline-records";
 import {
   AttendanceBatchEntry,
   AttendanceBatchResult,
+  AttendanceContextField,
   AttendanceItem,
   AttendanceLatestItem,
   AttendanceResponse,
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
+  EntityField,
   StateUpdateBatchResult,
   WorkflowAppView,
 } from "@/lib/opco-api";
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  attendanceContextExtraValues,
+  attendanceContextValidationErrors,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatDisplayDate,
@@ -45,6 +49,7 @@ import {
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
+  sanitizeAttendanceContextSelections,
   shouldFinishAttendanceVisualRequest,
   shouldRefreshAttendanceLatestAfterSync,
   shouldRenderAttendanceInlineFeedback,
@@ -95,6 +100,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [items, setItems] = useState<AttendanceItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
+  const [contextFields, setContextFields] = useState<AttendanceContextField[]>([]);
+  const [contextValues, setContextValues] = useState<Record<string, string | null>>({});
+  const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
   const [latest, setLatest] = useState<AttendanceLatestItem[]>([]);
   const [totalRegistered, setTotalRegistered] = useState(0);
   const [observationExpanded, setObservationExpanded] = useState(false);
@@ -147,11 +155,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   });
 
   const applyAttendanceResponse = useCallback((response: {
+    contextFields?: AttendanceContextField[];
     latest: AttendanceLatestItem[];
     statuses: AttendanceStatusOption[];
     summary: { totalRegistered: number };
   }, options: { updateLatest?: boolean } = {}) => {
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
+    setContextFields(response.contextFields ?? []);
 
     if (options.updateLatest !== false) {
       setLatest(response.latest);
@@ -159,6 +169,41 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     setTotalRegistered(response.summary.totalRegistered);
   }, []);
+
+  useEffect(() => {
+    if (!ownerKey || !selectedContractId || contextFields.length === 0) {
+      void Promise.resolve().then(() => {
+        setContextValues({});
+        setContextErrors({});
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(contextFields.map(async (field) => [
+      field.id,
+      await definitionCache.getAttendanceContextSelection(ownerKey, selectedContractId, appView.id, field.id),
+    ] as const)).then(async (entries) => {
+      if (cancelled) {
+        return;
+      }
+
+      const remembered = Object.fromEntries(entries);
+      const sanitized = sanitizeAttendanceContextSelections(contextFields, remembered);
+
+      setContextValues(sanitized);
+      setContextErrors({});
+
+      await Promise.all(entries
+        .filter(([fieldId, optionId]) => optionId && sanitized[fieldId] !== optionId)
+        .map(([fieldId]) => definitionCache.setAttendanceContextSelection(ownerKey, selectedContractId, appView.id, fieldId, null)));
+    }).catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appView.id, contextFields, definitionCache, ownerKey, selectedContractId]);
 
   const beginLoadingRequest = useCallback(() => {
     const requestId = ++requestSequenceRef.current;
@@ -230,9 +275,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setLatest(visibleLatest);
     setTotalRegistered(Math.max(summary.totalRegistered, remoteSnapshot?.totalRegistered ?? 0));
     setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
-    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId, appView.config.observationFieldId)));
     return summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
-  }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
+  }, [appView.config.observationFieldId, appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
   const refreshLocalSyncIndicators = useCallback(async () => {
     if (!ownerKey || !selectedContractId) {
@@ -259,9 +304,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     const unresolvedCount = summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
 
     setPendingCount(unresolvedCount);
-    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId)));
+    setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId, appView.config.observationFieldId)));
     return unresolvedCount;
-  }, [appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
+  }, [appView.config.observationFieldId, appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
   const cacheAttendanceOnlineResponse = useCallback(async (response: AttendanceResponse, options: { complete?: boolean } = {}) => {
     if (!ownerKey || !selectedContractId) {
@@ -509,7 +554,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
         }
 
-        setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId)));
+        setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId, appView.config.observationFieldId)));
         await refreshLocalDayState();
         return;
       }
@@ -541,6 +586,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
   }, [
     api,
+    appView.config.observationFieldId,
     appView.config.sourceEntityTypeId,
     appView.config.statusFieldId,
     appView.config.targetEntityTypeId,
@@ -591,6 +637,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               appView.config.statusFieldId,
               appView.config.defaultCheckInOptionId,
             ));
+            setContextFields(attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []));
           }
 
           if (!prepared || prepared.status !== "ready" || !sourceDefinition || !sourceHydrated) {
@@ -650,6 +697,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [
     api,
     appView.config.defaultCheckInOptionId,
+    appView.config.contextFieldIds,
     appView.config.sourceEntityTypeId,
     appView.config.statusFieldId,
     appView.id,
@@ -733,7 +781,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
+    const validationErrors = attendanceContextValidationErrors(contextFields, contextValues);
+    if (validationErrors.length > 0) {
+      setContextErrors(Object.fromEntries(validationErrors.map((item) => [item.fieldId, item.message])));
+      return;
+    }
+
     await saveEntry({
+      contextValues: attendanceContextExtraValues(contextFields, contextValues),
       observation: supportsObservation ? observation : undefined,
       personRecordId: selectedItem.person.id,
       statusOptionId: status.optionId,
@@ -745,7 +800,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
+    const validationErrors = attendanceContextValidationErrors(contextFields, contextValues);
+    if (validationErrors.length > 0) {
+      setContextErrors(Object.fromEntries(validationErrors.map((item) => [item.fieldId, item.message])));
+      return;
+    }
+
     await saveEntry({
+      contextValues: attendanceContextExtraValues(contextFields, contextValues),
       expectedUpdatedAt: conflict.existing.updatedAt,
       observation: supportsObservation ? observation : undefined,
       overwrite: true,
@@ -766,14 +828,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     try {
       if (!isOnline) {
+        const extraValues = attendanceEntryExtraValues(entry, appView.config);
+
         await definitionCache.saveStateUpdateLocally({
           appViewId: appView.id,
           contractId: selectedContractId,
           date,
           expectedUpdatedAt: selectedItem.attendance?.updatedAt ?? null,
-          extraValues: appView.config.observationFieldId && entry.observation !== undefined
-            ? { [appView.config.observationFieldId]: entry.observation }
-            : undefined,
+          extraValues,
           historyMode: "update-current",
           overwrite: entry.overwrite,
           ownerKey,
@@ -851,14 +913,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setRefreshError(null);
 
     try {
+      const extraValues = attendanceEntryExtraValues({
+        contextValues: record.contextValues as Record<string, string | null> | undefined,
+        observation: record.observation,
+        overwrite: true,
+        personRecordId: record.person.id,
+        statusOptionId: record.statusOptionId,
+      }, appView.config);
+
       await definitionCache.saveStateUpdateLocally({
         appViewId: appView.id,
         contractId: selectedContractId,
         date,
         expectedUpdatedAt: record.conflictRemoteUpdatedAt,
-        extraValues: appView.config.observationFieldId && record.observation !== undefined
-          ? { [appView.config.observationFieldId]: record.observation }
-          : undefined,
+        extraValues,
         historyMode: "update-current",
         overwrite: true,
         ownerKey,
@@ -927,6 +995,24 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setDate((current) => shiftLocalDate(current, amount));
   }
 
+  function handleContextChange(fieldId: string, optionId: string | null) {
+    if (!ownerKey || !selectedContractId) {
+      return;
+    }
+
+    const nextValues = { ...contextValues, [fieldId]: optionId };
+    const sanitized = sanitizeAttendanceContextSelections(contextFields, nextValues);
+
+    setContextValues(sanitized);
+    setContextErrors((current) => {
+      const next = { ...current };
+      delete next[fieldId];
+      return next;
+    });
+    void definitionCache.setAttendanceContextSelection(ownerKey, selectedContractId, appView.id, fieldId, sanitized[fieldId] ?? null)
+      .catch(() => undefined);
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
@@ -966,6 +1052,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           Visible UI error source: {visibleErrorDiagnostics.operation} {visibleErrorDiagnostics.method ?? "unknown"} {visibleErrorDiagnostics.pathTemplate ?? "unknown"} timeout={String(visibleErrorDiagnostics.timeoutOccurred)} status={visibleErrorDiagnostics.httpStatus ?? "none"} durationMs={visibleErrorDiagnostics.durationMs ?? "none"} run={visibleErrorDiagnostics.syncRunId ?? "none"} code={visibleErrorDiagnostics.errorCode}
         </Text>
       ) : null}
+
+      <AttendanceContextSelectors
+        errors={contextErrors}
+        fields={contextFields}
+        onChange={handleContextChange}
+        values={contextValues}
+      />
 
       {localConflicts.length > 0 ? (
         <View style={styles.latestBlock}>
@@ -1096,6 +1189,64 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   );
 }
 
+function AttendanceContextSelectors({
+  errors,
+  fields,
+  onChange,
+  values,
+}: {
+  errors: Record<string, string>;
+  fields: AttendanceContextField[];
+  onChange(fieldId: string, optionId: string | null): void;
+  values: Record<string, string | null>;
+}) {
+  if (fields.length === 0) {
+    return null;
+  }
+
+  return (
+    <View style={styles.contextBlock}>
+      {fields.map((field) => (
+        <View key={field.id} style={styles.contextField}>
+          <Text style={styles.contextLabel}>{field.name}</Text>
+          <View style={styles.contextOptions}>
+            {!field.required ? (
+              <Pressable
+                onPress={() => onChange(field.id, null)}
+                style={[
+                  styles.contextOption,
+                  !values[field.id] && styles.contextOptionSelected,
+                ]}
+              >
+                <Text style={[
+                  styles.contextOptionText,
+                  !values[field.id] && styles.contextOptionSelectedText,
+                ]}>Sin seleccion</Text>
+              </Pressable>
+            ) : null}
+            {field.options.map((option) => {
+              const selected = values[field.id] === option.optionId;
+
+              return (
+                <Pressable
+                  key={option.optionId}
+                  onPress={() => onChange(field.id, option.optionId)}
+                  style={[styles.contextOption, selected && styles.contextOptionSelected]}
+                >
+                  <Text style={[styles.contextOptionText, selected && styles.contextOptionSelectedText]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {errors[field.id] ? <Text style={styles.error}>{errors[field.id]}</Text> : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
   return (
     <View style={styles.latestBlock}>
@@ -1168,13 +1319,49 @@ function successLabel(result: AttendanceBatchResult | undefined) {
 function attendanceEntryToStateUpdateEntry(entry: AttendanceBatchEntry, config: AttendanceWorkflowConfig) {
   return {
     expectedUpdatedAt: entry.expectedUpdatedAt,
-    extraValues: config.observationFieldId && entry.observation !== undefined
-      ? { [config.observationFieldId]: entry.observation }
-      : undefined,
+    extraValues: attendanceEntryExtraValues(entry, config),
     overwrite: entry.overwrite,
     stateValues: [{ fieldId: config.statusFieldId, optionId: entry.statusOptionId }],
     subjectRecordId: entry.personRecordId,
   };
+}
+
+function attendanceEntryExtraValues(entry: AttendanceBatchEntry, config: AttendanceWorkflowConfig) {
+  const extraValues: Record<string, string | null> = {};
+
+  for (const [fieldId, optionId] of Object.entries(entry.contextValues ?? {})) {
+    if ((config.contextFieldIds ?? []).includes(fieldId)) {
+      extraValues[fieldId] = optionId;
+    }
+  }
+
+  if (config.observationFieldId && entry.observation !== undefined) {
+    extraValues[config.observationFieldId] = entry.observation;
+  }
+
+  return Object.keys(extraValues).length > 0 ? extraValues : undefined;
+}
+
+function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]) {
+  const fieldsById = new Map(fields.map((field) => [field.id, field]));
+
+  return contextFieldIds
+    .map((fieldId) => fieldsById.get(fieldId))
+    .filter((field): field is EntityField => field !== undefined && field.type === "SELECT" && !field.multiple)
+    .map((field) => ({
+      id: field.id,
+      key: field.key,
+      name: field.name,
+      options: (field.options ?? [])
+        .filter((option) => option.active !== false)
+        .map((option) => ({
+          label: option.label,
+          optionId: option.id,
+          order: option.order,
+        })),
+      required: field.required,
+      type: "SELECT" as const,
+    }));
 }
 
 function stateUpdateResultToAttendanceResult(
@@ -1249,6 +1436,51 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 18,
     paddingBottom: 32,
+  },
+  contextBlock: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 12,
+  },
+  contextField: {
+    gap: 8,
+    minWidth: 0,
+  },
+  contextLabel: {
+    color: "#0f3036",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  contextOption: {
+    alignItems: "center",
+    backgroundColor: "#f8fbfb",
+    borderColor: "#d7e4e7",
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 36,
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  contextOptionSelected: {
+    backgroundColor: "#135d66",
+    borderColor: "#135d66",
+  },
+  contextOptionSelectedText: {
+    color: "#ffffff",
+  },
+  contextOptionText: {
+    color: "#135d66",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  contextOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
   },
   dateBar: {
     alignItems: "center",

@@ -78,6 +78,7 @@ const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "8";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
+const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
 const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -106,7 +107,9 @@ export type LocalDatabase = AppNavigationCache &
   RecordsSyncStore &
   StateUpdateSyncStore & {
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
+  getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
+  setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
 };
@@ -133,6 +136,7 @@ export function getLocalDatabase(): LocalDatabase {
     getSyncTelemetry,
     getEntityDefinition,
     getOfflinePreparationDiagnostics,
+    getAttendanceContextSelection,
     listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
@@ -164,6 +168,7 @@ export function getLocalDatabase(): LocalDatabase {
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
     setSelectedContractId,
+    setAttendanceContextSelection,
     setOfflinePreparationDiagnostics,
     setStateUpdateSyncDiagnosticsTelemetry,
     updateLocalRecord,
@@ -3939,8 +3944,55 @@ async function setSelectedContractId(contractId: string | null, ownerKey?: strin
   );
 }
 
+async function getAttendanceContextSelection(
+  ownerKey: string,
+  contractId: string,
+  appViewId: string,
+  fieldId: string,
+) {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    attendanceContextSelectionKey(ownerKey, contractId, appViewId, fieldId),
+  );
+
+  return row?.value ?? null;
+}
+
+async function setAttendanceContextSelection(
+  ownerKey: string,
+  contractId: string,
+  appViewId: string,
+  fieldId: string,
+  optionId: string | null,
+) {
+  const db = await getDatabase();
+  const key = attendanceContextSelectionKey(ownerKey, contractId, appViewId, fieldId);
+
+  if (!optionId) {
+    await db.runAsync(`DELETE FROM app_metadata WHERE key = ?`, key);
+    return;
+  }
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    key,
+    optionId,
+  );
+}
+
 function stateUpdateSyncDiagnosticsKey(ownerKey: string) {
   return `${STATE_UPDATE_SYNC_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
+}
+
+function attendanceContextSelectionKey(ownerKey: string, contractId: string, appViewId: string, fieldId: string) {
+  return [
+    ATTENDANCE_CONTEXT_SELECTION_KEY,
+    fingerprintDiagnosticValue(ownerKey),
+    contractId,
+    appViewId,
+    fieldId,
+  ].join(":");
 }
 
 function offlinePreparationDiagnosticsKey(ownerKey: string) {

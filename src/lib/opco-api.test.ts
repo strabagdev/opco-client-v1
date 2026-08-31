@@ -1135,6 +1135,15 @@ describe("createOpcoApi", () => {
           sourceEntityType: { id: "entity_people", name: "Personas" },
           stateFields: [
             {
+              defaultOptionId: "other_option",
+              fieldId: "field_other",
+              label: "Otro",
+              options: [
+                { label: "Otro", optionId: "other_option" },
+              ],
+              required: false,
+            },
+            {
               defaultOptionId: "late_option",
               fieldId: "field_attendance_status",
               label: "Estado",
@@ -1147,6 +1156,7 @@ describe("createOpcoApi", () => {
             },
           ],
           statuses: [],
+          statusFieldId: "field_attendance_status",
           summary: { totalRegistered: 0 },
           targetEntityType: { id: "entity_attendance", name: "Asistencias" },
         },

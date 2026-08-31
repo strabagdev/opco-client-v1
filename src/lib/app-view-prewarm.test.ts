@@ -23,6 +23,14 @@ describe("app view prewarm", () => {
     const api = {
       getAttendanceWorkflow: vi.fn(async () => ({
         appView: { id: "view_workflow", name: "Tomar asistencia", slug: "tomar-asistencia" },
+        contextFields: [{
+          id: "shift_field",
+          key: "turno",
+          name: "Turno",
+          options: [{ label: "Día", optionId: "shift_day", order: 0, value: "dia" }],
+          required: true,
+          type: "SELECT" as const,
+        }],
         date: "2026-08-25",
         items: [],
         latest: [],
@@ -69,6 +77,15 @@ describe("app view prewarm", () => {
         stateFields: [{
           defaultOptionId: "status_present",
           fieldId: "field_attendance_status",
+        }],
+        extraFields: [{
+          id: "shift_field",
+          name: "Turno",
+          options: [{
+            value: "dia",
+          }],
+          required: true,
+          type: "SELECT",
         }],
       },
       status: "ready",

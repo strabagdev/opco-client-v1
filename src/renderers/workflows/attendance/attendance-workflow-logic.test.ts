@@ -4,6 +4,8 @@ import { AttendanceBatchResult, AttendanceStatusOption } from "@/lib/opco-api";
 
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  attendanceContextExtraValues,
+  attendanceContextValidationErrors,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatAttendancePendingText,
@@ -13,6 +15,7 @@ import {
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
+  sanitizeAttendanceContextSelections,
   selectDefaultCheckInStatus,
   shouldFinishAttendanceVisualRequest,
   shouldRefreshAttendanceLatestAfterSync,
@@ -258,6 +261,77 @@ describe("attendance workflow logic", () => {
       { fieldId: "status", label: "Ausente", optionId: "absent_option" },
       { fieldId: "status", label: "Presente", optionId: "present_option" },
     ]);
+  });
+
+  it("keeps attendance context values as extraValues when hydrating state-update cache", () => {
+    const items = attendanceResponseToStateUpdateItems({
+      appView: { id: "view_attendance", name: "Asistencia", slug: "asistencia" },
+      contextFields: [{
+        id: "shift_field",
+        key: "turno",
+        name: "Turno",
+        options: [{ label: "Día", optionId: "shift_day", value: "dia" }],
+        required: true,
+        type: "SELECT",
+      }],
+      date: "2026-08-26",
+      items: [{
+        attendance: {
+          contextValues: { shift_field: { label: "Día", optionId: "shift_day" } },
+          observation: "Sin novedad",
+          recordId: "attendance_1",
+          statusLabel: "Presente",
+          statusOptionId: "present_option",
+          updatedAt: "2026-08-26T12:00:00.000Z",
+        },
+        person: { displayName: "Persona 1", id: "person_1" },
+      }],
+      latest: [],
+      sourceEntityType: { id: "personas", name: "Personas" },
+      statuses,
+      summary: { totalRegistered: 1 },
+      targetEntityType: { id: "attendance", name: "Attendance" },
+    }, {
+      contextFieldIds: ["shift_field"],
+      observationFieldId: "observation",
+      statusFieldId: "status",
+    });
+
+    expect(items[0].current?.extraValues).toEqual({
+      observation: "Sin novedad",
+      shift_field: "dia",
+    });
+  });
+
+  it("sanitizes remembered context options and validates required fields", () => {
+    const fields = [{
+      id: "shift_field",
+      name: "Turno",
+      options: [{ label: "Día", optionId: "shift_day", value: "dia" }],
+      required: true,
+      type: "SELECT" as const,
+    }, {
+      id: "sector_field",
+      name: "Sector",
+      options: [{ label: "Norte", optionId: "sector_north", value: "norte" }],
+      required: false,
+      type: "SELECT" as const,
+    }];
+
+    expect(sanitizeAttendanceContextSelections(fields, {
+      sector_field: "missing_option",
+      shift_field: "shift_day",
+    })).toEqual({
+      sector_field: null,
+      shift_field: "shift_day",
+    });
+    expect(attendanceContextValidationErrors(fields, { sector_field: null })).toEqual([
+      { fieldId: "shift_field", message: "Turno es obligatorio." },
+    ]);
+    expect(attendanceContextExtraValues(fields, {
+      sector_field: null,
+      shift_field: "shift_day",
+    })).toEqual({ shift_field: "dia" });
   });
 
   it("prefers latest over stale roster item state when hydrating the Attendance day", () => {

@@ -605,6 +605,31 @@ describe("local database singleton", () => {
     expect(write?.[2]).not.toEqual(expect.stringContaining("org_1:user_1"));
   });
 
+  it("persists attendance context selections by owner, contract, app view, and field id", async () => {
+    const store = getLocalDatabase();
+
+    await store.setAttendanceContextSelection("org_1:user_1", "contract_1", "view_attendance", "shift_field", "shift_day");
+
+    const write = db.runAsync.mock.calls.find((call) =>
+      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      String(call[1]).startsWith("attendance_context_selection:"),
+    );
+
+    expect(write?.[1]).toEqual(expect.stringMatching(/^attendance_context_selection:fp_[a-f0-9]{8}:contract_1:view_attendance:shift_field$/));
+    expect(write?.[1]).not.toContain("org_1:user_1");
+    expect(write?.[2]).toBe("shift_day");
+
+    db.getFirstAsync.mockResolvedValueOnce({ value: "shift_day" });
+    await expect(store.getAttendanceContextSelection("org_1:user_1", "contract_1", "view_attendance", "shift_field"))
+      .resolves.toBe("shift_day");
+
+    await store.setAttendanceContextSelection("org_1:user_1", "contract_1", "view_attendance", "shift_field", null);
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `DELETE FROM app_metadata WHERE key = ?`,
+      expect.stringMatching(/^attendance_context_selection:fp_[a-f0-9]{8}:contract_1:view_attendance:shift_field$/),
+    );
+  });
+
   it("resolves the last visible STATE_UPDATE UI error without deleting the historical event", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM app_metadata")) {

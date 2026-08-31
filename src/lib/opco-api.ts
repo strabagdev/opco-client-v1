@@ -71,6 +71,7 @@ export type RecordsAppViewConfig = {
 };
 
 export type AttendanceWorkflowConfig = {
+  contextFieldIds?: string[];
   dateFieldId: string;
   defaultCheckInOptionId?: string;
   observationFieldId?: string;
@@ -261,8 +262,25 @@ export type AttendanceStatusOption = {
   optionId: string;
 };
 
+export type AttendanceContextField = {
+  id: string;
+  key?: string;
+  name: string;
+  options: {
+    label: string;
+    optionId: string;
+    order?: number;
+    value?: string;
+  }[];
+  required: boolean;
+  type: "SELECT";
+};
+
+export type AttendanceContextValues = Record<string, { label: string; optionId: string } | string | null>;
+
 export type AttendanceItem = {
   attendance: {
+    contextValues?: AttendanceContextValues;
     observation: string | null;
     recordId: string;
     statusLabel: string | null;
@@ -277,6 +295,7 @@ export type AttendanceItem = {
 
 export type AttendanceLatestItem = {
   attendanceRecordId: string;
+  contextValues?: AttendanceContextValues;
   person: {
     displayName: string;
     id: string;
@@ -292,6 +311,7 @@ export type AttendanceResponse = {
     name: string;
     slug: string;
   };
+  contextFields?: AttendanceContextField[];
   date: string;
   items: AttendanceItem[];
   latest: AttendanceLatestItem[];
@@ -299,7 +319,9 @@ export type AttendanceResponse = {
     id: string;
     name: string;
   };
+  stateFields?: StateUpdateField[];
   statuses: AttendanceStatusOption[];
+  statusFieldId?: string;
   summary: {
     totalRegistered: number;
   };
@@ -310,6 +332,7 @@ export type AttendanceResponse = {
 };
 
 export type AttendanceBatchEntry = {
+  contextValues?: Record<string, string | null>;
   expectedUpdatedAt?: string;
   observation?: string | null;
   overwrite?: boolean;
@@ -1225,6 +1248,7 @@ function normalizeAttendanceResponse(response: AttendanceResponse): AttendanceRe
 
   return {
     ...response,
+    contextFields: response.contextFields ?? [],
     statuses: normalizedStatuses,
     items: response.items.map((item) => {
       if (item.attendance) {
@@ -1242,14 +1266,17 @@ function normalizeAttendanceStatuses(response: AttendanceResponse): AttendanceSt
   }
 
   const stateFields = (response as AttendanceResponse & { stateFields?: StateUpdateField[] }).stateFields;
-  const statusField = stateFields?.[0];
+  const statusField = response.statusFieldId
+    ? stateFields?.find((field) => field.fieldId === response.statusFieldId)
+    : stateFields?.[0];
+  const legacyStatusField = statusField ?? stateFields?.[0];
 
-  if (!statusField) {
+  if (!legacyStatusField) {
     return [];
   }
 
-  return statusField.options.map((option) => ({
-    isDefaultCheckIn: statusField.defaultOptionId ? option.optionId === statusField.defaultOptionId : false,
+  return legacyStatusField.options.map((option) => ({
+    isDefaultCheckIn: legacyStatusField.defaultOptionId ? option.optionId === legacyStatusField.defaultOptionId : false,
     label: option.label,
     optionId: option.optionId,
   }));

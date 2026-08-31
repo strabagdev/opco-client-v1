@@ -1,4 +1,5 @@
 import {
+  AttendanceContextValues,
   AttendanceItem,
   AttendanceLatestItem,
   AttendanceStatusOption,
@@ -18,6 +19,7 @@ export type CachedAttendanceRecord = {
   conflictRemoteStatusOptionId?: string | null;
   conflictRemoteUpdatedAt?: string | null;
   date: string;
+  contextValues?: Record<string, EntityRecordValue>;
   expectedUpdatedAt?: string | null;
   localRecordId: string;
   observation?: string | null;
@@ -40,13 +42,14 @@ export function getAttendanceStatusLabel(statuses: AttendanceStatusOption[], sta
 export function attendanceStateFields(
   statuses: AttendanceStatusOption[],
   config: Pick<AttendanceWorkflowConfig, "defaultCheckInOptionId" | "statusFieldId">,
+  statusField?: Pick<StateUpdateField, "fieldId" | "label" | "name"> | null,
 ): StateUpdateField[] {
   const defaultOptionId = config.defaultCheckInOptionId ?? statuses.find((status) => status.isDefaultCheckIn)?.optionId;
 
   return [{
     defaultOptionId,
     fieldId: config.statusFieldId,
-    label: "Estado",
+    label: statusField?.label || statusField?.name || "Estado",
     options: statuses.map((status, index) => ({
       label: status.label,
       optionId: status.optionId,
@@ -79,13 +82,15 @@ export function attendanceStatusesFromStateFields(
 export function stateUpdateItemToAttendanceItem(
   item: StateUpdateItem,
   statusFieldId: string,
+  observationFieldId?: string,
 ): AttendanceItem {
   const status = item.current?.stateValues.find((value) => value.fieldId === statusFieldId);
 
   return {
     attendance: item.current
       ? {
-          observation: readObservation(item.current.extraValues),
+          observation: readObservation(item.current.extraValues, observationFieldId),
+          contextValues: readContextValues(item.current.extraValues, observationFieldId),
           recordId: item.current.recordId,
           statusLabel: status?.label ?? null,
           statusOptionId: status?.optionId ?? null,
@@ -114,6 +119,7 @@ export function stateUpdateLatestToAttendanceLatest(
 export function stateUpdateConflictToAttendanceRecord(
   record: CachedStateUpdateRecord,
   statusFieldId: string,
+  observationFieldId?: string,
 ): CachedAttendanceRecord {
   const status = record.stateValues.find((value) => value.fieldId === statusFieldId);
   const remoteStatus = record.conflictRemoteStateValues?.find((value) => value.fieldId === statusFieldId);
@@ -126,7 +132,8 @@ export function stateUpdateConflictToAttendanceRecord(
     date: record.date ?? "",
     expectedUpdatedAt: record.expectedUpdatedAt,
     localRecordId: record.localRecordId,
-    observation: readObservation(record.extraValues),
+    observation: readObservation(record.extraValues, observationFieldId),
+    contextValues: record.extraValues,
     person: record.subject,
     statusLabel: status?.label ?? null,
     statusOptionId: status?.optionId ?? null,
@@ -137,12 +144,33 @@ export function stateUpdateConflictToAttendanceRecord(
   };
 }
 
-function readObservation(extraValues: Record<string, EntityRecordValue> | undefined) {
+function readObservation(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string) {
   if (!extraValues) {
     return null;
+  }
+
+  if (observationFieldId) {
+    const value = extraValues[observationFieldId];
+    return typeof value === "string" ? value : null;
   }
 
   const firstText = Object.values(extraValues).find((value) => typeof value === "string");
 
   return typeof firstText === "string" ? firstText : null;
+}
+
+function readContextValues(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string) {
+  if (!extraValues) {
+    return undefined;
+  }
+
+  const contextValues = Object.fromEntries(Object.entries(extraValues)
+    .filter(([fieldId]) => fieldId !== observationFieldId)
+    .filter(([, value]) =>
+      value === null ||
+      typeof value === "string" ||
+      (Boolean(value) && typeof value === "object" && !Array.isArray(value) && "optionId" in value),
+    )) as AttendanceContextValues;
+
+  return Object.keys(contextValues).length > 0 ? contextValues : undefined;
 }
