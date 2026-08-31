@@ -26,14 +26,24 @@ export function getPrimaryDisplayField(definition: EntityDefinition) {
 export function getRecordListFields(definition: EntityDefinition) {
   const activeFields = getActiveFields(definition);
   const primaryField = getPrimaryDisplayField(definition);
-  const configuredFields = activeFields.filter((field) => {
+  const clientFields = activeFields.filter((field) => {
+    const display = getFieldDisplayConfig(field);
+
+    return display.showInClient === true && field.id !== primaryField?.id;
+  });
+
+  if (clientFields.length > 0) {
+    return clientFields;
+  }
+
+  const listFields = activeFields.filter((field) => {
     const display = getFieldDisplayConfig(field);
 
     return display.showInList === true && field.id !== primaryField?.id;
   });
 
-  if (configuredFields.length > 0) {
-    return configuredFields;
+  if (listFields.length > 0) {
+    return listFields;
   }
 
   return activeFields
@@ -126,7 +136,7 @@ function getFieldDisplayConfig(field: EntityField) {
   const display = field.config?.display;
 
   return display && typeof display === "object" && !Array.isArray(display)
-    ? (display as { primary?: boolean; showInList?: boolean })
+    ? (display as { primary?: boolean; showInClient?: boolean; showInList?: boolean })
     : {};
 }
 

@@ -11,53 +11,91 @@ import { EntityDefinition, EntityField, EntityRecord } from "./opco-api";
 import { entityDefinitionFixture, entityRecordFixture } from "../test/fixtures";
 
 describe("entity record display", () => {
-  it("uses configured showInList fields and excludes the primary field", () => {
+  it("falls back to configured showInList fields and excludes the primary field", () => {
     const fields = getRecordListFields(entityDefinitionFixture);
 
     expect(fields.map((field) => field.key)).toEqual(["estado"]);
   });
 
-  it("includes every configured showInList field even after the first four", () => {
+  it("uses configured showInClient fields for client summaries", () => {
     const definition: EntityDefinition = {
       ...entityDefinitionFixture,
       fields: [
         field({
-          config: { display: { primary: true, showInList: true }, validation: {} },
+          config: { display: { primary: true, showInClient: true, showInList: true }, validation: {} },
+          key: "nombre",
+          name: "Nombre",
+          order: 1,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInList: true }, validation: {} },
+          key: "estado",
+          name: "Estado",
+          order: 2,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInClient: true }, validation: {} },
+          key: "rut",
+          name: "RUT",
+          order: 3,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: { showInClient: true }, validation: {} },
+          key: "cargo",
+          name: "Cargo",
+          order: 4,
+          type: "TEXT",
+        }),
+      ],
+    };
+
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["rut", "cargo"]);
+  });
+
+  it("includes every configured showInClient field even after the first four", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        field({
+          config: { display: { primary: true, showInClient: true, showInList: true }, validation: {} },
           key: "numero",
           name: "Numero",
           order: 1,
           type: "TEXT",
         }),
         field({
-          config: { display: { showInList: true }, validation: {} },
+          config: { display: { showInClient: true }, validation: {} },
           key: "fecha_de_inicio",
           name: "Fecha de inicio",
           order: 2,
           type: "DATE",
         }),
         field({
-          config: { display: { showInList: true }, validation: {} },
+          config: { display: { showInClient: true }, validation: {} },
           key: "fecha_de_termino",
           name: "Fecha de termino",
           order: 3,
           type: "DATE",
         }),
         field({
-          config: { display: { showInList: true }, validation: {} },
+          config: { display: { showInClient: true }, validation: {} },
           key: "monto_neto",
           name: "Monto neto",
           order: 4,
           type: "MONEY",
         }),
         field({
-          config: { display: { showInList: true }, validation: {} },
+          config: { display: { showInClient: true }, validation: {} },
           key: "estado",
           name: "Estado",
           order: 5,
           type: "TEXT",
         }),
         field({
-          config: { display: { showInList: true }, validation: {} },
+          config: { display: { showInClient: true }, validation: {} },
           key: "hes",
           name: "HES",
           order: 6,
@@ -253,6 +291,41 @@ describe("entity record display", () => {
         label: "Responsable",
         value: "Ana",
       },
+    ]);
+  });
+
+  it("does not filter the full record detail with showInClient", () => {
+    const definition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: [
+        field({
+          config: { display: { showInClient: true }, validation: {} },
+          key: "nombre",
+          name: "Nombre",
+          order: 1,
+          type: "TEXT",
+        }),
+        field({
+          config: { display: {}, validation: {} },
+          key: "observaciones",
+          name: "Observaciones",
+          order: 2,
+          type: "TEXTAREA",
+        }),
+      ],
+    };
+
+    expect(getRecordDetailFields(definition, {
+      displayName: "Juan Perez",
+      id: "record_1",
+      updatedAt: "2026-08-20T12:00:00.000Z",
+      values: {
+        nombre: "Juan Perez",
+        observaciones: "Ficha completa",
+      },
+    })).toEqual([
+      { key: "nombre", label: "Nombre", value: "Juan Perez" },
+      { key: "observaciones", label: "Observaciones", value: "Ficha completa" },
     ]);
   });
 });
