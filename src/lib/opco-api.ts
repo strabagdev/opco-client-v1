@@ -73,6 +73,7 @@ export type RecordsAppViewConfig = {
 export type ReportAppViewConfig = {
   entityTypeId: string;
   dateFieldId: string;
+  timeFilter?: ReportTimeFilterConfig;
 } & (
   | {
       presentationMode: "TABLE";
@@ -92,6 +93,12 @@ export type ReportAppViewConfig = {
       };
     }
 );
+
+export type ReportTimeFilterConfig = {
+  mode: "RANGE" | "MONTH";
+  defaultPeriod: "CURRENT_MONTH";
+  allowChange: boolean;
+};
 
 export type AttendanceWorkflowConfig = {
   contextFieldIds?: string[];

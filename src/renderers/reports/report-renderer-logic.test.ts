@@ -54,6 +54,34 @@ describe("report renderer logic", () => {
     ]);
   });
 
+  it("builds all month days for MATRIX when date columns use MONTH time filter", () => {
+    const matrix = buildReportMatrixModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        timeFilter: {
+          allowChange: true,
+          defaultPeriod: "CURRENT_MONTH",
+          mode: "MONTH",
+        },
+        presentationMode: "MATRIX",
+        matrix: {
+          columnFieldId: "field_date",
+          rowFieldId: "field_person",
+          valueFieldId: "field_status",
+        },
+      },
+      from: "2026-08-01",
+      to: "2026-08-31",
+    });
+
+    expect(matrix?.columns).toHaveLength(31);
+    expect(matrix?.columns[0]).toEqual({ key: "2026-08-01", label: "01" });
+    expect(matrix?.columns[30]).toEqual({ key: "2026-08-31", label: "31" });
+    expect(matrix?.rows[0].values["2026-08-01"]).toBe("Presente");
+  });
+
   it("returns null when MATRIX config is incomplete", () => {
     expect(buildReportMatrixModel({
       ...baseReport,

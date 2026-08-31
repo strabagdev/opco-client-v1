@@ -1,5 +1,7 @@
 import { EntityField, EntityRecordValue, ReportResponse } from "@/lib/opco-api";
 
+import { monthDays } from "./report-time-filter";
+
 export type ReportTableModel = {
   columns: EntityField[];
   rows: {
@@ -104,8 +106,13 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
     rows.set(rowKey, row);
   }
 
+  const matrixColumns = report.config.matrix.columnFieldId === report.config.dateFieldId &&
+    report.config.timeFilter?.mode === "MONTH"
+    ? monthDays(report.from.slice(0, 7))
+    : Array.from(columns.values()).sort((left, right) => left.key.localeCompare(right.key, undefined, { numeric: true }));
+
   return {
-    columns: Array.from(columns.values()).sort((left, right) => left.key.localeCompare(right.key, undefined, { numeric: true })),
+    columns: matrixColumns,
     rows: Array.from(rows.values())
       .sort((left, right) => left.label.localeCompare(right.label))
       .map((row) => ({

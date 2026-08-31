@@ -262,7 +262,7 @@ Known `AppView.type` values:
 
 The registry depends on `isStateUpdateCompatibleWorkflow()` but does not own domain rules, sync, persistence, or conflict behavior.
 
-`REPORT` is a configurable consultation renderer, separate from RECORDS and workflows. It calls `/api/v1/contracts/:contractId/reports/:appViewId` with a shared `from/to` date range. `TABLE` renders one record per row using configured columns. `MATRIX` groups rows by `rowFieldId`, generates columns from `columnFieldId`, renders cells from `valueFieldId`, and optionally counts `summaryFieldId` values per row. For a monthly Attendance view this can be configured as Persona x Fecha with Estado as both value and summary, but the renderer does not hardcode Attendance statuses or field names.
+`REPORT` is a configurable consultation renderer, separate from RECORDS and workflows. It calls `/api/v1/contracts/:contractId/reports/:appViewId` with one shared `from/to` period. `timeFilter.mode = RANGE` shows Desde/Hasta inputs; `MONTH` shows a compact month navigator and converts the selected month to first/last day. Missing `timeFilter` falls back to editable current-month RANGE. `TABLE` renders one record per row using configured columns. `MATRIX` groups rows by `rowFieldId`, generates columns from `columnFieldId`, renders cells from `valueFieldId`, and optionally counts `summaryFieldId` values per row. For monthly date matrices, the renderer generates the real days in the selected month. For a monthly Attendance view this can be configured as Persona x Fecha with Estado as both value and summary, but the renderer does not hardcode Attendance statuses or field names.
 
 ## RECORDS Engine
 

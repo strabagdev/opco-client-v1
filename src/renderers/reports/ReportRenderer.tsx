@@ -15,11 +15,20 @@ import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 
 import { buildReportMatrixModel, buildReportTableModel } from "./report-renderer-logic";
+import {
+  formatMonthLabel,
+  initialReportPeriod,
+  normalizeReportTimeFilter,
+  reportPeriodToRange,
+  shiftMonth,
+  type ReportPeriodState,
+} from "./report-time-filter";
 
 export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>) {
   const { api, selectedContractId, token } = useSession();
-  const [from, setFrom] = useState(defaultMonthStart());
-  const [to, setTo] = useState(formatLocalDateInput(new Date()));
+  const timeFilter = useMemo(() => normalizeReportTimeFilter(appView.config), [appView.config]);
+  const [period, setPeriod] = useState<ReportPeriodState>(() => initialReportPeriod(appView.config));
+  const range = useMemo(() => reportPeriodToRange(period), [period]);
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -39,7 +48,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       setError(null);
 
       try {
-        const nextReport = await api.getReport(token, selectedContractId, appView.id, { from, to });
+        const nextReport = await api.getReport(token, selectedContractId, appView.id, range);
 
         if (isMounted) {
           setReport(nextReport);
@@ -60,7 +69,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, from, refreshCount, selectedContractId, to, token]);
+  }, [api, appView.id, range, refreshCount, selectedContractId, token]);
 
   const table = useMemo(() => report ? buildReportTableModel(report) : null, [report]);
   const matrix = useMemo(() => report ? buildReportMatrixModel(report) : null, [report]);
@@ -73,12 +82,16 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       </View>
 
       <View style={styles.filters}>
-        <DateInput label="Desde" onChangeText={setFrom} value={from} />
-        <DateInput label="Hasta" onChangeText={setTo} value={to} />
+        <PeriodControl
+          allowChange={timeFilter.allowChange}
+          onChange={setPeriod}
+          period={period}
+        />
         <Pressable
           accessibilityRole="button"
+          disabled={!timeFilter.allowChange}
           onPress={() => setRefreshCount((count) => count + 1)}
-          style={styles.filterButton}
+          style={[styles.filterButton, !timeFilter.allowChange ? styles.disabledButton : null]}
         >
           <Text style={styles.filterButtonText}>Actualizar</Text>
         </Pressable>
@@ -107,6 +120,66 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         <ReportMatrix matrix={matrix} />
       ) : null}
     </ScrollView>
+  );
+}
+
+function PeriodControl({
+  allowChange,
+  onChange,
+  period,
+}: {
+  allowChange: boolean;
+  onChange: (value: ReportPeriodState) => void;
+  period: ReportPeriodState;
+}) {
+  if (period.mode === "MONTH") {
+    return (
+      <View style={styles.monthControl}>
+        <Pressable
+          accessibilityLabel="Mes anterior"
+          accessibilityRole="button"
+          disabled={!allowChange}
+          onPress={() => onChange({ mode: "MONTH", month: shiftMonth(period.month, -1) })}
+          style={[styles.monthButton, !allowChange ? styles.disabledButton : null]}
+        >
+          <Text style={styles.monthButtonText}>‹</Text>
+        </Pressable>
+        <Text style={styles.monthLabel}>{formatMonthLabel(period.month)}</Text>
+        <Pressable
+          accessibilityLabel="Mes siguiente"
+          accessibilityRole="button"
+          disabled={!allowChange}
+          onPress={() => onChange({ mode: "MONTH", month: shiftMonth(period.month, 1) })}
+          style={[styles.monthButton, !allowChange ? styles.disabledButton : null]}
+        >
+          <Text style={styles.monthButtonText}>›</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!allowChange) {
+    return (
+      <View style={styles.fixedRange}>
+        <Text style={styles.inputLabel}>Período</Text>
+        <Text style={styles.fixedRangeText}>{period.from} - {period.to}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      <DateInput
+        label="Desde"
+        onChangeText={(from) => onChange({ ...period, from })}
+        value={period.from}
+      />
+      <DateInput
+        label="Hasta"
+        onChangeText={(to) => onChange({ ...period, to })}
+        value={period.to}
+      />
+    </>
   );
 }
 
@@ -183,15 +256,6 @@ function ReportMatrix({ matrix }: { matrix: NonNullable<ReturnType<typeof buildR
   );
 }
 
-function defaultMonthStart() {
-  const today = new Date();
-  return formatLocalDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
-}
-
-function formatLocalDateInput(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
-}
-
 const styles = StyleSheet.create({
   cell: {
     borderBottomColor: "#e5e7eb",
@@ -230,10 +294,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
   },
+  disabledButton: {
+    opacity: 0.45,
+  },
   filters: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
+  },
+  fixedRange: {
+    gap: 6,
+    minWidth: 220,
+  },
+  fixedRangeText: {
+    color: "#111827",
+    fontSize: 16,
+    minHeight: 44,
+    paddingVertical: 12,
   },
   header: {
     gap: 2,
@@ -253,6 +330,33 @@ const styles = StyleSheet.create({
     color: "#4b5563",
     fontSize: 13,
     fontWeight: "600",
+  },
+  monthButton: {
+    alignItems: "center",
+    borderColor: "#d1d5db",
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  monthButtonText: {
+    color: "#111827",
+    fontSize: 24,
+    lineHeight: 28,
+  },
+  monthControl: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 44,
+  },
+  monthLabel: {
+    color: "#111827",
+    fontSize: 16,
+    fontWeight: "600",
+    minWidth: 148,
+    textAlign: "center",
   },
   row: {
     flexDirection: "row",
