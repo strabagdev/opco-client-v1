@@ -66,9 +66,9 @@ describe("app shell feedback", () => {
       connectivityStatus: "offline",
     })).toEqual({
       id: "offline",
-      message: "Sin conexion. Los registros se guardan en este dispositivo.",
-      tone: "warning",
-      visual: "warning",
+      message: "Modo sin conexion",
+      tone: "info",
+      visual: "info",
     });
   });
 

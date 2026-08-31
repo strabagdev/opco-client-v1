@@ -109,9 +109,9 @@ export function resolveAppShellPersistentFeedback({
   if (connectivityStatus !== "online") {
     return {
       id: "offline",
-      message: "Sin conexion. Los registros se guardan en este dispositivo.",
-      tone: "warning",
-      visual: "warning",
+      message: "Modo sin conexion",
+      tone: "info",
+      visual: "info",
     };
   }
 

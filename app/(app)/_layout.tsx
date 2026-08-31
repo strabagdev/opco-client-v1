@@ -1,4 +1,5 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
+import { WifiOff } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
@@ -239,8 +240,14 @@ export default function AppLayout() {
             feedback.tone === "error" ? styles.feedbackBannerError : null,
             feedback.tone === "success" ? styles.feedbackBannerSuccess : null,
             feedback.tone === "warning" ? styles.feedbackBannerWarning : null,
+            feedback.tone === "info" ? styles.feedbackBannerInfo : null,
           ]}>
             {showFeedbackSpinner ? <ActivityIndicator color="#135d66" size="small" /> : null}
+            {feedback.visual === "info" ? (
+              <View style={styles.feedbackInfoIcon}>
+                <WifiOff color="#2f5e66" size={15} strokeWidth={2.2} />
+              </View>
+            ) : null}
             {feedback.visual === "success" ? (
               <View style={styles.feedbackSuccessIcon}>
                 <AppIcon color="#13795b" icon="clipboard-check" size={16} />
@@ -251,7 +258,8 @@ export default function AppLayout() {
               feedback.tone === "error" ? styles.feedbackTextError : null,
               feedback.tone === "success" ? styles.feedbackTextSuccess : null,
               feedback.tone === "warning" ? styles.feedbackTextWarning : null,
-            ]}>
+              feedback.tone === "info" ? styles.feedbackTextInfo : null,
+            ]} numberOfLines={feedback.id === "offline" ? 1 : undefined}>
               {feedback.message}
             </Text>
             {!persistentFeedback ? (
@@ -614,6 +622,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff7f7",
     borderColor: "#f1b8b8",
   },
+  feedbackBannerInfo: {
+    backgroundColor: "#f3f8f8",
+    borderColor: "#d6e4e6",
+  },
   feedbackBannerSuccess: {
     backgroundColor: "#eefbf4",
     borderColor: "#b9e4c9",
@@ -636,6 +648,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 20,
   },
+  feedbackInfoIcon: {
+    alignItems: "center",
+    flexShrink: 0,
+    height: 18,
+    justifyContent: "center",
+    width: 18,
+  },
   feedbackRow: {
     width: "100%",
   },
@@ -652,9 +671,13 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: "700",
     lineHeight: 20,
+    minWidth: 0,
   },
   feedbackTextError: {
     color: "#b42318",
+  },
+  feedbackTextInfo: {
+    color: "#2f5e66",
   },
   feedbackTextSuccess: {
     color: "#13795b",
