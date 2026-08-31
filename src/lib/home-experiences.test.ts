@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { appViewsFixture } from "../test/fixtures";
 import { resolveAppShellPersistentFeedback, type AppShellFeedbackInput } from "./app-shell-feedback";
-import { getHomeExperienceAvailabilityLabel, getHomeExperienceCards } from "./home-experiences";
+import {
+  getHomeExperienceAvailabilityLabel,
+  getHomeExperienceCards,
+  getHomeExperienceSection,
+  getHomeExperienceSections,
+} from "./home-experiences";
+import type { AppView } from "./opco-api";
 
 const baseFeedbackInput: AppShellFeedbackInput = {
   connectivityStatus: "online",
@@ -78,3 +84,76 @@ describe("Home experience offline presentation", () => {
     );
   });
 });
+
+describe("Home experience sections", () => {
+  it("classifies experiences by AppView type", () => {
+    expect(getHomeExperienceSection("RECORDS").title).toBe("Registros");
+    expect(getHomeExperienceSection("WORKFLOW").title).toBe("Flujos");
+    expect(getHomeExperienceSection("REPORT").title).toBe("Análisis");
+    expect(getHomeExperienceSection("DASHBOARD").title).toBe("Análisis");
+    expect(getHomeExperienceSection("BOARD").title).toBe("Análisis");
+  });
+
+  it("groups cards in section order while preserving card order inside each section", () => {
+    const cards = getHomeExperienceCards(sectionViews, {});
+    const sections = getHomeExperienceSections(cards);
+
+    expect(sections.map((section) => section.title)).toEqual(["Registros", "Flujos", "Análisis"]);
+    expect(sections.map((section) => section.cards.map((card) => card.appView.name))).toEqual([
+      ["Registro Personas"],
+      ["Registro de Asistencia"],
+      ["Reporte de Asistencia", "Dashboard Ejecutivo", "Tablero Operacional"],
+    ]);
+  });
+
+  it("omits empty sections", () => {
+    const cards = getHomeExperienceCards([
+      view("view_report", "REPORT", "Reporte de Asistencia"),
+    ], {});
+
+    expect(getHomeExperienceSections(cards).map((section) => section.title)).toEqual(["Análisis"]);
+  });
+
+  it("keeps unknown AppView types visible in the analytics section", () => {
+    const cards = getHomeExperienceCards([
+      view("view_unknown", "UNKNOWN", "Experiencia futura"),
+    ] as AppView[], {});
+    const sections = getHomeExperienceSections(cards);
+
+    expect(sections.map((section) => section.title)).toEqual(["Análisis"]);
+    expect(sections[0].cards[0].appView.name).toBe("Experiencia futura");
+    expect(sections[0].cards[0].metadata).toBe("Experiencia");
+  });
+});
+
+const sectionViews = [
+  view("view_workflow", "WORKFLOW", "Registro de Asistencia"),
+  view("view_report", "REPORT", "Reporte de Asistencia"),
+  view("view_records", "RECORDS", "Registro Personas"),
+  view("view_dashboard", "DASHBOARD", "Dashboard Ejecutivo"),
+  view("view_board", "BOARD", "Tablero Operacional"),
+];
+
+function view(id: string, type: string, name: string): AppView {
+  return {
+    config: type === "REPORT"
+      ? {
+        dateFieldId: "field_date",
+        entityTypeId: "entity_attendance",
+        presentationMode: "TABLE",
+        table: {
+          defaultSortDirection: "asc",
+          visibleFieldIds: ["field_status"],
+        },
+      }
+      : type === "RECORDS"
+        ? { entityTypeId: "entity_people" }
+        : {},
+    icon: null,
+    id,
+    name,
+    slug: id,
+    sortOrder: 1,
+    type,
+  } as AppView;
+}

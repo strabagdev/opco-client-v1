@@ -12,8 +12,8 @@ export function sortAppViews(views: AppView[]) {
   return [...views].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
 
-export function getAppViewTypeLabel(type: AppViewType) {
-  return APP_VIEW_TYPE_LABELS[type];
+export function getAppViewTypeLabel(type: AppViewType | string) {
+  return APP_VIEW_TYPE_LABELS[type as AppViewType] ?? "Experiencia";
 }
 
 export function getAppViewCardMetadata(appView: AppView) {

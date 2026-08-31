@@ -12,7 +12,7 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
-import { getHomeExperienceCards } from "@/lib/home-experiences";
+import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
@@ -46,6 +46,10 @@ export default function HomeScreen() {
   const experienceCards = useMemo(
     () => getHomeExperienceCards(views, offlineAvailabilityByViewId),
     [offlineAvailabilityByViewId, views],
+  );
+  const experienceSections = useMemo(
+    () => getHomeExperienceSections(experienceCards),
+    [experienceCards],
   );
 
   useEffect(() => {
@@ -223,32 +227,36 @@ export default function HomeScreen() {
 
   const experiencesSection = (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Experiencias</Text>
       {isLoadingViews ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
-      <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
-        {experienceCards.map(({ appView, availabilityLabel, href, metadata }) => {
-          return (
-            <Link href={href} key={appView.id} asChild>
-              <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
-                <View style={styles.viewIcon}>
-                  <AppIcon icon={appView.icon} size={22} />
-                </View>
-                <View style={styles.viewText}>
-                  <Text style={styles.viewName}>{appView.name}</Text>
-                  <View style={styles.typeBadge}>
-                    <Text style={styles.typeBadgeText}>{metadata}</Text>
-                  </View>
-                  {availabilityLabel ? <Text style={styles.availabilityText}>{availabilityLabel}</Text> : null}
-                </View>
-              </Pressable>
-            </Link>
-          );
-        })}
-      </View>
+      {experienceSections.map((section) => (
+        <View key={section.id} style={styles.experienceGroup}>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+          <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
+            {section.cards.map(({ appView, availabilityLabel, href, metadata }) => {
+              return (
+                <Link href={href} key={appView.id} asChild>
+                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
+                    <View style={styles.viewIcon}>
+                      <AppIcon icon={appView.icon} size={22} />
+                    </View>
+                    <View style={styles.viewText}>
+                      <Text style={styles.viewName}>{appView.name}</Text>
+                      <View style={styles.typeBadge}>
+                        <Text style={styles.typeBadgeText}>{metadata}</Text>
+                      </View>
+                      {availabilityLabel ? <Text style={styles.availabilityText}>{availabilityLabel}</Text> : null}
+                    </View>
+                  </Pressable>
+                </Link>
+              );
+            })}
+          </View>
+        </View>
+      ))}
     </View>
   );
 
@@ -379,6 +387,9 @@ const styles = StyleSheet.create({
     color: "#b42318",
     lineHeight: 20,
   },
+  experienceGroup: {
+    gap: 8,
+  },
   experiencesColumnWide: {
     width: "100%",
   },
@@ -421,12 +432,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   section: {
-    gap: 10,
+    gap: 16,
   },
   sectionTitle: {
-    color: "#17363c",
-    fontSize: 18,
+    color: "#587078",
+    fontSize: 13,
     fontWeight: "800",
+    textTransform: "uppercase",
   },
   typeBadge: {
     alignSelf: "flex-start",

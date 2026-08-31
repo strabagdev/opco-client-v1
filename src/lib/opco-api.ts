@@ -74,6 +74,7 @@ export type ReportAppViewConfig = {
   entityTypeId: string;
   dateFieldId: string;
   timeFilter?: ReportTimeFilterConfig;
+  valueDisplay?: Record<string, ReportSelectValueDisplay>;
 } & (
   | {
       presentationMode: "TABLE";
@@ -99,6 +100,8 @@ export type ReportTimeFilterConfig = {
   defaultPeriod: "CURRENT_MONTH";
   allowChange: boolean;
 };
+
+export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 
 export type AttendanceWorkflowConfig = {
   contextFieldIds?: string[];

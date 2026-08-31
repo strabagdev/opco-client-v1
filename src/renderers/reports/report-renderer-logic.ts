@@ -1,4 +1,4 @@
-import { EntityField, EntityRecordValue, ReportResponse } from "@/lib/opco-api";
+import { EntityField, EntityRecordValue, ReportResponse, ReportSelectValueDisplay } from "@/lib/opco-api";
 
 import { monthDays } from "./report-time-filter";
 
@@ -41,7 +41,9 @@ export function buildReportTableModel(report: ReportResponse): ReportTableModel 
     columns,
     rows: report.records.map((record) => ({
       id: record.id,
-      values: columns.map((field) => displayRecordValue(field, record.values[field.key])),
+      values: columns.map((field) =>
+        displayRecordValue(field, record.values[field.key], report.config.valueDisplay?.[field.id]),
+      ),
     })),
   };
 }
@@ -68,12 +70,16 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
 
   for (const record of report.records) {
     const rowKey = stableValueKey(record.values[rowField.key]);
-    const rowLabel = displayRecordValue(rowField, record.values[rowField.key]) || record.displayName;
+    const rowLabel =
+      displayRecordValue(rowField, record.values[rowField.key], report.config.valueDisplay?.[rowField.id]) ||
+      record.displayName;
     const columnKey = stableValueKey(record.values[columnField.key]);
     const columnLabel = columnField.id === report.config.dateFieldId
-      ? dayLabel(displayRecordValue(columnField, record.values[columnField.key]))
-      : displayRecordValue(columnField, record.values[columnField.key]);
-    const value = displayRecordValue(valueField, record.values[valueField.key]);
+      ? dayLabel(
+        displayRecordValue(columnField, record.values[columnField.key], report.config.valueDisplay?.[columnField.id]),
+      )
+      : displayRecordValue(columnField, record.values[columnField.key], report.config.valueDisplay?.[columnField.id]);
+    const value = displayRecordValue(valueField, record.values[valueField.key], report.config.valueDisplay?.[valueField.id]);
 
     if (!rowKey || !columnKey) {
       continue;
@@ -96,7 +102,7 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
     row.values.set(columnKey, cell);
 
     if (summaryField) {
-      const summaryValue = displayRecordValue(summaryField, record.values[summaryField.key]);
+      const summaryValue = displayRecordValue(summaryField, record.values[summaryField.key], report.config.valueDisplay?.[summaryField.id]);
 
       if (summaryValue) {
         row.summary.set(summaryValue, (row.summary.get(summaryValue) ?? 0) + 1);
@@ -124,7 +130,11 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
   };
 }
 
-export function displayRecordValue(field: EntityField, value: EntityRecordValue | undefined): string {
+export function displayRecordValue(
+  field: EntityField,
+  value: EntityRecordValue | undefined,
+  selectValueDisplay: ReportSelectValueDisplay = "LABEL",
+): string {
   if (value === null || value === undefined) {
     return "";
   }
@@ -139,12 +149,18 @@ export function displayRecordValue(field: EntityField, value: EntityRecordValue 
 
   if (field.type === "SELECT") {
     const option = field.options?.find((item) => item.value === value || item.id === value);
+    if (selectValueDisplay === "INTERNAL_VALUE") {
+      return option?.value || option?.label || String(value);
+    }
     return option?.label ?? String(value);
   }
 
   if (field.type === "MULTISELECT" && Array.isArray(value)) {
     return value.map((item) => {
       const option = field.options?.find((option) => option.value === item || option.id === item);
+      if (selectValueDisplay === "INTERNAL_VALUE") {
+        return option?.value || option?.label || String(item);
+      }
       return option?.label ?? String(item);
     }).join(", ");
   }

@@ -24,6 +24,27 @@ describe("report renderer logic", () => {
     expect(table?.rows[0].values).toEqual(["Juan Perez", "2026-08-01", "Presente"]);
   });
 
+  it("uses configured internal SELECT values in TABLE reports", () => {
+    const table = buildReportTableModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        presentationMode: "TABLE",
+        table: {
+          defaultSortDirection: "desc",
+          defaultSortFieldId: "field_date",
+          visibleFieldIds: ["field_person", "field_date", "field_status"],
+        },
+        valueDisplay: {
+          field_status: "INTERNAL_VALUE",
+        },
+      },
+    });
+
+    expect(table?.rows[0].values).toEqual(["Juan Perez", "2026-08-01", "presente"]);
+  });
+
   it("builds MATRIX rows, date columns, values and lateral summary with real labels", () => {
     const matrix = buildReportMatrixModel({
       ...baseReport,
@@ -52,6 +73,78 @@ describe("report renderer logic", () => {
         },
       },
     ]);
+  });
+
+  it("uses configured internal SELECT values in MATRIX cells and summaries", () => {
+    const matrix = buildReportMatrixModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        presentationMode: "MATRIX",
+        matrix: {
+          columnFieldId: "field_date",
+          rowFieldId: "field_person",
+          summaryFieldId: "field_status",
+          valueFieldId: "field_status",
+        },
+        valueDisplay: {
+          field_status: "INTERNAL_VALUE",
+        },
+      },
+    });
+
+    expect(matrix?.rows).toEqual([
+      {
+        id: "person_1",
+        label: "Juan Perez",
+        summary: "ausente: 1 presente: 1",
+        values: {
+          "2026-08-01": "presente",
+          "2026-08-02": "ausente",
+        },
+      },
+    ]);
+  });
+
+  it("falls back to SELECT labels in internal mode when an option has no internal value", () => {
+    const table = buildReportTableModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        presentationMode: "TABLE",
+        table: {
+          defaultSortDirection: "desc",
+          visibleFieldIds: ["field_status"],
+        },
+        valueDisplay: {
+          field_status: "INTERNAL_VALUE",
+        },
+      },
+      fields: baseReport.fields.map((field) =>
+        field.id === "field_status"
+          ? {
+            ...field,
+            options: field.options?.map((option) =>
+              option.id === "option_present" ? { ...option, value: "" } : option,
+            ),
+          }
+          : field,
+      ),
+      records: [
+        {
+          displayName: "Juan 2026-08-01",
+          id: "record_1",
+          updatedAt: "2026-08-01T12:00:00.000Z",
+          values: {
+            estado: "option_present",
+          },
+        },
+      ],
+    });
+
+    expect(table?.rows[0].values).toEqual(["Presente"]);
   });
 
   it("builds all month days for MATRIX when date columns use MONTH time filter", () => {
