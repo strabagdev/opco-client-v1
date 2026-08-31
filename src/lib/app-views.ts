@@ -3,6 +3,7 @@ import { AppView, AppViewType } from "./opco-api";
 export const APP_VIEW_TYPE_LABELS: Record<AppViewType, string> = {
   BOARD: "Tablero",
   DASHBOARD: "Dashboard",
+  REPORT: "Reporte",
   RECORDS: "Registros",
   WORKFLOW: "Flujo",
 };

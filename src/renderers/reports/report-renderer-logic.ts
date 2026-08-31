@@ -1,0 +1,186 @@
+import { EntityField, EntityRecordValue, ReportResponse } from "@/lib/opco-api";
+
+export type ReportTableModel = {
+  columns: EntityField[];
+  rows: {
+    id: string;
+    values: string[];
+  }[];
+};
+
+export type ReportMatrixModel = {
+  columns: {
+    key: string;
+    label: string;
+  }[];
+  rows: {
+    id: string;
+    label: string;
+    summary: string | null;
+    values: Record<string, string>;
+  }[];
+};
+
+export function buildReportTableModel(report: ReportResponse): ReportTableModel | null {
+  if (report.config.presentationMode !== "TABLE") {
+    return null;
+  }
+
+  const fieldsById = fieldMap(report.fields);
+  const columns = report.config.table.visibleFieldIds
+    .map((fieldId) => fieldsById.get(fieldId))
+    .filter((field): field is EntityField => Boolean(field));
+
+  if (columns.length === 0) {
+    return null;
+  }
+
+  return {
+    columns,
+    rows: report.records.map((record) => ({
+      id: record.id,
+      values: columns.map((field) => displayRecordValue(field, record.values[field.key])),
+    })),
+  };
+}
+
+export function buildReportMatrixModel(report: ReportResponse): ReportMatrixModel | null {
+  if (report.config.presentationMode !== "MATRIX") {
+    return null;
+  }
+
+  const fieldsById = fieldMap(report.fields);
+  const rowField = fieldsById.get(report.config.matrix.rowFieldId);
+  const columnField = fieldsById.get(report.config.matrix.columnFieldId);
+  const valueField = fieldsById.get(report.config.matrix.valueFieldId);
+  const summaryField = report.config.matrix.summaryFieldId
+    ? fieldsById.get(report.config.matrix.summaryFieldId)
+    : null;
+
+  if (!rowField || !columnField || !valueField) {
+    return null;
+  }
+
+  const columns = new Map<string, { key: string; label: string }>();
+  const rows = new Map<string, { id: string; label: string; values: Map<string, Set<string>>; summary: Map<string, number> }>();
+
+  for (const record of report.records) {
+    const rowKey = stableValueKey(record.values[rowField.key]);
+    const rowLabel = displayRecordValue(rowField, record.values[rowField.key]) || record.displayName;
+    const columnKey = stableValueKey(record.values[columnField.key]);
+    const columnLabel = columnField.id === report.config.dateFieldId
+      ? dayLabel(displayRecordValue(columnField, record.values[columnField.key]))
+      : displayRecordValue(columnField, record.values[columnField.key]);
+    const value = displayRecordValue(valueField, record.values[valueField.key]);
+
+    if (!rowKey || !columnKey) {
+      continue;
+    }
+
+    columns.set(columnKey, { key: columnKey, label: columnLabel || columnKey });
+
+    const row = rows.get(rowKey) ?? {
+      id: rowKey,
+      label: rowLabel || rowKey,
+      summary: new Map<string, number>(),
+      values: new Map<string, Set<string>>(),
+    };
+    const cell = row.values.get(columnKey) ?? new Set<string>();
+
+    if (value) {
+      cell.add(value);
+    }
+
+    row.values.set(columnKey, cell);
+
+    if (summaryField) {
+      const summaryValue = displayRecordValue(summaryField, record.values[summaryField.key]);
+
+      if (summaryValue) {
+        row.summary.set(summaryValue, (row.summary.get(summaryValue) ?? 0) + 1);
+      }
+    }
+
+    rows.set(rowKey, row);
+  }
+
+  return {
+    columns: Array.from(columns.values()).sort((left, right) => left.key.localeCompare(right.key, undefined, { numeric: true })),
+    rows: Array.from(rows.values())
+      .sort((left, right) => left.label.localeCompare(right.label))
+      .map((row) => ({
+        id: row.id,
+        label: row.label,
+        summary: summaryField ? formatSummary(row.summary) : null,
+        values: Object.fromEntries(Array.from(row.values.entries()).map(([key, values]) => [key, Array.from(values).join(", ")])),
+      })),
+  };
+}
+
+export function displayRecordValue(field: EntityField, value: EntityRecordValue | undefined): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (field.type === "RELATION") {
+    if (Array.isArray(value)) {
+      return value.map(relationLabel).filter(Boolean).join(", ");
+    }
+
+    return relationLabel(value);
+  }
+
+  if (field.type === "SELECT") {
+    const option = field.options?.find((item) => item.value === value || item.id === value);
+    return option?.label ?? String(value);
+  }
+
+  if (field.type === "MULTISELECT" && Array.isArray(value)) {
+    return value.map((item) => {
+      const option = field.options?.find((option) => option.value === item || option.id === item);
+      return option?.label ?? String(item);
+    }).join(", ");
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(String).join(", ");
+  }
+
+  if (typeof value === "object") {
+    return relationLabel(value) || JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function fieldMap(fields: EntityField[]) {
+  return new Map(fields.map((field) => [field.id, field]));
+}
+
+function relationLabel(value: unknown) {
+  return value && typeof value === "object" && "displayName" in value
+    ? String(value.displayName)
+    : "";
+}
+
+function stableValueKey(value: EntityRecordValue | undefined): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    if (Array.isArray(value)) return value.map((item) => stableValueKey(item as EntityRecordValue)).join("|");
+    if ("id" in value) return String(value.id);
+    if ("displayName" in value) return String(value.displayName);
+  }
+  return String(value);
+}
+
+function dayLabel(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  return match ? match[3] : value;
+}
+
+function formatSummary(summary: Map<string, number>) {
+  return Array.from(summary.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, count]) => `${label}: ${count}`)
+    .join(" ");
+}

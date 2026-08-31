@@ -243,6 +243,7 @@ Known `AppView.type` values:
 | --- | --- |
 | `RECORDS` | Implemented by `RecordsRenderer`. |
 | `WORKFLOW` | Implemented for `workflowKey = state-update` and `workflowKey = attendance`; unsupported UI for unknown workflows. |
+| `REPORT` | Implemented by `ReportRenderer` with `TABLE` and `MATRIX` presentation modes. |
 | `BOARD` | Unsupported UI only. |
 | `DASHBOARD` | Unsupported UI only. |
 
@@ -255,10 +256,13 @@ Known `AppView.type` values:
 - `RECORDS` -> `RecordsRenderer`
 - `WORKFLOW + attendance` -> `AttendanceWorkflow`
 - `WORKFLOW + state-update` -> `StateUpdateWorkflow`
+- `REPORT` -> `ReportRenderer`
 - unsupported workflows -> `UnsupportedWorkflow`
 - `BOARD` / `DASHBOARD` -> `UnsupportedRenderer`
 
 The registry depends on `isStateUpdateCompatibleWorkflow()` but does not own domain rules, sync, persistence, or conflict behavior.
+
+`REPORT` is a configurable consultation renderer, separate from RECORDS and workflows. It calls `/api/v1/contracts/:contractId/reports/:appViewId` with a shared `from/to` date range. `TABLE` renders one record per row using configured columns. `MATRIX` groups rows by `rowFieldId`, generates columns from `columnFieldId`, renders cells from `valueFieldId`, and optionally counts `summaryFieldId` values per row. For a monthly Attendance view this can be configured as Persona x Fecha with Estado as both value and summary, but the renderer does not hardcode Attendance statuses or field names.
 
 ## RECORDS Engine
 

@@ -2,6 +2,7 @@ import { ComponentType, createElement } from "react";
 
 import { AppView, AppViewType, WorkflowAppView } from "@/lib/opco-api";
 import { isStateUpdateCompatibleWorkflow } from "../lib/state-update-offline";
+import { ReportRenderer } from "@/renderers/reports/ReportRenderer";
 import { RecordsRenderer } from "@/renderers/records/RecordsRenderer";
 import { AppViewRendererProps } from "@/renderers/types";
 import { UnsupportedRenderer } from "@/renderers/unsupported/UnsupportedRenderer";
@@ -12,6 +13,7 @@ import { UnsupportedWorkflow } from "@/renderers/workflows/unsupported/Unsupport
 export const rendererRegistry: Record<AppViewType, ComponentType<AppViewRendererProps>> = {
   BOARD: UnsupportedRenderer,
   DASHBOARD: UnsupportedRenderer,
+  REPORT: ReportRenderer as ComponentType<AppViewRendererProps>,
   RECORDS: RecordsRenderer as ComponentType<AppViewRendererProps>,
   WORKFLOW: UnsupportedRenderer,
 };

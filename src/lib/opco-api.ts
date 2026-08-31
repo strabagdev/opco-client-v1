@@ -64,11 +64,34 @@ export type EntitySummary = {
   active: boolean;
 };
 
-export type AppViewType = "RECORDS" | "WORKFLOW" | "BOARD" | "DASHBOARD";
+export type AppViewType = "RECORDS" | "WORKFLOW" | "REPORT" | "BOARD" | "DASHBOARD";
 
 export type RecordsAppViewConfig = {
   entityTypeId: string;
 };
+
+export type ReportAppViewConfig = {
+  entityTypeId: string;
+  dateFieldId: string;
+} & (
+  | {
+      presentationMode: "TABLE";
+      table: {
+        visibleFieldIds: string[];
+        defaultSortFieldId?: string;
+        defaultSortDirection: "asc" | "desc";
+      };
+    }
+  | {
+      presentationMode: "MATRIX";
+      matrix: {
+        rowFieldId: string;
+        columnFieldId: string;
+        valueFieldId: string;
+        summaryFieldId?: string;
+      };
+    }
+);
 
 export type AttendanceWorkflowConfig = {
   contextFieldIds?: string[];
@@ -125,6 +148,16 @@ export type WorkflowAppView = {
   type: "WORKFLOW";
 };
 
+export type ReportAppView = {
+  config: ReportAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "REPORT";
+};
+
 export type BoardAppView = {
   config: BoardAppViewConfig;
   icon: string | null;
@@ -145,7 +178,7 @@ export type DashboardAppView = {
   type: "DASHBOARD";
 };
 
-export type AppView = RecordsAppView | WorkflowAppView | BoardAppView | DashboardAppView;
+export type AppView = RecordsAppView | WorkflowAppView | ReportAppView | BoardAppView | DashboardAppView;
 
 export type EntityFieldType =
   | "BOOLEAN"
@@ -244,6 +277,29 @@ export type EntityRecordsQuery = {
 export type EntityRecordsResponse = {
   records: EntityRecord[];
   pagination: EntityRecordPagination;
+};
+
+export type ReportQuery = {
+  from?: string;
+  to?: string;
+};
+
+export type ReportResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  config: ReportAppViewConfig;
+  entity: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  fields: EntityField[];
+  from: string;
+  records: EntityRecord[];
+  to: string;
 };
 
 export type EntityRecordResponse = {
@@ -1078,8 +1134,28 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(
           entityTypeId,
         )}/records/${encodeURIComponent(recordId)}`,
-        token,
+      token,
       ).then(normalizeEntityRecordResponse);
+    },
+    getReport(token: string, contractId: string, appViewId: string, query: ReportQuery = {}) {
+      const searchParams = new URLSearchParams();
+
+      if (query.from) {
+        searchParams.set("from", query.from);
+      }
+
+      if (query.to) {
+        searchParams.set("to", query.to);
+      }
+
+      const serializedQuery = searchParams.toString();
+
+      return authenticatedRequest<ReportResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/reports/${encodeURIComponent(appViewId)}${
+          serializedQuery ? `?${serializedQuery}` : ""
+        }`,
+        token,
+      );
     },
     createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {
       return authenticatedRequest<EntityRecordResponse>(

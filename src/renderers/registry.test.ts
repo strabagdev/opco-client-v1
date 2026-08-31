@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { WorkflowAppView } from "@/lib/opco-api";
+import { ReportAppView, WorkflowAppView } from "@/lib/opco-api";
 
-import { resolveWorkflowRenderer } from "./registry";
+import { resolveAppViewRenderer, resolveWorkflowRenderer } from "./registry";
 
 vi.mock("@/renderers/records/RecordsRenderer", () => ({
   RecordsRenderer() {
+    return null;
+  },
+}));
+
+vi.mock("@/renderers/reports/ReportRenderer", () => ({
+  ReportRenderer() {
     return null;
   },
 }));
@@ -51,7 +57,30 @@ const attendanceView: WorkflowAppView = {
   type: "WORKFLOW",
 };
 
+const reportView: ReportAppView = {
+  config: {
+    entityTypeId: "attendance",
+    dateFieldId: "field_date",
+    presentationMode: "MATRIX",
+    matrix: {
+      columnFieldId: "field_date",
+      rowFieldId: "field_person",
+      valueFieldId: "field_status",
+    },
+  },
+  icon: "table",
+  id: "view_report",
+  name: "Asistencia mensual",
+  slug: "asistencia-mensual",
+  sortOrder: 2,
+  type: "REPORT",
+};
+
 describe("workflow renderer registry", () => {
+  it("resolves report renderer as its own AppView type", () => {
+    expect(resolveAppViewRenderer(reportView.type).name).toBe("ReportRenderer");
+  });
+
   it("resolves attendance workflow by workflowKey", () => {
     expect(resolveWorkflowRenderer(attendanceView).name).toBe("AttendanceWorkflow");
   });

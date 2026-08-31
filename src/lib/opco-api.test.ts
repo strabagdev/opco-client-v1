@@ -1029,6 +1029,49 @@ describe("createOpcoApi", () => {
     expect(result.views.map((view) => view.type)).toEqual(["RECORDS", "WORKFLOW", "BOARD", "DASHBOARD"]);
   });
 
+  it("requests report data by AppView and date range", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              appView: { id: "report_1", name: "Asistencia mensual", slug: "asistencia-mensual" },
+              config: {
+                entityTypeId: "attendance",
+                dateFieldId: "date_field",
+                presentationMode: "TABLE",
+                table: {
+                  defaultSortDirection: "desc",
+                  visibleFieldIds: ["person_field", "date_field"],
+                },
+              },
+              entity: { id: "attendance", name: "Asistencias", slug: "asistencias" },
+              fields: [],
+              from: "2026-08-01",
+              records: [],
+              to: "2026-08-31",
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const result = await api.getReport("token_123", "contract_1", "report_1", {
+      from: "2026-08-01",
+      to: "2026-08-31",
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/reports/report_1?from=2026-08-01&to=2026-08-31");
+    expect(result.config.presentationMode).toBe("TABLE");
+  });
+
   it("parses users without assigned app views", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",

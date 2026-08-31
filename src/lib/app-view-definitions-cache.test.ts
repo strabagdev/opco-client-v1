@@ -132,7 +132,7 @@ describe("AppView offline readiness", () => {
       telemetryByScope,
       "owner_a",
       "contract_a",
-      { ...recordsView, config: { entityTypeId: "entity_other" }, id: "view_other" },
+      { ...recordsView, config: { entityTypeId: "entity_other" }, id: "view_other", type: "RECORDS" },
     ).offlineReady).toBe(false);
   });
 
