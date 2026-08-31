@@ -1,5 +1,5 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { WifiOff } from "lucide-react-native";
+import { LogOut, WifiOff, X } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
@@ -353,23 +353,28 @@ export default function AppLayout() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.userMenuPanel, isWideLayout ? styles.userMenuPanelWide : styles.userMenuPanelCompact]}>
             <View style={styles.userMenuHeader}>
-              <View style={styles.userAvatarLarge}>
-                <Text style={styles.userAvatarLargeText}>{userInitials}</Text>
+              <View style={styles.userMenuIdentity}>
+                <View style={styles.userAvatarLarge}>
+                  <Text style={styles.userAvatarLargeText}>{userInitials}</Text>
+                </View>
+                <View style={styles.userMenuText}>
+                  <Text numberOfLines={1} style={styles.userMenuName}>{userDisplayName}</Text>
+                  {me?.user.email ? <Text numberOfLines={1} style={styles.userMenuEmail}>{me.user.email}</Text> : null}
+                </View>
               </View>
-              <View style={styles.userMenuText}>
-                <Text style={styles.userMenuName}>{userDisplayName}</Text>
-                {me?.user.email ? <Text style={styles.userMenuEmail}>{me.user.email}</Text> : null}
-              </View>
-            </View>
-            <View style={styles.userMenuActions}>
               <Pressable
+                accessibilityLabel="Cerrar menu de usuario"
                 accessibilityRole="button"
                 onPress={() => setIsUserMenuOpen(false)}
-                style={styles.modalCloseButton}
+                style={styles.userMenuCloseButton}
               >
-                <Text style={styles.modalCloseText}>Cerrar</Text>
+                <X color="#587078" size={18} strokeWidth={2.2} />
               </Pressable>
+            </View>
+            <View style={styles.userMenuBody} />
+            <View style={styles.userMenuFooter}>
               <Pressable
+                accessibilityLabel="Cerrar sesion"
                 accessibilityRole="button"
                 onPress={() => {
                   setIsUserMenuOpen(false);
@@ -377,6 +382,7 @@ export default function AppLayout() {
                 }}
                 style={styles.logoutButton}
               >
+                <LogOut color="#9f3412" size={16} strokeWidth={2.2} />
                 <Text style={styles.logoutText}>Cerrar sesion</Text>
               </Pressable>
             </View>
@@ -687,17 +693,20 @@ const styles = StyleSheet.create({
   },
   logoutButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
-    borderColor: "#b8c7ca",
+    alignSelf: "flex-end",
+    backgroundColor: "#ffffff",
+    borderColor: "#d8e2e4",
     borderRadius: 8,
     borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
     justifyContent: "center",
     minHeight: 40,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   logoutText: {
-    color: "#ffffff",
+    color: "#9f3412",
     fontWeight: "800",
   },
   modalBackdrop: {
@@ -828,30 +837,51 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontWeight: "800",
   },
-  userMenuActions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    justifyContent: "flex-end",
+  userMenuBody: {
+    minHeight: 20,
+  },
+  userMenuCloseButton: {
+    alignItems: "center",
+    borderRadius: 8,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
   },
   userMenuEmail: {
     color: "#587078",
+    flexShrink: 1,
     marginTop: 2,
   },
+  userMenuFooter: {
+    alignItems: "flex-end",
+    borderTopColor: "#e1e8ea",
+    borderTopWidth: 1,
+    paddingTop: 14,
+  },
   userMenuHeader: {
-    alignItems: "center",
+    alignItems: "flex-start",
     flexDirection: "row",
     gap: 12,
+    justifyContent: "space-between",
+  },
+  userMenuIdentity: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 12,
+    minWidth: 0,
   },
   userMenuName: {
     color: "#17363c",
+    flexShrink: 1,
     fontSize: 18,
     fontWeight: "800",
   },
   userMenuPanel: {
     backgroundColor: "#ffffff",
     borderRadius: 8,
-    gap: 18,
+    gap: 14,
+    maxHeight: "86%",
     padding: 16,
     width: "100%",
   },
