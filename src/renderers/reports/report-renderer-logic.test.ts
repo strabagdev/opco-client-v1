@@ -42,7 +42,48 @@ describe("report renderer logic", () => {
       },
     });
 
-    expect(table?.rows[0].values).toEqual(["Juan Perez", "2026-08-01", "presente"]);
+    expect(table?.rows[0].values).toEqual(["Juan Perez", "2026-08-01", "PRESENTE"]);
+  });
+
+  it("uppercases compact internal SELECT values in TABLE reports", () => {
+    const table = buildReportTableModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        presentationMode: "TABLE",
+        table: {
+          defaultSortDirection: "desc",
+          defaultSortFieldId: "field_date",
+          visibleFieldIds: ["field_status"],
+        },
+        valueDisplay: {
+          field_status: "INTERNAL_VALUE",
+        },
+      },
+      fields: baseReport.fields.map((field) =>
+        field.id === "field_status"
+          ? {
+            ...field,
+            options: field.options?.map((option) =>
+              option.id === "option_present" ? { ...option, value: "p" } : option,
+            ),
+          }
+          : field,
+      ),
+      records: [
+        {
+          displayName: "Juan 2026-08-01",
+          id: "record_1",
+          updatedAt: "2026-08-01T12:00:00.000Z",
+          values: {
+            estado: "p",
+          },
+        },
+      ],
+    });
+
+    expect(table?.rows[0].values).toEqual(["P"]);
   });
 
   it("builds MATRIX rows, date columns, values and lateral summary with real labels", () => {
@@ -98,13 +139,31 @@ describe("report renderer logic", () => {
       {
         id: "person_1",
         label: "Juan Perez",
-        summary: "ausente: 1 presente: 1",
+        summary: "AUSENTE: 1 PRESENTE: 1",
         values: {
-          "2026-08-01": "presente",
-          "2026-08-02": "ausente",
+          "2026-08-01": "PRESENTE",
+          "2026-08-02": "AUSENTE",
         },
       },
     ]);
+  });
+
+  it("keeps visible label casing when SELECT display uses LABEL", () => {
+    const table = buildReportTableModel({
+      ...baseReport,
+      fields: baseReport.fields.map((field) =>
+        field.id === "field_status"
+          ? {
+            ...field,
+            options: field.options?.map((option) =>
+              option.id === "option_present" ? { ...option, label: "Presente normal" } : option,
+            ),
+          }
+          : field,
+      ),
+    });
+
+    expect(table?.rows[0].values).toEqual(["Juan Perez", "2026-08-01", "Presente normal"]);
   });
 
   it("falls back to SELECT labels in internal mode when an option has no internal value", () => {
@@ -145,6 +204,55 @@ describe("report renderer logic", () => {
     });
 
     expect(table?.rows[0].values).toEqual(["Presente"]);
+  });
+
+  it("uppercases configured internal MULTISELECT values", () => {
+    const table = buildReportTableModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        dateFieldId: "field_date",
+        presentationMode: "TABLE",
+        table: {
+          defaultSortDirection: "desc",
+          visibleFieldIds: ["field_tags"],
+        },
+        valueDisplay: {
+          field_tags: "INTERNAL_VALUE",
+        },
+      },
+      fields: [
+        ...baseReport.fields,
+        {
+          active: true,
+          config: { display: {}, validation: {} },
+          id: "field_tags",
+          key: "marcas",
+          name: "Marcas",
+          options: [
+            { active: true, id: "option_p", label: "Presente", order: 1, value: "p" },
+            { active: true, id: "option_l", label: "Licencia", order: 2, value: "l" },
+          ],
+          order: 4,
+          required: false,
+          searchable: false,
+          type: "MULTISELECT",
+          unique: false,
+        },
+      ],
+      records: [
+        {
+          displayName: "Juan 2026-08-01",
+          id: "record_1",
+          updatedAt: "2026-08-01T12:00:00.000Z",
+          values: {
+            marcas: ["p", "l"],
+          },
+        },
+      ],
+    });
+
+    expect(table?.rows[0].values).toEqual(["P, L"]);
   });
 
   it("builds all month days for MATRIX when date columns use MONTH time filter", () => {

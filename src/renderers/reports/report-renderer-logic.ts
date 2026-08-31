@@ -150,7 +150,7 @@ export function displayRecordValue(
   if (field.type === "SELECT") {
     const option = field.options?.find((item) => item.value === value || item.id === value);
     if (selectValueDisplay === "INTERNAL_VALUE") {
-      return option?.value || option?.label || String(value);
+      return internalValueLabel(option?.value, option?.label, value);
     }
     return option?.label ?? String(value);
   }
@@ -159,7 +159,7 @@ export function displayRecordValue(
     return value.map((item) => {
       const option = field.options?.find((option) => option.value === item || option.id === item);
       if (selectValueDisplay === "INTERNAL_VALUE") {
-        return option?.value || option?.label || String(item);
+        return internalValueLabel(option?.value, option?.label, item);
       }
       return option?.label ?? String(item);
     }).join(", ");
@@ -184,6 +184,10 @@ function relationLabel(value: unknown) {
   return value && typeof value === "object" && "displayName" in value
     ? String(value.displayName)
     : "";
+}
+
+function internalValueLabel(internalValue: string | undefined, fallbackLabel: string | undefined, rawValue: unknown) {
+  return internalValue ? internalValue.toUpperCase() : fallbackLabel ?? String(rawValue);
 }
 
 function stableValueKey(value: EntityRecordValue | undefined): string {
