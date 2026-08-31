@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId } from "./app-diagnostics";
 
 describe("global app diagnostics", () => {
-  it("defines the initial diagnostics tabs in one extensible list", () => {
+  it("defines the global diagnostics modal tabs in one extensible list", () => {
     expect(GLOBAL_DIAGNOSTIC_TABS).toEqual([
       { id: "pwa", label: "PWA" },
       { id: "state-update", label: "STATE_UPDATE" },
@@ -18,7 +18,7 @@ describe("global app diagnostics", () => {
     expect(normalizeDiagnosticTabId(null)).toBe("pwa");
   });
 
-  it("uses a technical diagnostics icon and clear accessibility label", () => {
+  it("keeps the header diagnostics entry available", () => {
     expect(GLOBAL_DIAGNOSTICS_BUTTON).toEqual({
       accessibilityLabel: "Diagnostico",
       icon: "chart-no-axes-column",

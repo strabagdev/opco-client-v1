@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import { getRecordsDiagnosticsRows, getSyncDiagnosticsRows } from "./sync-diagnostics";
 
+declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
+
+describe("records renderer diagnostics presentation", () => {
+  it("keeps inline diagnostics panels out of the experience content", () => {
+    const { readFileSync } = require("fs");
+    const source = readFileSync("src/renderers/records/RecordsRenderer.tsx", "utf8");
+
+    expect(source).not.toContain("Diagnostico de sincronizacion");
+    expect(source).not.toContain("Diagnostico de records");
+    expect(source).not.toContain("syncDiagnostics");
+    expect(source).not.toContain("recordsDiagnostics");
+  });
+});
+
 describe("records sync diagnostics", () => {
   it("shows sync timestamps without exposing owner keys or payloads", () => {
     const telemetry = {

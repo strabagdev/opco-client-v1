@@ -27,11 +27,6 @@ import {
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
 } from "@/lib/visual-stability";
 import {
-  RecordsDiagnosticsState,
-  getRecordsDiagnosticsRows,
-  getSyncDiagnosticsRows,
-} from "@/renderers/records/sync-diagnostics";
-import {
   getRecordsCacheBannerMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
@@ -58,7 +53,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [recordsSyncTelemetry, setRecordsSyncTelemetry] = useState<SyncTelemetry | null>(null);
-  const [recordsDiagnostics, setRecordsDiagnostics] = useState<RecordsDiagnosticsState | null>(null);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
@@ -138,22 +132,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setFromCache(false);
       setIsOfflineData(false);
       setSyncedAt(null);
-      setRecordsDiagnostics({
-        appViewId: appView.id,
-        connectivityStatus,
-        contractId: selectedContractId,
-        entityTypeId,
-        error: null,
-        isLoading: true,
-        local: null,
-        outboxConsistency: null,
-        ownerKey,
-        page: 1,
-        refresh: null,
-        rendererRecords: 0,
-        search: debouncedSearch,
-        sessionStatus: status,
-      });
 
       try {
         const definitionResult = await getEntityDefinitionWithCache({
@@ -180,46 +158,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               contractId: selectedContractId,
               entityTypeId,
               ownerKey,
-              onDiagnostics: (diagnostics) => {
-                if (!isMounted) {
-                  return;
-                }
-
-                setRecordsDiagnostics({
-                  appViewId: appView.id,
-                  connectivityStatus,
-                  contractId: selectedContractId,
-                  entityTypeId,
-                  error: null,
-                  isLoading: true,
-                  local: diagnostics.afterReconcile ?? null,
-                  outboxConsistency: null,
-                  ownerKey,
-                  page: 1,
-                  refresh: diagnostics,
-                  rendererRecords: 0,
-                  search: debouncedSearch,
-                  sessionStatus: status,
-                });
-              },
               resultPageSize: PAGE_SIZE,
               store: definitionCache,
               suppressNetworkTelemetry: status === "offline",
               token,
             });
-        let outboxConsistency: RecordsDiagnosticsState["outboxConsistency"] = null;
-
-        if (shouldShowRecordsDiagnostics()) {
-          try {
-            outboxConsistency = await definitionCache.getRecordOutboxConsistency({
-              contractId: selectedContractId,
-              entityTypeId,
-              ownerKey,
-            });
-          } catch {
-            outboxConsistency = null;
-          }
-        }
 
         if (isMounted) {
           setDefinition(definitionResult.definition);
@@ -228,22 +171,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           setSyncedAt(definitionResult.syncedAt);
           setRecords(recordsResult.records);
           setPagination(recordsResult.pagination);
-          setRecordsDiagnostics((current) => ({
-            appViewId: current?.appViewId ?? appView.id,
-            connectivityStatus,
-            contractId: current?.contractId ?? selectedContractId,
-            entityTypeId: current?.entityTypeId ?? entityTypeId,
-            error: null,
-            isLoading: false,
-            local: current?.local ?? null,
-            outboxConsistency,
-            ownerKey: current?.ownerKey ?? ownerKey,
-            page: recordsResult.pagination.page,
-            refresh: current?.refresh ?? null,
-            rendererRecords: recordsResult.records.length,
-            search: debouncedSearch,
-            sessionStatus: current?.sessionStatus ?? status,
-          }));
         }
         await refreshRecordsSyncSummary();
         await refreshCurrentSyncTelemetry();
@@ -252,7 +179,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           const message = nextError instanceof Error ? nextError.message : "No fue posible cargar registros.";
 
           setError(message);
-          setRecordsDiagnostics((current) => current ? { ...current, error: message, isLoading: false } : current);
         }
       } finally {
         if (isMounted) {
@@ -424,13 +350,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
         </Pressable>
       ) : null}
-
-      {shouldShowSyncDiagnostics() ? (
-        <SyncDiagnostics summary={recordsSyncSummary} telemetry={recordsSyncTelemetry} />
-      ) : null}
-      {shouldShowRecordsDiagnostics() ? (
-        <RecordsDiagnostics diagnostics={recordsDiagnostics} telemetry={recordsSyncTelemetry} />
-      ) : null}
     </ScrollView>
   );
 }
@@ -492,75 +411,6 @@ function formatSyncSummary(summary: {
     summary.failedCount ? `${summary.failedCount} errores` : null,
     summary.conflictCount ? `${summary.conflictCount} conflictos` : null,
   ].filter(Boolean).join(" · ");
-}
-
-function shouldShowSyncDiagnostics() {
-  if (typeof __DEV__ !== "undefined" && __DEV__) {
-    return true;
-  }
-
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return new URLSearchParams(window.location.search).has("syncDiagnostics");
-}
-
-function shouldShowRecordsDiagnostics() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return new URLSearchParams(window.location.search).get("recordsDiagnostics") === "1";
-}
-
-function RecordsDiagnostics({
-  diagnostics,
-  telemetry,
-}: {
-  diagnostics: RecordsDiagnosticsState | null;
-  telemetry: SyncTelemetry | null;
-}) {
-  const rows = getRecordsDiagnosticsRows(diagnostics, telemetry);
-
-  return (
-    <View style={styles.syncDiagnostics}>
-      <Text style={styles.syncDiagnosticsTitle}>Diagnostico de records</Text>
-      {rows.map(([label, value]) => (
-        <View key={label} style={styles.syncDiagnosticsRow}>
-          <Text style={styles.syncDiagnosticsLabel}>{label}</Text>
-          <Text style={styles.syncDiagnosticsValue}>{value}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function SyncDiagnostics({
-  summary,
-  telemetry,
-}: {
-  summary: {
-    conflictCount: number;
-    failedCount: number;
-    pendingCount: number;
-    syncingCount: number;
-  };
-  telemetry: SyncTelemetry | null;
-}) {
-  const rows = getSyncDiagnosticsRows({ summary, telemetry });
-
-  return (
-    <View style={styles.syncDiagnostics}>
-      <Text style={styles.syncDiagnosticsTitle}>Diagnostico de sincronizacion</Text>
-      {rows.map(([label, value]) => (
-        <View key={label} style={styles.syncDiagnosticsRow}>
-          <Text style={styles.syncDiagnosticsLabel}>{label}</Text>
-          <Text style={styles.syncDiagnosticsValue}>{value}</Text>
-        </View>
-      ))}
-    </View>
-  );
 }
 
 const styles = StyleSheet.create({
@@ -768,35 +618,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
     justifyContent: "flex-end",
-  },
-  syncDiagnostics: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 6,
-    padding: 12,
-  },
-  syncDiagnosticsLabel: {
-    color: "#587078",
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  syncDiagnosticsRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  syncDiagnosticsTitle: {
-    color: "#17363c",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  syncDiagnosticsValue: {
-    color: "#17363c",
-    flex: 1,
-    fontSize: 12,
-    textAlign: "right",
   },
   syncProblemText: {
     color: "#9a3412",
