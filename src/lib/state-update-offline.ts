@@ -66,6 +66,7 @@ export type OfflineStateUpdateValues = {
 
 export type CachedStateUpdateRecord = {
   attempts?: number;
+  conflictRemoteExtraValues?: Record<string, EntityRecordValue>;
   conflictRemoteStateValues?: StateUpdateCurrentFieldValue[];
   conflictRemoteUpdatedAt?: string | null;
   date?: string;
@@ -847,6 +848,7 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord): CachedSt
   const conflictValues = record.conflictRemoteValues as Partial<OfflineStateUpdateValues> | null;
 
   return {
+    conflictRemoteExtraValues: conflictValues?.extraValues,
     conflictRemoteStateValues: conflictValues?.stateValues,
     conflictRemoteUpdatedAt: record.conflictRemoteUpdatedAt,
     date: values.date,

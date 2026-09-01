@@ -128,11 +128,13 @@ Relevant tables:
 
 - `entity_records`: renderable local snapshots, remote IDs, remote version, conflict snapshots, and `sync_status`.
 - `pending_operations`: durable outbox for `CREATE`, `UPDATE`, and `STATE_UPDATE`.
-- `app_metadata`: schema version, selected contract, and persisted state-update diagnostics.
+- `app_metadata`: schema version, selected contract, remembered Attendance context selections, Attendance day hydration metadata, and persisted state-update diagnostics.
 - `app_view_definitions`: prepared workflow/runtime metadata by `owner_key + contract_id + app_view_id`.
 - `sync_telemetry`: sync phase and timestamps. `STATE_UPDATE` uses `workflow:<appViewId>` as the telemetry entity key.
 
 Offline `STATE_UPDATE` save is atomic: the local `entity_records` snapshot and the `pending_operations` row are written in the same SQLite transaction.
+
+Conflict persistence is also atomic: `markStateUpdateOperationConflict()` writes the pending operation error metadata and the associated local `entity_records` conflict snapshot in one SQLite transaction. The successful final shape is unchanged: pending operation has `last_error_code = CONFLICT`, and the local record has `sync_status = conflict` plus remote conflict metadata.
 
 `local_id` is scoped. For `update-current` with `subject` or `subject-date` uniqueness, it is derived from `appViewId`, optional date, and `subjectRecordId`. For append/no-uniqueness records it is generated from the AppView plus time/randomness.
 
@@ -285,11 +287,19 @@ A conflict contains:
 - `expectedUpdatedAt`;
 - optional overwrite confirmation.
 
-Backend differences now distinguish `kind=state` and `kind=extra`.
+Backend conflict differences can distinguish state fields from extra fields through the structured difference payload. The client treats normal option differences as state diffs and preserves extra diffs when Core includes raw local/remote extra values or marks the source as extra.
 
 Overwrite is a new semantic intention and requires a new `clientRequestId`. The original conflict probe should keep its original key if retried; the overwrite confirmation should not reuse it.
 
-IMPLEMENTATION GAP: client conflict UI is still primarily state/status oriented. Generic `state-update` extras and Attendance observation are submitted, but conflict rendering/resolution does not yet present a full field-by-field extra diff equivalent to the backend contract.
+Current client representation preserves both state and extra differences when Operational Core returns them:
+
+- state diffs remain represented as `existing.stateValues` and `requested.stateValues`;
+- extra diffs can be represented as `existing.extraValues`, `requested.extraValues`, and an `extraValues[]` metadata array;
+- each extra diff can carry `fieldId`, `fieldLabel`, `fieldType`, `localValue`, and `remoteValue`;
+- when the prepared definition is available, SELECT and MULTISELECT extra values are rendered with option labels while retaining their technical values internally;
+- unknown extra fields are still shown with a technical fallback label instead of being hidden or crashing.
+
+Conflict resolution semantics have not changed. The user still chooses the whole local intention or the remote Opco state; there is no field-by-field merge action yet.
 
 ## Idempotency Errors
 
@@ -312,12 +322,28 @@ Attendance maps to `STATE_UPDATE` like this:
 | --- | --- |
 | person | subject |
 | status | state |
-| observation | extra |
+| context fields | extras |
+| observation, only when `observationFieldId` exists | extra |
 | date | date |
 | uniqueness | `subject-date` |
 | history mode | `update-current` |
 
+Attendance uses configured `statusFieldId`, `personFieldId`, `dateFieldId`, optional `contextFieldIds`, and optional `observationFieldId`. UI/config option identity is `optionId`. SELECT context selections are remembered locally by `optionId`, but the persistible value in `extraValues` is resolved to `FieldOption.value` because that is the entity field value expected by Operational Core. Labels are display text only. If the value cannot be resolved, the client fails validation locally instead of sending an arbitrary `optionId`.
+
+`observationFieldId` is optional. If it is absent, Attendance has no observation input, does not generate an observation extra value, and does not infer observation from arbitrary text/context `extraValues`.
+
 Attendance may keep UX-specific text, status buttons, and the legacy GET adapter. It must not own separate sync/storage/conflict semantics.
+
+Offline Attendance snapshots:
+
+- remote snapshots are cached per date using the generic state-update shape in `entity_records`;
+- daily hydration metadata lives in `app_metadata` with `lastSuccessfulRefreshAt`;
+- local pending/failed/conflict rows overlay the remote snapshot and are never deleted by absence;
+- online opening of any date hydrates that date for later offline use;
+- prewarm automatically hydrates every date in the current month only, with maximum Attendance date-request concurrency of 3;
+- dates outside the current month are not downloaded automatically and are hydrated only when opened online.
+
+Monthly Home readiness uses `attendanceMonthStatus`: `complete` when all dates in the current month have complete snapshots, `partial` when at least one date is hydrated but one or more are missing, and `none` when no current-month date is hydrated. The active workflow date still uses its own daily hydration telemetry.
 
 The compatible workflow family is named by `isStateUpdateCompatibleWorkflow()`. Current compatible keys are:
 
@@ -365,6 +391,8 @@ The dedicated `/diagnostics/state-update` route is an operational console. It re
 
 `requestHistory` keeps the recent bounded sanitized request events, currently capped at 20. It records operation class (`SAVE`, `DAY_LOAD`, `REFRESH_AFTER_SYNC`, `SEARCH`, `PERSON_LOAD`, `RECONCILE`, `READY_CHECK`, `AUTH_REFRESH`, `HEALTH`, or `OTHER`), HTTP method, path template, client timing milestones, timeout flag, HTTP status, backend error code when available, local `syncRunId` when available, sanitized request correlation id, echoed backend request id, parsed `Server-Timing`, and a derived interpretation such as `client_timeout_before_response`, `network_failure`, `http_error`, `server_slow`, or `success`. `AUTH_REFRESH` entries exist to distinguish auth readiness from business writes; a timeout there means the sync run was blocked before POST and should not be displayed as a failed record save. It must not persist payloads, raw IDs, query values, tokens, cookies, names, stack traces, or form values.
 
+Structured backend validation errors can include field-level details such as `fieldId`, `fieldLabel`, `fieldType`, `rejectedValue`, `expectedType`, and `expectedValues`. The client persists those details on the pending operation as `lastErrorDetails`, shows a global summary (`Un cambio no pudo sincronizarse.`), and exposes `Ver detalle` for human-readable and technical detail. The primary message should use field labels and rejected values, not arbitrary `optionId`s, `undefined`, or `null`. When the failed operation is resolved or sync succeeds, the global pending-error notice disappears; telemetry/history may still retain sanitized evidence.
+
 `Last STATE_UPDATE activity` is separate from `Last STATE_UPDATE sync`. A real sync engine run writes both, with activity `type=sync`. Readiness probes may write activity `type=ready_check` with `result=reconnecting`, `ready_confirmed`, `sync_started`, `ready_failed`, `cancelled_scope_changed`, or `interrupted`, but they do not invent `Last STATE_UPDATE sync`. The diagnostics UI labels the historical sync card as the last completed sync and shows readiness activity separately. Snapshot reconciliation through `upsertStateUpdateSnapshot()` may complete pending local intent without a POST sync run; that writes activity `type=snapshot_reconciliation` and does not invent a new `Last STATE_UPDATE sync`.
 
 `Last visible UI error` is historical. The current visible error may disappear after success, refresh, navigation, or remount, but diagnostics keep the last sanitized event with `occurredAt`, optional `clearedAt`, `operation`, HTTP method, path template, duration, timeout flag, HTTP status, error code, optional `syncRunId`, and resolution such as `unresolved`, `cleared_after_success`, or `refresh_failed`. It must not persist user-facing messages, payloads, tokens, raw IDs, names, or form values.
@@ -402,6 +430,9 @@ Reconnect detection is persisted when connectivity transitions from `offline` or
 | 13 | Combined pending-work sync uses one engine-order facade; state-update sync uses one telemetry wrapper. | IMPLEMENTED |
 | 14 | Diagnostic observation is passive; explicit operator commands may invoke existing recovery/sync commands. | IMPLEMENTED |
 | 15 | Attendance is an adapter, not an engine. | IMPLEMENTED |
+| 16 | Conflict operation metadata and local conflict record are persisted atomically. | IMPLEMENTED |
+| 17 | Observation is represented only when `observationFieldId` exists. | IMPLEMENTED |
+| 18 | Conflict UI can present state and extra diffs when Core returns them. | IMPLEMENTED |
 
 ## State Update 1.0 Readiness
 
@@ -412,11 +443,13 @@ Implemented client-side readiness for State Update 1.0:
 - server-owned `updatedAt` as the only remote version;
 - complete snapshot reconciliation for remote deletions;
 - explicit handling for backend idempotency errors;
-- centralized compatible workflow detection for `state-update` and `attendance`.
+- centralized compatible workflow detection for `state-update` and `attendance`;
+- generic conflict diff presentation for state fields and extra fields;
+- structured error detail persistence and global detail UI.
 
-Remaining implementation gap:
+Remaining limitation:
 
-- conflict UI still does not present a complete generic extra diff equivalent to the backend conflict payload.
+- conflict resolution remains a whole-intent decision; there is no field-by-field merge action.
 
 ## Architecture Entities For System Diagram
 

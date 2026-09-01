@@ -145,18 +145,12 @@ export function stateUpdateConflictToAttendanceRecord(
 }
 
 function readObservation(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string) {
-  if (!extraValues) {
+  if (!extraValues || !observationFieldId) {
     return null;
   }
 
-  if (observationFieldId) {
-    const value = extraValues[observationFieldId];
-    return typeof value === "string" ? value : null;
-  }
-
-  const firstText = Object.values(extraValues).find((value) => typeof value === "string");
-
-  return typeof firstText === "string" ? firstText : null;
+  const value = extraValues[observationFieldId];
+  return typeof value === "string" ? value : null;
 }
 
 function readContextValues(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string) {

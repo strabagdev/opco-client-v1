@@ -487,6 +487,14 @@ export type StateUpdateCurrentFieldValue = {
   optionId: string | null;
 };
 
+export type StateUpdateConflictExtraValue = {
+  fieldId: string;
+  fieldLabel?: string | null;
+  fieldType?: EntityFieldType | string | null;
+  localValue?: EntityRecordValue;
+  remoteValue?: EntityRecordValue;
+};
+
 export type StateUpdateCurrent = {
   extraValues?: Record<string, EntityRecordValue>;
   recordId: string;
@@ -562,13 +570,16 @@ export type StateUpdateBatchResult =
     }
   | {
       existing: {
+        extraValues?: Record<string, EntityRecordValue>;
         recordId: string;
         stateValues: StateUpdateCurrentFieldValue[];
         updatedAt: string;
       };
       requested: {
+        extraValues?: Record<string, EntityRecordValue>;
         stateValues: StateUpdateCurrentFieldValue[];
       };
+      extraValues?: StateUpdateConflictExtraValue[];
       result: "CONFLICT";
       subjectRecordId: string;
     }
@@ -591,11 +602,18 @@ export type StateUpdateBatchResponse = {
 
 type StateUpdateApiConflictResult = {
   differences: {
-    existingLabel: string | null;
-    existingOptionId: string | null;
+    existingValue?: EntityRecordValue;
+    existingLabel?: string | null;
+    existingOptionId?: string | null;
     fieldId: string;
-    requestedLabel: string;
-    requestedOptionId: string;
+    fieldLabel?: string | null;
+    fieldType?: EntityFieldType | string | null;
+    localValue?: EntityRecordValue;
+    remoteValue?: EntityRecordValue;
+    requestedLabel?: string | null;
+    requestedOptionId?: string | null;
+    requestedValue?: EntityRecordValue;
+    source?: "extra" | "state" | string | null;
   }[];
   existing: {
     recordId: string;
@@ -1430,26 +1448,76 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
     return result;
   }
 
+  const stateDifferences = result.differences.filter((difference) => !isStateUpdateExtraDifference(difference));
+  const extraDifferences = result.differences
+    .filter(isStateUpdateExtraDifference)
+    .map((difference) => ({
+      fieldId: difference.fieldId,
+      fieldLabel: difference.fieldLabel,
+      fieldType: difference.fieldType,
+      localValue: readConflictLocalValue(difference),
+      remoteValue: readConflictRemoteValue(difference),
+    }));
+
   return {
     existing: {
+      extraValues: objectFromConflictExtraValues(extraDifferences, "remoteValue"),
       recordId: result.existing.recordId,
-      stateValues: result.differences.map((difference) => ({
+      stateValues: stateDifferences.map((difference) => ({
         fieldId: difference.fieldId,
-        label: difference.existingLabel,
-        optionId: difference.existingOptionId,
+        label: difference.existingLabel ?? null,
+        optionId: difference.existingOptionId ?? null,
       })),
       updatedAt: result.existing.updatedAt,
     },
+    extraValues: extraDifferences.length > 0 ? extraDifferences : undefined,
     requested: {
-      stateValues: result.differences.map((difference) => ({
+      extraValues: objectFromConflictExtraValues(extraDifferences, "localValue"),
+      stateValues: stateDifferences.map((difference) => ({
         fieldId: difference.fieldId,
-        label: difference.requestedLabel,
-        optionId: difference.requestedOptionId,
+        label: difference.requestedLabel ?? null,
+        optionId: difference.requestedOptionId ?? null,
       })),
     },
     result: "CONFLICT",
     subjectRecordId: result.subjectRecordId,
   };
+}
+
+function isStateUpdateExtraDifference(difference: StateUpdateApiConflictResult["differences"][number]) {
+  return difference.source === "extra" ||
+    "existingValue" in difference ||
+    "requestedValue" in difference ||
+    "remoteValue" in difference ||
+    "localValue" in difference;
+}
+
+function readConflictRemoteValue(difference: StateUpdateApiConflictResult["differences"][number]) {
+  if ("remoteValue" in difference) {
+    return difference.remoteValue;
+  }
+
+  return difference.existingValue;
+}
+
+function readConflictLocalValue(difference: StateUpdateApiConflictResult["differences"][number]) {
+  if ("localValue" in difference) {
+    return difference.localValue;
+  }
+
+  return difference.requestedValue;
+}
+
+function objectFromConflictExtraValues(
+  differences: StateUpdateConflictExtraValue[],
+  key: "localValue" | "remoteValue",
+) {
+  const entries = differences
+    .filter((difference): difference is StateUpdateConflictExtraValue & Record<typeof key, EntityRecordValue> =>
+      key in difference && difference[key] !== undefined)
+    .map((difference) => [difference.fieldId, difference[key]] as const);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {

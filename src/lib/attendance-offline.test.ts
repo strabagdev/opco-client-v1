@@ -69,4 +69,63 @@ describe("attendance state-update adapter", () => {
       person: { displayName: "Ana", id: "person_1" },
     });
   });
+
+  it("does not infer an observation from text extraValues without observationFieldId", () => {
+    expect(stateUpdateItemToAttendanceItem({
+      current: {
+        extraValues: {
+          free_text_context: "Texto de contexto",
+          group_field: "grupo_1",
+          shift_field: { label: "Turno A", optionId: "shift_a" },
+        },
+        recordId: "state_1",
+        stateValues: [{ fieldId: "field_status", label: "Presente", optionId: "status_present" }],
+        updatedAt: "2026-08-25T12:00:00.000Z",
+      },
+      subject: { displayName: "Ana", id: "person_1" },
+    }, "field_status")).toEqual({
+      attendance: {
+        contextValues: {
+          free_text_context: "Texto de contexto",
+          group_field: "grupo_1",
+          shift_field: { label: "Turno A", optionId: "shift_a" },
+        },
+        observation: null,
+        recordId: "state_1",
+        statusLabel: "Presente",
+        statusOptionId: "status_present",
+        updatedAt: "2026-08-25T12:00:00.000Z",
+      },
+      person: { displayName: "Ana", id: "person_1" },
+    });
+  });
+
+  it("reads only observationFieldId as observation when multiple text extraValues exist", () => {
+    expect(stateUpdateItemToAttendanceItem({
+      current: {
+        extraValues: {
+          field_observation: "Observación real",
+          free_text_context: "Texto de contexto",
+          group_field: "grupo_1",
+        },
+        recordId: "state_1",
+        stateValues: [{ fieldId: "field_status", label: "Presente", optionId: "status_present" }],
+        updatedAt: "2026-08-25T12:00:00.000Z",
+      },
+      subject: { displayName: "Ana", id: "person_1" },
+    }, "field_status", "field_observation")).toEqual({
+      attendance: {
+        contextValues: {
+          free_text_context: "Texto de contexto",
+          group_field: "grupo_1",
+        },
+        observation: "Observación real",
+        recordId: "state_1",
+        statusLabel: "Presente",
+        statusOptionId: "status_present",
+        updatedAt: "2026-08-25T12:00:00.000Z",
+      },
+      person: { displayName: "Ana", id: "person_1" },
+    });
+  });
 });

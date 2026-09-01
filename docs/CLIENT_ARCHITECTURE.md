@@ -262,9 +262,9 @@ Known `AppView.type` values:
 
 The registry depends on `isStateUpdateCompatibleWorkflow()` but does not own domain rules, sync, persistence, or conflict behavior.
 
-The Home screen groups assigned experiences directly from `AppView.type`: RECORDS under Registros, WORKFLOW under Flujos, and REPORT, DASHBOARD, and BOARD under Análisis. Unknown future types remain visible under Análisis with generic metadata instead of crashing or disappearing.
+The Home screen groups assigned experiences directly from `AppView.type`: RECORDS under Registros, WORKFLOW under Flujos, and REPORT, DASHBOARD, and BOARD under Análisis. Unknown future types remain visible under Análisis with generic metadata instead of crashing or disappearing. Home derives per-experience offline availability from local cache/metadata and subscribes to SQLite cache-change notifications so transitions such as data-not-cached -> partial -> ready are reflected without F5, remount, or focus. Focus refresh remains a fallback.
 
-`REPORT` is a configurable consultation renderer, separate from RECORDS and workflows. It calls `/api/v1/contracts/:contractId/reports/:appViewId` with one shared `from/to` period. `timeFilter.mode = RANGE` shows Desde/Hasta inputs; `MONTH` shows a compact month navigator and converts the selected month to first/last day. Missing `timeFilter` falls back to editable current-month RANGE. `TABLE` renders one record per row using configured columns. `MATRIX` groups rows by `rowFieldId`, generates columns from `columnFieldId`, renders cells from `valueFieldId`, and optionally counts `summaryFieldId` values per row. For SELECT and MULTISELECT report fields, `config.valueDisplay[fieldId]` chooses visible labels or internal values; missing entries default to labels, and internal mode falls back to the label when no internal value exists. For monthly date matrices, the renderer generates the real days in the selected month. For a monthly Attendance view this can be configured as Persona x Fecha with Estado as both value and summary, but the renderer does not hardcode Attendance statuses or field names.
+`REPORT` is a configurable consultation renderer, separate from RECORDS, BOARD, DASHBOARD, and workflows. It calls `/api/v1/contracts/:contractId/reports/:appViewId` with one shared `from/to` period and does not create, update, sync, or persist records locally. `timeFilter.mode = RANGE` shows Desde/Hasta inputs; `MONTH` shows a compact month navigator and converts the selected month to first/last day. Missing `timeFilter` falls back to editable current-month RANGE. `TABLE` renders one record per row using configured columns. `MATRIX` groups rows by `rowFieldId`, generates columns from `columnFieldId`, renders cells from `valueFieldId`, and optionally counts `summaryFieldId` values per row. For SELECT and MULTISELECT report fields, `config.valueDisplay[fieldId]` chooses visible labels or internal values; missing entries default to labels, and internal mode uppercases the internal value for presentation while falling back to the label when no internal value exists. For monthly date matrices, the renderer generates the real days in the selected month. For a monthly Attendance view this can be configured as Persona x Fecha with Estado as both value and summary, but the renderer does not hardcode Attendance statuses or field names.
 
 ## RECORDS Engine
 
@@ -324,7 +324,9 @@ Global fit:
 Workflow adapter -> intent -> SQLite entity_records + pending_operations -> SessionProvider orchestrator -> state-update-sync -> API -> Operational Core -> exact reconcile -> refresh signal -> mounted UI
 ```
 
-Attendance is only an adapter/preset over this path. It does not own a separate outbox, sync loop, conflict engine, or storage engine.
+Attendance is only an adapter/preset over this path. It does not own a separate outbox, sync loop, conflict engine, or storage engine. It uses configured `statusFieldId`, `personFieldId`, `dateFieldId`, optional `observationFieldId`, and optional `contextFieldIds`. UI/config option identity is `optionId`; SELECT context selections are remembered locally by `optionId`, but the persistible `extraValues` sent to Operational Core use `FieldOption.value`. Labels are never used as identity. If `observationFieldId` is absent, Attendance has no implicit observation and must not infer one from arbitrary text extras.
+
+STATE_UPDATE conflicts preserve `stateValues` and `extraValues` when Operational Core returns them. Extra diffs can carry `fieldId`, `fieldLabel`, `fieldType`, `localValue`, and `remoteValue`. The generic workflow UI resolves SELECT/MULTISELECT extras to labels when a prepared definition is available and shows unknown fields with a technical fallback instead of hiding them. Resolution semantics remain unchanged: explicit whole-intent overwrite or remote discard only.
 
 ## SQLite
 
@@ -332,7 +334,7 @@ Local database: `opco-client.db`. Current schema version in code: `8`.
 
 | Table | Category | Purpose | Ownership | Authority | Scope | Lifecycle |
 | --- | --- | --- | --- | --- | --- | --- |
-| `app_metadata` | METADATA / TELEMETRY | Schema version, selected contract, state-update diagnostics telemetry. | Local DB. | Local metadata only. | Global or owner-keyed metadata keys. | Created/migrated locally; reset only after explicit local reset. |
+| `app_metadata` | METADATA / TELEMETRY | Schema version, selected contract, Attendance day hydration metadata, remembered Attendance context selections, state-update diagnostics telemetry. | Local DB. | Local metadata only. | Global, owner-keyed, or owner/contract/AppView/date scoped metadata keys. | Created/migrated locally; reset only after explicit local reset. |
 | `context_snapshot` | CACHE DATA | Cached `/me` and `/context` for offline startup. | SessionProvider/local DB. | Cache of Operational Core context. | `owner_key`. | Upserted after successful auth/context; read on offline restore. |
 | `app_views` | CACHE DATA | Assigned AppViews for a contract. | AppView navigation cache. | Cache of `/views`. | `owner_key + contract_id`. | Upserted online; read offline; cleared on logout navigation cache clear. |
 | `app_view_definitions` | CACHE DATA / METADATA | Prepared renderer/workflow metadata and readiness status. | Prewarm and renderers. | Cache of API definitions/workflow metadata. | `owner_key + contract_id + app_view_id`. | Reconciled against assigned AppViews; ready cache preserved on network prewarm failure. |
@@ -417,6 +419,13 @@ RECORDS outbox integrity:
 - Conflict, retryable failure, and definitive failure state transitions commit the outbox error metadata and record status together.
 - Crash leftovers are observable through `getRecordOutboxConsistency()` and RECORDS diagnostics. Detection is read-only and sanitized; recovery requires normal sync retry or explicit operator/product handling.
 
+STATE_UPDATE outbox integrity:
+
+- Offline saves commit the local workflow snapshot and `pending_operations` row in one SQLite transaction.
+- Remote completion clears the outbox row and marks the local state-update record synced in one SQLite transaction.
+- Conflict persistence writes pending-operation error metadata and the associated local record conflict snapshot in one SQLite transaction.
+- Conflict resolution semantics remain explicit: no silent overwrite, no automatic retry loop, and no change to overwrite/version policy.
+
 ## Global Sync Orchestration
 
 Triggers:
@@ -474,25 +483,27 @@ Data cache:
 
 - RECORDS data is demand-cached on AppView load/refresh, not globally prewarmed.
 - State-update target data is hydrated from workflow GET responses.
-- Attendance prewarm additionally refreshes the source Personas entity because offline search needs local people.
+- Attendance prewarm additionally refreshes the source Personas entity because offline search needs local people, and hydrates complete remote snapshots for each date in the current month.
 - Generic state-update prewarm refreshes the source entity records for offline subject search.
+- Attendance monthly snapshot prewarm is explicitly concurrency-limited to 3 date requests and does not refetch source records per date.
+- Dates outside the current Attendance month are hydrated only when the user opens that date online; there is no automatic massive historical download.
 
 Definition readiness and data readiness are separate:
 
 - `DEFINITION_READY`: renderer/workflow metadata exists locally and can build the screen.
 - `DATA_READY`: the local data required by that renderer has been successfully hydrated at least once.
 - `OFFLINE_READY`: both definition and required data are ready.
-- `PARTIAL_OFFLINE`: definition exists, but required data has never been authoritatively hydrated.
+- `PARTIAL_OFFLINE`: definition exists, and some required data is hydrated, but the renderer-specific data requirement is not complete.
 
 The global app shell communicates normal offline availability. Home omits per-experience `Disponible sin conexion` labels for `OFFLINE_READY`; it only shows per-experience exception labels such as `Configuracion disponible; datos aun no descargados` or `Requiere conexion para preparar datos`.
 
-Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness.
+Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker for entity datasets. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness. Attendance day snapshots additionally use `app_metadata` hydration keys with `lastSuccessfulRefreshAt` per owner/contract/AppView/target entity/date.
 
 Readiness scope:
 
 - RECORDS: `ownerKey + contractId + entityTypeId` through sync telemetry; Home resolves it per AppView.
 - STATE_UPDATE: `ownerKey + contractId + sourceEntityTypeId` for subject selection data.
-- Attendance: same STATE_UPDATE source hydration rule; Personas may be loaded empty and still count as known.
+- Attendance: STATE_UPDATE source hydration plus current-month snapshot status. `attendanceMonthStatus = complete` means every current-month date has a complete snapshot; `partial` means at least one date is hydrated and one or more are missing; `none` means no current-month date is hydrated. Home treats `complete` as offline-ready, `partial` as partial offline data, and `none` as data not yet available offline. The selected workflow date still uses its own daily hydration telemetry.
 
 An AppView can be available offline as a prepared definition while its data is still missing, but it must not be advertised as fully offline-ready until its renderer data requirement is satisfied.
 
@@ -612,6 +623,7 @@ Error groups:
 | RECORDS search | Partial load/cache upsert only. | Search result UI; no destructive cleanup. |
 | RECORDS sync completion | Pending count and telemetry refresh. | `recordsReconnectRefreshKey` can reload mounted records. |
 | STATE_UPDATE sync completion | Operation completion/conflict/failure. | `stateUpdateReconnectRefreshKey` tells mounted workflows to reload. |
+| Local cache/metadata readiness change | AppView definition, sync telemetry, or Attendance day hydration metadata changes in SQLite. | Home subscribes to cache-change notifications and recalculates availability without polling. |
 | Reconnect | Session refresh, context/views reload, readiness gate, pending push only when ready. | Refresh keys and context state. |
 | Foreground/resume | Runs readiness gate and sync only if pending work exists and online. | Same as reconnect if work ran. |
 | Manual refresh/retry | Renderer or diagnostics invokes load/sync. | Local component state refresh. |
@@ -634,6 +646,8 @@ Observation means opening, mounting, or refreshing a diagnostics view. Observati
 
 Operator actions are separate from observation. Buttons such as manual retry, sync now, and confirmed SQLite reset may mutate local state or call existing sync/recovery commands, but only after explicit user action. Attendance GET diagnostics is also an explicit read action from the diagnostics route; it is not fired automatically on mount.
 
+Operational Core can return structured validation details for `STATE_UPDATE` failures. Opco Client preserves those details in pending operation payload metadata as `lastErrorDetails`, renders a concise global message such as `Un cambio no pudo sincronizarse.`, and exposes `Ver detalle` for field label, type, rejected value, expected type/values, code, retryability, and technical detail when present. Resolving or successfully syncing the operation removes the global pending-error notice; technical telemetry/history may remain as passive evidence.
+
 ## Error Taxonomy
 
 | Code/group | Owner subsystem | Retryability | User-facing behavior |
@@ -648,7 +662,7 @@ Operator actions are separate from observation. Buttons such as manual retry, sy
 | Missing/invalid `updatedAt` | API client contract parser. | No as success. | Controlled contract error; no invented version. |
 | `REMOTE_VERSION_CHANGED` | RECORDS sync. | Manual. | Conflict screen. |
 | workflow `CONFLICT` | STATE_UPDATE / Attendance. | Manual. | Conflict UI; overwrite requires explicit confirmation. |
-| workflow `ERROR` | STATE_UPDATE backend validation. | No automatic retry. | Failed row or visible message. |
+| workflow `ERROR` / `INVALID_FIELD_VALUE` | STATE_UPDATE backend validation. | No automatic retry when definitive. | Failed row, global banner, and `Ver detalle` when structured `lastErrorDetails` exists. |
 | `IDEMPOTENCY_KEY_REUSED` | STATE_UPDATE sync/API. | No automatic retry. | Manual recovery. |
 | `IDEMPOTENCY_RESULT_UNAVAILABLE` | STATE_UPDATE sync/API. | Exact reconcile only for safe update-current; otherwise manual. | Manual recovery/failure. |
 | `SQLITE_UNAVAILABLE` | Local DB. | Yes if storage recovers. | Recovery screen or queued retry. |
@@ -814,9 +828,11 @@ sequenceDiagram
 | 22 | Session diagnostics wiring is extracted; observation remains passive and commands remain explicit. | IMPLEMENTED |
 | 23 | Web shell emits restrictive security headers including CSP, COOP, COEP, Referrer-Policy, and MIME-sniffing protection. | IMPLEMENTED |
 | 24 | An AppView is advertised as offline-ready only when both its renderer definition and required local data have been successfully hydrated. | IMPLEMENTED |
-| 25 | Generic conflict UI covers RECORDS field diffs but state-update extra diff is incomplete. | PARTIAL |
+| 25 | Generic conflict UI covers RECORDS field diffs and STATE_UPDATE state/extra diffs when Core provides them. | IMPLEMENTED |
 | 26 | `SessionProvider` still concentrates auth/context/contract/prewarm/recovery UI/refresh-key composition. | PARTIAL |
-| 27 | README architecture matches the current workflow implementation. | PARTIAL |
+| 27 | README architecture matches the current workflow and REPORT implementation. | IMPLEMENTED |
+| 28 | Home reacts to local cache/metadata readiness changes without requiring F5, remount, or focus. | IMPLEMENTED |
+| 29 | Attendance observation exists only when `observationFieldId` is configured. | IMPLEMENTED |
 
 ## Known Complexity And Technical Debt
 
@@ -824,8 +840,8 @@ sequenceDiagram
 | --- | --- | --- | --- | --- | --- |
 | SessionProvider | Owns auth, context, selected contract, recovery UI, refresh keys, prewarm kick-off, and public context composition. Lifecycle/recovery/diagnostics controllers are extracted. | Auth/context/prewarm changes can still affect visible app composition. | P2 | Extract contract/prewarm composition only if concrete duplication or regressions reappear. | No |
 | Global sync orchestration | Pending engine order lives in `syncPendingWork`; lifecycle details live in `use-pending-work-lifecycle`; refresh keys remain in `SessionProvider`. | Refresh-key API still couples renderers to provider state. | P3 | Keep facade thin; only extract refresh signals if consumers grow. | No |
-| State-update conflict UI | Generic extra field diff is not complete. | Users may not see full extra-value differences. | P2 | State Update 1.1 conflict diff/resolution UI. | No |
-| README drift | README still contains older unsupported-workflow statements. | New contributors may trust stale docs. | P3 | Update README to point to this doc and `docs/STATE_UPDATE.md`. | No |
+| State-update conflict resolution | UI presents state/extra diffs when Core provides them, but resolution actions are still whole-intent choices. | Users cannot merge individual extra fields inside the conflict modal. | P3 | Add field-level merge only if product requires it. | No |
+| Error detail modal breadth | Global sync error detail focuses the first structured field while technical details remain available. | Multi-field validation failures may require reading technical detail for the full set. | P3 | Expand modal rows if multi-field errors become common. | No |
 | Web token storage | Web access token is in localStorage; refresh token is HttpOnly cookie. CSP now limits executable origins and blocks `unsafe-eval`, but `style-src 'unsafe-inline'` remains required by Expo/RN Web. | XSS exposure of access token if attacker-controlled JavaScript executes in the page. | P2 | Evaluate BFF/cookie-only access strategy for web; remove inline style requirement if Expo/RN Web supports nonced styles later. | No |
 | Multi-tab OPFS | Expo SQLite Web may hit `ACCESS_HANDLE_BUSY`. | Second tab can show recovery/busy state. | P2 | Keep UX guidance; consider explicit single-tab lock messaging. | No |
 | AppView data prewarm semantics | Workflow source records are prewarmed, RECORDS data is demand-cached, and Home now distinguishes definition readiness from data readiness. | Readiness still means usable known local data, not freshness to the second. | P3 | Keep readiness labels precise as new renderers are added. | No |

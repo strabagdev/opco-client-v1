@@ -1,6 +1,6 @@
 # opco-client
 
-Cliente generico multiplataforma para la API externa de Opco. Esta etapa valida el flujo Expo -> login -> token -> `/me` -> `/context` -> seleccion de contrato -> AppViews asignadas -> renderer `RECORDS` -> definicion de entidad -> cache local en SQLite -> listado, detalle, creacion y edicion de records.
+Cliente generico multiplataforma para la API externa de Opco. La implementacion actual cubre Expo -> login -> token -> `/me` -> `/context` -> seleccion de contrato -> AppViews asignadas -> renderers `RECORDS`, `WORKFLOW` y `REPORT` -> cache local en SQLite -> registros, workflows de estado, reportes de consulta y sincronizacion offline-first donde esta soportada.
 
 ## Stack
 
@@ -28,13 +28,15 @@ EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 
 - `app/`: rutas Expo Router.
 - `app/(auth)/login.tsx`: login minimo con email/password.
-- `app/(app)/index.tsx`: diagnostico autenticado, contexto, contrato y AppViews asignadas al usuario.
+- `app/(app)/index.tsx`: Home autenticada, contexto, contrato, AppViews asignadas, categorias de experiencias y disponibilidad offline.
 - `app/(app)/view/[appViewId].tsx`: ruta generica de experiencia; carga `/views` y resuelve renderer por `AppView.type`.
 - `app/(app)/view/[appViewId]/record/[recordId].tsx`: detalle de record conservando contexto de AppView.
 - `app/(app)/view/[appViewId]/record/new.tsx`: creacion dinamica de record para AppViews `RECORDS`.
 - `app/(app)/view/[appViewId]/record/[recordId]/edit.tsx`: edicion parcial dinamica de record.
-- `src/renderers/registry.ts`: registry central `RECORDS`, `WORKFLOW`, `BOARD`, `DASHBOARD`.
-- `src/renderers/records/`: primer renderer real; lista, detalle y formulario dinamico.
+- `src/renderers/registry.ts`: registry central `RECORDS`, `WORKFLOW`, `REPORT`, `BOARD`, `DASHBOARD`.
+- `src/renderers/records/`: lista, detalle y formulario dinamico para AppViews `RECORDS`.
+- `src/renderers/workflows/`: `AttendanceWorkflow` y workflow generico `STATE_UPDATE`.
+- `src/renderers/reports/`: renderer read-only para reportes `TABLE` y `MATRIX`.
 - `src/renderers/unsupported/`: estado temporal para tipos de AppView no implementados.
 - `src/lib/opco-api.ts`: cliente central de API y parsing de envelopes `{ ok, data/error }`.
 - `src/lib/app-views.ts`: labels, orden y rutas basadas en AppView.
@@ -77,11 +79,14 @@ DTO conceptual:
 type AppView =
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "RECORDS"; config: { entityTypeId: string } }
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "WORKFLOW"; config: Record<string, unknown> }
+  | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "REPORT"; config: Record<string, unknown> }
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "BOARD"; config: Record<string, unknown> }
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "DASHBOARD"; config: Record<string, unknown> };
 ```
 
 Si `/views` retorna `[]`, la home muestra: `No tienes experiencias asignadas para este contrato.` No hay fallback automatico al listado global de entidades.
+
+Home clasifica experiencias por `AppView.type`: `RECORDS` bajo Registros, `WORKFLOW` bajo Flujos, y `REPORT`, `BOARD`, `DASHBOARD` o tipos futuros desconocidos bajo Analisis. Las secciones vacias no se renderizan.
 
 ## Renderers
 
@@ -89,12 +94,17 @@ Registry actual:
 
 ```text
 RECORDS   -> RecordsRenderer
-WORKFLOW  -> UnsupportedRenderer
+WORKFLOW + attendance    -> AttendanceWorkflow
+WORKFLOW + state-update  -> StateUpdateWorkflow
+WORKFLOW + desconocido   -> UnsupportedRenderer
+REPORT    -> ReportRenderer
 BOARD     -> UnsupportedRenderer
 DASHBOARD -> UnsupportedRenderer
 ```
 
-`WORKFLOW`, `BOARD` y `DASHBOARD` muestran el nombre, icono, tipo y el mensaje temporal: `Esta experiencia todavia no esta disponible en esta version de Opco Client.`
+`REPORT` es consulta/presentacion: no crea, edita ni sincroniza registros locales. Soporta `TABLE` y `MATRIX`, `timeFilter.mode = RANGE | MONTH`, `defaultPeriod = CURRENT_MONTH`, `allowChange`, y `valueDisplay[fieldId] = LABEL | INTERNAL_VALUE`. `INTERNAL_VALUE` se muestra en reportes en mayusculas solo como presentacion; no modifica datos, opciones ni API. `REPORT` no es `BOARD` ni `DASHBOARD`.
+
+`BOARD`, `DASHBOARD` y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
 
 ## CRUD Records
 
@@ -150,9 +160,11 @@ En iOS hay que distinguir Safari normal de una Web App agregada a la pantalla de
 
 Las AppViews `RECORDS` son offline-first para navegacion, listado, detalle, creacion y edicion. La app conserva snapshots por `ownerKey` de `/me`, `/context`, contrato seleccionado y AppViews por contrato, sin persistir credenciales adicionales. Con ese snapshot puede reabrir sin red, reconstruir `owner_key` y llegar hasta las pantallas cacheadas. La cache de records esta scopeada por `owner_key`, `contract_id` y `entity_type_id`; `owner_key` se construye como `organization.id:user.id`. Si la app no puede conocer ese contexto, no muestra cache local, para evitar que otro usuario del mismo dispositivo vea datos ajenos.
 
-Al estar online, el cliente precachea en segundo plano las definiciones de todas las AppViews asignadas del contrato activo. Este prewarm corre por `ownerKey + contractId`, con concurrencia limitada y single-flight, y no bloquea Home. `RECORDS` guarda la definicion de EntityType, campos, opciones y configuracion de display; `WORKFLOW` guarda la metadata de runtime. Los workflows de estado usan el outbox compartido `STATE_UPDATE` en `pending_operations`, scopeado por `ownerKey + contractId + appViewId`, con `subjectRecordId`, `date`, `stateValues`, `extraValues`, `clientRequestId`, `overwrite` y `expectedUpdatedAt`. Attendance es un preset/adaptador de `state-update`: conserva labels y UX de asistencia, pero sus escrituras offline se expresan como `STATE_UPDATE` y usan el sync/recovery/telemetry generico. `BOARD` y `DASHBOARD` guardan lo suficiente para mostrar el estado unsupported offline.
+Al estar online, el cliente precachea en segundo plano las definiciones de todas las AppViews asignadas del contrato activo. Este prewarm corre por `ownerKey + contractId`, con concurrencia limitada y single-flight, y no bloquea Home. `RECORDS` guarda la definicion de EntityType, campos, opciones y configuracion de display; `WORKFLOW` guarda la metadata de runtime; `REPORT` queda disponible como consulta online/read-only; `BOARD` y `DASHBOARD` guardan lo suficiente para mostrar el estado unsupported offline. Los workflows de estado usan el outbox compartido `STATE_UPDATE` en `pending_operations`, scopeado por `ownerKey + contractId + appViewId`, con `subjectRecordId`, `date`, `stateValues`, `extraValues`, `clientRequestId`, `overwrite` y `expectedUpdatedAt`. Attendance es un preset/adaptador de `state-update`: conserva labels y UX de asistencia, pero sus escrituras offline se expresan como `STATE_UPDATE` y usan el sync/recovery/telemetry generico.
 
-El prewarm de definiciones no descarga EntityRecords de forma global. Los records siguen siendo cache bajo demanda cuando el usuario visita, busca o refresca una experiencia, excepto Attendance, que precachea solo su fuente configurada de Personas. Por eso la disponibilidad offline distingue definicion de datos: `definition-missing`, `data-not-cached`, `ready`, `online-only` y `unsupported`. Un `RECORDS` con definicion preparada pero sin records cacheados abre su estructura y muestra `No hay datos guardados para esta experiencia.`
+El prewarm de definiciones no descarga EntityRecords de forma global. Los records siguen siendo cache bajo demanda cuando el usuario visita, busca o refresca una experiencia, excepto Attendance, que precachea su fuente configurada de Personas y snapshots por fecha del mes actual. Por eso la disponibilidad offline distingue definicion de datos: `definition-missing`, `data-not-cached`, `data-partial`, `ready`, `online-only` y `unsupported`. Un `RECORDS` con definicion preparada pero sin records cacheados abre su estructura y muestra `No hay datos guardados para esta experiencia.`
+
+Home deriva disponibilidad desde `app_view_definitions`, `sync_telemetry`, metadata de snapshots Attendance y cache local. Tambien escucha cambios de cache/metadata SQLite para recalcular sin F5, remount ni foco; `useFocusEffect` permanece como fallback.
 
 Al reconectar o cambiar contrato, el cliente refresca `/views`, reconcilia AppViews revocadas, prepara nuevas/cambiadas y conserva una definicion previa valida si un prewarm falla por red. Las definiciones preparadas se guardan en SQLite en `app_view_definitions`, scopeadas por `owner_key`, `contract_id` y `app_view_id`, separadas de records y de la telemetry de sync. Precargar una definicion nunca actualiza `lastSuccessfulSyncAt` de records.
 
@@ -213,11 +225,21 @@ La UI muestra badges solo para estados no normales: `Pendiente`, `Sincronizando`
 
 ## Attendance
 
-`AttendanceWorkflow` permite registrar asistencia sin conexion cuando ya se preparo online. La preparacion requiere AppView config, statuses dinamicos, definition de la EntityType fuente y snapshot local de Personas. Si falta algo, la experiencia indica `Abre Registro de Asistencia con conexion para preparar su uso sin conexion.`
+`AttendanceWorkflow` permite registrar asistencia sin conexion cuando ya se preparo online. Es un adapter/preset sobre `STATE_UPDATE` y usa `statusFieldId`, `personFieldId`, `dateFieldId`, `contextFieldIds` y `observationFieldId` cuando existe. La preparacion requiere AppView config, statuses dinamicos, definition de la EntityType fuente, snapshot local de Personas y snapshots de asistencia por fecha. Si falta algo, la experiencia indica que debe abrirse con conexion para preparar su uso sin conexion.
 
 Offline, la busqueda de Personas lee `entity_records` SQLite de la `sourceEntityTypeId`; no llama API ni crea una tabla paralela de Personas. Al elegir un estado, la app persiste primero una operacion `STATE_UPDATE` en `pending_operations` usando `ownerKey + contractId + appViewId + date + subjectRecordId`, conserva un `clientRequestId` estable y consolida registros repetidos de la misma Persona+Fecha porque Attendance declara `historyMode = update-current` y `uniqueness = subject-date`. Solo despues muestra `Guardado en este dispositivo.`
 
-Al reconectar, el sync compartido procesa Attendance como `STATE_UPDATE` con `POST workflow/state-update` y una entrada por operacion. `CREATED`, `UNCHANGED` y `UPDATED` limpian el pending y dejan estado confirmado. `ERROR` queda `failed` con mensaje legible. `CONFLICT` conserva el pending, guarda el snapshot remoto y pide decision explicita: `Usar mi cambio` reintenta con `overwrite=true` y `expectedUpdatedAt` remoto; `Usar Opco` descarta la intencion local. No hay overwrite silencioso ni last-write-wins.
+Los campos de contexto se configuran por `contextFieldIds`. En UI y seleccion local, un SELECT/MULTISELECT se recuerda por `optionId`; al generar `extraValues` persistibles para Core se resuelve a `FieldOption.value`. El label nunca es identidad ni valor persistible. Si no puede resolverse un `option.value`, el cliente falla localmente en vez de enviar un `optionId` invalido.
+
+`observationFieldId` es opcional. Si no existe, no hay input de observacion, no se genera stateValue/extraValue de observacion y el cliente no infiere observacion desde otros `extraValues` de texto o contexto.
+
+Attendance guarda snapshots remotos por fecha sobre la misma infraestructura `entity_records`/`STATE_UPDATE`. Al mostrar un dia, combina snapshot remoto, registros locales synced y operaciones pending/failed/conflict para que los cambios locales se superpongan sin duplicar. Online, abrir un dia hidrata esa fecha y deja su telemetry diaria. El prewarm automatico descarga el mes actual completo con concurrencia maxima 3; no descarga meses anteriores de forma masiva. Fechas fuera del mes actual se hidratan solo al abrirlas online.
+
+La disponibilidad mensual de Attendance se deriva como `attendanceMonthStatus`: `complete` cuando todas las fechas del mes actual tienen snapshot completo; `partial` cuando al menos una fecha esta hidratada y falta otra; `none` cuando ninguna fecha del mes esta hidratada. Home usa ese estado para mostrar ready, datos parciales o datos no disponibles offline. La fecha seleccionada dentro del workflow sigue usando su propia telemetry diaria.
+
+Al reconectar, el sync compartido procesa Attendance como `STATE_UPDATE` con `POST workflow/state-update` y una entrada por operacion. `CREATED`, `UNCHANGED` y `UPDATED` limpian el pending y dejan estado confirmado. `ERROR` queda `failed` con mensaje legible y puede conservar `lastErrorDetails` estructurado. `CONFLICT` conserva el pending, guarda el snapshot remoto y pide decision explicita: `Usar mi cambio` reintenta con `overwrite=true` y `expectedUpdatedAt` remoto; `Usar Opco` descarta la intencion local. No hay overwrite silencioso ni last-write-wins.
+
+Los conflictos `STATE_UPDATE` pueden conservar diferencias de `stateValues` y `extraValues` cuando Core las entrega. La UI generica resuelve SELECT/MULTISELECT a labels visibles si tiene definicion preparada, conserva valores tecnicos para diagnostico y muestra campos desconocidos con fallback tecnico en vez de ocultarlos. La persistencia de conflicto actualiza pending operation y record local dentro de una sola transaccion SQLite.
 
 La telemetry de Personas sigue describiendo el snapshot de Personas. Attendance usa el scope generico de workflow `workflow:<appViewId>` para push de operaciones `STATE_UPDATE`. El reset destructivo de SQLite cuenta tambien operaciones de estado porque se almacenan en `entity_records`/`pending_operations` compartidos.
 
@@ -378,6 +400,8 @@ En Expo Web, `expo-sqlite` depende de WASM y de headers de aislamiento cross-ori
 
 `@react-native-community/netinfo` entrega el estado `online`/`offline`/`unknown` y dispara sync al recuperar conectividad. Aun asi, la app no confia solo en ese estado: una request puede fallar aunque NetInfo diga online, y ese error real conserva la operacion pendiente para retry posterior.
 
+Operational Core puede devolver detalles estructurados de validacion para `STATE_UPDATE`. El cliente persiste `lastErrorDetails` en la operacion pendiente, muestra un resumen humano en el banner global (`Un cambio no pudo sincronizarse.`) y permite abrir `Ver detalle` para ver campo, valor rechazado, tipo esperado, codigo tecnico y retryability cuando esos datos existen. Resolver o sincronizar correctamente deja de mostrar el error como pendiente; la evidencia tecnica puede conservarse en diagnosticos.
+
 ## Token Storage
 
 En iOS y Android el access token se guarda con `expo-secure-store`. En Web/notebook, que tambien es una plataforma soportada por el cliente, actualmente se guarda en `localStorage` para mantener sesion entre recargas. `localStorage` no ofrece la misma proteccion que SecureStore frente a JavaScript ejecutado en la pagina, por lo que no debe tratarse como equivalente de seguridad. Una evolucion futura para Web podria mover la sesion a un BFF con cookies `HttpOnly`/`Secure` y reducir la exposicion del bearer token al runtime del navegador. La password nunca se persiste.
@@ -417,4 +441,4 @@ Despues de generar el dominio Railway de `opco-client`, agrega ese origin exacto
 
 ## Limitaciones actuales
 
-Esta etapa no implementa offline para `WORKFLOW`, `BOARD` ni `DASHBOARD`, delete offline, FILE/IMAGE offline, background sync del SO, resolucion sofisticada de conflictos multiusuario, camara/QR ni adjuntos.
+Esta etapa no implementa offline generico para todo `WORKFLOW`, `BOARD` ni `DASHBOARD`: solo `WORKFLOW + attendance` y `WORKFLOW + state-update` usan el runtime `STATE_UPDATE` compartido. `BOARD` y `DASHBOARD` siguen unsupported. `REPORT` existe como consulta/presentacion online y no modifica registros. Tampoco hay delete offline, FILE/IMAGE offline, background sync del SO, merge sofisticado campo por campo para RECORDS, camara/QR ni adjuntos.

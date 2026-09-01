@@ -42,6 +42,11 @@ describe("AppView offline readiness", () => {
       offlineReady: true,
       reason: "definition-ready-data-ready",
     });
+    expect(deriveOfflineAvailability({
+      appView: recordsView,
+      definition: recordsDefinition(recordsView),
+      recordsTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    })).toBe("ready");
   });
 
   it("does not treat search-only cached rows as RECORDS data readiness", () => {

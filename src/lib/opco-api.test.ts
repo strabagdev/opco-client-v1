@@ -1467,6 +1467,71 @@ describe("createOpcoApi", () => {
     });
   });
 
+  it("normalizes backend state-update conflict differences with generic extraValues", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            result: {
+              differences: [
+                {
+                  existingLabel: "Detenido",
+                  existingOptionId: "stopped",
+                  fieldId: "field_operational",
+                  requestedLabel: "Operando",
+                  requestedOptionId: "running",
+                },
+                {
+                  existingValue: "turno_b",
+                  fieldId: "shift_field",
+                  fieldLabel: "Turno",
+                  fieldType: "SELECT",
+                  requestedValue: "turno_a",
+                  source: "extra",
+                },
+              ],
+              existing: {
+                recordId: "event_1",
+                updatedAt: "2026-08-22T12:00:00.000Z",
+              },
+              requested: { states: { field_operational: "running" } },
+              result: "CONFLICT",
+              subjectRecordId: "asset_1",
+            },
+          },
+          ok: true,
+        }),
+    });
+
+    const result = await api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      extraValues: { shift_field: "turno_a" },
+      stateValues: [{ fieldId: "field_operational", optionId: "running" }],
+      subjectRecordId: "asset_1",
+    });
+
+    expect(result.results[0]).toMatchObject({
+      existing: {
+        extraValues: { shift_field: "turno_b" },
+        stateValues: [{ fieldId: "field_operational", label: "Detenido", optionId: "stopped" }],
+      },
+      extraValues: [{
+        fieldId: "shift_field",
+        fieldLabel: "Turno",
+        fieldType: "SELECT",
+        localValue: "turno_a",
+        remoteValue: "turno_b",
+      }],
+      requested: {
+        extraValues: { shift_field: "turno_a" },
+        stateValues: [{ fieldId: "field_operational", label: "Operando", optionId: "running" }],
+      },
+      result: "CONFLICT",
+    });
+  });
+
   it("parses attendance conflicts with expected overwrite data", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",

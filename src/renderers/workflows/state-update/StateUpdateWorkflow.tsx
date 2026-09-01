@@ -35,6 +35,7 @@ import {
 import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
 import {
   activeStateOptions,
+  buildStateUpdateConflictRows,
   currentStateValue,
   defaultStateValues,
   firstBlockingStateUpdateResult,
@@ -44,7 +45,6 @@ import {
   shiftLocalDate,
   shouldSearchStateUpdateSubjects,
   STATE_UPDATE_SEARCH_DEBOUNCE_MS,
-  stateFieldOptionLabel,
   stateUpdateSuccessLabel,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
@@ -681,6 +681,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       <ConflictModal
         conflict={conflict}
+        extraFields={response?.extraFields ?? []}
         fields={response?.stateFields ?? []}
         isSaving={isSaving}
         onCancel={() => setConflict(null)}
@@ -781,18 +782,20 @@ function formatLatestState(response: StateUpdateResponse | null, item: StateUpda
 
 function ConflictModal({
   conflict,
+  extraFields,
   fields,
   isSaving,
   onCancel,
   onConfirm,
 }: {
   conflict: ConflictState | null;
+  extraFields: EntityDefinition["fields"];
   fields: StateUpdateField[];
   isSaving: boolean;
   onCancel(): void;
   onConfirm(): void;
 }) {
-  const rows = conflict ? conflictRows(conflict, fields) : [];
+  const rows = conflict ? buildStateUpdateConflictRows(conflict, fields, extraFields) : [];
 
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
@@ -802,7 +805,7 @@ function ConflictModal({
           <Text style={styles.modalMessage}>Opco tiene un estado distinto para este registro.</Text>
           <View style={styles.conflictRows}>
             {rows.map((row) => (
-              <View key={row.fieldId} style={styles.conflictRow}>
+              <View key={`${row.fieldType ?? "field"}:${row.fieldId}`} style={styles.conflictRow}>
                 <Text style={styles.conflictLabel}>{row.label}</Text>
                 <Text style={styles.conflictText}>Actual: {row.existing ?? "Sin estado"}</Text>
                 <Text style={styles.conflictText}>Solicitado: {row.requested ?? "Sin estado"}</Text>
@@ -821,30 +824,6 @@ function ConflictModal({
       </View>
     </Modal>
   );
-}
-
-function conflictRows(conflict: ConflictState, fields: StateUpdateField[]) {
-  return fields
-    .map((field) => {
-      const existing = conflict.existing.stateValues.find((value) => value.fieldId === field.fieldId);
-      const requested = conflict.requested.stateValues.find((value) => value.fieldId === field.fieldId);
-      const existingLabel = existing?.label ?? stateFieldOptionLabel(field, existing?.optionId);
-      const requestedLabel = requested?.label ?? stateFieldOptionLabel(field, requested?.optionId);
-
-      if ((existing?.optionId ?? null) === (requested?.optionId ?? null)) {
-        return null;
-      }
-
-      return {
-        existing: existingLabel,
-        fieldId: field.fieldId,
-        label: field.label,
-        requested: requestedLabel,
-      };
-    })
-    .filter((row): row is { existing: string | null; fieldId: string; label: string; requested: string | null } =>
-      Boolean(row),
-    );
 }
 
 function formatLocalTime(value: string) {

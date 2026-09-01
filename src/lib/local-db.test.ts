@@ -8,6 +8,7 @@ import {
   getLocalDatabase,
   resetLocalDatabaseAfterConfirmation,
   retryLocalDatabaseInitialization,
+  subscribeLocalDatabaseCacheChanges,
 } from "./local-db";
 import { PendingOperation } from "./offline-records";
 import { STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
@@ -745,6 +746,66 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
 
+  it("notifies Home availability listeners when RECORDS full refresh telemetry becomes ready", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeLocalDatabaseCacheChanges(listener);
+    const store = getLocalDatabase();
+
+    await store.markSyncPhaseCompleted({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      phase: "reconciling",
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+
+    unsubscribe();
+  });
+
+  it("notifies Home availability listeners when Attendance moves from none to partial or complete", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeLocalDatabaseCacheChanges(listener);
+    const store = getLocalDatabase();
+
+    await store.markAttendanceDaySnapshotHydrated({
+      appViewId: "attendance_view_1",
+      contractId: "contract_1",
+      date: "2026-08-26",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    await store.markAttendanceDaySnapshotHydrated({
+      appViewId: "attendance_view_1",
+      contractId: "contract_1",
+      date: "2026-08-27",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+  });
+
+  it("stops notifying Home availability listeners after unsubscribe", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeLocalDatabaseCacheChanges(listener);
+    const store = getLocalDatabase();
+
+    unsubscribe();
+    await store.markAttendanceDaySnapshotHydrated({
+      appViewId: "attendance_view_1",
+      contractId: "contract_1",
+      date: "2026-08-26",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("returns interrupted syncing STATE_UPDATE operations for retry on reconnect", async () => {
     const store = getLocalDatabase();
 
@@ -1445,6 +1506,85 @@ describe("local database singleton", () => {
       expect.any(String),
       "state_update_local_record_1",
     );
+  });
+
+  it("commits STATE_UPDATE conflict metadata and local record status as one transaction", async () => {
+    const store = getLocalDatabase();
+
+    await store.markStateUpdateOperationConflict(
+      stateUpdatePendingOperation(),
+      stateUpdateConflictResult(),
+    );
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
+
+    db.runAsync.mockClear();
+    await transactionTask();
+
+    expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE pending_operations");
+    expect(db.runAsync.mock.calls[1][0]).toContain("sync_status = 'conflict'");
+    expect(db.runAsync.mock.calls[1]).toEqual([
+      expect.stringContaining("UPDATE entity_records"),
+      "CONFLICT",
+      "Opco tiene un estado distinto para este registro.",
+      expect.stringContaining("\"extraValues\":{\"shift_field\":\"turno_b\"}"),
+      "Persona segura",
+      "2026-08-26T12:00:00.000Z",
+      "state_update_local_record_1",
+    ]);
+  });
+
+  it("does not leave STATE_UPDATE conflict half-applied when the local record conflict write fails inside the transaction", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("state update conflict record failed");
+      throw new Error("state update conflict record failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("sync_status = 'conflict'")) {
+        throw new Error("state update conflict record failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.markStateUpdateOperationConflict(
+      stateUpdatePendingOperation(),
+      stateUpdateConflictResult(),
+    )).rejects.toThrow("state update conflict record failed");
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const conflictCalls = db.runAsync.mock.calls.filter(([sql]) =>
+      String(sql).includes("UPDATE pending_operations") || String(sql).includes("sync_status = 'conflict'"),
+    );
+    expect(conflictCalls[0][0]).toContain("UPDATE pending_operations");
+    expect(conflictCalls[1][0]).toContain("sync_status = 'conflict'");
+  });
+
+  it("does not apply STATE_UPDATE conflict record changes when the pending operation write fails first", async () => {
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      await expect(task()).rejects.toThrow("state update conflict pending failed");
+      throw new Error("state update conflict pending failed");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE pending_operations")) {
+        throw new Error("state update conflict pending failed");
+      }
+      return undefined;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.markStateUpdateOperationConflict(
+      stateUpdatePendingOperation(),
+      stateUpdateConflictResult(),
+    )).rejects.toThrow("state update conflict pending failed");
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    const conflictCalls = db.runAsync.mock.calls.filter(([sql]) =>
+      String(sql).includes("UPDATE pending_operations") || String(sql).includes("sync_status = 'conflict'"),
+    );
+    expect(conflictCalls).toHaveLength(1);
+    expect(conflictCalls[0][0]).toContain("UPDATE pending_operations");
   });
 
   it("persists the local STATE_UPDATE record and outbox operation in one SQLite transaction", async () => {
@@ -2229,6 +2369,60 @@ function recordsPendingOperation(overrides: Partial<PendingOperation> = {}): Pen
     serverRecordId: null,
     updatedAt: "2026-08-24T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function stateUpdatePendingOperation(overrides: Partial<PendingOperation> = {}): PendingOperation {
+  return {
+    attempts: 1,
+    clientRequestId: "client-request-id-current-1",
+    contractId: "contract_real_1",
+    createdAt: "2026-08-26T10:00:00.000Z",
+    entityTypeId: "attendance",
+    id: "state_update_pending_1",
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    localRecordId: "state_update_local_record_1",
+    operation: "STATE_UPDATE",
+    ownerKey: "org_1:user_1",
+    payload: {
+      appViewId: "attendance_view_real_1",
+      clientRequestId: "client-request-id-current-1",
+      date: "2026-08-26",
+      extraValues: { shift_field: "turno_a" },
+      historyMode: "update-current",
+      stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+      subjectDisplayName: "Persona segura",
+      subjectRecordId: "person_real_1",
+      uniqueness: "subject-date",
+    },
+    serverRecordId: null,
+    updatedAt: "2026-08-26T10:01:00.000Z",
+    ...overrides,
+  };
+}
+
+function stateUpdateConflictResult() {
+  return {
+    existing: {
+      extraValues: { shift_field: "turno_b" },
+      recordId: "attendance_remote_1",
+      stateValues: [{ fieldId: "status_field", label: "Ausente", optionId: "absent_option" }],
+      updatedAt: "2026-08-26T12:00:00.000Z",
+    },
+    extraValues: [{
+      fieldId: "shift_field",
+      fieldLabel: "Turno",
+      fieldType: "SELECT",
+      localValue: "turno_a",
+      remoteValue: "turno_b",
+    }],
+    requested: {
+      extraValues: { shift_field: "turno_a" },
+      stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
+    },
+    result: "CONFLICT" as const,
+    subjectRecordId: "person_real_1",
   };
 }
 

@@ -88,6 +88,7 @@ const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 
 type LocalDatabaseGlobalState = {
+  cacheChangeListeners: Set<() => void>;
   database: SQLite.SQLiteDatabase | null;
   databasePromise: Promise<SQLite.SQLiteDatabase> | null;
   lifecycleCloseRegistered: boolean;
@@ -397,6 +398,7 @@ function getLocalDatabaseGlobalState() {
     globalState[GLOBAL_DATABASE_STATE_KEY] = {
       database: null,
       databasePromise: null,
+      cacheChangeListeners: new Set(),
       lifecycleCloseRegistered: false,
       lastUnavailableError: null,
       listeners: new Set(),
@@ -432,6 +434,12 @@ function isSameLocalDatabaseStorageState(current: LocalDatabaseStorageState, nex
 
 function notifyLocalDatabaseStorageListeners(state = getLocalDatabaseGlobalState()) {
   for (const listener of state.listeners) {
+    listener();
+  }
+}
+
+function notifyLocalDatabaseCacheChangeListeners(state = getLocalDatabaseGlobalState()) {
+  for (const listener of state.cacheChangeListeners) {
     listener();
   }
 }
@@ -549,6 +557,16 @@ export function subscribeLocalDatabaseStorageState(listener: () => void) {
 
   return () => {
     state.listeners.delete(listener);
+  };
+}
+
+export function subscribeLocalDatabaseCacheChanges(listener: () => void) {
+  const state = getLocalDatabaseGlobalState();
+
+  state.cacheChangeListeners.add(listener);
+
+  return () => {
+    state.cacheChangeListeners.delete(listener);
   };
 }
 
@@ -932,6 +950,7 @@ async function upsertAppViewDefinition({
     lastPreparedAt,
     status,
   );
+  notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function getAppViewDefinition(
@@ -980,6 +999,7 @@ async function reconcileAppViewDefinitions(ownerKey: string, contractId: string,
       ownerKey,
       contractId,
     );
+    notifyLocalDatabaseCacheChangeListeners();
     return;
   }
 
@@ -996,6 +1016,7 @@ async function reconcileAppViewDefinitions(ownerKey: string, contractId: string,
     contractId,
     ...assignedAppViewIds,
   );
+  notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function upsertRemoteRecords({
@@ -1773,6 +1794,7 @@ async function markSyncPhaseCompleted({
     contractId,
     entityTypeId,
   );
+  notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function markSyncError({
@@ -2743,43 +2765,45 @@ async function markStateUpdateOperationConflict(
     appViewId: payload.appViewId,
     date: payload.date,
     expectedUpdatedAt: result.existing.updatedAt,
-    extraValues: payload.extraValues,
+    extraValues: result.existing.extraValues ?? payload.extraValues,
     stateValues: result.existing.stateValues,
     subjectDisplayName: payload.subjectDisplayName,
     subjectRecordId: result.subjectRecordId,
   };
 
-  await db.runAsync(
-    `
-      UPDATE pending_operations
-      SET updated_at = ?,
-          last_error_code = ?,
-          last_error_message = ?
-      WHERE id = ?
-    `,
-    now,
-    "CONFLICT",
-    "Opco tiene un estado distinto para este registro.",
-    operation.id,
-  );
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET sync_status = 'conflict',
-          sync_error_code = ?,
-          sync_error_message = ?,
-          conflict_remote_values_json = ?,
-          conflict_remote_display_name = ?,
-          conflict_remote_updated_at = ?
-      WHERE local_id = ?
-    `,
-    "CONFLICT",
-    "Opco tiene un estado distinto para este registro.",
-    JSON.stringify(remoteValues),
-    payload.subjectDisplayName,
-    result.existing.updatedAt,
-    operation.localRecordId,
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE pending_operations
+        SET updated_at = ?,
+            last_error_code = ?,
+            last_error_message = ?
+        WHERE id = ?
+      `,
+      now,
+      "CONFLICT",
+      "Opco tiene un estado distinto para este registro.",
+      operation.id,
+    );
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET sync_status = 'conflict',
+            sync_error_code = ?,
+            sync_error_message = ?,
+            conflict_remote_values_json = ?,
+            conflict_remote_display_name = ?,
+            conflict_remote_updated_at = ?
+        WHERE local_id = ?
+      `,
+      "CONFLICT",
+      "Opco tiene un estado distinto para este registro.",
+      JSON.stringify(remoteValues),
+      payload.subjectDisplayName,
+      result.existing.updatedAt,
+      operation.localRecordId,
+    );
+  });
 }
 
 async function discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }) {
@@ -3880,6 +3904,7 @@ async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotSco
     attendanceDaySnapshotHydrationKey(input),
     JSON.stringify({ lastSuccessfulRefreshAt: refreshedAt }),
   );
+  notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics) {

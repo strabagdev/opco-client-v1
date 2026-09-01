@@ -8,6 +8,7 @@ import {
   isValidStateUpdateRemoteUpdatedAt,
   mergeStateUpdateReconnectPreflightTelemetryPatch,
   mergeStateUpdateSyncDiagnosticsTelemetry,
+  normalizeStateUpdateRecord,
   stateUpdateIntentsEqual,
   stateUpdateRemoteItemMatchesPayload,
   resolveStateUpdateSyncTelemetryResult,
@@ -261,6 +262,43 @@ describe("state-update exact intention matching", () => {
     expect(isStateUpdateCompatibleWorkflow("legacy-attendance")).toBe(false);
     expect(isValidStateUpdateRemoteUpdatedAt("2026-08-27T10:00:00.000Z")).toBe(true);
     expect(isValidStateUpdateRemoteUpdatedAt("2026-08-27")).toBe(false);
+  });
+});
+
+describe("state-update conflict normalization", () => {
+  it("preserves remote extraValues from a persisted conflict payload", () => {
+    expect(normalizeStateUpdateRecord({
+      conflictRemoteDisplayName: "Persona 1",
+      conflictRemoteUpdatedAt: "2026-08-27T12:00:00.000Z",
+      conflictRemoteValues: {
+        appViewId: "view_attendance",
+        date: "2026-08-27",
+        extraValues: { shift_field: "turno_b" },
+        stateValues: [{ fieldId: "status", label: "Ausente", optionId: "absent" }],
+        subjectDisplayName: "Persona 1",
+        subjectRecordId: "person_1",
+      },
+      displayName: "Persona 1",
+      id: "record_1",
+      localId: "local_1",
+      remoteUpdatedAt: null,
+      serverId: null,
+      syncStatus: "conflict",
+      updatedAt: "2026-08-27T10:00:00.000Z",
+      values: {
+        appViewId: "view_attendance",
+        date: "2026-08-27",
+        extraValues: { shift_field: "turno_a" },
+        stateValues: [{ fieldId: "status", label: "Presente", optionId: "present" }],
+        subjectDisplayName: "Persona 1",
+        subjectRecordId: "person_1",
+      },
+    })).toMatchObject({
+      conflictRemoteExtraValues: { shift_field: "turno_b" },
+      conflictRemoteStateValues: [{ fieldId: "status", label: "Ausente", optionId: "absent" }],
+      extraValues: { shift_field: "turno_a" },
+      syncStatus: "conflict",
+    });
   });
 });
 

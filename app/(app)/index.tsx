@@ -14,10 +14,12 @@ import { AppIcon } from "@/components/app-icon";
 import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
+import { subscribeHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { selectContractId } from "@/lib/contract-selection";
+import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
@@ -212,6 +214,17 @@ export default function HomeScreen() {
       void refreshOfflineAvailability(views);
     }
   }, [refreshOfflineAvailability, views]));
+
+  useEffect(() => {
+    if (views.length === 0) {
+      return;
+    }
+
+    return subscribeHomeOfflineAvailabilityRefresh({
+      refresh: (canUpdate) => refreshOfflineAvailability(views, canUpdate),
+      subscribe: subscribeLocalDatabaseCacheChanges,
+    });
+  }, [refreshOfflineAvailability, views]);
 
   const contractSelector = context && context.contracts.length > 1 ? (
     <View style={[styles.contractList, isWideLayout ? styles.contractListWide : null]}>

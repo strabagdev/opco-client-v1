@@ -9,11 +9,13 @@
 
 ## AppViews / Renderers
 
-- `AppView.type` defines the renderer category: `RECORDS`, `WORKFLOW`, `BOARD`, `DASHBOARD`.
+- `AppView.type` defines the renderer category: `RECORDS`, `WORKFLOW`, `REPORT`, `BOARD`, `DASHBOARD`.
 - `WORKFLOW` selects concrete behavior with `config.workflowKey`.
 - Do not add AppView types for specific workflows such as attendance or inspection.
 - The renderer registry must resolve by `type` plus `workflowKey`.
 - Unknown `workflowKey` values must fail with a controlled unsupported workflow UI.
+- `REPORT` is supported as a read-only consultation/presentation AppView, with `TABLE` and `MATRIX` modes, `timeFilter` `RANGE`/`MONTH`, and `valueDisplay` `LABEL`/`INTERNAL_VALUE`.
+- `BOARD` and `DASHBOARD` remain visible AppView types but currently resolve to controlled unsupported UI.
 
 ## RECORDS
 
@@ -26,7 +28,11 @@
 
 - Attendance is `WORKFLOW` with `workflowKey = "attendance"`.
 - API/domain statuses are `PRESENTE` and `AUSENTE`.
-- The client must not know or persist internal `FieldOption.value` values for attendance.
+- Attendance is an adapter/preset over the shared `STATE_UPDATE` runtime and uses configured `statusFieldId`, `personFieldId`, `dateFieldId`, optional `observationFieldId`, and optional `contextFieldIds`.
+- UI/config identity for options is `optionId`; labels are display text and must not be used as identity.
+- For SELECT context/state extra fields, the persistible value sent to Operational Core is `FieldOption.value`; do not send `optionId` where Core expects a field value.
+- Attendance status semantics continue to resolve through configured field ids and option identity; do not hardcode visible labels such as "Estado".
+- `observationFieldId` is optional. If it is absent, there is no implicit observation and the client must not infer one from arbitrary text `extraValues`.
 - Conflicts come from the backend; existing status changes may require explicit overwrite.
 - Offline workflow writes must reuse shared SQLite, `pending_operations`, sync, reconnect, recovery, and telemetry infrastructure.
 - Do not create ad-hoc parallel offline queues for workflows.
