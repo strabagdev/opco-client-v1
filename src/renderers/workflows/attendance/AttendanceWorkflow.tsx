@@ -33,12 +33,12 @@ import {
   AttendanceResponse,
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
-  EntityField,
   StateUpdateBatchResult,
   WorkflowAppView,
 } from "@/lib/opco-api";
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
+  attendanceContextFieldsFromPreparedDefinition,
   attendanceContextValidationErrors,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
@@ -1326,28 +1326,6 @@ function successLabel(result: AttendanceBatchResult | undefined) {
   }
 
   return "Asistencia registrada.";
-}
-
-function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]) {
-  const fieldsById = new Map(fields.map((field) => [field.id, field]));
-
-  return contextFieldIds
-    .map((fieldId) => fieldsById.get(fieldId))
-    .filter((field): field is EntityField => field !== undefined && field.type === "SELECT" && !field.multiple)
-    .map((field) => ({
-      id: field.id,
-      key: field.key,
-      name: field.name,
-      options: (field.options ?? [])
-        .filter((option) => option.active !== false)
-        .map((option) => ({
-          label: option.label,
-          optionId: option.id,
-          order: option.order,
-        })),
-      required: field.required,
-      type: "SELECT" as const,
-    }));
 }
 
 function stateUpdateResultToAttendanceResult(

@@ -7,6 +7,7 @@ import {
   AttendanceResponse,
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
+  EntityField,
   StateUpdateItem,
 } from "@/lib/opco-api";
 
@@ -361,6 +362,29 @@ function canonicalAttendanceContextValue(field: AttendanceContextField | undefin
   }
 
   return option.value;
+}
+
+export function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]) {
+  const fieldsById = new Map(fields.map((field) => [field.id, field]));
+
+  return contextFieldIds
+    .map((fieldId) => fieldsById.get(fieldId))
+    .filter((field): field is EntityField => field !== undefined && field.type === "SELECT" && !field.multiple)
+    .map((field) => ({
+      id: field.id,
+      key: field.key,
+      name: field.name,
+      options: (field.options ?? [])
+        .filter((option) => option.active !== false)
+        .map((option) => ({
+          label: option.label,
+          optionId: option.id,
+          order: option.order,
+          value: option.value,
+        })),
+      required: field.required,
+      type: "SELECT" as const,
+    }));
 }
 
 function attendanceLatestDedupeKey(item: AttendanceLatestItem) {

@@ -291,9 +291,9 @@ describe("app view prewarm", () => {
 
   it("does not duplicate concurrent prewarm triggers for the same owner and contract", async () => {
     const api = {
-      getAttendanceWorkflow: vi.fn(async () => ({
+      getAttendanceWorkflow: vi.fn(async (_token, _contractId, _appViewId, query: { date: string }) => ({
         appView: { id: "view_workflow", name: "Tomar asistencia", slug: "tomar-asistencia" },
-        date: "2026-08-25",
+        date: query.date,
         items: [],
         latest: [],
         sourceEntityType: { id: "entity_people", name: "Personas" },
