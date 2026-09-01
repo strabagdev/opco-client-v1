@@ -1,5 +1,5 @@
-import { Link } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { Link, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
@@ -38,6 +39,8 @@ export default function HomeScreen() {
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const today = formatLocalDateInput(new Date());
+  const currentMonthDates = useMemo(() => currentMonthDateKeys(new Date(`${today}T00:00:00`)), [today]);
 
   const selectedContract = useMemo(
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
@@ -64,55 +67,89 @@ export default function HomeScreen() {
     }
   }, [context, selectedContractId, setSelectedContractId]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function refreshOfflineAvailability(nextViews: AppView[]) {
-      if (!selectedContractId || !ownerKey) {
+  const refreshOfflineAvailability = useCallback(async (nextViews: AppView[], canUpdate: () => boolean = () => true) => {
+    if (!selectedContractId || !ownerKey) {
+      if (canUpdate()) {
         setOfflineAvailabilityByViewId({});
-        return;
       }
+      return;
+    }
 
-      try {
-        const entries = await Promise.all(nextViews.map(async (appView) => {
-          const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
-          const recordsTelemetry = appView.type === "RECORDS"
-            ? await definitionCache.getSyncTelemetry({
-                contractId: selectedContractId,
-                entityTypeId: appView.config.entityTypeId,
-                ownerKey,
-              })
-            : null;
-          const sourceEntityTypeId = definition?.definition.kind === "state-update"
+    try {
+      const entries = await Promise.all(nextViews.map(async (appView) => {
+        const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
+        const recordsTelemetry = appView.type === "RECORDS"
+          ? await definitionCache.getSyncTelemetry({
+              contractId: selectedContractId,
+              entityTypeId: appView.config.entityTypeId,
+              ownerKey,
+            })
+          : null;
+        const sourceEntityTypeId = definition?.definition.kind === "state-update"
+          ? definition.definition.sourceEntityTypeId
+          : definition?.definition.kind === "attendance"
             ? definition.definition.sourceEntityTypeId
-            : definition?.definition.kind === "attendance"
-              ? definition.definition.sourceEntityTypeId
-              : null;
-          const sourceTelemetry = sourceEntityTypeId
-            ? await definitionCache.getSyncTelemetry({
-                contractId: selectedContractId,
-                entityTypeId: sourceEntityTypeId,
-                ownerKey,
-              })
             : null;
+        const targetEntityTypeId = definition?.definition.kind === "state-update"
+          ? definition.definition.targetEntityTypeId
+          : definition?.definition.kind === "attendance"
+            ? definition.definition.targetEntityTypeId
+            : null;
+        const sourceTelemetry = sourceEntityTypeId
+          ? await definitionCache.getSyncTelemetry({
+              contractId: selectedContractId,
+              entityTypeId: sourceEntityTypeId,
+              ownerKey,
+            })
+          : null;
+        const isAttendanceWorkflow = appView.type === "WORKFLOW" &&
+          appView.config.workflowKey === "attendance";
+        const attendanceDayHydration = isAttendanceWorkflow &&
+          targetEntityTypeId
+          ? await definitionCache.getAttendanceDaySnapshotHydration({
+              appViewId: appView.id,
+              contractId: selectedContractId,
+              date: today,
+              ownerKey,
+              targetEntityTypeId,
+            })
+          : null;
+        const attendanceMonthStatus = isAttendanceWorkflow &&
+          appView.config.workflowKey === "attendance" &&
+          targetEntityTypeId
+          ? deriveAttendanceMonthStatus(await Promise.all(currentMonthDates.map((date) =>
+              definitionCache.getAttendanceDaySnapshotHydration({
+                appViewId: appView.id,
+                contractId: selectedContractId,
+                date,
+                ownerKey,
+                targetEntityTypeId,
+              })
+            )))
+          : undefined;
 
-          return [appView.id, deriveOfflineAvailability({
-            appView,
-            definition,
-            recordsTelemetry,
-            sourceTelemetry,
-          })] as const;
-        }));
+        return [appView.id, deriveOfflineAvailability({
+          attendanceDayHydration,
+          attendanceMonthStatus,
+          appView,
+          definition,
+          recordsTelemetry,
+          sourceTelemetry,
+        })] as const;
+      }));
 
-        if (isMounted) {
-          setOfflineAvailabilityByViewId(Object.fromEntries(entries));
-        }
-      } catch {
-        if (isMounted) {
-          setOfflineAvailabilityByViewId({});
-        }
+      if (canUpdate()) {
+        setOfflineAvailabilityByViewId(Object.fromEntries(entries));
+      }
+    } catch {
+      if (canUpdate()) {
+        setOfflineAvailabilityByViewId({});
       }
     }
+  }, [currentMonthDates, definitionCache, ownerKey, selectedContractId, today]);
+
+  useEffect(() => {
+    let isMounted = true;
 
     async function loadViews() {
       if (!token || !selectedContractId || !ownerKey) {
@@ -147,11 +184,11 @@ export default function HomeScreen() {
             token,
           }).finally(() => {
             if (isMounted) {
-              void refreshOfflineAvailability(data.views);
+              void refreshOfflineAvailability(data.views, () => isMounted);
             }
           });
         }
-        await refreshOfflineAvailability(data.views);
+        await refreshOfflineAvailability(data.views, () => isMounted);
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
@@ -168,7 +205,13 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, selectedContractId, token]);
+  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token]);
+
+  useFocusEffect(useCallback(() => {
+    if (views.length > 0) {
+      void refreshOfflineAvailability(views);
+    }
+  }, [refreshOfflineAvailability, views]));
 
   const contractSelector = context && context.contracts.length > 1 ? (
     <View style={[styles.contractList, isWideLayout ? styles.contractListWide : null]}>
@@ -460,3 +503,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+
+function formatLocalDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}

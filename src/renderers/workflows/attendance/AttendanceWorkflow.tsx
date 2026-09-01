@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { cacheAttendanceRemoteSnapshot, hasSuccessfulAttendanceDayHydration } from "@/lib/attendance-snapshot-cache";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import {
   attendanceStateFields,
@@ -41,12 +42,10 @@ import {
   attendanceContextValidationErrors,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
-  attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatDisplayDate,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
-  isAttendanceRemoteSnapshotComplete,
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
@@ -111,6 +110,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [localConflicts, setLocalConflicts] = useState<CachedAttendanceRecord[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
+  const [daySnapshotHydrated, setDaySnapshotHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -246,7 +246,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
-    const [summary, localLatest, conflicts] = await Promise.all([
+    const [summary, localLatest, conflicts, dayHydration] = await Promise.all([
       definitionCache.getStateUpdateSummary({
         appViewId: appView.id,
         contractId: selectedContractId,
@@ -268,6 +268,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         ownerKey,
         targetEntityTypeId: appView.config.targetEntityTypeId,
       }),
+      definitionCache.getAttendanceDaySnapshotHydration({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date,
+        ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+      }),
     ]);
 
     const localVisibleLatest = localLatest.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
@@ -277,6 +284,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setTotalRegistered(Math.max(summary.totalRegistered, remoteSnapshot?.totalRegistered ?? 0));
     setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId, appView.config.observationFieldId)));
+    setDaySnapshotHydrated(hasSuccessfulAttendanceDayHydration(dayHydration));
     return summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
   }, [appView.config.observationFieldId, appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
@@ -326,14 +334,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       store: definitionCache,
       token: token!,
     });
-    await definitionCache.upsertStateUpdateSnapshot({
+    await cacheAttendanceRemoteSnapshot({
       appViewId: appView.id,
+      config: appView.config,
       contractId: selectedContractId,
-      complete: options.complete === true,
-      date: response.date,
-      items: attendanceResponseToStateUpdateItems(response, appView.config),
       ownerKey,
-      targetEntityTypeId: response.targetEntityType.id,
+      response,
+      snapshotComplete: options.complete,
+      store: definitionCache,
     });
   }, [api, appView.config, appView.id, definitionCache, ownerKey, selectedContractId, token]);
 
@@ -412,7 +420,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       applyAttendanceResponse(response, { updateLatest: false });
-      await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+      await cacheAttendanceOnlineResponse(response);
       await refreshLocalDayState({
         latest: response.latest,
         totalRegistered: response.summary.totalRegistered,
@@ -459,7 +467,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       applyAttendanceResponse(response, { updateLatest: false });
-      await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+      await cacheAttendanceOnlineResponse(response);
       await refreshLocalDayState({
         latest: response.latest,
         totalRegistered: response.summary.totalRegistered,
@@ -668,7 +676,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         }
 
         applyAttendanceResponse(response, { updateLatest: false });
-        await cacheAttendanceOnlineResponse(response, { complete: isAttendanceRemoteSnapshotComplete(response) });
+        await cacheAttendanceOnlineResponse(response);
         await refreshLocalDayState({
           latest: response.latest,
           totalRegistered: response.summary.totalRegistered,
@@ -1048,6 +1056,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </Text>
       ) : null}
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
+      {connectivityStatus !== "online" && !daySnapshotHydrated ? (
+        <Text style={styles.offline}>Datos de este dia aun no disponibles sin conexion.</Text>
+      ) : null}
       {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (
         <Text style={styles.diagnostic}>
           Visible UI error source: {visibleErrorDiagnostics.operation} {visibleErrorDiagnostics.method ?? "unknown"} {visibleErrorDiagnostics.pathTemplate ?? "unknown"} timeout={String(visibleErrorDiagnostics.timeoutOccurred)} status={visibleErrorDiagnostics.httpStatus ?? "none"} durationMs={visibleErrorDiagnostics.durationMs ?? "none"} run={visibleErrorDiagnostics.syncRunId ?? "none"} code={visibleErrorDiagnostics.errorCode}

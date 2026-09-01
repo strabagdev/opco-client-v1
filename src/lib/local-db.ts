@@ -13,6 +13,8 @@ import {
   resolveStateUpdateClientRequestId,
   SaveStateUpdateLocallyInput,
   SearchStateUpdateSubjectsInput,
+  AttendanceDaySnapshotHydration,
+  AttendanceDaySnapshotScope,
   STATE_UPDATE_OPERATION,
   StateUpdateSyncDiagnosticsTelemetry,
   StateUpdateOutboxDiagnostics,
@@ -80,6 +82,7 @@ const SCHEMA_VERSION = "8";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
+const ATTENDANCE_DAY_SNAPSHOT_HYDRATION_KEY = "attendance_day_snapshot_hydration";
 const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
@@ -107,10 +110,12 @@ export type LocalDatabase = AppNavigationCache &
   SyncTelemetryStore &
   RecordsSyncStore &
   StateUpdateSyncStore & {
+  getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
   setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
+  markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
 };
@@ -135,8 +140,9 @@ export function getLocalDatabase(): LocalDatabase {
     getStateUpdateOutboxDiagnostics,
     getStateUpdateSyncDiagnosticsTelemetry,
     getSyncTelemetry,
-    getEntityDefinition,
-    getOfflinePreparationDiagnostics,
+	    getEntityDefinition,
+	    getAttendanceDaySnapshotHydration,
+	    getOfflinePreparationDiagnostics,
     getAttendanceContextSelection,
     listStateUpdateConflicts,
     listAppViewDefinitions,
@@ -164,8 +170,9 @@ export function getLocalDatabase(): LocalDatabase {
     retryFailedStateUpdateOperations,
     retryPendingOperation,
     retryStateUpdateOperation,
-    resolveStateUpdateVisibleErrorEvent,
-    discardStateUpdateLocalChange,
+	    resolveStateUpdateVisibleErrorEvent,
+	    markAttendanceDaySnapshotHydrated,
+	    discardStateUpdateLocalChange,
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
     setSelectedContractId,
@@ -3850,6 +3857,31 @@ async function getOfflinePreparationDiagnostics(ownerKey: string): Promise<Offli
   return parseOfflinePreparationDiagnostics(row.value);
 }
 
+async function getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    attendanceDaySnapshotHydrationKey(input),
+  );
+
+  if (!row?.value) {
+    return null;
+  }
+
+  return parseAttendanceDaySnapshotHydration(row.value);
+}
+
+async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }) {
+  const db = await getDatabase();
+  const refreshedAt = input.refreshedAt ?? new Date().toISOString();
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    attendanceDaySnapshotHydrationKey(input),
+    JSON.stringify({ lastSuccessfulRefreshAt: refreshedAt }),
+  );
+}
+
 async function setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics) {
   const db = await getDatabase();
 
@@ -4009,8 +4041,40 @@ function attendanceContextSelectionKey(ownerKey: string, contractId: string, app
   ].join(":");
 }
 
+function attendanceDaySnapshotHydrationKey({
+  appViewId,
+  contractId,
+  date,
+  ownerKey,
+  targetEntityTypeId,
+}: AttendanceDaySnapshotScope) {
+  return [
+    ATTENDANCE_DAY_SNAPSHOT_HYDRATION_KEY,
+    fingerprintDiagnosticValue(ownerKey),
+    contractId,
+    appViewId,
+    targetEntityTypeId,
+    date,
+  ].join(":");
+}
+
 function offlinePreparationDiagnosticsKey(ownerKey: string) {
   return `${OFFLINE_PREPARATION_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
+}
+
+function parseAttendanceDaySnapshotHydration(value: string): AttendanceDaySnapshotHydration | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<AttendanceDaySnapshotHydration>;
+    const lastSuccessfulRefreshAt = typeof parsed.lastSuccessfulRefreshAt === "string" ? parsed.lastSuccessfulRefreshAt : null;
+
+    if (!lastSuccessfulRefreshAt) {
+      return null;
+    }
+
+    return { lastSuccessfulRefreshAt };
+  } catch {
+    return null;
+  }
 }
 
 function parseStateUpdateSyncDiagnosticsTelemetry(value: string): StateUpdateSyncDiagnosticsTelemetry | null {

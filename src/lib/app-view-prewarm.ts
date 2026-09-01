@@ -15,9 +15,11 @@ import {
 import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records";
 import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
-import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
+import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendance-snapshot-cache";
+import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore } from "./state-update-offline";
 
 export const PREWARM_CONCURRENCY = 4;
+export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
 export const OFFLINE_PREPARATION_SLOW_THRESHOLD_MS = 10_000;
 
 const activePrewarms = new Map<string, Promise<void>>();
@@ -75,6 +77,7 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & {
   } | null>;
   upsertEntityDefinition(contractId: string, entityTypeId: string, definition: EntityDefinition, syncedAt: string): Promise<void>;
 } & Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
+  Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "upsertStateUpdateSnapshot"> &
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export function prewarmAssignedAppViewsOnce(params: {
@@ -247,9 +250,11 @@ async function prewarmOneAppView({
       appView.config.workflowKey === "attendance"
     ) {
       const attendanceConfig = appView.config as AttendanceWorkflowConfig;
+      const today = formatLocalDateInput(new Date());
+      const monthDates = currentMonthDateKeys(new Date());
       const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
         const workflow = await api.getAttendanceWorkflow(token, contractId, appView.id, {
-          date: formatLocalDateInput(new Date()),
+          date: today,
         });
         const definition = await api.getEntityDefinition(token, contractId, workflow.sourceEntityType.id);
 
@@ -310,6 +315,19 @@ async function prewarmOneAppView({
           ownerKey,
           status: "ready",
         })),
+      );
+      await measurePrewarmStage(telemetry, "snapshot", () =>
+        cacheAttendanceMonthSnapshots({
+          api,
+          appView,
+          attendanceConfig,
+          contractId,
+          monthDates,
+          ownerKey,
+          response,
+          store,
+          token,
+        }),
       );
       return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
@@ -761,6 +779,60 @@ function normalizeNullableNumber(value: unknown) {
 
 function normalizeCount(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+async function cacheAttendanceMonthSnapshots({
+  api,
+  appView,
+  attendanceConfig,
+  contractId,
+  monthDates,
+  ownerKey,
+  response,
+  store,
+  token,
+}: {
+  api: Pick<OpcoApi, "getAttendanceWorkflow">;
+  appView: AppView;
+  attendanceConfig: AttendanceWorkflowConfig;
+  contractId: string;
+  monthDates: string[];
+  ownerKey: string;
+  response: Awaited<ReturnType<OpcoApi["getAttendanceWorkflow"]>>;
+  store: Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "upsertStateUpdateSnapshot">;
+  token: string;
+}) {
+  try {
+    await cacheAttendanceRemoteSnapshot({
+      appViewId: appView.id,
+      config: attendanceConfig,
+      contractId,
+      ownerKey,
+      response,
+      store,
+    });
+  } catch {
+    // A single day can be retried later when the user opens it online.
+  }
+
+  const remainingDates = monthDates.filter((date) => date !== response.date);
+
+  await runWithConcurrency(remainingDates, ATTENDANCE_MONTH_PREWARM_CONCURRENCY, async (date) => {
+    try {
+      const attendanceResponse = await api.getAttendanceWorkflow(token, contractId, appView.id, { date });
+
+      await cacheAttendanceRemoteSnapshot({
+        appViewId: appView.id,
+        config: attendanceConfig,
+        contractId,
+        ownerKey,
+        response: attendanceResponse,
+        store,
+      });
+    } catch {
+      // A single day can be retried later when the user opens it online.
+    }
+  });
 }
 
 function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): PreparedAppViewDefinition {

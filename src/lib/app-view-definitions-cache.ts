@@ -6,13 +6,15 @@ import {
   StateUpdateHistoryMode,
   StateUpdateUniqueness,
 } from "./opco-api";
-import { isStateUpdateCompatibleWorkflow } from "./state-update-offline";
+import { AttendanceDaySnapshotHydration, isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 import { SyncTelemetry } from "./sync-telemetry";
+import type { AttendanceMonthStatus } from "./attendance-snapshot-cache";
 
 export type AppViewDefinitionStatus = "ready" | "partial" | "error";
 
 export type OfflineAvailability =
   | "ready"
+  | "data-partial"
   | "data-not-cached"
   | "definition-missing"
   | "online-only"
@@ -94,10 +96,13 @@ export type AppViewOfflineReadinessReason =
   | "online-only";
 
 export type AppViewOfflineReadiness = {
+  attendanceMonthStatus?: AttendanceMonthStatus;
+  attendanceTodayReady?: boolean;
   dataReady: boolean;
   definitionReady: boolean;
   offlineReady: boolean;
   reason: AppViewOfflineReadinessReason;
+  sourceReady?: boolean;
 };
 
 export function getWorkflowKey(appView: AppView) {
@@ -109,9 +114,13 @@ export function deriveOfflineAvailability({
   definition,
   recordsTelemetry,
   sourceTelemetry,
+  attendanceDayHydration,
+  attendanceMonthStatus,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
+  attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
+  attendanceMonthStatus?: AttendanceMonthStatus;
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): OfflineAvailability {
@@ -120,6 +129,8 @@ export function deriveOfflineAvailability({
     definition,
     recordsTelemetry,
     sourceTelemetry,
+    attendanceDayHydration,
+    attendanceMonthStatus,
   });
 
   if (readiness.offlineReady) {
@@ -134,6 +145,10 @@ export function deriveOfflineAvailability({
     return "online-only";
   }
 
+  if (readiness.attendanceMonthStatus === "partial") {
+    return "data-partial";
+  }
+
   if (readiness.definitionReady) {
     return "data-not-cached";
   }
@@ -146,9 +161,13 @@ export function getAppViewOfflineReadiness({
   definition,
   recordsTelemetry,
   sourceTelemetry,
+  attendanceDayHydration,
+  attendanceMonthStatus,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
+  attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
+  attendanceMonthStatus?: AttendanceMonthStatus;
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): AppViewOfflineReadiness {
@@ -178,21 +197,47 @@ export function getAppViewOfflineReadiness({
     });
   }
 
+  if (appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance") {
+    const prepared = definition.definition;
+
+    if (prepared.kind === "state-update") {
+      const sourceReady = hasSuccessfulHydration(sourceTelemetry);
+      const attendanceTodayReady = hasSuccessfulAttendanceDayHydration(attendanceDayHydration);
+      const monthStatus = attendanceMonthStatus ?? (attendanceTodayReady ? "partial" : "none");
+      const dataReady = sourceReady && monthStatus === "complete";
+
+      return readiness({
+        attendanceMonthStatus: monthStatus,
+        attendanceTodayReady,
+        dataReady,
+        definitionReady: true,
+        reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+        sourceReady,
+      });
+    }
+
+    if (prepared.kind === "attendance") {
+      const sourceReady = prepared.sourceEntityTypeId ? hasSuccessfulHydration(sourceTelemetry) : false;
+      const attendanceTodayReady = hasSuccessfulAttendanceDayHydration(attendanceDayHydration);
+      const monthStatus = attendanceMonthStatus ?? (attendanceTodayReady ? "partial" : "none");
+      const dataReady = sourceReady && monthStatus === "complete";
+
+      return readiness({
+        attendanceMonthStatus: monthStatus,
+        attendanceTodayReady,
+        dataReady,
+        definitionReady: true,
+        reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+        sourceReady,
+      });
+    }
+  }
+
   if (appView.type === "WORKFLOW" && isStateUpdateCompatibleWorkflow(appView.config.workflowKey)) {
     const prepared = definition.definition;
 
     if (prepared.kind === "state-update") {
       const dataReady = hasSuccessfulHydration(sourceTelemetry);
-
-      return readiness({
-        dataReady,
-        definitionReady: true,
-        reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
-      });
-    }
-
-    if (prepared.kind === "attendance") {
-      const dataReady = prepared.sourceEntityTypeId ? hasSuccessfulHydration(sourceTelemetry) : false;
 
       return readiness({
         dataReady,
@@ -213,19 +258,45 @@ export function hasSuccessfulHydration(telemetry?: Pick<SyncTelemetry, "lastFull
   return typeof telemetry?.lastFullRefreshCompletedAt === "string" && telemetry.lastFullRefreshCompletedAt.length > 0;
 }
 
+function hasSuccessfulAttendanceDayHydration(
+  hydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null,
+) {
+  return typeof hydration?.lastSuccessfulRefreshAt === "string" && hydration.lastSuccessfulRefreshAt.length > 0;
+}
+
 function readiness({
   dataReady,
   definitionReady,
   reason,
+  sourceReady,
+  attendanceTodayReady,
+  attendanceMonthStatus,
 }: {
+  attendanceMonthStatus?: AttendanceMonthStatus;
+  attendanceTodayReady?: boolean;
   dataReady: boolean;
   definitionReady: boolean;
   reason: AppViewOfflineReadinessReason;
+  sourceReady?: boolean;
 }): AppViewOfflineReadiness {
-  return {
+  const result: AppViewOfflineReadiness = {
     dataReady,
     definitionReady,
     offlineReady: definitionReady && dataReady,
     reason,
   };
+
+  if (attendanceTodayReady !== undefined) {
+    result.attendanceTodayReady = attendanceTodayReady;
+  }
+
+  if (attendanceMonthStatus !== undefined) {
+    result.attendanceMonthStatus = attendanceMonthStatus;
+  }
+
+  if (sourceReady !== undefined) {
+    result.sourceReady = sourceReady;
+  }
+
+  return result;
 }

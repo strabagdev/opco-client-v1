@@ -101,7 +101,7 @@ describe("AppView offline readiness", () => {
     });
   });
 
-  it("treats an empty but successfully hydrated Attendance source as data-ready", () => {
+  it("does not treat Attendance as ready when only its source records are hydrated", () => {
     expect(getAppViewOfflineReadiness({
       appView: attendanceView,
       definition: stateUpdateDefinition(attendanceView, "entity_people"),
@@ -115,8 +115,80 @@ describe("AppView offline readiness", () => {
       definition: stateUpdateDefinition(attendanceView, "entity_people"),
       sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
     })).toMatchObject({
+      attendanceTodayReady: false,
+      dataReady: false,
+      offlineReady: false,
+      sourceReady: true,
+    });
+  });
+
+  it("marks Attendance ready only when source records and the current month are fully hydrated", () => {
+    expect(getAppViewOfflineReadiness({
+      appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "complete",
+      definition: stateUpdateDefinition(attendanceView, "entity_people"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    })).toMatchObject({
+      attendanceMonthStatus: "complete",
+      attendanceTodayReady: true,
       dataReady: true,
       offlineReady: true,
+      sourceReady: true,
+    });
+  });
+
+  it("keeps Attendance partially available when some current-month days are hydrated", () => {
+    const readiness = getAppViewOfflineReadiness({
+      appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "partial",
+      definition: stateUpdateDefinition(attendanceView, "entity_people"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    });
+
+    expect(readiness).toMatchObject({
+      attendanceMonthStatus: "partial",
+      attendanceTodayReady: true,
+      dataReady: false,
+      offlineReady: false,
+      sourceReady: true,
+    });
+    expect(deriveOfflineAvailability({
+      appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "partial",
+      definition: stateUpdateDefinition(attendanceView, "entity_people"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    })).toBe("data-partial");
+  });
+
+  it("does not consider the month complete when today is hydrated but another day is missing", () => {
+    expect(getAppViewOfflineReadiness({
+      appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "partial",
+      definition: stateUpdateDefinition(attendanceView, "entity_people"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    })).toMatchObject({
+      attendanceTodayReady: true,
+      dataReady: false,
+      offlineReady: false,
+    });
+  });
+
+  it("keeps Attendance unavailable offline when no current-month day is hydrated", () => {
+    expect(getAppViewOfflineReadiness({
+      appView: attendanceView,
+      attendanceMonthStatus: "none",
+      definition: stateUpdateDefinition(attendanceView, "entity_people"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+    })).toMatchObject({
+      attendanceMonthStatus: "none",
+      attendanceTodayReady: false,
+      dataReady: false,
+      offlineReady: false,
+      sourceReady: true,
     });
   });
 
@@ -143,12 +215,16 @@ describe("AppView offline readiness", () => {
 
     expect(getAppViewOfflineReadiness({
       appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "complete",
       definition: stateUpdateDefinition(attendanceView, "entity_people"),
       sourceTelemetry: telemetryByScope.get("owner_a:contract_a:entity_people"),
     }).offlineReady).toBe(true);
 
     expect(getAppViewOfflineReadiness({
       appView: attendanceView,
+      attendanceDayHydration: { lastSuccessfulRefreshAt: hydratedAt },
+      attendanceMonthStatus: "complete",
       definition: stateUpdateDefinition(attendanceView, "entity_assets"),
       sourceTelemetry: telemetryByScope.get("owner_a:contract_a:entity_assets") ?? null,
     }).offlineReady).toBe(false);

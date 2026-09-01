@@ -4,8 +4,10 @@ export function getOfflineAvailabilityText(availability: OfflineAvailability) {
   switch (availability) {
     case "ready":
       return "Disponible sin conexion";
+    case "data-partial":
+      return "Datos offline parciales";
     case "data-not-cached":
-      return "Configuracion disponible; datos aun no descargados";
+      return "Datos aun no disponibles sin conexion";
     case "online-only":
       return "Requiere conexion";
     case "unsupported":

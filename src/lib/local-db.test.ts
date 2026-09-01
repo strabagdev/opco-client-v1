@@ -218,6 +218,55 @@ describe("local database singleton", () => {
     expect(db.runAsync.mock.calls.some((call) => call[1] === "offline_preparation_diagnostics:org_1:user_1")).toBe(false);
   });
 
+  it("persists Attendance day snapshot hydration by scoped metadata", async () => {
+    const store = getLocalDatabase();
+
+    await store.markAttendanceDaySnapshotHydrated({
+      appViewId: "view_attendance",
+      contractId: "contract_1",
+      date: "2026-08-31",
+      ownerKey: "org_1:user_1",
+      refreshedAt: "2026-08-31T12:00:00.000Z",
+      targetEntityTypeId: "entity_attendance",
+    });
+
+    const metadataCall = db.runAsync.mock.calls.find(
+      (call) => call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+        typeof call[1] === "string" &&
+        call[1].startsWith("attendance_day_snapshot_hydration:"),
+    );
+
+    expect(metadataCall?.[1]).toContain("contract_1:view_attendance:entity_attendance:2026-08-31");
+    expect(metadataCall?.[1]).not.toContain("org_1:user_1");
+    expect(JSON.parse(String(metadataCall?.[2]))).toEqual({
+      lastSuccessfulRefreshAt: "2026-08-31T12:00:00.000Z",
+    });
+  });
+
+  it("hydrates Attendance day snapshot metadata from app_metadata", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM app_metadata")) {
+        return {
+          value: JSON.stringify({
+            lastSuccessfulRefreshAt: "2026-08-31T12:00:00.000Z",
+          }),
+        };
+      }
+
+      return null;
+    });
+
+    await expect(getLocalDatabase().getAttendanceDaySnapshotHydration({
+      appViewId: "view_attendance",
+      contractId: "contract_1",
+      date: "2026-08-31",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "entity_attendance",
+    })).resolves.toEqual({
+      lastSuccessfulRefreshAt: "2026-08-31T12:00:00.000Z",
+    });
+  });
+
   it("hydrates offline preparation diagnostics from app_metadata", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM app_metadata")) {

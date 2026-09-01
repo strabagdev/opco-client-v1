@@ -755,10 +755,19 @@ export type StateUpdateSnapshotReconcileResult = {
   staleSyncedRemoved: number;
 };
 
+export type AttendanceDaySnapshotHydration = {
+  lastSuccessfulRefreshAt: string;
+};
+
+export type AttendanceDaySnapshotScope = StateUpdateScope & {
+  date: string;
+};
+
 export type StateUpdateOfflineStore = {
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
   discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }): Promise<void>;
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
+  getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
   getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
   getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null>;
@@ -773,6 +782,7 @@ export type StateUpdateOfflineStore = {
   recordStateUpdateSessionTermination(ownerKey: string, event: StateUpdateSessionTerminationTelemetry): Promise<void>;
   recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry): Promise<void>;
   resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution): Promise<void>;
+  markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
   setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;
   upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult>;

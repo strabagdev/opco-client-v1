@@ -9,8 +9,12 @@ describe("AppView offline availability labels", () => {
 
   it("uses an honest partial label when only configuration is available", () => {
     expect(getOfflineAvailabilityText("data-not-cached")).toBe(
-      "Configuracion disponible; datos aun no descargados",
+      "Datos aun no disponibles sin conexion",
     );
+  });
+
+  it("uses a discrete partial label when some Attendance days are available", () => {
+    expect(getOfflineAvailabilityText("data-partial")).toBe("Datos offline parciales");
   });
 
   it("requires connection when definition/data are not prepared", () => {

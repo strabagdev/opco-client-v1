@@ -79,8 +79,9 @@ describe("Home experience offline presentation", () => {
   it("keeps exception labels so navigation availability can remain explicit", () => {
     expect(getHomeExperienceAvailabilityLabel("online-only")).toBe("Requiere conexion");
     expect(getHomeExperienceAvailabilityLabel("definition-missing")).toBe("Requiere conexion para preparar datos");
+    expect(getHomeExperienceAvailabilityLabel("data-partial")).toBe("Datos offline parciales");
     expect(getHomeExperienceAvailabilityLabel("data-not-cached")).toBe(
-      "Configuracion disponible; datos aun no descargados",
+      "Datos aun no disponibles sin conexion",
     );
   });
 });
