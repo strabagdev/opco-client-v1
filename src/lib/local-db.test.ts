@@ -11,7 +11,7 @@ import {
   subscribeLocalDatabaseCacheChanges,
 } from "./local-db";
 import { PendingOperation } from "./offline-records";
-import { EntityField } from "./opco-api";
+import { EntityDefinition, EntityField } from "./opco-api";
 import { STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
 
 const sqliteMock = vi.hoisted(() => ({
@@ -1869,6 +1869,192 @@ describe("local database singleton", () => {
     });
   });
 
+  it("normalizes legacy relation objects when retrying failed RECORDS UPDATE operations", async () => {
+    const enrichedValues = {
+      cargo: {
+        displayName: "Maestro Primera",
+        entityTypeId: "cargos",
+        id: "cargo_1",
+      },
+      nombre: "Pedro",
+      responsables: [
+        { displayName: "A", entityTypeId: "personas", id: "a" },
+        { displayName: "B", entityTypeId: "personas", id: "b" },
+      ],
+    };
+    let entityRecordReads = 0;
+
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        entityRecordReads += 1;
+
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          server_id: "record_1",
+          sync_status: entityRecordReads === 1 ? "failed" : "pending_update",
+          values_json: JSON.stringify(enrichedValues),
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return pendingOperationRow({
+          id: "update_local_1",
+          local_record_id: "local_1",
+          operation: "UPDATE",
+          payload_json: JSON.stringify({ values: enrichedValues }),
+          server_record_id: "record_1",
+        });
+      }
+
+      if (sql.includes("FROM entity_definitions")) {
+        return recordsEntityDefinitionRow([
+          localDbField("cargo", "RELATION", "ONE"),
+          localDbField("nombre", "TEXT"),
+          localDbField("responsables", "RELATION", "MANY", true),
+        ]);
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.retryFailedRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      recordId: "record_1",
+    });
+
+    const pendingUpdate = db.runAsync.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("UPDATE pending_operations"),
+    );
+    const payload = JSON.parse(String(pendingUpdate?.[1]));
+
+    expect(payload.values).toEqual({
+      cargo: "cargo_1",
+      nombre: "Pedro",
+      responsables: ["a", "b"],
+    });
+    expect(db.runAsync.mock.calls.some(([sql]) =>
+      typeof sql === "string" &&
+      sql.includes("UPDATE entity_records") &&
+      sql.includes("values_json"),
+    )).toBe(false);
+  });
+
+  it("preserves clientRequestId when retrying failed RECORDS CREATE operations with normalized relations", async () => {
+    const enrichedValues = {
+      cargo: {
+        displayName: "Maestro Primera",
+        entityTypeId: "cargos",
+        id: "cargo_1",
+      },
+      nombre: "Local",
+    };
+    let entityRecordReads = 0;
+
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        entityRecordReads += 1;
+
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          server_id: null,
+          sync_status: entityRecordReads === 1 ? "failed" : "pending_create",
+          values_json: JSON.stringify(enrichedValues),
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return pendingOperationRow({
+          client_request_id: "request_legacy_1",
+          id: "create_local_1",
+          local_record_id: "local_1",
+          operation: "CREATE",
+          payload_json: JSON.stringify({ clientRequestId: "request_legacy_1", values: enrichedValues }),
+          server_record_id: null,
+        });
+      }
+
+      if (sql.includes("FROM entity_definitions")) {
+        return recordsEntityDefinitionRow([
+          localDbField("cargo", "RELATION", "ONE"),
+          localDbField("nombre", "TEXT"),
+        ]);
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.retryFailedRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      recordId: "local_1",
+    });
+
+    const pendingUpdate = db.runAsync.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("UPDATE pending_operations"),
+    );
+    const payload = JSON.parse(String(pendingUpdate?.[1]));
+
+    expect(payload).toEqual({
+      clientRequestId: "request_legacy_1",
+      values: {
+        cargo: "cargo_1",
+        nombre: "Local",
+      },
+    });
+  });
+
+  it("does not rewrite a failed RECORDS operation when the entity definition is missing on retry", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          server_id: "record_1",
+          sync_status: "failed",
+          values_json: JSON.stringify({
+            cargo: {
+              displayName: "Maestro Primera",
+              entityTypeId: "cargos",
+              id: "cargo_1",
+            },
+          }),
+        });
+      }
+
+      if (sql.includes("FROM pending_operations")) {
+        return pendingOperationRow({
+          id: "update_local_1",
+          local_record_id: "local_1",
+          operation: "UPDATE",
+          payload_json: JSON.stringify({ values: { cargo: { id: "cargo_1" } } }),
+          server_record_id: "record_1",
+        });
+      }
+
+      if (sql.includes("FROM entity_definitions")) {
+        return null;
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await expect(store.retryFailedRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      ownerKey: "org_1:user_1",
+      recordId: "record_1",
+    })).rejects.toThrow("No se encontro una definicion local para reintentar el registro.");
+
+    expect(db.withTransactionAsync).not.toHaveBeenCalled();
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("UPDATE pending_operations"))).toBe(false);
+    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("UPDATE entity_records"))).toBe(false);
+  });
+
   it("does not report RECORDS update success when the outbox write fails inside the transaction", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
@@ -2491,6 +2677,22 @@ function recordsEntityRecordRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function recordsEntityDefinitionRow(fields: EntityField[]) {
+  const definition: EntityDefinition = {
+    active: true,
+    fields,
+    icon: null,
+    id: "entity_1",
+    name: "Entity",
+    slug: "entity",
+  };
+
+  return {
+    definition_json: JSON.stringify(definition),
+    synced_at: "2026-08-24T10:00:00.000Z",
+  };
+}
+
 function localDbField(
   key: string,
   type: EntityField["type"],
@@ -2507,6 +2709,26 @@ function localDbField(
     order: 1,
     required: false,
     type,
+  };
+}
+
+function pendingOperationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    attempts: 1,
+    client_request_id: "request_1",
+    contract_id: "contract_1",
+    created_at: "2026-08-24T10:00:00.000Z",
+    entity_type_id: "entity_1",
+    id: "create_local_1",
+    last_error_code: null,
+    last_error_message: null,
+    local_record_id: "local_1",
+    operation: "CREATE",
+    owner_key: "org_1:user_1",
+    payload_json: JSON.stringify({ clientRequestId: "request_1", values: { name: "Local" } }),
+    server_record_id: null,
+    updated_at: "2026-08-24T10:00:00.000Z",
+    ...overrides,
   };
 }
 

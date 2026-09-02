@@ -2937,11 +2937,18 @@ async function retryFailedRecord({
     throw new Error("No se encontro una operacion pendiente para reintentar.");
   }
 
+  const cachedDefinition = await getEntityDefinition(contractId, entityTypeId);
+
+  if (!cachedDefinition) {
+    throw new Error("No se encontro una definicion local para reintentar el registro.");
+  }
+
   const now = new Date().toISOString();
   const nextStatus: RecordSyncStatus = operation.operation === "CREATE" ? "pending_create" : "pending_update";
+  const payloadValues = normalizeRecordValuesForPersistence(cachedDefinition.definition.fields, existing.values);
   const nextPayload = operation.operation === "CREATE"
-    ? { clientRequestId: operation.client_request_id, values: existing.values }
-    : { values: existing.values };
+    ? { clientRequestId: operation.client_request_id, values: payloadValues }
+    : { values: payloadValues };
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
