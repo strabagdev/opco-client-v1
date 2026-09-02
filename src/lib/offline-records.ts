@@ -194,11 +194,13 @@ export type RecordIdentityInput = BaseScopedInput & {
 
 export type CreateLocalRecordInput = BaseScopedInput & {
   clientRequestId?: string;
+  fields?: EntityField[];
   localId?: string;
   values: Record<string, EntityRecordValue>;
 };
 
 export type UpdateLocalRecordInput = BaseScopedInput & {
+  fields?: EntityField[];
   recordId: string;
   values: Record<string, EntityRecordValue>;
 };
@@ -527,6 +529,7 @@ function fingerprintValue(value: string) {
 }
 
 export type SaveRecordParams = BaseScopedInput & {
+  fields?: EntityField[];
   mode: "create" | "edit";
   recordId?: string;
   store: Pick<OfflineRecordStore, "createLocalRecord" | "updateLocalRecord">;
@@ -536,6 +539,7 @@ export type SaveRecordParams = BaseScopedInput & {
 export async function saveRecordLocally({
   contractId,
   entityTypeId,
+  fields = [],
   mode,
   ownerKey,
   recordId,
@@ -547,6 +551,7 @@ export async function saveRecordLocally({
       clientRequestId: createClientRequestId(),
       contractId,
       entityTypeId,
+      fields,
       ownerKey,
       values,
     });
@@ -559,6 +564,7 @@ export async function saveRecordLocally({
   return store.updateLocalRecord({
     contractId,
     entityTypeId,
+    fields,
     ownerKey,
     recordId,
     values,
@@ -623,6 +629,83 @@ export function buildLocalDisplayName(values: Record<string, EntityRecordValue>)
   });
 
   return firstValue === undefined || firstValue === null ? "Registro sin nombre" : String(firstValue);
+}
+
+export function normalizeRecordValuesForPersistence(
+  fields: EntityField[],
+  values: Record<string, EntityRecordValue>,
+) {
+  if (fields.length === 0) {
+    return values;
+  }
+
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => {
+      const field = fields.find((item) => item.key === key);
+
+      return [key, field ? normalizeRecordValueForPersistence(field, value) : value];
+    }),
+  ) as Record<string, EntityRecordValue>;
+}
+
+function normalizeRecordValueForPersistence(field: EntityField, value: EntityRecordValue): EntityRecordValue {
+  if (field.type !== "RELATION") {
+    return value;
+  }
+
+  const many = isManyRelationField(field);
+
+  if (value === null) {
+    return null;
+  }
+
+  if (many && Array.isArray(value)) {
+    return value
+      .map((item) => readRelationRecordId(item))
+      .filter((item): item is string => Boolean(item));
+  }
+
+  if (!many && typeof value === "string") {
+    return value;
+  }
+
+  if (many && typeof value === "string") {
+    return value;
+  }
+
+  const relationId = readRelationRecordId(value);
+
+  return relationId ?? value;
+}
+
+function isManyRelationField(field: EntityField) {
+  if (field.multiple) {
+    return true;
+  }
+
+  const relationConfig = readObject(field.config?.relation);
+
+  if (relationConfig?.relationKind === "MANY") {
+    return true;
+  }
+
+  return field.config?.relationKind === "MANY";
+}
+
+function readRelationRecordId(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") {
+    return value.id;
+  }
+
+  return null;
+}
+
+function readObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function isNetworkLikeError(error: unknown) {

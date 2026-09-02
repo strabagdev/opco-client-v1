@@ -72,6 +72,40 @@ describe("records sync engine", () => {
     expect(store.completed).toHaveLength(1);
   });
 
+  it("sends normalized relation ids already stored in the UPDATE payload", async () => {
+    store.operations = [
+      operation({
+        localRecordId: "record_1",
+        operation: "UPDATE",
+        payload: {
+          values: {
+            cargo: "cargo_1",
+            responsables: ["a", "b"],
+          },
+        },
+        serverRecordId: "record_1",
+      }),
+    ];
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({
+        record: record("record_1", { cargo: "cargo_old" }),
+      })),
+      updateEntityRecord: vi.fn(async () => ({
+        record: record("record_1", { cargo: "cargo_1", responsables: ["a", "b"] }),
+      })),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(api.updateEntityRecord).toHaveBeenCalledWith("token_1", "contract_1", "entity_1", "record_1", {
+      values: {
+        cargo: "cargo_1",
+        responsables: ["a", "b"],
+      },
+    });
+  });
+
   it("detects UPDATE conflicts before PATCH and keeps local values out of remote overwrite", async () => {
     store.remoteUpdatedAt = "2026-08-20T10:00:00.000Z";
     store.operations = [

@@ -11,6 +11,7 @@ import {
   subscribeLocalDatabaseCacheChanges,
 } from "./local-db";
 import { PendingOperation } from "./offline-records";
+import { EntityField } from "./opco-api";
 import { STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
 
 const sqliteMock = vi.hoisted(() => ({
@@ -1714,6 +1715,47 @@ describe("local database singleton", () => {
     expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
   });
 
+  it("keeps normalized relation strings when persisting RECORDS CREATE outbox payloads", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: String(params.at(-1)),
+          sync_status: "pending_create",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.createLocalRecord({
+      clientRequestId: "request_1",
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      fields: [
+        localDbField("relation_one", "RELATION", "ONE"),
+        localDbField("relation_many", "RELATION", "MANY", true),
+        localDbField("nombre", "TEXT"),
+      ],
+      localId: "local_1",
+      ownerKey: "org_1:user_1",
+      values: {
+        nombre: "Local",
+        relation_many: ["a", "b"],
+        relation_one: "cargo_1",
+      },
+    });
+
+    const outboxWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+    const payload = JSON.parse(String(outboxWrite?.[9]));
+
+    expect(payload.values).toEqual({
+      nombre: "Local",
+      relation_many: ["a", "b"],
+      relation_one: "cargo_1",
+    });
+  });
+
   it("does not report RECORDS create success when the outbox insert fails inside the transaction", async () => {
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("pending insert failed");
@@ -1775,6 +1817,56 @@ describe("local database singleton", () => {
 
     expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE entity_records");
     expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("normalizes relation objects before persisting RECORDS UPDATE outbox payloads", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return recordsEntityRecordRow({
+          local_id: "local_1",
+          remote_updated_at: "2026-08-24T10:00:00.000Z",
+          server_id: "record_1",
+          sync_status: "synced",
+          values_json: JSON.stringify({
+            cargo: {
+              displayName: "Maestro Primera",
+              entityTypeId: "cargos",
+              id: "cargo_1",
+            },
+            nombre: "Juan",
+            responsables: [
+              { displayName: "A", entityTypeId: "personas", id: "a" },
+              { displayName: "B", entityTypeId: "personas", id: "b" },
+            ],
+          }),
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.updateLocalRecord({
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      fields: [
+        localDbField("cargo", "RELATION", "ONE"),
+        localDbField("nombre", "TEXT"),
+        localDbField("responsables", "RELATION", "MANY", true),
+      ],
+      ownerKey: "org_1:user_1",
+      recordId: "record_1",
+      values: { nombre: "Pedro" },
+    });
+
+    const outboxWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+    const payload = JSON.parse(String(outboxWrite?.[9]));
+
+    expect(payload.values).toEqual({
+      cargo: "cargo_1",
+      nombre: "Pedro",
+      responsables: ["a", "b"],
+    });
   });
 
   it("does not report RECORDS update success when the outbox write fails inside the transaction", async () => {
@@ -2396,6 +2488,25 @@ function recordsEntityRecordRow(overrides: Record<string, unknown> = {}) {
     sync_status: "pending_create",
     values_json: JSON.stringify({ name: "Local" }),
     ...overrides,
+  };
+}
+
+function localDbField(
+  key: string,
+  type: EntityField["type"],
+  relationKind?: "ONE" | "MANY",
+  multiple = false,
+): EntityField {
+  return {
+    active: true,
+    config: relationKind ? { relation: { relationKind } } : {},
+    id: `field_${key}`,
+    key,
+    multiple,
+    name: key,
+    order: 1,
+    required: false,
+    type,
   };
 }
 

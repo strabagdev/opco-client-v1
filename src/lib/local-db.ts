@@ -64,8 +64,9 @@ import {
   RecordOutboxConsistency,
   RecordOutboxConsistencyIssueCode,
   fingerprintRecordsScope,
+  normalizeRecordValuesForPersistence,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -1308,6 +1309,7 @@ async function createLocalRecord({
   clientRequestId = createLocalRecordId(),
   contractId,
   entityTypeId,
+  fields = [],
   localId = createLocalRecordId(),
   ownerKey,
   values,
@@ -1315,6 +1317,7 @@ async function createLocalRecord({
   clientRequestId?: string;
   contractId: string;
   entityTypeId: string;
+  fields?: EntityField[];
   localId?: string;
   ownerKey: string;
   values: Record<string, EntityRecordValue>;
@@ -1322,6 +1325,7 @@ async function createLocalRecord({
   const db = await getDatabase();
   const now = new Date().toISOString();
   const displayName = buildLocalDisplayName(values);
+  const payloadValues = normalizeRecordValuesForPersistence(fields, values);
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
@@ -1357,7 +1361,7 @@ async function createLocalRecord({
       ownerKey,
       payload: {
         clientRequestId,
-        values,
+        values: payloadValues,
       },
       serverRecordId: null,
       timestamp: now,
@@ -1376,12 +1380,14 @@ async function createLocalRecord({
 async function updateLocalRecord({
   contractId,
   entityTypeId,
+  fields = [],
   ownerKey,
   recordId,
   values,
 }: {
   contractId: string;
   entityTypeId: string;
+  fields?: EntityField[];
   ownerKey: string;
   recordId: string;
   values: Record<string, EntityRecordValue>;
@@ -1398,6 +1404,7 @@ async function updateLocalRecord({
     ...existing.values,
     ...values,
   };
+  const payloadValues = normalizeRecordValuesForPersistence(fields, nextValues);
   const createOperation = await db.getFirstAsync<PendingOperationRow>(
     `
       SELECT *
@@ -1444,7 +1451,7 @@ async function updateLocalRecord({
         `,
         JSON.stringify({
           clientRequestId: createOperation.client_request_id,
-          values: nextValues,
+          values: payloadValues,
         }),
         now,
         createOperation.id,
@@ -1464,7 +1471,7 @@ async function updateLocalRecord({
       operation: "UPDATE",
       ownerKey,
       payload: {
-        values: nextValues,
+        values: payloadValues,
       },
       serverRecordId: existing.serverId,
       timestamp: now,

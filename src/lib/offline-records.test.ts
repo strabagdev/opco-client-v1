@@ -6,9 +6,10 @@ import {
   fingerprintRecordsScope,
   loadRecordWithOfflineCache,
   loadRecordsWithOfflineCache,
+  normalizeRecordValuesForPersistence,
   refreshEntityRecordsCache,
 } from "./offline-records";
-import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "./opco-api";
+import { EntityField, EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "./opco-api";
 import { SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "./sync-telemetry";
 
 const scope = {
@@ -24,6 +25,58 @@ beforeEach(() => {
 });
 
 describe("offline records cache", () => {
+  it("normalizes RELATION values to record ids for durable persistence", () => {
+    const fields = [
+      recordField("relation_one", "RELATION", { relationKind: "ONE" }),
+      recordField("relation_many", "RELATION", { relationKind: "MANY" }, true),
+      recordField("nombre", "TEXT"),
+    ];
+
+    expect(normalizeRecordValuesForPersistence(fields, {
+      relation_one: {
+        displayName: "Maestro Primera",
+        entityTypeId: "cargos",
+        id: "cargo_1",
+      },
+      nombre: "Juan",
+      relation_many: [
+        { displayName: "A", entityTypeId: "personas", id: "a" },
+        { displayName: "B", entityTypeId: "personas", id: "b" },
+      ],
+    })).toEqual({
+      nombre: "Juan",
+      relation_many: ["a", "b"],
+      relation_one: "cargo_1",
+    });
+  });
+
+  it("keeps already-normalized RELATION and non-RELATION values unchanged", () => {
+    const fields = [
+      recordField("relation_one", "RELATION", { relationKind: "ONE" }),
+      recordField("relation_many", "RELATION", { relationKind: "MANY" }, true),
+      recordField("nombre", "TEXT"),
+    ];
+
+    expect(normalizeRecordValuesForPersistence(fields, {
+      nombre: "Juan",
+      relation_many: ["a", "b"],
+      relation_one: "cargo_1",
+    })).toEqual({
+      nombre: "Juan",
+      relation_many: ["a", "b"],
+      relation_one: "cargo_1",
+    });
+    expect(normalizeRecordValuesForPersistence(fields, {
+      nombre: "Juan",
+      relation_many: null,
+      relation_one: null,
+    })).toEqual({
+      nombre: "Juan",
+      relation_many: null,
+      relation_one: null,
+    });
+  });
+
   it("stores remote records and reads them back from cache", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -574,6 +627,84 @@ describe("offline records cache", () => {
     expect(operations[0].payload.values).toMatchObject({ codigo: "EQ-1", estado: "mantencion" });
   });
 
+  it("writes normalized RELATION ids to the durable UPDATE payload while keeping cached values enriched", async () => {
+    const fields = [
+      recordField("cargo", "RELATION", { relationKind: "ONE" }),
+      recordField("nombre", "TEXT"),
+      recordField("tags", "MULTISELECT"),
+    ];
+
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [
+        record("record_1", "Juan", {
+          cargo: {
+            displayName: "Maestro Primera",
+            entityTypeId: "cargos",
+            id: "cargo_1",
+          },
+          nombre: "Juan",
+          tags: ["norte"],
+        }),
+      ],
+    });
+
+    await store.updateLocalRecord({
+      ...scope,
+      fields,
+      recordId: "record_1",
+      values: { nombre: "Pedro" },
+    });
+
+    const operations = await store.listPendingOperations(scope.ownerKey);
+    const cached = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    expect(operations[0].payload.values).toEqual({
+      cargo: "cargo_1",
+      nombre: "Pedro",
+      tags: ["norte"],
+    });
+    expect(cached?.values.cargo).toEqual({
+      displayName: "Maestro Primera",
+      entityTypeId: "cargos",
+      id: "cargo_1",
+    });
+  });
+
+  it("writes normalized RELATION MANY ids to the durable UPDATE payload", async () => {
+    const fields = [
+      recordField("responsables", "RELATION", { relationKind: "MANY" }, true),
+      recordField("nombre", "TEXT"),
+    ];
+
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [
+        record("record_1", "Juan", {
+          nombre: "Juan",
+          responsables: [
+            { displayName: "A", entityTypeId: "personas", id: "a" },
+            { displayName: "B", entityTypeId: "personas", id: "b" },
+          ],
+        }),
+      ],
+    });
+
+    await store.updateLocalRecord({
+      ...scope,
+      fields,
+      recordId: "record_1",
+      values: { nombre: "Pedro" },
+    });
+
+    const operations = await store.listPendingOperations(scope.ownerKey);
+
+    expect(operations[0].payload.values).toEqual({
+      nombre: "Pedro",
+      responsables: ["a", "b"],
+    });
+  });
+
   it("stores remote updatedAt as base version and keeps it during local edits", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -695,6 +826,25 @@ function record(id: string, displayName: string, values: Record<string, EntityRe
   };
 }
 
+function recordField(
+  key: string,
+  type: EntityField["type"],
+  relationConfig?: { relationKind: "ONE" | "MANY" },
+  multiple = false,
+): EntityField {
+  return {
+    active: true,
+    config: relationConfig ? { relation: relationConfig } : {},
+    id: `field_${key}`,
+    key,
+    multiple,
+    name: key,
+    order: 1,
+    required: false,
+    type,
+  };
+}
+
 class MemoryRecordStore implements OfflineRecordStore {
   forceEmptyReconcileDiagnostics = false;
   records = new Map<string, Awaited<ReturnType<OfflineRecordStore["createLocalRecord"]>>>();
@@ -708,6 +858,7 @@ class MemoryRecordStore implements OfflineRecordStore {
   async createLocalRecord(input: Parameters<OfflineRecordStore["createLocalRecord"]>[0]) {
     const localId = input.localId ?? "local_generated";
     const now = new Date().toISOString();
+    const payloadValues = normalizeRecordValuesForPersistence(input.fields ?? [], input.values);
     const cached = {
       displayName: String(Object.values(input.values)[0] ?? "Registro sin nombre"),
       id: localId,
@@ -734,7 +885,7 @@ class MemoryRecordStore implements OfflineRecordStore {
       ownerKey: input.ownerKey,
       payload: {
         clientRequestId: input.clientRequestId,
-        values: input.values,
+        values: payloadValues,
       },
       serverRecordId: null,
       updatedAt: now,
@@ -781,6 +932,7 @@ class MemoryRecordStore implements OfflineRecordStore {
     }
 
     const values = { ...existing.values, ...input.values };
+    const payloadValues = normalizeRecordValuesForPersistence(input.fields ?? [], values);
     const cached = {
       ...existing,
       displayName: String(Object.values(values)[0] ?? existing.displayName),
@@ -793,7 +945,7 @@ class MemoryRecordStore implements OfflineRecordStore {
     const createOperation = this.operations.get(`CREATE:${existing.localId}`);
 
     if (createOperation) {
-      createOperation.payload.values = values;
+      createOperation.payload.values = payloadValues;
       return cached;
     }
 
@@ -809,7 +961,7 @@ class MemoryRecordStore implements OfflineRecordStore {
       localRecordId: existing.localId,
       operation: "UPDATE",
       ownerKey: input.ownerKey,
-      payload: { values },
+      payload: { values: payloadValues },
       serverRecordId: existing.serverId,
       updatedAt: new Date().toISOString(),
     });

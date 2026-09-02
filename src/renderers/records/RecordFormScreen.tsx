@@ -162,6 +162,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       const localRecord = await saveRecordLocally({
         contractId: selectedContractId,
         entityTypeId,
+        fields,
         mode,
         ownerKey,
         recordId,
