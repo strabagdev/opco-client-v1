@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { getRecordsDiagnosticsRows, getSyncDiagnosticsRows } from "./sync-diagnostics";
+import {
+  getRecordsDiagnosticsRows,
+  getRecordsFailedOperationDiagnosticsSections,
+  getRecordsFailedOperationsNotice,
+  getSyncDiagnosticsRows,
+} from "./sync-diagnostics";
 
 declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
 
@@ -79,6 +84,62 @@ describe("records sync diagnostics", () => {
     expect(rows).toContainEqual(["Estado actual", "error"]);
     expect(rows).toContainEqual(["Ultimo error", "NETWORK"]);
     expect(rows).toContainEqual(["Fase del error", "refreshing"]);
+  });
+
+  it("formats durable failed RECORDS operations even when telemetry is unavailable", () => {
+    const telemetryRows = getSyncDiagnosticsRows({
+      summary: {
+        conflictCount: 0,
+        failedCount: 1,
+        pendingCount: 0,
+        syncingCount: 0,
+      },
+      telemetry: null,
+    });
+    const sections = getRecordsFailedOperationDiagnosticsSections([
+      {
+        entityTypeId: "entity_personas_sensitive_abcdef",
+        lastErrorCode: "VALIDATION_ERROR",
+        lastErrorMessage: "El campo requerido falta.",
+        localRecordId: "local_record_sensitive_123456",
+        operation: "UPDATE",
+        retryCount: 1,
+        serverRecordId: "server_record_sensitive_654321",
+        syncErrorCode: "VALIDATION_ERROR",
+        syncErrorMessage: "El campo requerido falta.",
+        syncStatus: "failed",
+        updatedAt: "2026-09-02T10:20:00.000Z",
+      },
+    ]);
+    const rendered = JSON.stringify(sections);
+
+    expect(telemetryRows).toContainEqual(["Ultimo error", "none"]);
+    expect(telemetryRows).toContainEqual(["Errores", "1"]);
+    expect(sections[0]?.title).toBe("#1");
+    expect(sections[0]?.rows).toContainEqual(["Operacion", "UPDATE"]);
+    expect(sections[0]?.rows).toContainEqual(["Codigo", "VALIDATION_ERROR"]);
+    expect(sections[0]?.rows).toContainEqual(["Mensaje", "El campo requerido falta."]);
+    expect(sections[0]?.rows).toContainEqual(["Entidad", "...abcdef"]);
+    expect(sections[0]?.rows).toContainEqual(["Registro", "...654321"]);
+    expect(rendered).not.toContain("entity_personas_sensitive_abcdef");
+    expect(rendered).not.toContain("server_record_sensitive_654321");
+    expect(rendered).not.toContain("local_record_sensitive_123456");
+  });
+
+  it("explains retained failed RECORDS separately from pending operations", () => {
+    expect(getRecordsFailedOperationsNotice({
+      conflictCount: 0,
+      failedCount: 1,
+      pendingCount: 0,
+      syncingCount: 0,
+    })).toBe("Los errores quedan retenidos para revision o reintento manual.");
+
+    expect(getRecordsFailedOperationsNotice({
+      conflictCount: 0,
+      failedCount: 0,
+      pendingCount: 0,
+      syncingCount: 0,
+    })).toBeNull();
   });
 });
 

@@ -746,6 +746,53 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
 
+  it("lists durable failed RECORDS operations for global diagnostics", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations") && sql.includes("entity_records.sync_status = 'failed'")) {
+        return [
+          {
+            attempts: 2,
+            entity_type_id: "entity_people_abcdef",
+            last_error_code: "VALIDATION_ERROR",
+            last_error_message: "Nombre requerido.",
+            local_record_id: "local_record_123456",
+            operation: "UPDATE",
+            record_sync_error_code: "VALIDATION_ERROR",
+            record_sync_error_message: "Nombre requerido.",
+            record_sync_status: "failed",
+            server_record_id: "server_record_654321",
+            updated_at: "2026-09-02T12:00:00.000Z",
+          },
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const operations = await store.listFailedRecordOperations({
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+    });
+
+    expect(operations).toEqual([
+      {
+        entityTypeId: "entity_people_abcdef",
+        lastErrorCode: "VALIDATION_ERROR",
+        lastErrorMessage: "Nombre requerido.",
+        localRecordId: "local_record_123456",
+        operation: "UPDATE",
+        retryCount: 2,
+        serverRecordId: "server_record_654321",
+        syncErrorCode: "VALIDATION_ERROR",
+        syncErrorMessage: "Nombre requerido.",
+        syncStatus: "failed",
+        updatedAt: "2026-09-02T12:00:00.000Z",
+      },
+    ]);
+    expect(db.getAllAsync).toHaveBeenCalledWith(expect.stringContaining("pending_operations.operation IN ('CREATE', 'UPDATE')"), "org_1:user_1", "contract_1", 5);
+  });
+
   it("notifies Home availability listeners when RECORDS full refresh telemetry becomes ready", async () => {
     const listener = vi.fn();
     const unsubscribe = subscribeLocalDatabaseCacheChanges(listener);

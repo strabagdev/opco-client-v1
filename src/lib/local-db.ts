@@ -149,6 +149,7 @@ export function getLocalDatabase(): LocalDatabase {
     listAppViewDefinitions,
     getSelectedContractId,
     listCachedRecords,
+    listFailedRecordOperations,
     listProblemRecords,
     listPendingOperations,
     listPendingStateUpdateOperations,
@@ -1547,6 +1548,50 @@ async function getRecordsSyncSummary({
     pendingCount: count(["pending_create", "pending_update"]),
     syncingCount: count(["syncing"]),
   };
+}
+
+async function listFailedRecordOperations({
+  contractId,
+  limit = 5,
+  ownerKey,
+}: {
+  contractId: string;
+  limit?: number;
+  ownerKey: string;
+}) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<FailedRecordOperationDiagnosticsRow>(
+    `
+      SELECT
+        pending_operations.operation AS operation,
+        pending_operations.entity_type_id AS entity_type_id,
+        pending_operations.local_record_id AS local_record_id,
+        pending_operations.server_record_id AS server_record_id,
+        pending_operations.attempts AS attempts,
+        pending_operations.last_error_code AS last_error_code,
+        pending_operations.last_error_message AS last_error_message,
+        pending_operations.updated_at AS updated_at,
+        entity_records.sync_status AS record_sync_status,
+        entity_records.sync_error_code AS record_sync_error_code,
+        entity_records.sync_error_message AS record_sync_error_message
+      FROM pending_operations
+      INNER JOIN entity_records ON entity_records.owner_key = pending_operations.owner_key
+        AND entity_records.contract_id = pending_operations.contract_id
+        AND entity_records.entity_type_id = pending_operations.entity_type_id
+        AND entity_records.local_id = pending_operations.local_record_id
+      WHERE pending_operations.owner_key = ?
+        AND pending_operations.contract_id = ?
+        AND pending_operations.operation IN ('CREATE', 'UPDATE')
+        AND entity_records.sync_status = 'failed'
+      ORDER BY pending_operations.updated_at DESC
+      LIMIT ?
+    `,
+    ownerKey,
+    contractId,
+    limit,
+  );
+
+  return rows.map(mapFailedRecordOperationDiagnosticsRow);
 }
 
 async function getRecordOutboxConsistency({
@@ -3310,6 +3355,20 @@ type StateUpdateOutboxDiagnosticsRow = PendingOperationRow & {
   record_sync_status: RecordSyncStatus | null;
 };
 
+type FailedRecordOperationDiagnosticsRow = {
+  attempts: number;
+  entity_type_id: string;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  local_record_id: string;
+  operation: "CREATE" | "UPDATE";
+  record_sync_error_code: string | null;
+  record_sync_error_message: string | null;
+  record_sync_status: RecordSyncStatus;
+  server_record_id: string | null;
+  updated_at: string;
+};
+
 type StateUpdateLocalRecordDiagnosticsRow = EntityRecordRow & {
   definition_json: string | null;
   definition_status: AppViewDefinitionStatus | null;
@@ -3408,6 +3467,22 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
     ownerKey: row.owner_key,
     payload: JSON.parse(row.payload_json) as PendingOperation["payload"],
     serverRecordId: row.server_record_id,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapFailedRecordOperationDiagnosticsRow(row: FailedRecordOperationDiagnosticsRow) {
+  return {
+    entityTypeId: row.entity_type_id,
+    lastErrorCode: row.last_error_code,
+    lastErrorMessage: row.last_error_message,
+    localRecordId: row.local_record_id,
+    operation: row.operation,
+    retryCount: row.attempts,
+    serverRecordId: row.server_record_id,
+    syncErrorCode: row.record_sync_error_code,
+    syncErrorMessage: row.record_sync_error_message,
+    syncStatus: row.record_sync_status,
     updatedAt: row.updated_at,
   };
 }

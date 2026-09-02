@@ -62,6 +62,20 @@ export type RecordsSyncSummary = {
   syncingCount: number;
 };
 
+export type RecordsFailedOperationDiagnostics = {
+  entityTypeId: string;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  localRecordId: string;
+  operation: Extract<PendingOperationType, "CREATE" | "UPDATE">;
+  retryCount: number;
+  serverRecordId: string | null;
+  syncErrorCode: string | null;
+  syncErrorMessage: string | null;
+  syncStatus: RecordSyncStatus;
+  updatedAt: string;
+};
+
 export type RecordCacheStatusCounts = {
   conflict: number;
   failed: number;
@@ -131,6 +145,7 @@ export type OfflineRecordStore = {
   getRecordOutboxConsistency(input: BaseScopedInput): Promise<RecordOutboxConsistency>;
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
+  listFailedRecordOperations(input: ListFailedRecordOperationsInput): Promise<RecordsFailedOperationDiagnostics[]>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
   reconcileRemoteRecordsSnapshot(input: ReconcileRemoteRecordsSnapshotInput): Promise<RecordsReconcileDiagnostics | void>;
   retryFailedRecord(input: RetryFailedRecordInput): Promise<CachedEntityRecord>;
@@ -167,6 +182,10 @@ export type ListProblemRecordsInput = BaseScopedInput;
 export type RecordsSyncSummaryInput = {
   contractId: string;
   ownerKey: string;
+};
+
+export type ListFailedRecordOperationsInput = RecordsSyncSummaryInput & {
+  limit?: number;
 };
 
 export type RecordIdentityInput = BaseScopedInput & {

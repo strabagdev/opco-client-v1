@@ -19,7 +19,11 @@ import {
   getPendingSyncErrorTechnicalRows,
 } from "@/lib/pending-sync-errors";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
-import { getSyncDiagnosticsRows } from "@/renderers/records/sync-diagnostics";
+import {
+  getRecordsFailedOperationDiagnosticsSections,
+  getRecordsFailedOperationsNotice,
+  getSyncDiagnosticsRows,
+} from "@/renderers/records/sync-diagnostics";
 import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
 
 const APP_SHELL_TOAST_DURATION_MS = 3500;
@@ -38,6 +42,7 @@ export default function AppLayout() {
     offlinePreparationDiagnostics,
     ownerKey,
     pendingRecordsCount,
+    recordsFailedOperations,
     recordsSyncSummary,
     selectedContractId,
     signOut,
@@ -184,9 +189,20 @@ export default function AppLayout() {
     summary: recordsSyncSummary,
     telemetry: null,
   });
+  const recordsFailedDiagnosticsSections = getRecordsFailedOperationDiagnosticsSections(recordsFailedOperations);
+  const recordsFailedOperationsNotice = getRecordsFailedOperationsNotice(recordsSyncSummary);
   const firstPendingSyncError = pendingStateUpdateSyncErrors[0] ?? null;
-  const syncErrorMessage = formatPendingSyncErrorMessage(firstPendingSyncError);
-  const syncErrorTechnicalRows = getPendingSyncErrorTechnicalRows(firstPendingSyncError);
+  const shouldShowRecordsSyncErrorDetail = recordsSyncSummary.failedCount > 0 && !firstPendingSyncError;
+  const syncErrorMessage = shouldShowRecordsSyncErrorDetail
+    ? "Un cambio de RECORDS no pudo sincronizarse. Revisa el detalle durable retenido localmente."
+    : formatPendingSyncErrorMessage(firstPendingSyncError);
+  const syncErrorTechnicalRows = shouldShowRecordsSyncErrorDetail ? [] : getPendingSyncErrorTechnicalRows(firstPendingSyncError);
+  const pendingSyncErrorCount = shouldShowRecordsSyncErrorDetail
+    ? recordsSyncSummary.failedCount
+    : pendingStateUpdateSyncErrors.length;
+  const syncErrorSubtitle = shouldShowRecordsSyncErrorDetail
+    ? (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios retenidos con error` : "1 cambio retenido con error")
+    : (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios pendientes con error` : "1 cambio pendiente con error");
   const canRetryFirstPendingSyncError = Boolean(
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );
@@ -377,7 +393,12 @@ export default function AppLayout() {
                 />
               ) : null}
               {selectedDiagnosticsTab === "records" ? (
-                <RecordsGlobalDiagnostics rows={recordsDiagnosticsRows} />
+                <RecordsGlobalDiagnostics
+                  failedSections={recordsFailedDiagnosticsSections}
+                  notice={recordsFailedOperationsNotice}
+                  rows={recordsDiagnosticsRows}
+                  totalFailedCount={recordsSyncSummary.failedCount}
+                />
               ) : null}
             </ScrollView>
           </View>
@@ -395,11 +416,7 @@ export default function AppLayout() {
             <View style={styles.modalHeader}>
               <View style={styles.syncErrorTitleBlock}>
                 <Text style={styles.modalTitle}>Error de sincronizacion</Text>
-                <Text style={styles.syncErrorSubtitle}>
-                  {pendingStateUpdateSyncErrors.length > 1
-                    ? `${pendingStateUpdateSyncErrors.length} cambios pendientes con error`
-                    : "1 cambio pendiente con error"}
-                </Text>
+                <Text style={styles.syncErrorSubtitle}>{syncErrorSubtitle}</Text>
               </View>
               <Pressable
                 accessibilityLabel="Cerrar detalle de error de sincronizacion"
@@ -415,19 +432,28 @@ export default function AppLayout() {
                 <Text style={styles.syncErrorMessage}>{syncErrorMessage}</Text>
               </View>
               <Text style={styles.diagnosticsTitle}>Detalle tecnico</Text>
-              {syncErrorTechnicalRows.map(([label, value]) => (
-                <View key={label} style={styles.diagnosticsRow}>
-                  <Text style={styles.diagnosticsLabel}>{label}</Text>
-                  <Text style={styles.diagnosticsValue}>{String(value)}</Text>
-                </View>
-              ))}
+              {syncErrorTechnicalRows.length > 0 ? (
+                syncErrorTechnicalRows.map(([label, value]) => (
+                  <View key={label} style={styles.diagnosticsRow}>
+                    <Text style={styles.diagnosticsLabel}>{label}</Text>
+                    <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+                  </View>
+                ))
+              ) : null}
+              {shouldShowRecordsSyncErrorDetail ? (
+                <RecordsFailedDiagnostics
+                  failedSections={recordsFailedDiagnosticsSections}
+                  notice={recordsFailedOperationsNotice}
+                  totalFailedCount={recordsSyncSummary.failedCount}
+                />
+              ) : null}
             </ScrollView>
             <View style={styles.syncErrorFooter}>
               <Pressable
                 accessibilityRole="button"
                 onPress={() => {
                   setIsDiagnosticsOpen(true);
-                  setSelectedDiagnosticsTab("state-update");
+                  setSelectedDiagnosticsTab(shouldShowRecordsSyncErrorDetail ? "records" : "state-update");
                   setIsSyncErrorModalOpen(false);
                 }}
                 style={styles.secondaryModalButton}
@@ -546,7 +572,17 @@ function PwaDiagnostics({
   );
 }
 
-function RecordsGlobalDiagnostics({ rows }: { rows: [string, string | number | boolean | null][] }) {
+function RecordsGlobalDiagnostics({
+  failedSections,
+  notice,
+  rows,
+  totalFailedCount,
+}: {
+  failedSections: ReturnType<typeof getRecordsFailedOperationDiagnosticsSections>;
+  notice: string | null;
+  rows: [string, string | number | boolean | null][];
+  totalFailedCount: number;
+}) {
   return (
     <View style={styles.diagnostics}>
       <Text style={styles.diagnosticsTitle}>RECORDS</Text>
@@ -556,6 +592,49 @@ function RecordsGlobalDiagnostics({ rows }: { rows: [string, string | number | b
           <Text style={styles.diagnosticsValue}>{String(value)}</Text>
         </View>
       ))}
+      <RecordsFailedDiagnostics
+        failedSections={failedSections}
+        notice={notice}
+        totalFailedCount={totalFailedCount}
+      />
+    </View>
+  );
+}
+
+function RecordsFailedDiagnostics({
+  failedSections,
+  notice,
+  totalFailedCount,
+}: {
+  failedSections: ReturnType<typeof getRecordsFailedOperationDiagnosticsSections>;
+  notice: string | null;
+  totalFailedCount: number;
+}) {
+  if (totalFailedCount <= 0) {
+    return null;
+  }
+
+  return (
+    <View style={styles.diagnosticsSection}>
+      <Text style={styles.diagnosticsTitle}>Errores de RECORDS</Text>
+      {notice ? <Text style={styles.diagnosticsNotice}>{notice}</Text> : null}
+      {failedSections.length > 0 ? (
+        failedSections.map((section) => (
+          <View key={section.title} style={styles.diagnosticsSubsection}>
+            <Text style={styles.diagnosticsSectionTitle}>{section.title}</Text>
+            {section.rows.map(([label, value]) => (
+              <View key={`${section.title}:${label}`} style={styles.diagnosticsRow}>
+                <Text style={styles.diagnosticsLabel}>{label}</Text>
+                <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+              </View>
+            ))}
+          </View>
+        ))
+      ) : (
+        <Text style={styles.diagnosticsNotice}>
+          Hay errores durables de RECORDS, pero no se pudo resolver la operacion asociada.
+        </Text>
+      )}
     </View>
   );
 }
@@ -650,6 +729,11 @@ const styles = StyleSheet.create({
   diagnosticsModalPanelWide: {
     maxWidth: 920,
   },
+  diagnosticsNotice: {
+    color: "#587078",
+    fontSize: 12,
+    lineHeight: 17,
+  },
   diagnosticsTab: {
     alignItems: "center",
     backgroundColor: "#eef4f4",
@@ -684,6 +768,21 @@ const styles = StyleSheet.create({
     color: "#17363c",
     fontSize: 14,
     fontWeight: "800",
+  },
+  diagnosticsSection: {
+    borderColor: "#d9e3e5",
+    borderTopWidth: 1,
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 10,
+  },
+  diagnosticsSectionTitle: {
+    color: "#17363c",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  diagnosticsSubsection: {
+    gap: 6,
   },
   diagnosticsValue: {
     color: "#17363c",

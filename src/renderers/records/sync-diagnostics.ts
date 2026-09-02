@@ -1,6 +1,7 @@
 import { SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   RecordCacheStatusCounts,
+  RecordsFailedOperationDiagnostics,
   RecordOutboxConsistency,
   RecordsRefreshDiagnostics,
 } from "@/lib/offline-records";
@@ -34,6 +35,47 @@ export function getSyncDiagnosticsRows({
     ["Errores", String(summary.failedCount)],
     ["Conflictos", String(summary.conflictCount)],
   ];
+}
+
+export type RecordsFailedOperationDiagnosticsSection = {
+  rows: [string, string | number | boolean | null][];
+  title: string;
+};
+
+export function getRecordsFailedOperationDiagnosticsSections(
+  operations: RecordsFailedOperationDiagnostics[],
+): RecordsFailedOperationDiagnosticsSection[] {
+  return operations.map((operation, index) => {
+    const recordFingerprint = operation.serverRecordId ?? operation.localRecordId;
+    const code = operation.lastErrorCode ?? operation.syncErrorCode ?? "none";
+    const message = operation.lastErrorMessage ?? operation.syncErrorMessage ?? "none";
+
+    return {
+      title: `#${index + 1}`,
+      rows: [
+        ["Operacion", operation.operation],
+        ["Entidad", abbreviateScopeValue(operation.entityTypeId)],
+        ["Registro", abbreviateScopeValue(recordFingerprint)],
+        ["Intentos", String(operation.retryCount)],
+        ["Codigo", code],
+        ["Mensaje", message],
+        ["Estado local", operation.syncStatus],
+        ["Actualizado", operation.updatedAt],
+      ],
+    };
+  });
+}
+
+export function getRecordsFailedOperationsNotice(summary: RecordsSyncDiagnosticsSummary) {
+  if (summary.failedCount <= 0) {
+    return null;
+  }
+
+  if (summary.pendingCount === 0) {
+    return "Los errores quedan retenidos para revision o reintento manual.";
+  }
+
+  return "Hay errores retenidos junto con cambios pendientes.";
 }
 
 export type RecordsDiagnosticsState = {

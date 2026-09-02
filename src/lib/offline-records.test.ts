@@ -882,6 +882,37 @@ class MemoryRecordStore implements OfflineRecordStore {
     };
   }
 
+  async listFailedRecordOperations(input: Parameters<OfflineRecordStore["listFailedRecordOperations"]>[0]) {
+    return [...this.operations.values()]
+      .filter((operation) => operation.ownerKey === input.ownerKey && operation.contractId === input.contractId)
+      .map((operation) => {
+        if (operation.operation !== "CREATE" && operation.operation !== "UPDATE") {
+          return null;
+        }
+
+        const record = [...this.records.values()].find((item) =>
+          this.recordMatches(item, input.ownerKey, input.contractId, operation.entityTypeId) &&
+          item.localId === operation.localRecordId &&
+          item.syncStatus === "failed"
+        );
+
+        return record ? {
+          entityTypeId: operation.entityTypeId,
+          lastErrorCode: operation.lastErrorCode,
+          lastErrorMessage: operation.lastErrorMessage,
+          localRecordId: operation.localRecordId,
+          operation: operation.operation,
+          retryCount: operation.attempts,
+          serverRecordId: operation.serverRecordId,
+          syncErrorCode: record.syncErrorCode ?? null,
+          syncErrorMessage: record.syncErrorMessage ?? null,
+          syncStatus: record.syncStatus,
+          updatedAt: operation.updatedAt,
+        } : null;
+      })
+      .filter((operation): operation is NonNullable<typeof operation> => operation !== null);
+  }
+
   async getRecordCacheStatusCounts(input: Parameters<OfflineRecordStore["getRecordCacheStatusCounts"]>[0]) {
     const records = [...this.records.values()].filter((item) =>
       this.recordMatches(item, input.ownerKey, input.contractId, input.entityTypeId),

@@ -32,7 +32,7 @@ import {
   LocalDatabaseRecoverySummary,
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
-import { RecordsSyncSummary } from "@/lib/offline-records";
+import { RecordsFailedOperationDiagnostics, RecordsSyncSummary } from "@/lib/offline-records";
 import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
@@ -85,6 +85,7 @@ type SessionContextValue = {
   offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
+  recordsFailedOperations: RecordsFailedOperationDiagnostics[];
   localDatabaseStorageState: LocalDatabaseStorageState;
   localStorageRecoveryNotice: string | null;
   recordsReconnectRefreshKey: number;
@@ -147,6 +148,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
   const [stateUpdateReconnectRefreshKey, setStateUpdateReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
+  const [recordsFailedOperations, setRecordsFailedOperations] = useState<RecordsFailedOperationDiagnostics[]>([]);
   const [selectedContractIdState, setSelectedContractIdState] = useState<string | null>(null);
   const connectivityStatus = useConnectivityStatus();
   const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
@@ -226,23 +228,30 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const refreshPendingRecordsCount = useCallback(async () => {
     if (!ownerKey || !selectedContractIdState) {
       setPendingRecordsCount(0);
+      setRecordsFailedOperations([]);
       setRecordsSyncSummary(emptyRecordsSyncSummary);
       return;
     }
 
     try {
-      const [count, summary] = await Promise.all([
+      const [count, summary, failedOperations] = await Promise.all([
         definitionCache.countPendingOperations(ownerKey),
         definitionCache.getRecordsSyncSummary({
+          contractId: selectedContractIdState,
+          ownerKey,
+        }),
+        definitionCache.listFailedRecordOperations({
           contractId: selectedContractIdState,
           ownerKey,
         }),
       ]);
 
       setPendingRecordsCount(count);
+      setRecordsFailedOperations(failedOperations);
       setRecordsSyncSummary(summary);
     } catch {
       setPendingRecordsCount(0);
+      setRecordsFailedOperations([]);
       setRecordsSyncSummary(emptyRecordsSyncSummary);
     }
   }, [definitionCache, ownerKey, selectedContractIdState]);
@@ -552,6 +561,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         offlinePreparationDiagnostics,
         ownerKey,
         pendingRecordsCount,
+        recordsFailedOperations,
         localDatabaseStorageState,
         localStorageRecoveryNotice,
         recordsReconnectRefreshKey,
