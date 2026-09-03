@@ -35,6 +35,7 @@ import {
 import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
 import {
   activeStateOptions,
+  buildEffectiveStateSnapshot,
   buildStateUpdateConflictRows,
   currentStateValue,
   defaultStateValues,
@@ -436,18 +437,20 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
-    const stateErrors = validateStateFields(response.stateFields, stateValues);
+    const stateSnapshot = buildEffectiveStateSnapshot({
+      currentStateValues: selectedItem.current?.stateValues,
+      fields: response.stateFields,
+      formValues: stateValues,
+    });
     const nextExtraErrors = validateFormFields(response.extraFields, extraValues);
 
-    if (stateErrors || Object.keys(nextExtraErrors).length > 0) {
+    if (stateSnapshot.error || Object.keys(nextExtraErrors).length > 0) {
       setExtraErrors(nextExtraErrors);
-      setError(stateErrors);
+      setError(stateSnapshot.error);
       return;
     }
 
-    const changedStateValues = buildChangedStateValues(response.stateFields, stateValues, selectedItem);
-
-    if (changedStateValues.length === 0 && response.extraFields.length === 0) {
+    if (!stateSnapshot.hasChanges && response.extraFields.length === 0) {
       setError("No hay cambios para guardar.");
       return;
     }
@@ -456,7 +459,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       expectedUpdatedAt,
       extraValues: buildSubmitValues(response.extraFields, extraValues),
       overwrite,
-      stateValues: changedStateValues,
+      stateValues: stateSnapshot.stateValues,
       subjectRecordId: selectedItem.subject.id,
     };
 
@@ -481,7 +484,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           overwrite,
           ownerKey,
           stateFields: response.stateFields,
-          stateValues: changedStateValues,
+          stateValues: stateSnapshot.stateValues,
           subjectDisplayName: selectedItem.subject.displayName,
           subjectRecordId: selectedItem.subject.id,
           targetEntityTypeId: response.targetEntityType.id,
@@ -703,27 +706,6 @@ function initialStateValues(response: StateUpdateResponse | null, item: StateUpd
   });
 
   return values;
-}
-
-function validateStateFields(fields: StateUpdateField[], values: StateValues) {
-  const missing = fields.find((field) => field.required && !values[field.fieldId]);
-
-  return missing ? `${missing.label} es obligatorio.` : null;
-}
-
-function buildChangedStateValues(fields: StateUpdateField[], values: StateValues, item: StateUpdateItem) {
-  return fields
-    .map((field) => {
-      const optionId = values[field.fieldId] || null;
-      const current = currentStateValue(item.current?.stateValues ?? [], field.fieldId);
-
-      if (optionId === (current?.optionId ?? null)) {
-        return null;
-      }
-
-      return { fieldId: field.fieldId, optionId };
-    })
-    .filter((value): value is { fieldId: string; optionId: string | null } => Boolean(value));
 }
 
 function formatCurrentState(response: StateUpdateResponse | null, item: StateUpdateItem) {

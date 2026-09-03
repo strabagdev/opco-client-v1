@@ -1554,6 +1554,58 @@ describe("local database singleton", () => {
       expect.any(String),
       "state_update_local_record_1",
     );
+    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
+    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
+
+    expect(syncedValues.stateValues).toEqual([
+      { fieldId: "status_field", label: "Presente", optionId: "present_option" },
+    ]);
+  });
+
+  it("keeps every effective state value when completing a generic multi-field STATE_UPDATE", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    const store = getLocalDatabase();
+
+    await store.completeStateUpdateOperation({
+      attempts: 1,
+      clientRequestId: "client-request-id-versioning-1",
+      contractId: "contract_real_1",
+      createdAt: "2026-08-26T10:00:00.000Z",
+      entityTypeId: "versioning",
+      id: "state_update_pending_2",
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      localRecordId: "state_update_local_record_2",
+      operation: "STATE_UPDATE",
+      ownerKey: "org_1:user_1",
+      payload: {
+        appViewId: "view_versioning",
+        clientRequestId: "client-request-id-versioning-1",
+        historyMode: "append",
+        stateValues: [
+          { fieldId: "status_field", label: "En revision", optionId: "status_review" },
+          { fieldId: "version_field", label: "2", optionId: "version_2" },
+        ],
+        subjectDisplayName: "Procedimiento seguro",
+        subjectRecordId: "procedure_1",
+        uniqueness: "subject",
+      },
+      serverRecordId: null,
+      updatedAt: "2026-08-26T10:01:00.000Z",
+    }, {
+      recordId: "versioning_remote_1",
+      result: "CREATED",
+      subjectRecordId: "procedure_1",
+      updatedAt: "2026-08-26T11:30:00.000Z",
+    });
+
+    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
+    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
+
+    expect(syncedValues.stateValues).toEqual([
+      { fieldId: "status_field", label: "En revision", optionId: "status_review" },
+      { fieldId: "version_field", label: "2", optionId: "version_2" },
+    ]);
   });
 
   it("commits STATE_UPDATE conflict metadata and local record status as one transaction", async () => {
@@ -1658,6 +1710,36 @@ describe("local database singleton", () => {
 
     expect(db.runAsync.mock.calls[0][0]).toContain("INSERT INTO entity_records");
     expect(db.runAsync.mock.calls[1][0]).toContain("INSERT INTO pending_operations");
+  });
+
+  it("persists the complete generic STATE_UPDATE state snapshot in the offline outbox", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_view_versioning_procedure_a",
+          sync_status: "pending_create",
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateMultiStateSaveInput("procedure_a"));
+
+    const outboxWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+    const payload = JSON.parse(String(outboxWrite?.[9]));
+
+    expect(payload).toMatchObject({
+      appViewId: "view_versioning",
+      historyMode: "append",
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_review" },
+        { fieldId: "version_field", optionId: "version_2" },
+      ],
+      subjectRecordId: "procedure_a",
+      uniqueness: "subject",
+    });
   });
 
   it("does not report local save success when the STATE_UPDATE outbox insert fails inside the transaction", async () => {
@@ -3007,5 +3089,42 @@ function stateUpdateSaveInput(subjectRecordId: string, optionId = "present_optio
     subjectRecordId,
     targetEntityTypeId: "attendance",
     uniqueness: "subject-date" as const,
+  };
+}
+
+function stateUpdateMultiStateSaveInput(subjectRecordId: string) {
+  return {
+    appViewId: "view_versioning",
+    contractId: "contract_real_1",
+    historyMode: "append" as const,
+    ownerKey: "org_1:user_1",
+    stateFields: [
+      {
+        fieldId: "status_field",
+        label: "Estatus",
+        options: [
+          { label: "Vigente", optionId: "status_active" },
+          { label: "En revision", optionId: "status_review" },
+        ],
+        required: true,
+      },
+      {
+        fieldId: "version_field",
+        label: "Version",
+        options: [
+          { label: "1", optionId: "version_1" },
+          { label: "2", optionId: "version_2" },
+        ],
+        required: true,
+      },
+    ],
+    stateValues: [
+      { fieldId: "status_field", optionId: "status_review" },
+      { fieldId: "version_field", optionId: "version_2" },
+    ],
+    subjectDisplayName: `Procedimiento ${subjectRecordId}`,
+    subjectRecordId,
+    targetEntityTypeId: "versioning",
+    uniqueness: "subject" as const,
   };
 }

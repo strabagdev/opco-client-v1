@@ -200,6 +200,10 @@ describe("state-update sync engine", () => {
 
     expect(result.retriable).toBe(1);
     expect(store.retried[0].clientRequestId).toBe("request_original");
+    expect((store.retried[0].payload as OfflineStateUpdatePayload).stateValues).toEqual([
+      { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+      { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+    ]);
   });
 
   it("completes a timed out operation when remote reconciliation confirms the requested state", async () => {
@@ -281,6 +285,10 @@ describe("state-update sync engine", () => {
     expect(result.lastRequestDiagnostics?.requestStartedAt).toBe("2026-08-26T12:00:00.000Z");
     expect(store.completed).toHaveLength(0);
     expect(store.retried[0].clientRequestId).toBe("request_original");
+    expect((store.retried[0].payload as OfflineStateUpdatePayload).stateValues).toEqual([
+      { fieldId: "field_operational_status", label: "Operando", optionId: "running" },
+      { fieldId: "field_availability", label: "Disponible", optionId: "available" },
+    ]);
     expect(store.operations).toHaveLength(1);
   });
 

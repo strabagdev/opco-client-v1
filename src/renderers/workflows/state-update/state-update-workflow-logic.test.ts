@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField } from "@/lib/opco-api";
-import { buildStateUpdateConflictRows } from "./state-update-workflow-logic";
+import { buildEffectiveStateSnapshot, buildStateUpdateConflictRows } from "./state-update-workflow-logic";
 
 const stateFields: StateUpdateField[] = [{
   fieldId: "status_field",
@@ -47,6 +47,169 @@ const extraFields: EntityField[] = [
     type: "TEXTAREA",
   },
 ];
+
+const multiStateFields: StateUpdateField[] = [
+  {
+    fieldId: "status_field",
+    label: "Estatus",
+    options: [
+      { label: "Vigente", optionId: "status_active" },
+      { label: "En revision", optionId: "status_review" },
+      { label: "Archivado", optionId: "status_archived" },
+    ],
+    required: true,
+  },
+  {
+    fieldId: "version_field",
+    label: "Version",
+    options: [
+      { label: "1", optionId: "version_1" },
+      { label: "2", optionId: "version_2" },
+      { label: "3", optionId: "version_3" },
+    ],
+    required: true,
+  },
+];
+
+describe("state-update effective state snapshot", () => {
+  it("sends every state field when only status changes", () => {
+    expect(buildEffectiveStateSnapshot({
+      currentStateValues: [
+        { fieldId: "status_field", label: "Vigente", optionId: "status_active" },
+        { fieldId: "version_field", label: "2", optionId: "version_2" },
+      ],
+      fields: multiStateFields,
+      formValues: {
+        status_field: "status_review",
+        version_field: "version_2",
+      },
+    })).toEqual({
+      error: null,
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_review" },
+        { fieldId: "version_field", optionId: "version_2" },
+      ],
+    });
+  });
+
+  it("keeps the current status when only version changes", () => {
+    expect(buildEffectiveStateSnapshot({
+      currentStateValues: [
+        { fieldId: "status_field", label: "Vigente", optionId: "status_active" },
+        { fieldId: "version_field", label: "2", optionId: "version_2" },
+      ],
+      fields: multiStateFields,
+      formValues: {
+        status_field: "status_active",
+        version_field: "version_3",
+      },
+    })).toMatchObject({
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_active" },
+        { fieldId: "version_field", optionId: "version_3" },
+      ],
+    });
+  });
+
+  it("uses both new values when both state fields change", () => {
+    expect(buildEffectiveStateSnapshot({
+      currentStateValues: [
+        { fieldId: "status_field", label: "Vigente", optionId: "status_active" },
+        { fieldId: "version_field", label: "2", optionId: "version_2" },
+      ],
+      fields: multiStateFields,
+      formValues: {
+        status_field: "status_archived",
+        version_field: "version_3",
+      },
+    })).toMatchObject({
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_archived" },
+        { fieldId: "version_field", optionId: "version_3" },
+      ],
+    });
+  });
+
+  it("builds the first event without current values", () => {
+    expect(buildEffectiveStateSnapshot({
+      fields: multiStateFields,
+      formValues: {
+        status_field: "status_active",
+        version_field: "version_1",
+      },
+    })).toMatchObject({
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_active" },
+        { fieldId: "version_field", optionId: "version_1" },
+      ],
+    });
+  });
+
+  it("blocks required state fields that still have no effective value", () => {
+    expect(buildEffectiveStateSnapshot({
+      fields: multiStateFields,
+      formValues: {
+        status_field: "status_active",
+      },
+    })).toEqual({
+      error: "Version es obligatorio.",
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_active" },
+      ],
+    });
+  });
+
+  it("uses a valid configured default when no current or form value exists", () => {
+    expect(buildEffectiveStateSnapshot({
+      fields: [{
+        ...multiStateFields[0],
+        defaultOptionId: "status_active",
+      }],
+      formValues: {},
+    })).toEqual({
+      error: null,
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_active" },
+      ],
+    });
+  });
+
+  it("does not invent null values for optional fields without an effective value", () => {
+    expect(buildEffectiveStateSnapshot({
+      fields: [{
+        ...multiStateFields[0],
+        required: false,
+      }],
+      formValues: {},
+    })).toEqual({
+      error: null,
+      hasChanges: false,
+      stateValues: [],
+    });
+  });
+
+  it("keeps the N=1 unchanged state as a snapshot without treating it as a change", () => {
+    expect(buildEffectiveStateSnapshot({
+      currentStateValues: [{ fieldId: "status_field", label: "Vigente", optionId: "status_active" }],
+      fields: [multiStateFields[0]],
+      formValues: {
+        status_field: "status_active",
+      },
+    })).toEqual({
+      error: null,
+      hasChanges: false,
+      stateValues: [
+        { fieldId: "status_field", optionId: "status_active" },
+      ],
+    });
+  });
+});
 
 describe("state-update conflict rows", () => {
   it("keeps state-only conflicts unchanged", () => {

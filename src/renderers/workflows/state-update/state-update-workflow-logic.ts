@@ -42,6 +42,50 @@ export function defaultStateValues(fields: StateUpdateField[]) {
   }, {});
 }
 
+export function buildEffectiveStateSnapshot({
+  currentStateValues,
+  fields,
+  formValues,
+}: {
+  currentStateValues?: StateUpdateCurrentFieldValue[];
+  fields: StateUpdateField[];
+  formValues: Record<string, string>;
+}) {
+  const currentValues = currentStateValues ?? [];
+  const stateValues: { fieldId: string; optionId: string }[] = [];
+  let hasChanges = false;
+  let error: string | null = null;
+
+  for (const field of fields) {
+    const formOptionId = normalizeOptionId(formValues[field.fieldId]);
+    const currentOptionId = normalizeOptionId(currentStateValue(currentValues, field.fieldId)?.optionId);
+    const defaultOptionId = validStateFieldOption(field, field.defaultOptionId)?.optionId ?? null;
+    const effectiveOptionId = formOptionId ?? currentOptionId ?? defaultOptionId;
+
+    if (!effectiveOptionId) {
+      if (field.required) {
+        error = `${field.label} es obligatorio.`;
+        break;
+      }
+
+      continue;
+    }
+
+    if (!validStateFieldOption(field, effectiveOptionId)) {
+      error = `${field.label} tiene una opcion no valida.`;
+      break;
+    }
+
+    if (effectiveOptionId !== currentOptionId) {
+      hasChanges = true;
+    }
+
+    stateValues.push({ fieldId: field.fieldId, optionId: effectiveOptionId });
+  }
+
+  return { error, hasChanges, stateValues };
+}
+
 export function stateFieldOptionLabel(field: StateUpdateField, optionId: string | null | undefined) {
   if (!optionId) {
     return null;
@@ -58,6 +102,20 @@ export function activeStateOptions(field: StateUpdateField): StateUpdateOption[]
 
 export function currentStateValue(values: StateUpdateCurrentFieldValue[], fieldId: string) {
   return values.find((value) => value.fieldId === fieldId) ?? null;
+}
+
+function normalizeOptionId(value: string | null | undefined) {
+  const normalized = value?.trim();
+
+  return normalized ? normalized : null;
+}
+
+function validStateFieldOption(field: StateUpdateField, optionId: string | null | undefined) {
+  if (!optionId) {
+    return null;
+  }
+
+  return field.options.find((option) => option.optionId === optionId && option.active !== false) ?? null;
 }
 
 export function firstBlockingStateUpdateResult(results: StateUpdateBatchResult[]) {
