@@ -8,7 +8,7 @@ import {
   prewarmAssignedAppViewsOnce,
 } from "./app-view-prewarm";
 import { CachedEntityRecord } from "./offline-records";
-import { AttendanceResponse, EntityDefinition, EntityRecord, OpcoNetworkError } from "./opco-api";
+import { AppView, AttendanceResponse, EntityDefinition, EntityRecord, OpcoNetworkError, StateUpdateResponse } from "./opco-api";
 import { emptySyncTelemetry, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope } from "./sync-telemetry";
 import { appViewsFixture, entityDefinitionFixture } from "../test/fixtures";
 import { AttendanceDaySnapshotHydration, AttendanceDaySnapshotScope, UpsertStateUpdateSnapshotInput } from "./state-update-offline";
@@ -523,6 +523,69 @@ describe("app view prewarm", () => {
 
     await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", "view_records")).resolves.toMatchObject({
       definition: { kind: "records" },
+      status: "ready",
+    });
+  });
+
+  it("stores subject-only state-update definitions with normalized empty collections", async () => {
+    const stateUpdateView: AppView = {
+      config: {
+        historyMode: "append",
+        sourceEntityTypeId: "procedures",
+        stateFields: [{ fieldId: "field_status", required: true }],
+        subjectFieldId: "field_procedure",
+        targetEntityTypeId: "versions",
+        uniqueness: "subject",
+        workflowKey: "state-update",
+      },
+      icon: "workflow",
+      id: "view_state_update",
+      name: "Versionado",
+      slug: "versionado",
+      sortOrder: 5,
+      type: "WORKFLOW",
+    };
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: "view_state_update", name: "Versionado", slug: "versionado" },
+        historyMode: "append",
+        sourceEntityType: { id: "procedures", name: "Procedimientos" },
+        subjectFieldId: "field_procedure",
+        targetEntityType: { id: "versions", name: "Versionado" },
+        uniqueness: "subject",
+      }) as StateUpdateResponse),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(async (_token, _contractId, _entityTypeId, query?: { page?: number; pageSize?: number }) => ({
+        pagination: { page: query?.page ?? 1, pageSize: query?.pageSize ?? 100, total: 0, totalPages: 1 },
+        records: [],
+      })),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [stateUpdateView],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(api.getStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_state_update", {
+      date: undefined,
+    });
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", "view_state_update")).resolves.toMatchObject({
+      definition: {
+        dateFieldId: undefined,
+        extraFields: [],
+        historyMode: "append",
+        kind: "state-update",
+        sourceEntityTypeId: "procedures",
+        stateFields: [],
+        subjectFieldId: "field_procedure",
+        targetEntityTypeId: "versions",
+        uniqueness: "subject",
+      },
       status: "ready",
     });
   });

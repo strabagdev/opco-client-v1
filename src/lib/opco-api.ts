@@ -1397,17 +1397,39 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
 }
 
 function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdateResponse {
-  response.latest?.forEach((item) => {
+  const items = (response.items ?? []).map((item) => ({
+    ...item,
+    current: item.current
+      ? {
+          ...item.current,
+          stateValues: item.current.stateValues ?? [],
+        }
+      : item.current,
+  }));
+  const latest = (response.latest ?? []).map((item) => ({
+    ...item,
+    stateValues: item.stateValues ?? [],
+  }));
+  const extraFields = response.extraFields ?? [];
+  const stateFields = response.stateFields ?? [];
+
+  latest.forEach((item) => {
     assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
   });
 
-  response.items.forEach((item) => {
+  items.forEach((item) => {
     if (item.current) {
       assertIsoDateTime(item.current.updatedAt, "Opco devolvio un updatedAt invalido para el estado actual.");
     }
   });
 
-  return response;
+  return {
+    ...response,
+    extraFields,
+    items,
+    latest,
+    stateFields,
+  };
 }
 
 function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): StateUpdateBatchResponse {

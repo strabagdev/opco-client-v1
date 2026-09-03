@@ -839,11 +839,11 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
   return {
     appView,
     dateFieldId: response.dateFieldId,
-    extraFields: response.extraFields,
+    extraFields: response.extraFields ?? [],
     historyMode: response.historyMode,
     kind: "state-update",
     sourceEntityTypeId: response.sourceEntityType.id,
-    stateFields: response.stateFields,
+    stateFields: response.stateFields ?? [],
     subjectFieldId: response.subjectFieldId,
     targetEntityTypeId: response.targetEntityType.id,
     uniqueness: response.uniqueness,

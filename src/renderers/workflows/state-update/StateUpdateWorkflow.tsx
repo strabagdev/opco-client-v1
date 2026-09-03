@@ -698,7 +698,7 @@ function initialStateValues(response: StateUpdateResponse | null, item: StateUpd
 
   const values = defaultStateValues(response.stateFields);
 
-  item.current?.stateValues.forEach((value) => {
+  (item.current?.stateValues ?? []).forEach((value) => {
     values[value.fieldId] = value.optionId ?? "";
   });
 
