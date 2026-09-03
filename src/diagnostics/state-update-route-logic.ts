@@ -151,7 +151,9 @@ export type StateUpdateRunSummary = {
   readinessConfirmedAt: string | null;
   readinessStartedAt: string | null;
   recordsOperationsCompleted: number | null;
+  recordsOperationsConflicted: number | null;
   recordsOperationsFailed: number | null;
+  recordsOperationsRetriable: number | null;
   recordsPhaseCompletedAt: string | null;
   recordsPhaseFailedAt: string | null;
   recordsPhaseResult: string | null;
@@ -427,7 +429,9 @@ export function resolveLatestStateUpdateRunSummary(
     readinessConfirmedAt: preflight?.readinessConfirmedAt ?? null,
     readinessStartedAt: preflight?.readinessStartedAt ?? null,
     recordsOperationsCompleted: preflight?.recordsOperationsCompleted ?? null,
+    recordsOperationsConflicted: preflight?.recordsOperationsConflicted ?? null,
     recordsOperationsFailed: preflight?.recordsOperationsFailed ?? null,
+    recordsOperationsRetriable: preflight?.recordsOperationsRetriable ?? null,
     recordsPhaseCompletedAt: preflight?.recordsPhaseCompletedAt ?? null,
     recordsPhaseFailedAt: preflight?.recordsPhaseFailedAt ?? null,
     recordsPhaseResult: preflight?.recordsPhaseResult ?? null,
@@ -524,7 +528,9 @@ export function formatStateUpdateRunRows(run: StateUpdateRunSummary): StateUpdat
     ["recordsPhaseFailedAt", formatDiagnosticValue(run.recordsPhaseFailedAt)],
     ["recordsPhaseResult", formatDiagnosticValue(run.recordsPhaseResult)],
     ["recordsOperationsCompleted", formatDiagnosticValue(run.recordsOperationsCompleted)],
+    ["recordsOperationsConflicted", formatDiagnosticValue(run.recordsOperationsConflicted)],
     ["recordsOperationsFailed", formatDiagnosticValue(run.recordsOperationsFailed)],
+    ["recordsOperationsRetriable", formatDiagnosticValue(run.recordsOperationsRetriable)],
     ["stateUpdatePhaseStartedAt", formatDiagnosticValue(run.stateUpdatePhaseStartedAt)],
     ["stateUpdatePhaseCompletedAt", formatDiagnosticValue(run.stateUpdatePhaseCompletedAt)],
     ["stateUpdatePhaseFailedAt", formatDiagnosticValue(run.stateUpdatePhaseFailedAt)],
@@ -587,7 +593,9 @@ export function formatStateUpdatePreflightRows(
     ["recordsPhaseFailedAt", formatDiagnosticValue(preflight.recordsPhaseFailedAt)],
     ["recordsPhaseResult", formatDiagnosticValue(preflight.recordsPhaseResult)],
     ["recordsOperationsCompleted", formatDiagnosticValue(preflight.recordsOperationsCompleted)],
+    ["recordsOperationsConflicted", formatDiagnosticValue(preflight.recordsOperationsConflicted)],
     ["recordsOperationsFailed", formatDiagnosticValue(preflight.recordsOperationsFailed)],
+    ["recordsOperationsRetriable", formatDiagnosticValue(preflight.recordsOperationsRetriable)],
     ["stateUpdatePhaseStartedAt", formatDiagnosticValue(preflight.stateUpdatePhaseStartedAt)],
     ["stateUpdatePhaseCompletedAt", formatDiagnosticValue(preflight.stateUpdatePhaseCompletedAt)],
     ["stateUpdatePhaseFailedAt", formatDiagnosticValue(preflight.stateUpdatePhaseFailedAt)],
@@ -645,7 +653,9 @@ function buildStateUpdateRunSummary({
     readinessConfirmedAt: preflight?.readinessConfirmedAt ?? null,
     readinessStartedAt: preflight?.readinessStartedAt ?? null,
     recordsOperationsCompleted: preflight?.recordsOperationsCompleted ?? null,
+    recordsOperationsConflicted: preflight?.recordsOperationsConflicted ?? null,
     recordsOperationsFailed: preflight?.recordsOperationsFailed ?? null,
+    recordsOperationsRetriable: preflight?.recordsOperationsRetriable ?? null,
     recordsPhaseCompletedAt: preflight?.recordsPhaseCompletedAt ?? null,
     recordsPhaseFailedAt: preflight?.recordsPhaseFailedAt ?? null,
     recordsPhaseResult: preflight?.recordsPhaseResult ?? null,

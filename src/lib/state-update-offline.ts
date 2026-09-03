@@ -225,7 +225,9 @@ export type StateUpdateReconnectPreflightTelemetry = {
   recordsPhaseStartedAt?: string | null;
   recordsPhaseResult?: "completed" | "failed" | null;
   recordsOperationsCompleted?: number | null;
+  recordsOperationsConflicted?: number | null;
   recordsOperationsFailed?: number | null;
+  recordsOperationsRetriable?: number | null;
   stateUpdatePhaseCompletedAt?: string | null;
   stateUpdatePhaseFailedAt?: string | null;
   stateUpdatePhaseStartedAt?: string | null;
@@ -545,7 +547,9 @@ function closeStateUpdateReconnectPreflightFromSyncResult({
     syncRunId,
     trigger: preflight.trigger,
     recordsOperationsCompleted: preflight.recordsOperationsCompleted ?? 0,
+    recordsOperationsConflicted: preflight.recordsOperationsConflicted ?? 0,
     recordsOperationsFailed: preflight.recordsOperationsFailed ?? 0,
+    recordsOperationsRetriable: preflight.recordsOperationsRetriable ?? 0,
     recordsPhaseCompletedAt: preflight.recordsPhaseCompletedAt ?? completedAt,
     recordsPhaseResult: preflight.recordsPhaseResult ?? "completed",
     recordsPhaseStartedAt: preflight.recordsPhaseStartedAt ?? preflight.syncPendingWorkStartedAt,

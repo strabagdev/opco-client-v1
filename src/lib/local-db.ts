@@ -4365,7 +4365,9 @@ function normalizeStateUpdateReconnectPreflightTelemetry(
       ? telemetry.scopeCheckAfterReadiness
       : null,
     recordsOperationsCompleted: normalizeNullableDiagnosticCount(telemetry.recordsOperationsCompleted),
+    recordsOperationsConflicted: normalizeNullableDiagnosticCount(telemetry.recordsOperationsConflicted),
     recordsOperationsFailed: normalizeNullableDiagnosticCount(telemetry.recordsOperationsFailed),
+    recordsOperationsRetriable: normalizeNullableDiagnosticCount(telemetry.recordsOperationsRetriable),
     recordsPhaseCompletedAt: normalizeDiagnosticTimestamp(telemetry.recordsPhaseCompletedAt),
     recordsPhaseFailedAt: normalizeDiagnosticTimestamp(telemetry.recordsPhaseFailedAt),
     recordsPhaseResult: telemetry.recordsPhaseResult === "completed" || telemetry.recordsPhaseResult === "failed"

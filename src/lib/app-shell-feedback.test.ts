@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyAppShellVisibleErrorEvent,
   formatPendingWorkMessage,
+  formatSyncConflictNotice,
   resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
   resolveAppShellStatusIndicator,
@@ -52,12 +54,12 @@ describe("app shell feedback", () => {
       pendingCount: 1,
     })).toEqual({
       id: "pending-work",
-      message: "1 registro por sincronizar",
-      tone: "warning",
-      visual: "warning",
+      message: "Cambios guardados. Se sincronizaran al recuperar conexion.",
+      tone: "info",
+      visual: "info",
     });
 
-    expect(formatPendingWorkMessage(2)).toBe("2 registros por sincronizar");
+    expect(formatPendingWorkMessage(2)).toBe("Cambios guardados. Se sincronizaran al recuperar conexion.");
   });
 
   it("shows offline as persistent feedback without pending work", () => {
@@ -66,10 +68,73 @@ describe("app shell feedback", () => {
       connectivityStatus: "offline",
     })).toEqual({
       id: "offline",
-      message: "Modo sin conexion",
+      message: "Trabajando sin conexion",
       tone: "info",
       visual: "info",
     });
+  });
+
+  it("shows read connectivity issues without treating them as durable sync errors", () => {
+    expect(resolveAppShellPersistentFeedback({
+      ...baseInput,
+      hasReadConnectivityIssue: true,
+    })).toEqual({
+      id: "read-connectivity-issue",
+      message: "Conexion inestable. Mostrando datos guardados.",
+      tone: "info",
+      visual: "info",
+    });
+  });
+
+  it("prioritizes durable sync errors over transient read connectivity issues", () => {
+    expect(resolveAppShellPersistentFeedback({
+      ...baseInput,
+      hasError: true,
+      hasReadConnectivityIssue: true,
+      syncErrorCount: 2,
+    })).toEqual({
+      id: "sync-error",
+      message: "2 cambios no pudieron sincronizarse.",
+      tone: "error",
+      visual: "error",
+    });
+  });
+
+  it("formats conflicts as changes requiring review", () => {
+    expect(resolveAppShellPersistentFeedback({
+      ...baseInput,
+      hasConflict: true,
+      syncConflictCount: 1,
+    })).toMatchObject({
+      id: "sync-conflict",
+      message: "1 cambio requiere revision.",
+    });
+    expect(formatSyncConflictNotice(3)).toBe("3 cambios requieren revision.");
+  });
+
+  it("classifies unresolved visible errors by operation and method", () => {
+    expect(classifyAppShellVisibleErrorEvent({
+      operation: "load-day",
+      resolution: "unresolved",
+    })).toBe("read");
+    expect(classifyAppShellVisibleErrorEvent({
+      method: "GET",
+      operation: "save",
+      resolution: "unresolved",
+    })).toBe("read");
+    expect(classifyAppShellVisibleErrorEvent({
+      method: "POST",
+      operation: "save",
+      resolution: "unresolved",
+    })).toBe("write");
+    expect(classifyAppShellVisibleErrorEvent({
+      operation: "sync",
+      resolution: "unresolved",
+    })).toBe("sync");
+    expect(classifyAppShellVisibleErrorEvent({
+      operation: "load-day",
+      resolution: "cleared_after_success",
+    })).toBeNull();
   });
 
   it("shows real sync and auth phases as persistent feedback", () => {

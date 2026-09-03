@@ -36,7 +36,9 @@ export type SyncPendingWorkPhaseEvent =
       phase: "records";
       result: "completed" | "failed" | "started";
       recordsOperationsCompleted?: number;
+      recordsOperationsConflicted?: number;
       recordsOperationsFailed?: number;
+      recordsOperationsRetriable?: number;
       startedAt?: string;
     }
   | {
@@ -91,7 +93,9 @@ export async function syncPendingWork({
     completedAt: new Date().toISOString(),
     phase: "records",
     recordsOperationsCompleted: records.completed,
-    recordsOperationsFailed: records.conflicts + records.failed + records.retriable,
+    recordsOperationsConflicted: records.conflicts,
+    recordsOperationsFailed: records.failed,
+    recordsOperationsRetriable: records.retriable,
     result: "completed",
   });
 

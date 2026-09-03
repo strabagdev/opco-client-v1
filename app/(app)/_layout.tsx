@@ -6,6 +6,7 @@ import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, Styl
 import { AppIcon } from "@/components/app-icon";
 import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import {
+  classifyAppShellVisibleErrorEvent,
   resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
   resolveAppShellStatusIndicator,
@@ -47,6 +48,7 @@ export default function AppLayout() {
     selectedContractId,
     signOut,
     stateUpdateReconnectDiagnostics,
+    stateUpdateReconnectRefreshKey,
     status,
   } = useSession();
   const router = useRouter();
@@ -71,12 +73,21 @@ export default function AppLayout() {
     () => getPendingStateUpdateSyncErrors(diagnosticsStateUpdate.diagnostics),
     [diagnosticsStateUpdate.diagnostics],
   );
-  const hasStateUpdateVisibleError = Boolean(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent?.resolution === "unresolved");
-  const hasSyncError = recordsSyncSummary.failedCount > 0 || hasStateUpdateVisibleError;
+  const visibleErrorKind = classifyAppShellVisibleErrorEvent(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent);
+  const stateUpdateConflictCount = diagnosticsStateUpdate.diagnostics
+    ? Math.max(
+        diagnosticsStateUpdate.diagnostics.summary.conflict,
+        diagnosticsStateUpdate.diagnostics.summary.localConflict,
+      )
+    : 0;
+  const durableSyncErrorCount = recordsSyncSummary.failedCount + pendingStateUpdateSyncErrors.length;
+  const syncConflictCount = recordsSyncSummary.conflictCount + stateUpdateConflictCount;
+  const hasSyncError = durableSyncErrorCount > 0;
   const persistentFeedback = resolveAppShellPersistentFeedback({
     connectivityStatus,
-    hasConflict: recordsSyncSummary.conflictCount > 0,
+    hasConflict: syncConflictCount > 0,
     hasError: hasSyncError,
+    hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
     isOperationalCoreReadinessChecking,
@@ -84,12 +95,14 @@ export default function AppLayout() {
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,
-    pendingSyncErrorCount: Math.max(recordsSyncSummary.failedCount, pendingStateUpdateSyncErrors.length, 1),
+    syncConflictCount,
+    syncErrorCount: durableSyncErrorCount,
   });
   const shellStatusIndicator = resolveAppShellStatusIndicator({
     connectivityStatus,
-    hasConflict: recordsSyncSummary.conflictCount > 0,
+    hasConflict: syncConflictCount > 0,
     hasError: hasSyncError,
+    hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
     isOperationalCoreReadinessChecking,
@@ -182,6 +195,10 @@ export default function AppLayout() {
     }
   }, [persistentFeedback?.id, refreshStateUpdateDiagnostics]);
 
+  useEffect(() => {
+    void refreshStateUpdateDiagnostics();
+  }, [refreshStateUpdateDiagnostics, stateUpdateReconnectRefreshKey]);
+
   const feedback = persistentFeedback ?? toast;
   const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
@@ -202,7 +219,7 @@ export default function AppLayout() {
     : pendingStateUpdateSyncErrors.length;
   const syncErrorSubtitle = shouldShowRecordsSyncErrorDetail
     ? (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios retenidos con error` : "1 cambio retenido con error")
-    : (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios pendientes con error` : "1 cambio pendiente con error");
+    : (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios no pudieron sincronizarse` : "1 cambio no pudo sincronizarse");
   const canRetryFirstPendingSyncError = Boolean(
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );

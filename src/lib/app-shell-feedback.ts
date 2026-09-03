@@ -23,6 +23,7 @@ export type AppShellFeedbackInput = {
   connectivityStatus: ConnectivityStatus;
   hasConflict: boolean;
   hasError: boolean;
+  hasReadConnectivityIssue?: boolean;
   isAuthSessionRestoring: boolean;
   isOfflinePreparationRunning: boolean;
   isOperationalCoreReadinessChecking: boolean;
@@ -30,13 +31,25 @@ export type AppShellFeedbackInput = {
   localStorageRecoveryNotice?: string | null;
   offlineReadiness: OfflineReadiness;
   pendingCount: number;
+  syncConflictCount?: number;
+  syncErrorCount?: number;
   pendingSyncErrorCount?: number;
+};
+
+export type AppShellVisibleErrorKind = "read" | "write" | "sync" | "unknown";
+
+export type AppShellVisibleErrorEvent = {
+  method?: string | null;
+  operation?: string | null;
+  pathTemplate?: string | null;
+  resolution?: string | null;
 };
 
 export function resolveAppShellPersistentFeedback({
   connectivityStatus,
   hasConflict,
   hasError,
+  hasReadConnectivityIssue = false,
   isAuthSessionRestoring,
   isOfflinePreparationRunning,
   isOperationalCoreReadinessChecking,
@@ -44,6 +57,8 @@ export function resolveAppShellPersistentFeedback({
   localStorageRecoveryNotice,
   offlineReadiness,
   pendingCount,
+  syncConflictCount = 1,
+  syncErrorCount,
   pendingSyncErrorCount = 1,
 }: AppShellFeedbackInput): AppShellFeedbackMessage | null {
   if (localStorageRecoveryNotice) {
@@ -58,7 +73,7 @@ export function resolveAppShellPersistentFeedback({
   if (hasError) {
     return {
       id: "sync-error",
-      message: formatPendingSyncErrorNotice(pendingSyncErrorCount),
+      message: formatPendingSyncErrorNotice(syncErrorCount ?? pendingSyncErrorCount),
       tone: "error",
       visual: "error",
     };
@@ -67,7 +82,7 @@ export function resolveAppShellPersistentFeedback({
   if (hasConflict) {
     return {
       id: "sync-conflict",
-      message: "Hay un conflicto pendiente de resolver.",
+      message: formatSyncConflictNotice(syncConflictCount),
       tone: "error",
       visual: "error",
     };
@@ -104,15 +119,24 @@ export function resolveAppShellPersistentFeedback({
     return {
       id: "pending-work",
       message: formatPendingWorkMessage(pendingCount),
-      tone: "warning",
-      visual: "warning",
+      tone: "info",
+      visual: "info",
+    };
+  }
+
+  if (hasReadConnectivityIssue) {
+    return {
+      id: "read-connectivity-issue",
+      message: "Conexion inestable. Mostrando datos guardados.",
+      tone: "info",
+      visual: "info",
     };
   }
 
   if (connectivityStatus !== "online") {
     return {
       id: "offline",
-      message: "Modo sin conexion",
+      message: "Trabajando sin conexion",
       tone: "info",
       visual: "info",
     };
@@ -191,8 +215,53 @@ export function resolveAppShellSuccessToast({
   };
 }
 
-export function formatPendingWorkMessage(count: number) {
-  return `${count} ${count === 1 ? "registro" : "registros"} por sincronizar`;
+export function formatPendingWorkMessage(_count: number) {
+  return "Cambios guardados. Se sincronizaran al recuperar conexion.";
+}
+
+export function formatSyncConflictNotice(count: number) {
+  if (count > 1) {
+    return `${count} cambios requieren revision.`;
+  }
+
+  return "1 cambio requiere revision.";
+}
+
+export function classifyAppShellVisibleErrorEvent(
+  event: AppShellVisibleErrorEvent | null | undefined,
+): AppShellVisibleErrorKind | null {
+  if (!event || event.resolution !== "unresolved") {
+    return null;
+  }
+
+  const operation = event.operation?.toLocaleLowerCase("en-US") ?? "";
+  const method = event.method?.toLocaleUpperCase("en-US") ?? "";
+
+  if (method === "GET") {
+    return "read";
+  }
+
+  if (operation === "sync" || operation.includes("retry")) {
+    return "sync";
+  }
+
+  if (operation === "save" || operation === "create" || operation === "update") {
+    return "write";
+  }
+
+  if (
+    operation === "load-day" ||
+    operation === "load-workflow" ||
+    operation === "refresh" ||
+    operation === "search" ||
+    operation === "source-load" ||
+    operation === "hydration" ||
+    operation === "prewarm"
+  ) {
+    return "read";
+  }
+
+  return "unknown";
 }
 
 export function shouldRenderAppShellFeedbackBand(feedback: AppShellFeedbackMessage | null) {

@@ -87,6 +87,40 @@ describe("pending work sync orchestration", () => {
     expect(syncStateUpdates).toHaveBeenCalledOnce();
   });
 
+  it("separates retriable RECORDS network failures from terminal failed diagnostics", async () => {
+    const phaseEvents: unknown[] = [];
+    const store = new EmptyRecordsStore([]);
+    const syncStateUpdates = vi.fn(async () => null);
+
+    store.operations = [operation()];
+
+    await syncPendingWork({
+      api: {
+        createEntityRecord: vi.fn(async () => {
+          throw new OpcoNetworkError();
+        }),
+        getEntityRecord: vi.fn(),
+        updateEntityRecord: vi.fn(),
+      },
+      onPhase(event) {
+        phaseEvents.push(event);
+      },
+      ownerKey: "org_1:user_1",
+      recordsStore: store,
+      syncStateUpdates,
+      token: "token_1",
+      trigger: "reconnect",
+    });
+
+    expect(phaseEvents).toContainEqual(expect.objectContaining({
+      phase: "records",
+      recordsOperationsConflicted: 0,
+      recordsOperationsFailed: 0,
+      recordsOperationsRetriable: 1,
+      result: "completed",
+    }));
+  });
+
   it("emits RECORDS and STATE_UPDATE phase diagnostics without changing engine order", async () => {
     const phases: string[] = [];
     const syncStateUpdates = vi.fn(async (input: { syncRunId: string }) => ({

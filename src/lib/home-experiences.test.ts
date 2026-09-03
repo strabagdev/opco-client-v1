@@ -28,7 +28,7 @@ describe("Home experience offline presentation", () => {
     expect(resolveAppShellPersistentFeedback({
       ...baseFeedbackInput,
       connectivityStatus: "offline",
-    })?.message).toBe("Modo sin conexion");
+    })?.message).toBe("Trabajando sin conexion");
   });
 
   it("keeps card navigation and metadata while omitting ready-offline labels", () => {

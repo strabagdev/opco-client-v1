@@ -238,7 +238,9 @@ export function usePendingWorkLifecycle({
         runSyncStartedAt: null,
         scopeCheckAfterReadiness: null,
         recordsOperationsCompleted: null,
+        recordsOperationsConflicted: null,
         recordsOperationsFailed: null,
+        recordsOperationsRetriable: null,
         recordsPhaseCompletedAt: null,
         recordsPhaseFailedAt: null,
         recordsPhaseResult: null,
@@ -1073,7 +1075,9 @@ function syncPendingWorkPhaseToReconnectPreflight(event: SyncPendingWorkPhaseEve
   if (event.phase === "records") {
     return {
       ...(event.recordsOperationsCompleted === undefined ? {} : { recordsOperationsCompleted: event.recordsOperationsCompleted }),
+      ...(event.recordsOperationsConflicted === undefined ? {} : { recordsOperationsConflicted: event.recordsOperationsConflicted }),
       ...(event.recordsOperationsFailed === undefined ? {} : { recordsOperationsFailed: event.recordsOperationsFailed }),
+      ...(event.recordsOperationsRetriable === undefined ? {} : { recordsOperationsRetriable: event.recordsOperationsRetriable }),
       ...(event.completedAt === undefined ? {} : { recordsPhaseCompletedAt: event.completedAt }),
       ...(event.failedAt === undefined ? {} : { recordsPhaseFailedAt: event.failedAt }),
       recordsPhaseResult: event.result === "completed" || event.result === "failed" ? event.result : null,
