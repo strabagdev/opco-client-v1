@@ -103,7 +103,7 @@ A logical `StateUpdateIntent` includes:
 
 The client uses `stateValues` internally. The wire payload to Operational Core uses `states` conceptually, while the current client API wrapper accepts `stateValues` and translates it at the API boundary. Do not mix internal and wire names outside that boundary.
 
-For generic `GET workflow/state-update`, Operational Core's documented response uses `subjects` as the search result collection and `states` as the current/latest state map. The Client keeps its internal renderer model as `items` plus `stateValues`; `src/lib/opco-api.ts` is the boundary adapter that maps `subjects -> items`, `subjectEntityType -> sourceEntityType`, and `states -> stateValues`. Attendance keeps its separate endpoint and `items` response shape.
+For generic `GET workflow/state-update`, Operational Core's documented response uses `subjects` as the search result collection and `states` as the current/latest state map. The Client keeps its internal renderer model as `items` plus `stateValues`; `src/lib/opco-api.ts` is the boundary adapter that maps `subjects -> items`, `subjectEntityType -> sourceEntityType`, and `states -> stateValues`. SELECT state fields carry `optionId`; scalar state fields (`TEXT`, `INTEGER`, `DECIMAL`, `MONEY`, `DATE`, and `BOOLEAN`) carry `value`. Attendance keeps its separate endpoint and `items` response shape.
 
 ## Client Request ID
 
@@ -217,7 +217,7 @@ Backend State Update 1.0 treats an intention as matching only when every submitt
 
 Current client implementation centralizes exact matching in the state-update offline helper. Timeout recovery, snapshot repair, and local reconciliation use the same semantic comparison:
 
-- requested state fields compare by `fieldId + optionId`;
+- requested state fields compare by `fieldId` plus `optionId` for SELECT fields or `value` for scalar fields;
 - requested extras compare by field key and canonical value;
 - omitted extras are ignored;
 - explicit `null`, `false`, `0`, and `""` are preserved as requested values;
@@ -289,13 +289,13 @@ A conflict contains:
 - `expectedUpdatedAt`;
 - optional overwrite confirmation.
 
-Backend conflict differences can distinguish state fields from extra fields through the structured difference payload. The client treats normal option differences as state diffs and preserves extra diffs when Core includes raw local/remote extra values or marks the source as extra.
+Backend conflict differences can distinguish state fields from extra fields through the structured difference payload. The client treats normal option/scalar differences as state diffs and preserves extra diffs when Core includes raw local/remote extra values or marks the source as extra.
 
 Overwrite is a new semantic intention and requires a new `clientRequestId`. The original conflict probe should keep its original key if retried; the overwrite confirmation should not reuse it.
 
 Current client representation preserves both state and extra differences when Operational Core returns them:
 
-- state diffs remain represented as `existing.stateValues` and `requested.stateValues`;
+- state diffs remain represented as `existing.stateValues` and `requested.stateValues`, including scalar `value` where applicable;
 - extra diffs can be represented as `existing.extraValues`, `requested.extraValues`, and an `extraValues[]` metadata array;
 - each extra diff can carry `fieldId`, `fieldLabel`, `fieldType`, `localValue`, and `remoteValue`;
 - when the prepared definition is available, SELECT and MULTISELECT extra values are rendered with option labels while retaining their technical values internally;
@@ -441,7 +441,7 @@ Reconnect detection is persisted when connectivity transitions from `offline` or
 Implemented client-side readiness for State Update 1.0:
 
 - immutable `clientRequestId` semantics for retries vs modified intentions;
-- exact reconciliation across requested states and extras;
+- exact reconciliation across requested SELECT/scalar states and extras;
 - server-owned `updatedAt` as the only remote version;
 - complete snapshot reconciliation for remote deletions;
 - explicit handling for backend idempotency errors;

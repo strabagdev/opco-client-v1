@@ -2641,7 +2641,8 @@ async function completeStateUpdateOperationInTransaction(
     stateValues: payload.stateValues.map((value) => ({
       fieldId: value.fieldId,
       label: value.label ?? null,
-      optionId: value.optionId,
+      optionId: value.optionId ?? null,
+      value: value.value,
     })),
     subjectDisplayName: payload.subjectDisplayName,
     subjectRecordId: payload.subjectRecordId,

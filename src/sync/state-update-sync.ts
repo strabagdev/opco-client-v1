@@ -107,7 +107,9 @@ async function runSync({
         overwrite: payload.overwrite,
         stateValues: payload.stateValues.map((value) => ({
           fieldId: value.fieldId,
+          label: value.label,
           optionId: value.optionId,
+          value: value.value,
         })),
         subjectRecordId: payload.subjectRecordId,
       }, {

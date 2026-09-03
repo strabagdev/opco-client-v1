@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendStateUpdateRequestHistory,
+  buildOfflineStateValues,
   createStateUpdateLocalRecordId,
   interpretStateUpdateRequest,
   isStateUpdateCompatibleWorkflow,
@@ -16,6 +17,7 @@ import {
   upsertStateUpdateReconnectRunHistory,
 } from "./state-update-offline";
 import type { StateUpdateSyncDiagnosticsTelemetry } from "./state-update-offline";
+import type { StateUpdateField } from "./opco-api";
 
 describe("state-update offline identity", () => {
   it("consolidates update-current by appView, subject, and date when uniqueness is subject-date", () => {
@@ -203,6 +205,47 @@ describe("state-update exact intention matching", () => {
       subjectRecordId: "equipment_1",
       uniqueness: "subject-date",
     })).toBe(true);
+  });
+
+  it("compares scalar requested states exactly, including false and zero", () => {
+    expect(stateUpdateRemoteItemMatchesPayload({
+      current: {
+        recordId: "record_1",
+        stateValues: [
+          { fieldId: "field_operational", label: "No", optionId: null, value: false },
+          { fieldId: "field_count", label: "0", optionId: null, value: 0 },
+        ],
+        updatedAt: "2026-08-27T10:00:00.000Z",
+      },
+      subject: { displayName: "Equipo 1", id: "equipment_1" },
+    }, {
+      appViewId: "view_equipment_state",
+      clientRequestId: "request_1",
+      date: "2026-08-27",
+      historyMode: "update-current",
+      stateValues: [
+        { fieldId: "field_operational", optionId: null, value: false },
+        { fieldId: "field_count", optionId: null, value: 0 },
+      ],
+      subjectDisplayName: "Equipo 1",
+      subjectRecordId: "equipment_1",
+      uniqueness: "subject-date",
+    })).toBe(true);
+  });
+
+  it("formats offline scalar state snapshots for display", () => {
+    const fields: StateUpdateField[] = [
+      { fieldId: "field_operational", label: "Operacional", options: [], required: true, type: "BOOLEAN" },
+      { fieldId: "field_temperature", label: "Temperatura", options: [], required: true, type: "DECIMAL" },
+    ];
+
+    expect(buildOfflineStateValues(fields, [
+      { fieldId: "field_operational", optionId: null, value: false },
+      { fieldId: "field_temperature", optionId: null, value: 23.5 },
+    ])).toEqual([
+      { fieldId: "field_operational", label: "No", optionId: null, value: false },
+      { fieldId: "field_temperature", label: "23.5", optionId: null, value: 23.5 },
+    ]);
   });
 
   it("treats omitted extras as not requested and explicit null as requested", () => {

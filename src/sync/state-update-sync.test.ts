@@ -54,7 +54,7 @@ describe("state-update sync engine", () => {
       expectedUpdatedAt: undefined,
       extraValues: { field_observation: "Turno AM" },
       overwrite: undefined,
-      stateValues: [{ fieldId: "field_attendance_status", optionId: "status_present" }],
+      stateValues: [{ fieldId: "field_attendance_status", label: "Presente", optionId: "status_present", value: undefined }],
       subjectRecordId: "person_1",
     }, {
       diagnosticSyncRunId: null,
@@ -87,8 +87,8 @@ describe("state-update sync engine", () => {
       extraValues: { motivo: "mantencion", observacion: "Turno AM" },
       overwrite: undefined,
       stateValues: [
-        { fieldId: "field_operational_status", optionId: "running" },
-        { fieldId: "field_availability", optionId: "available" },
+        { fieldId: "field_operational_status", label: "Operando", optionId: "running", value: undefined },
+        { fieldId: "field_availability", label: "Disponible", optionId: "available", value: undefined },
       ],
       subjectRecordId: "equipment_1",
     }, {
@@ -96,6 +96,47 @@ describe("state-update sync engine", () => {
     });
     expect(store.completed).toHaveLength(1);
     expect(store.telemetry.get("org_1:user_1:contract_1:workflow:view_equipment_state")?.lastPushCompletedAt).toBe("now");
+  });
+
+  it("syncs scalar state snapshots without dropping persisted values", async () => {
+    store.operations = [operation({
+      payload: {
+        appViewId: "view_equipment_state",
+        clientRequestId: "request_original",
+        date: "2026-08-25",
+        historyMode: "update-current",
+        stateValues: [
+          { fieldId: "field_operational", label: "No", optionId: null, value: false },
+          { fieldId: "field_temperature", label: "0", optionId: null, value: 0 },
+        ],
+        subjectDisplayName: "Excavadora 1",
+        subjectRecordId: "equipment_1",
+        uniqueness: "subject-date",
+      },
+    })];
+    const api = {
+      saveStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: "view_equipment_state", name: "Estado Equipo", slug: "estado-equipo" },
+        results: [{ recordId: "event_1", result: "UPDATED" as const, subjectRecordId: "equipment_1", updatedAt: "2026-08-26T12:00:00.000Z" }],
+      })),
+    };
+
+    const result = await syncPendingStateUpdatesOnce({
+      api,
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(result.completed).toBe(1);
+    expect(api.saveStateUpdateWorkflow).toHaveBeenCalledWith("token_1", "contract_1", "view_equipment_state", expect.objectContaining({
+      stateValues: [
+        { fieldId: "field_operational", label: "No", optionId: null, value: false },
+        { fieldId: "field_temperature", label: "0", optionId: null, value: 0 },
+      ],
+    }), {
+      diagnosticSyncRunId: null,
+    });
   });
 
   it("passes the lifecycle syncRunId to STATE_UPDATE POST diagnostics", async () => {

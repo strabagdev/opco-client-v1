@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField } from "@/lib/opco-api";
-import { buildEffectiveStateSnapshot, buildStateUpdateConflictRows } from "./state-update-workflow-logic";
+import {
+  buildEffectiveStateSnapshot,
+  buildStateUpdateConflictRows,
+  defaultStateValues,
+  formValueFromStateValue,
+  formatStateValueLabel,
+} from "./state-update-workflow-logic";
 
 const stateFields: StateUpdateField[] = [{
   fieldId: "status_field",
@@ -68,6 +74,51 @@ const multiStateFields: StateUpdateField[] = [
       { label: "3", optionId: "version_3" },
     ],
     required: true,
+  },
+];
+
+const scalarStateFields: StateUpdateField[] = [
+  {
+    fieldId: "condition_field",
+    label: "Condicion",
+    options: [],
+    required: true,
+    type: "TEXT",
+  },
+  {
+    fieldId: "counter_field",
+    label: "Contador",
+    options: [],
+    required: true,
+    type: "INTEGER",
+  },
+  {
+    fieldId: "score_field",
+    label: "Score",
+    options: [],
+    required: true,
+    type: "DECIMAL",
+  },
+  {
+    fieldId: "budget_field",
+    label: "Presupuesto",
+    options: [],
+    required: true,
+    type: "MONEY",
+  },
+  {
+    fieldId: "due_date_field",
+    label: "Fecha limite",
+    options: [],
+    required: true,
+    type: "DATE",
+  },
+  {
+    fieldId: "active_field",
+    label: "Activo",
+    options: [],
+    required: true,
+    type: "BOOLEAN",
   },
 ];
 
@@ -209,6 +260,67 @@ describe("state-update effective state snapshot", () => {
       ],
     });
   });
+
+  it("builds scalar state field snapshots with typed values", () => {
+    expect(buildEffectiveStateSnapshot({
+      currentStateValues: [
+        { fieldId: "condition_field", label: "Anterior", optionId: null, value: "Anterior" },
+        { fieldId: "counter_field", label: "0", optionId: null, value: 0 },
+        { fieldId: "score_field", label: "1.5", optionId: null, value: 1.5 },
+        { fieldId: "budget_field", label: "10", optionId: null, value: 10 },
+        { fieldId: "due_date_field", label: "2026-08-30", optionId: null, value: "2026-08-30T00:00:00.000Z" },
+        { fieldId: "active_field", label: "No", optionId: null, value: false },
+      ],
+      fields: scalarStateFields,
+      formValues: {
+        active_field: true,
+        budget_field: "0",
+        condition_field: " Operando ",
+        counter_field: "0",
+        due_date_field: "2026-09-01",
+        score_field: "2.75",
+      },
+    })).toEqual({
+      error: null,
+      hasChanges: true,
+      stateValues: [
+        { fieldId: "condition_field", optionId: null, value: "Operando" },
+        { fieldId: "counter_field", optionId: null, value: 0 },
+        { fieldId: "score_field", optionId: null, value: 2.75 },
+        { fieldId: "budget_field", optionId: null, value: 0 },
+        { fieldId: "due_date_field", optionId: null, value: "2026-09-01" },
+        { fieldId: "active_field", optionId: null, value: true },
+      ],
+    });
+  });
+
+  it("validates required scalar values by their field type", () => {
+    expect(buildEffectiveStateSnapshot({
+      fields: [scalarStateFields[1]],
+      formValues: { counter_field: "1.5" },
+    })).toMatchObject({ error: "Contador debe ser un entero valido." });
+
+    expect(buildEffectiveStateSnapshot({
+      fields: [scalarStateFields[4]],
+      formValues: { due_date_field: "2026-02-31" },
+    })).toMatchObject({ error: "Fecha limite debe ser una fecha valida." });
+  });
+
+  it("derives generic state field form values and labels by type", () => {
+    expect(defaultStateValues(scalarStateFields)).toMatchObject({ active_field: false });
+    expect(formValueFromStateValue(scalarStateFields[4], {
+      fieldId: "due_date_field",
+      label: "2026-09-01",
+      optionId: null,
+      value: "2026-09-01T00:00:00.000Z",
+    })).toBe("2026-09-01");
+    expect(formatStateValueLabel(scalarStateFields[5], {
+      fieldId: "active_field",
+      label: null,
+      optionId: null,
+      value: false,
+    })).toBe("No");
+  });
 });
 
 describe("state-update conflict rows", () => {
@@ -286,6 +398,21 @@ describe("state-update conflict rows", () => {
       { existing: "Ausente", fieldId: "status_field", requested: "Presente" },
       { existing: "Remoto", fieldId: "observation_field", label: "Observacion", requested: "Local" },
     ]);
+  });
+
+  it("renders scalar stateValue conflicts with technical values", () => {
+    expect(buildStateUpdateConflictRows(conflictResult({
+      existingStateValues: [{ fieldId: "active_field", label: null, optionId: null, value: false }],
+      requestedStateValues: [{ fieldId: "active_field", label: null, optionId: null, value: true }],
+    }), [scalarStateFields[5]], extraFields)).toEqual([{
+      existing: "No",
+      fieldId: "active_field",
+      fieldType: "STATE",
+      label: "Activo",
+      requested: "Si",
+      technicalExisting: false,
+      technicalRequested: true,
+    }]);
   });
 
   it("keeps unknown extra fields visible with a technical fallback", () => {

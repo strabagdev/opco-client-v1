@@ -3,11 +3,14 @@ import {
   EntityRecordValue,
   StateUpdateBatchResult,
   StateUpdateCurrentFieldValue,
+  StateUpdateEntry,
   StateUpdateField,
   StateUpdateOption,
 } from "@/lib/opco-api";
 
 export const STATE_UPDATE_SEARCH_DEBOUNCE_MS = 300;
+
+export type StateUpdateFormValues = Record<string, string | boolean>;
 
 export function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
@@ -35,8 +38,8 @@ export function shouldSearchStateUpdateSubjects(value: string) {
 }
 
 export function defaultStateValues(fields: StateUpdateField[]) {
-  return fields.reduce<Record<string, string>>((values, field) => {
-    values[field.fieldId] = field.defaultOptionId ?? "";
+  return fields.reduce<StateUpdateFormValues>((values, field) => {
+    values[field.fieldId] = stateFieldType(field) === "BOOLEAN" ? false : field.defaultOptionId ?? "";
 
     return values;
   }, {});
@@ -49,38 +52,30 @@ export function buildEffectiveStateSnapshot({
 }: {
   currentStateValues?: StateUpdateCurrentFieldValue[];
   fields: StateUpdateField[];
-  formValues: Record<string, string>;
+  formValues: StateUpdateFormValues;
 }) {
   const currentValues = currentStateValues ?? [];
-  const stateValues: { fieldId: string; optionId: string }[] = [];
+  const stateValues: StateUpdateEntry["stateValues"] = [];
   let hasChanges = false;
   let error: string | null = null;
 
   for (const field of fields) {
-    const formOptionId = normalizeOptionId(formValues[field.fieldId]);
-    const currentOptionId = normalizeOptionId(currentStateValue(currentValues, field.fieldId)?.optionId);
-    const defaultOptionId = validStateFieldOption(field, field.defaultOptionId)?.optionId ?? null;
-    const effectiveOptionId = formOptionId ?? currentOptionId ?? defaultOptionId;
+    const snapshot = buildEffectiveFieldSnapshot({
+      currentValue: currentStateValue(currentValues, field.fieldId),
+      field,
+      formValue: formValues[field.fieldId],
+    });
 
-    if (!effectiveOptionId) {
-      if (field.required) {
-        error = `${field.label} es obligatorio.`;
-        break;
-      }
-
-      continue;
-    }
-
-    if (!validStateFieldOption(field, effectiveOptionId)) {
-      error = `${field.label} tiene una opcion no valida.`;
+    if (snapshot.error) {
+      error = snapshot.error;
       break;
     }
 
-    if (effectiveOptionId !== currentOptionId) {
-      hasChanges = true;
+    if (snapshot.value) {
+      stateValues.push(snapshot.value);
     }
 
-    stateValues.push({ fieldId: field.fieldId, optionId: effectiveOptionId });
+    hasChanges = hasChanges || snapshot.hasChanges;
   }
 
   return { error, hasChanges, stateValues };
@@ -116,6 +111,197 @@ function validStateFieldOption(field: StateUpdateField, optionId: string | null 
   }
 
   return field.options.find((option) => option.optionId === optionId && option.active !== false) ?? null;
+}
+
+function buildEffectiveFieldSnapshot({
+  currentValue,
+  field,
+  formValue,
+}: {
+  currentValue: StateUpdateCurrentFieldValue | null;
+  field: StateUpdateField;
+  formValue: string | boolean | undefined;
+}) {
+  if (stateFieldType(field) === "SELECT") {
+    const formOptionId = normalizeOptionId(typeof formValue === "string" ? formValue : undefined);
+    const currentOptionId = normalizeOptionId(currentValue?.optionId);
+    const defaultOptionId = validStateFieldOption(field, field.defaultOptionId)?.optionId ?? null;
+    const effectiveOptionId = formOptionId ?? currentOptionId ?? defaultOptionId;
+
+    if (!effectiveOptionId) {
+      return missingStateFieldSnapshot(field);
+    }
+
+    if (!validStateFieldOption(field, effectiveOptionId)) {
+      return { error: `${field.label} tiene una opcion no valida.`, hasChanges: false, value: null };
+    }
+
+    return {
+      error: null,
+      hasChanges: effectiveOptionId !== currentOptionId,
+      value: { fieldId: field.fieldId, optionId: effectiveOptionId },
+    };
+  }
+
+  const formStateValue = normalizeScalarStateValue(field, formValue);
+  const currentState = normalizeCurrentScalarStateValue(field, currentValue);
+  const effectiveValue = formStateValue.hasValue ? formStateValue.value : currentState.value;
+
+  if (formStateValue.error) {
+    return { error: formStateValue.error, hasChanges: false, value: null };
+  }
+
+  if (!hasNonEmptyScalarValue(field, effectiveValue)) {
+    return missingStateFieldSnapshot(field);
+  }
+
+  return {
+    error: null,
+    hasChanges: !stateScalarValuesEqual(field, currentState.value, effectiveValue),
+    value: {
+      fieldId: field.fieldId,
+      optionId: null,
+      value: effectiveValue,
+    },
+  };
+}
+
+function missingStateFieldSnapshot(field: StateUpdateField) {
+  if (field.required) {
+    return { error: `${field.label} es obligatorio.`, hasChanges: false, value: null };
+  }
+
+  return { error: null, hasChanges: false, value: null };
+}
+
+function normalizeScalarStateValue(field: StateUpdateField, value: string | boolean | undefined) {
+  if (stateFieldType(field) === "BOOLEAN") {
+    return { error: null, hasValue: typeof value === "boolean", value: value === true };
+  }
+
+  const textValue = typeof value === "string" ? value.trim() : "";
+
+  if (!textValue) {
+    return { error: null, hasValue: false, value: null };
+  }
+
+  if (stateFieldType(field) === "INTEGER") {
+    if (!/^-?\d+$/.test(textValue)) {
+      return { error: `${field.label} debe ser un entero valido.`, hasValue: false, value: null };
+    }
+
+    return { error: null, hasValue: true, value: Number.parseInt(textValue, 10) };
+  }
+
+  if (stateFieldType(field) === "DECIMAL" || stateFieldType(field) === "MONEY") {
+    if (!/^-?\d+(\.\d+)?$/.test(textValue)) {
+      return { error: `${field.label} debe ser un decimal valido.`, hasValue: false, value: null };
+    }
+
+    return { error: null, hasValue: true, value: Number.parseFloat(textValue) };
+  }
+
+  if (stateFieldType(field) === "DATE" && !isValidStateDateValue(textValue)) {
+    return { error: `${field.label} debe ser una fecha valida.`, hasValue: false, value: null };
+  }
+
+  return { error: null, hasValue: true, value: textValue };
+}
+
+function normalizeCurrentScalarStateValue(field: StateUpdateField, currentValue: StateUpdateCurrentFieldValue | null) {
+  if (!currentValue || currentValue.value === undefined) {
+    return { value: null };
+  }
+
+  if (stateFieldType(field) === "DATE" && typeof currentValue.value === "string") {
+    return { value: currentValue.value.slice(0, 10) };
+  }
+
+  return { value: currentValue.value };
+}
+
+function hasNonEmptyScalarValue(field: StateUpdateField, value: unknown) {
+  if (stateFieldType(field) === "BOOLEAN") {
+    return typeof value === "boolean";
+  }
+
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  return typeof value !== "string" || value.trim().length > 0;
+}
+
+function stateScalarValuesEqual(field: StateUpdateField, currentValue: unknown, requestedValue: unknown) {
+  return JSON.stringify(normalizeComparableStateScalar(field, currentValue)) ===
+    JSON.stringify(normalizeComparableStateScalar(field, requestedValue));
+}
+
+function normalizeComparableStateScalar(field: StateUpdateField, value: unknown) {
+  if (stateFieldType(field) === "DATE" && typeof value === "string") {
+    return value.slice(0, 10);
+  }
+
+  return value;
+}
+
+export function formValueFromStateValue(field: StateUpdateField, value: StateUpdateCurrentFieldValue | null | undefined) {
+  if (stateFieldType(field) === "SELECT") {
+    return value?.optionId ?? "";
+  }
+
+  if (stateFieldType(field) === "BOOLEAN") {
+    return value?.value === true;
+  }
+
+  if (stateFieldType(field) === "DATE" && typeof value?.value === "string") {
+    return value.value.slice(0, 10);
+  }
+
+  return value?.value === null || value?.value === undefined ? "" : String(value.value);
+}
+
+export function formatStateValueLabel(field: StateUpdateField, value: StateUpdateCurrentFieldValue | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  if (stateFieldType(field) === "SELECT") {
+    return value.label ?? stateFieldOptionLabel(field, value.optionId);
+  }
+
+  return value.label ?? formatStateScalarLabel(field, value.value);
+}
+
+function formatStateScalarLabel(field: StateUpdateField, value: unknown) {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) {
+    return null;
+  }
+
+  if (stateFieldType(field) === "BOOLEAN") {
+    return value === true ? "Si" : "No";
+  }
+
+  return String(value);
+}
+
+export function stateFieldType(field: StateUpdateField) {
+  return field.type ?? "SELECT";
+}
+
+function isValidStateDateValue(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (!match) {
+    return false;
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const date = new Date(year, month - 1, day);
+
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
 }
 
 export function firstBlockingStateUpdateResult(results: StateUpdateBatchResult[]) {
@@ -175,10 +361,10 @@ function stateConflictRows(
     .map<StateUpdateConflictRow | null>((field) => {
       const existing = conflict.existing.stateValues.find((value) => value.fieldId === field.fieldId);
       const requested = conflict.requested.stateValues.find((value) => value.fieldId === field.fieldId);
-      const existingLabel = existing?.label ?? stateFieldOptionLabel(field, existing?.optionId);
-      const requestedLabel = requested?.label ?? stateFieldOptionLabel(field, requested?.optionId);
+      const existingLabel = formatStateValueLabel(field, existing);
+      const requestedLabel = formatStateValueLabel(field, requested);
 
-      if ((existing?.optionId ?? null) === (requested?.optionId ?? null)) {
+      if (stateConflictValuesEqual(field, existing, requested)) {
         return null;
       }
 
@@ -188,11 +374,34 @@ function stateConflictRows(
         fieldType: "STATE",
         label: field.label,
         requested: requestedLabel,
-        technicalExisting: existing?.optionId ?? null,
-        technicalRequested: requested?.optionId ?? null,
+        technicalExisting: technicalStateValue(field, existing),
+        technicalRequested: technicalStateValue(field, requested),
       };
     })
     .filter((row): row is StateUpdateConflictRow => Boolean(row));
+}
+
+function stateConflictValuesEqual(
+  field: StateUpdateField,
+  existing: StateUpdateCurrentFieldValue | undefined,
+  requested: StateUpdateCurrentFieldValue | undefined,
+) {
+  if (stateFieldType(field) === "SELECT") {
+    return (existing?.optionId ?? null) === (requested?.optionId ?? null);
+  }
+
+  return stateScalarValuesEqual(field, existing?.value, requested?.value);
+}
+
+function technicalStateValue(
+  field: StateUpdateField,
+  value: StateUpdateCurrentFieldValue | undefined,
+): EntityRecordValue {
+  if (stateFieldType(field) === "SELECT") {
+    return value?.optionId ?? null;
+  }
+
+  return value?.value ?? null;
 }
 
 function extraConflictRows(

@@ -40,12 +40,16 @@ import {
   currentStateValue,
   defaultStateValues,
   firstBlockingStateUpdateResult,
+  formValueFromStateValue,
   formatLocalDateInput,
+  formatStateValueLabel,
   hasSuccessfulStateUpdateResult,
   normalizeStateUpdateSearch,
   shiftLocalDate,
   shouldSearchStateUpdateSubjects,
   STATE_UPDATE_SEARCH_DEBOUNCE_MS,
+  StateUpdateFormValues,
+  stateFieldType,
   stateUpdateSuccessLabel,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
@@ -66,7 +70,7 @@ type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
   subjectName: string;
 };
 
-type StateValues = Record<string, string>;
+type StateValues = StateUpdateFormValues;
 
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
   const {
@@ -633,30 +637,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
           <View style={styles.form}>
             {response.stateFields.map((field) => (
-              <View key={field.fieldId} style={styles.fieldGroup}>
-                <Text style={styles.label}>{field.label}</Text>
-                <View style={styles.optionList}>
-                  {activeStateOptions(field).map((option) => {
-                    const selected = stateValues[field.fieldId] === option.optionId;
-
-                    return (
-                      <Pressable
-                        key={option.optionId}
-                        onPress={() => {
-                          setStateValues((current) => ({
-                            ...current,
-                            [field.fieldId]: selected && !field.required ? "" : option.optionId,
-                          }));
-                          setError(null);
-                        }}
-                        style={[styles.optionButton, selected && styles.optionButtonSelected]}
-                      >
-                        <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
+              <StateFieldInput
+                field={field}
+                key={field.fieldId}
+                onChange={(value) => {
+                  setStateValues((current) => ({ ...current, [field.fieldId]: value }));
+                  setError(null);
+                }}
+                value={stateValues[field.fieldId]}
+              />
             ))}
 
             {response.extraFields.map((field) => (
@@ -702,7 +691,11 @@ function initialStateValues(response: StateUpdateResponse | null, item: StateUpd
   const values = defaultStateValues(response.stateFields);
 
   (item.current?.stateValues ?? []).forEach((value) => {
-    values[value.fieldId] = value.optionId ?? "";
+    const field = response.stateFields.find((candidate) => candidate.fieldId === value.fieldId);
+
+    if (field) {
+      values[value.fieldId] = formValueFromStateValue(field, value);
+    }
   });
 
   return values;
@@ -714,7 +707,7 @@ function formatCurrentState(response: StateUpdateResponse | null, item: StateUpd
   }
 
   const labels = response.stateFields
-    .map((field) => currentStateValue(item.current?.stateValues ?? [], field.fieldId)?.label)
+    .map((field) => formatStateValueLabel(field, currentStateValue(item.current?.stateValues ?? [], field.fieldId)))
     .filter(Boolean);
 
   return labels.length > 0 ? labels.join(" · ") : null;
@@ -756,10 +749,75 @@ function formatLatestState(response: StateUpdateResponse | null, item: StateUpda
   }
 
   const labels = response.stateFields
-    .map((field) => item.stateValues?.find((value) => value.fieldId === field.fieldId)?.label)
+    .map((field) => formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)))
     .filter(Boolean);
 
   return labels.length > 0 ? labels.join(" · ") : null;
+}
+
+function StateFieldInput({
+  field,
+  onChange,
+  value,
+}: {
+  field: StateUpdateField;
+  onChange(value: string | boolean): void;
+  value: string | boolean | undefined;
+}) {
+  const type = stateFieldType(field);
+
+  if (type === "SELECT") {
+    return (
+      <View style={styles.fieldGroup}>
+        <Text style={styles.label}>{field.label}</Text>
+        <View style={styles.optionList}>
+          {activeStateOptions(field).map((option) => {
+            const selected = value === option.optionId;
+
+            return (
+              <Pressable
+                key={option.optionId}
+                onPress={() => onChange(selected && !field.required ? "" : option.optionId)}
+                style={[styles.optionButton, selected && styles.optionButtonSelected]}
+              >
+                <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    );
+  }
+
+  if (type === "BOOLEAN") {
+    const selected = value === true;
+
+    return (
+      <View style={styles.fieldGroup}>
+        <Text style={styles.label}>{field.label}</Text>
+        <Pressable
+          onPress={() => onChange(!selected)}
+          style={[styles.optionButton, selected && styles.optionButtonSelected]}
+        >
+          <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{selected ? "Si" : "No"}</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.fieldGroup}>
+      <Text style={styles.label}>{field.label}</Text>
+      <TextInput
+        autoCapitalize="none"
+        keyboardType={type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default"}
+        onChangeText={onChange}
+        placeholder={type === "DATE" ? "YYYY-MM-DD" : field.required ? "Obligatorio" : ""}
+        style={styles.input}
+        value={typeof value === "string" ? value : ""}
+      />
+    </View>
+  );
 }
 
 function ConflictModal({
@@ -991,6 +1049,15 @@ const styles = StyleSheet.create({
     color: "#0f3036",
     fontSize: 20,
     fontWeight: "800",
+  },
+  input: {
+    borderColor: "#c8d2d5",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#17363c",
+    ...stableTextInputStyle,
+    minHeight: 46,
+    paddingHorizontal: 12,
   },
   optionButton: {
     borderColor: "#b8c7ca",

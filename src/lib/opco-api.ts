@@ -469,12 +469,14 @@ export type StateUpdateOption = {
 
 export type StateUpdateField = {
   defaultOptionId?: string;
+  fieldType?: EntityFieldType | string | null;
   fieldId: string;
   key?: string;
   label: string;
   name?: string;
   options: StateUpdateOption[];
   required: boolean;
+  type?: EntityFieldType;
 };
 
 export type StateUpdateSubject = {
@@ -486,6 +488,7 @@ export type StateUpdateCurrentFieldValue = {
   fieldId: string;
   label: string | null;
   optionId: string | null;
+  value?: EntityRecordValue;
 };
 
 export type StateUpdateConflictExtraValue = {
@@ -548,7 +551,7 @@ export type StateUpdateResponse = {
 
 type StateUpdateRawCurrent = Omit<NonNullable<StateUpdateCurrent>, "stateValues"> & {
   stateValues?: StateUpdateCurrentFieldValue[];
-  states?: Record<string, { label?: string | null; optionId?: string | null } | null>;
+  states?: Record<string, { label?: string | null; optionId?: string | null } | EntityRecordValue>;
 };
 
 type StateUpdateRawItem = Omit<StateUpdateItem, "current"> & {
@@ -557,14 +560,16 @@ type StateUpdateRawItem = Omit<StateUpdateItem, "current"> & {
 
 type StateUpdateRawLatestItem = Omit<StateUpdateLatestItem, "stateValues"> & {
   stateValues?: StateUpdateCurrentFieldValue[];
-  states?: Record<string, { label?: string | null; optionId?: string | null } | null>;
+  states?: Record<string, { label?: string | null; optionId?: string | null } | EntityRecordValue>;
 };
 
 type StateUpdateRawField = StateUpdateField | {
   defaultOptionId?: string | null;
   field?: EntityField;
+  fieldType?: EntityFieldType | string | null;
   options?: StateUpdateOption[];
   required?: boolean;
+  type?: EntityFieldType | string | null;
 };
 
 type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "sourceEntityType" | "stateFields"> & {
@@ -582,7 +587,9 @@ export type StateUpdateEntry = {
   overwrite?: boolean;
   stateValues: {
     fieldId: string;
-    optionId: string | null;
+    label?: string | null;
+    optionId?: string | null;
+    value?: EntityRecordValue;
   }[];
   subjectRecordId: string;
 };
@@ -633,12 +640,14 @@ export type StateUpdateBatchResponse = {
 
 type StateUpdateApiConflictResult = {
   differences: {
+    currentValue?: EntityRecordValue;
     existingValue?: EntityRecordValue;
     existingLabel?: string | null;
     existingOptionId?: string | null;
     fieldId: string;
     fieldLabel?: string | null;
     fieldType?: EntityFieldType | string | null;
+    kind?: "extra" | "state" | string | null;
     localValue?: EntityRecordValue;
     remoteValue?: EntityRecordValue;
     requestedLabel?: string | null;
@@ -651,7 +660,7 @@ type StateUpdateApiConflictResult = {
     updatedAt: string;
   };
   requested: {
-    states: Record<string, string>;
+    states: Record<string, EntityRecordValue>;
   };
   result: "CONFLICT";
   subjectRecordId: string;
@@ -1428,17 +1437,17 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
 }
 
 function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUpdateResponse {
+  const stateFields = (response.stateFields ?? []).map(normalizeStateUpdateField);
   const rawItems = response.subjects ?? response.items ?? [];
   const items = rawItems.map((item) => ({
     ...item,
-    current: normalizeStateUpdateCurrent(item.current),
+    current: normalizeStateUpdateCurrent(item.current, stateFields),
   }));
   const latest = (response.latest ?? []).map((item) => ({
     ...item,
-    stateValues: normalizeStateUpdateFieldValues(item.stateValues, item.states),
+    stateValues: normalizeStateUpdateFieldValues(item.stateValues, item.states, stateFields),
   }));
   const extraFields = response.extraFields ?? [];
-  const stateFields = (response.stateFields ?? []).map(normalizeStateUpdateField);
   const sourceEntityType = normalizeStateUpdateSourceEntityType(response);
 
   latest.forEach((item) => {
@@ -1461,34 +1470,32 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
   };
 }
 
-function normalizeStateUpdateCurrent(current: StateUpdateRawCurrent | null): StateUpdateCurrent {
+function normalizeStateUpdateCurrent(current: StateUpdateRawCurrent | null, stateFields: StateUpdateField[]): StateUpdateCurrent {
   if (!current) {
     return null;
   }
 
   return {
     ...current,
-    stateValues: normalizeStateUpdateFieldValues(current.stateValues, current.states),
+    stateValues: normalizeStateUpdateFieldValues(current.stateValues, current.states, stateFields),
   };
 }
 
 function normalizeStateUpdateFieldValues(
   stateValues?: StateUpdateCurrentFieldValue[],
-  states?: Record<string, { label?: string | null; optionId?: string | null } | null>,
+  states?: Record<string, { label?: string | null; optionId?: string | null } | EntityRecordValue>,
+  stateFields: StateUpdateField[] = [],
 ): StateUpdateCurrentFieldValue[] {
   if (Array.isArray(stateValues)) {
-    return stateValues;
+    return stateValues.map((value) => normalizeStateUpdateFieldValue(value, stateFields));
   }
 
   if (!states) {
     return [];
   }
 
-  return Object.entries(states).map(([fieldId, value]) => ({
-    fieldId,
-    label: value?.label ?? null,
-    optionId: value?.optionId ?? null,
-  }));
+  return Object.entries(states).map(([fieldId, value]) =>
+    normalizeStateUpdateFieldValue({ fieldId, value }, stateFields));
 }
 
 function normalizeStateUpdateField(field: StateUpdateRawField): StateUpdateField {
@@ -1496,6 +1503,7 @@ function normalizeStateUpdateField(field: StateUpdateRawField): StateUpdateField
     return {
       ...field,
       options: field.options ?? [],
+      type: normalizeStateUpdateFieldType(field.type ?? field.fieldType),
     };
   }
 
@@ -1509,7 +1517,93 @@ function normalizeStateUpdateField(field: StateUpdateRawField): StateUpdateField
     name: coreField?.name,
     options: field.options ?? [],
     required: field.required ?? false,
+    type: normalizeStateUpdateFieldType(coreField?.type ?? field.type ?? field.fieldType),
   };
+}
+
+function normalizeStateUpdateFieldValue(
+  value: StateUpdateCurrentFieldValue | { fieldId: string; value?: EntityRecordValue },
+  stateFields: StateUpdateField[],
+): StateUpdateCurrentFieldValue {
+  const field = stateFields.find((item) => item.fieldId === value.fieldId);
+  const rawValue = "value" in value ? value.value : undefined;
+  const optionId = "optionId" in value
+    ? value.optionId
+    : readStateUpdateOptionId(rawValue, field);
+  const option = field?.options.find((item) => item.optionId === optionId);
+
+  if (field?.type === "SELECT") {
+    return {
+      fieldId: value.fieldId,
+      label: ("label" in value ? value.label : undefined) ?? option?.label ?? null,
+      optionId: optionId ?? null,
+    };
+  }
+
+  const scalarValue = "value" in value ? rawValue : undefined;
+
+  return {
+    fieldId: value.fieldId,
+    label: ("label" in value ? value.label : undefined) ?? formatStateUpdateScalarValue(field, scalarValue),
+    optionId: optionId ?? null,
+    value: scalarValue,
+  };
+}
+
+function readStateUpdateOptionId(value: EntityRecordValue | undefined, field?: StateUpdateField) {
+  if (field?.type === "SELECT" && typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value) && "optionId" in value) {
+    const optionId = (value as { optionId?: unknown }).optionId;
+
+    return typeof optionId === "string" ? optionId : null;
+  }
+
+  return null;
+}
+
+function formatStateUpdateScalarValue(field: StateUpdateField | undefined, value: EntityRecordValue | undefined) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (field?.type === "BOOLEAN") {
+    return value === true ? "Si" : "No";
+  }
+
+  if (Array.isArray(value) || typeof value === "object") {
+    return null;
+  }
+
+  return String(value);
+}
+
+function normalizeStateUpdateFieldType(value: unknown): EntityFieldType {
+  const knownTypes: EntityFieldType[] = [
+    "BOOLEAN",
+    "DATE",
+    "DATETIME",
+    "DECIMAL",
+    "EMAIL",
+    "FILE",
+    "IMAGE",
+    "INTEGER",
+    "MONEY",
+    "MULTISELECT",
+    "PHONE",
+    "RELATION",
+    "SELECT",
+    "TEXT",
+    "TEXTAREA",
+    "TIME",
+    "URL",
+  ];
+
+  return typeof value === "string" && knownTypes.includes(value as EntityFieldType)
+    ? value as EntityFieldType
+    : "SELECT";
 }
 
 function normalizeStateUpdateSourceEntityType(response: StateUpdateRawResponse): StateUpdateResponse["sourceEntityType"] {
@@ -1579,6 +1673,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
         fieldId: difference.fieldId,
         label: difference.existingLabel ?? null,
         optionId: difference.existingOptionId ?? null,
+        value: readConflictRemoteValue(difference),
       })),
       updatedAt: result.existing.updatedAt,
     },
@@ -1589,6 +1684,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
         fieldId: difference.fieldId,
         label: difference.requestedLabel ?? null,
         optionId: difference.requestedOptionId ?? null,
+        value: readConflictLocalValue(difference),
       })),
     },
     result: "CONFLICT",
@@ -1597,6 +1693,14 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
 }
 
 function isStateUpdateExtraDifference(difference: StateUpdateApiConflictResult["differences"][number]) {
+  if (difference.kind === "state" || difference.source === "state") {
+    return false;
+  }
+
+  if (difference.kind === "extra" || difference.source === "extra") {
+    return true;
+  }
+
   return difference.source === "extra" ||
     "existingValue" in difference ||
     "requestedValue" in difference ||
@@ -1607,6 +1711,10 @@ function isStateUpdateExtraDifference(difference: StateUpdateApiConflictResult["
 function readConflictRemoteValue(difference: StateUpdateApiConflictResult["differences"][number]) {
   if ("remoteValue" in difference) {
     return difference.remoteValue;
+  }
+
+  if ("currentValue" in difference) {
+    return difference.currentValue;
   }
 
   return difference.existingValue;
@@ -1635,8 +1743,8 @@ function objectFromConflictExtraValues(
 function stateValuesToStates(stateValues: StateUpdateEntry["stateValues"]) {
   return Object.fromEntries(
     stateValues
-      .filter((value): value is { fieldId: string; optionId: string } => typeof value.optionId === "string" && value.optionId.trim().length > 0)
-      .map((value) => [value.fieldId, value.optionId]),
+      .filter((value) => value.value !== undefined || (typeof value.optionId === "string" && value.optionId.trim().length > 0))
+      .map((value) => [value.fieldId, value.value !== undefined ? value.value : value.optionId]),
   );
 }
 

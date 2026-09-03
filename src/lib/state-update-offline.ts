@@ -31,7 +31,8 @@ export type OfflineStateUpdatePayload = {
   stateValues: {
     fieldId: string;
     label?: string | null;
-    optionId: string | null;
+    optionId?: string | null;
+    value?: EntityRecordValue;
   }[];
   subjectDisplayName: string;
   subjectRecordId: string;
@@ -739,7 +740,8 @@ export type SaveStateUpdateLocallyInput = StateUpdateScope & {
   stateFields: StateUpdateField[];
   stateValues: {
     fieldId: string;
-    optionId: string | null;
+    optionId?: string | null;
+    value?: EntityRecordValue;
   }[];
   subjectDisplayName: string;
   subjectRecordId: string;
@@ -873,7 +875,7 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord): CachedSt
 
 export function buildOfflineStateValues(
   stateFields: StateUpdateField[],
-  stateValues: { fieldId: string; optionId: string | null }[],
+  stateValues: { fieldId: string; label?: string | null; optionId?: string | null; value?: EntityRecordValue }[],
 ): StateUpdateCurrentFieldValue[] {
   return stateValues.map((value) => {
     const field = stateFields.find((item) => item.fieldId === value.fieldId);
@@ -881,8 +883,9 @@ export function buildOfflineStateValues(
 
     return {
       fieldId: value.fieldId,
-      label: option?.label ?? null,
-      optionId: value.optionId,
+      label: option?.label ?? value.label ?? formatOfflineStateValue(field, value.value),
+      optionId: value.optionId ?? null,
+      value: value.value,
     };
   });
 }
@@ -1021,7 +1024,8 @@ function stateUpdateRequestedStatesMatch(
   return requestedStateValues.every((requested) =>
     remoteStateValues.some((remote) =>
       remote.fieldId === requested.fieldId &&
-      remote.optionId === requested.optionId,
+      JSON.stringify(normalizeStateUpdateValue(remote.value ?? remote.optionId)) ===
+        JSON.stringify(normalizeStateUpdateValue(requested.value ?? requested.optionId)),
     ),
   );
 }
@@ -1043,9 +1047,26 @@ function normalizeStateUpdateStateValues(stateValues: OfflineStateUpdatePayload[
   return (Array.isArray(stateValues) ? stateValues : [])
     .map((value) => ({
       fieldId: value.fieldId,
-      optionId: value.optionId,
+      optionId: value.optionId ?? null,
+      value: normalizeStateUpdateValue(value.value),
     }))
     .sort((first, second) => first.fieldId.localeCompare(second.fieldId));
+}
+
+function formatOfflineStateValue(field: StateUpdateField | undefined, value: EntityRecordValue | undefined) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (field?.type === "BOOLEAN") {
+    return value === true ? "Si" : "No";
+  }
+
+  if (Array.isArray(value) || typeof value === "object") {
+    return null;
+  }
+
+  return String(value);
 }
 
 function normalizeStateUpdateExtraValues(extraValues?: Record<string, EntityRecordValue>) {
@@ -1105,6 +1126,7 @@ function normalizeStateUpdateCurrentStateValues(current: NonNullable<StateUpdate
       fieldId,
       label: typeof value.label === "string" ? value.label : null,
       optionId: typeof value.optionId === "string" ? value.optionId : null,
+      value: rawValue as EntityRecordValue,
     };
   });
 }

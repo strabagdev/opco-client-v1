@@ -1413,6 +1413,72 @@ describe("createOpcoApi", () => {
     ]);
   });
 
+  it("normalizes generic scalar state-update fields and states", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Condicion", slug: "condicion" },
+            extraFields: [],
+            historyMode: "update-current",
+            stateFields: [
+              {
+                field: {
+                  active: true,
+                  id: "field_temperature",
+                  key: "temperature",
+                  name: "Temperatura",
+                  required: true,
+                  type: "DECIMAL",
+                },
+                required: true,
+              },
+              {
+                field: {
+                  active: true,
+                  id: "field_operational",
+                  key: "operational",
+                  name: "Operacional",
+                  required: true,
+                  type: "BOOLEAN",
+                },
+                required: true,
+              },
+            ],
+            subjectEntityType: { id: "assets", name: "Activos" },
+            subjectFieldId: "field_asset",
+            subjects: [{
+              current: {
+                recordId: "state_1",
+                states: {
+                  field_operational: false,
+                  field_temperature: 23.5,
+                },
+                updatedAt: "2026-08-22T12:00:00.000Z",
+              },
+              subject: { displayName: "Equipo 1", id: "asset_1" },
+            }],
+            targetEntityType: { id: "events", name: "Eventos" },
+            uniqueness: "subject-date",
+          },
+          ok: true,
+        }),
+    });
+
+    const result = await api.getStateUpdateWorkflow("token_123", "contract_1", "view_state");
+
+    expect(result.stateFields.map((field) => ({ fieldId: field.fieldId, type: field.type }))).toEqual([
+      { fieldId: "field_temperature", type: "DECIMAL" },
+      { fieldId: "field_operational", type: "BOOLEAN" },
+    ]);
+    expect(result.items[0].current?.stateValues).toEqual([
+      { fieldId: "field_operational", label: "No", optionId: null, value: false },
+      { fieldId: "field_temperature", label: "23.5", optionId: null, value: 23.5 },
+    ]);
+  });
+
   it("normalizes omitted state-update collections to empty arrays", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
@@ -1571,6 +1637,42 @@ describe("createOpcoApi", () => {
       subjectRecordId: "asset_1",
     });
     expect(result.results[0]).toMatchObject({ result: "UPDATED", updatedAt: "2026-08-22T12:00:00.000Z" });
+  });
+
+  it("saves generic state-update entries with scalar state fields", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Estados", slug: "estados" },
+            result: { recordId: "event_1", result: "UPDATED", subjectRecordId: "asset_1", updatedAt: "2026-08-22T12:00:00.000Z" },
+          },
+          ok: true,
+        });
+      },
+    });
+
+    await api.saveStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      stateValues: [
+        { fieldId: "field_temperature", optionId: null, value: 23.5 },
+        { fieldId: "field_operational", optionId: null, value: false },
+        { fieldId: "field_status", optionId: "running" },
+      ],
+      subjectRecordId: "asset_1",
+    });
+
+    expect(JSON.parse(String(requests[0].body))).toMatchObject({
+      states: {
+        field_operational: false,
+        field_status: "running",
+        field_temperature: 23.5,
+      },
+    });
   });
 
   it("rejects successful state-update results without authoritative updatedAt", async () => {

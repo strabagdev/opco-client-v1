@@ -1608,6 +1608,52 @@ describe("local database singleton", () => {
     ]);
   });
 
+  it("keeps scalar state values when completing a generic STATE_UPDATE", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    const store = getLocalDatabase();
+
+    await store.completeStateUpdateOperation({
+      attempts: 1,
+      clientRequestId: "client-request-id-condition-1",
+      contractId: "contract_real_1",
+      createdAt: "2026-08-26T10:00:00.000Z",
+      entityTypeId: "equipment_events",
+      id: "state_update_pending_scalar",
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      localRecordId: "state_update_local_record_scalar",
+      operation: "STATE_UPDATE",
+      ownerKey: "org_1:user_1",
+      payload: {
+        appViewId: "view_equipment_state",
+        clientRequestId: "client-request-id-condition-1",
+        historyMode: "update-current",
+        stateValues: [
+          { fieldId: "active_field", label: "No", optionId: null, value: false },
+          { fieldId: "count_field", label: "0", optionId: null, value: 0 },
+        ],
+        subjectDisplayName: "Equipo seguro",
+        subjectRecordId: "equipment_1",
+        uniqueness: "subject",
+      },
+      serverRecordId: null,
+      updatedAt: "2026-08-26T10:01:00.000Z",
+    }, {
+      recordId: "equipment_event_remote_1",
+      result: "UPDATED",
+      subjectRecordId: "equipment_1",
+      updatedAt: "2026-08-26T11:30:00.000Z",
+    });
+
+    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
+    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
+
+    expect(syncedValues.stateValues).toEqual([
+      { fieldId: "active_field", label: "No", optionId: null, value: false },
+      { fieldId: "count_field", label: "0", optionId: null, value: 0 },
+    ]);
+  });
+
   it("commits STATE_UPDATE conflict metadata and local record status as one transaction", async () => {
     const store = getLocalDatabase();
 
