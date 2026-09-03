@@ -103,6 +103,8 @@ A logical `StateUpdateIntent` includes:
 
 The client uses `stateValues` internally. The wire payload to Operational Core uses `states` conceptually, while the current client API wrapper accepts `stateValues` and translates it at the API boundary. Do not mix internal and wire names outside that boundary.
 
+For generic `GET workflow/state-update`, Operational Core's documented response uses `subjects` as the search result collection and `states` as the current/latest state map. The Client keeps its internal renderer model as `items` plus `stateValues`; `src/lib/opco-api.ts` is the boundary adapter that maps `subjects -> items`, `subjectEntityType -> sourceEntityType`, and `states -> stateValues`. Attendance keeps its separate endpoint and `items` response shape.
+
 ## Client Request ID
 
 The official backend contract is that `clientRequestId` identifies one immutable intention:

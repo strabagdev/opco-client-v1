@@ -1322,6 +1322,97 @@ describe("createOpcoApi", () => {
     expect(result.summary?.totalRegistered).toBe(1);
   });
 
+  it("adapts generic state-update subjects to internal items", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Versionado", slug: "versionado" },
+            extraFields: [],
+            historyMode: "append",
+            latest: [
+              {
+                recordId: "version_latest",
+                states: {
+                  field_status: { label: "Publicado", optionId: "published" },
+                },
+                subject: { displayName: "Procedimiento reciente", id: "procedure_recent" },
+                updatedAt: "2026-08-23T12:00:00.000Z",
+              },
+            ],
+            stateFields: [
+              {
+                field: {
+                  active: true,
+                  id: "field_status",
+                  key: "estatus",
+                  name: "Estatus",
+                  required: true,
+                  type: "SELECT",
+                },
+                options: [{ label: "Publicado", optionId: "published", value: "publicado" }],
+                required: true,
+              },
+            ],
+            subjectEntityType: { id: "procedures", name: "Procedimientos" },
+            subjectFieldId: "field_procedure",
+            subjects: [
+              {
+                current: null,
+                subject: { displayName: "Procedimiento sin version", id: "procedure_1" },
+              },
+              {
+                current: {
+                  recordId: "version_2",
+                  states: {
+                    field_status: { label: "Publicado", optionId: "published" },
+                  },
+                  updatedAt: "2026-08-22T12:00:00.000Z",
+                },
+                subject: { displayName: "Procedimiento publicado", id: "procedure_2" },
+              },
+            ],
+            summary: { totalRegistered: 2 },
+            targetEntityType: { id: "versions", name: "Versionado" },
+            uniqueness: "subject",
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.getStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      search: " procedimiento ",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?search=procedimiento",
+    );
+    expect(result.sourceEntityType).toEqual({ id: "procedures", name: "Procedimientos" });
+    expect(result.stateFields[0]).toMatchObject({
+      fieldId: "field_status",
+      label: "Estatus",
+      options: [{ label: "Publicado", optionId: "published", value: "publicado" }],
+      required: true,
+    });
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]).toEqual({
+      current: null,
+      subject: { displayName: "Procedimiento sin version", id: "procedure_1" },
+    });
+    expect(result.items[1].current?.stateValues).toEqual([
+      { fieldId: "field_status", label: "Publicado", optionId: "published" },
+    ]);
+    expect(result.latest?.[0].stateValues).toEqual([
+      { fieldId: "field_status", label: "Publicado", optionId: "published" },
+    ]);
+  });
+
   it("normalizes omitted state-update collections to empty arrays", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",

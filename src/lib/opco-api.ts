@@ -464,6 +464,7 @@ export type StateUpdateOption = {
   label: string;
   optionId: string;
   order?: number;
+  value?: string;
 };
 
 export type StateUpdateField = {
@@ -543,6 +544,36 @@ export type StateUpdateResponse = {
     name: string;
   };
   uniqueness: StateUpdateUniqueness;
+};
+
+type StateUpdateRawCurrent = Omit<NonNullable<StateUpdateCurrent>, "stateValues"> & {
+  stateValues?: StateUpdateCurrentFieldValue[];
+  states?: Record<string, { label?: string | null; optionId?: string | null } | null>;
+};
+
+type StateUpdateRawItem = Omit<StateUpdateItem, "current"> & {
+  current: StateUpdateRawCurrent | null;
+};
+
+type StateUpdateRawLatestItem = Omit<StateUpdateLatestItem, "stateValues"> & {
+  stateValues?: StateUpdateCurrentFieldValue[];
+  states?: Record<string, { label?: string | null; optionId?: string | null } | null>;
+};
+
+type StateUpdateRawField = StateUpdateField | {
+  defaultOptionId?: string | null;
+  field?: EntityField;
+  options?: StateUpdateOption[];
+  required?: boolean;
+};
+
+type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "sourceEntityType" | "stateFields"> & {
+  items?: StateUpdateRawItem[];
+  latest?: StateUpdateRawLatestItem[];
+  sourceEntityType?: StateUpdateResponse["sourceEntityType"];
+  stateFields?: StateUpdateRawField[];
+  subjectEntityType?: StateUpdateResponse["sourceEntityType"];
+  subjects?: StateUpdateRawItem[];
 };
 
 export type StateUpdateEntry = {
@@ -1266,7 +1297,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       const serializedQuery = searchParams.toString();
 
-      return authenticatedRequest<StateUpdateResponse>(
+      return authenticatedRequest<StateUpdateRawResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(
           appViewId,
         )}/workflow/state-update${serializedQuery ? `?${serializedQuery}` : ""}`,
@@ -1396,22 +1427,19 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
   return response;
 }
 
-function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdateResponse {
-  const items = (response.items ?? []).map((item) => ({
+function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUpdateResponse {
+  const rawItems = response.subjects ?? response.items ?? [];
+  const items = rawItems.map((item) => ({
     ...item,
-    current: item.current
-      ? {
-          ...item.current,
-          stateValues: item.current.stateValues ?? [],
-        }
-      : item.current,
+    current: normalizeStateUpdateCurrent(item.current),
   }));
   const latest = (response.latest ?? []).map((item) => ({
     ...item,
-    stateValues: item.stateValues ?? [],
+    stateValues: normalizeStateUpdateFieldValues(item.stateValues, item.states),
   }));
   const extraFields = response.extraFields ?? [];
-  const stateFields = response.stateFields ?? [];
+  const stateFields = (response.stateFields ?? []).map(normalizeStateUpdateField);
+  const sourceEntityType = normalizeStateUpdateSourceEntityType(response);
 
   latest.forEach((item) => {
     assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
@@ -1428,8 +1456,70 @@ function normalizeStateUpdateResponse(response: StateUpdateResponse): StateUpdat
     extraFields,
     items,
     latest,
+    sourceEntityType,
     stateFields,
   };
+}
+
+function normalizeStateUpdateCurrent(current: StateUpdateRawCurrent | null): StateUpdateCurrent {
+  if (!current) {
+    return null;
+  }
+
+  return {
+    ...current,
+    stateValues: normalizeStateUpdateFieldValues(current.stateValues, current.states),
+  };
+}
+
+function normalizeStateUpdateFieldValues(
+  stateValues?: StateUpdateCurrentFieldValue[],
+  states?: Record<string, { label?: string | null; optionId?: string | null } | null>,
+): StateUpdateCurrentFieldValue[] {
+  if (Array.isArray(stateValues)) {
+    return stateValues;
+  }
+
+  if (!states) {
+    return [];
+  }
+
+  return Object.entries(states).map(([fieldId, value]) => ({
+    fieldId,
+    label: value?.label ?? null,
+    optionId: value?.optionId ?? null,
+  }));
+}
+
+function normalizeStateUpdateField(field: StateUpdateRawField): StateUpdateField {
+  if ("fieldId" in field && typeof field.fieldId === "string") {
+    return {
+      ...field,
+      options: field.options ?? [],
+    };
+  }
+
+  const coreField = "field" in field ? field.field : undefined;
+
+  return {
+    defaultOptionId: field.defaultOptionId ?? undefined,
+    fieldId: coreField?.id ?? "",
+    key: coreField?.key,
+    label: coreField?.name ?? "",
+    name: coreField?.name,
+    options: field.options ?? [],
+    required: field.required ?? false,
+  };
+}
+
+function normalizeStateUpdateSourceEntityType(response: StateUpdateRawResponse): StateUpdateResponse["sourceEntityType"] {
+  const sourceEntityType = response.sourceEntityType ?? response.subjectEntityType;
+
+  if (!sourceEntityType) {
+    throw new Error("Opco no devolvio la entidad fuente del workflow de estado.");
+  }
+
+  return sourceEntityType;
 }
 
 function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): StateUpdateBatchResponse {
