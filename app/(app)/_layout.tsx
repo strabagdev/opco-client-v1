@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
 import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import {
   classifyAppShellVisibleErrorEvent,
@@ -83,6 +84,18 @@ export default function AppLayout() {
   const durableSyncErrorCount = recordsSyncSummary.failedCount + pendingStateUpdateSyncErrors.length;
   const syncConflictCount = recordsSyncSummary.conflictCount + stateUpdateConflictCount;
   const hasSyncError = durableSyncErrorCount > 0;
+  const stateUpdateSummary = diagnosticsStateUpdate.diagnostics?.summary;
+  const hasStateUpdateSummary = Boolean(stateUpdateSummary);
+  const stateUpdatePendingCount = stateUpdateSummary
+    ? stateUpdateSummary.pendingCreate + stateUpdateSummary.pendingUpdate + stateUpdateSummary.syncing + stateUpdateSummary.failed + stateUpdateSummary.conflict
+    : 0;
+  const stateUpdateCurrentActivity = resolveStateUpdateCurrentActivity({
+    pending: stateUpdatePendingCount,
+    reconnect: stateUpdateReconnectDiagnostics,
+  });
+  const isStateUpdateActivityActive = hasStateUpdateSummary
+    ? isActiveStateUpdateActivity(stateUpdateCurrentActivity)
+    : isPendingWorkSyncing || isOperationalCoreReadinessChecking;
   const persistentFeedback = resolveAppShellPersistentFeedback({
     connectivityStatus,
     hasConflict: syncConflictCount > 0,
@@ -90,8 +103,8 @@ export default function AppLayout() {
     hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
-    isOperationalCoreReadinessChecking,
-    isPendingWorkSyncing,
+    isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
+    isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,
@@ -105,8 +118,8 @@ export default function AppLayout() {
     hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
     isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
-    isOperationalCoreReadinessChecking,
-    isPendingWorkSyncing,
+    isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
+    isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,

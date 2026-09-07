@@ -270,6 +270,14 @@ export function resolveStateUpdateCurrentActivity({
     };
   }
 
+  if (pending === 0 && activity?.completedAt && isTerminalIdleStateUpdateActivityResult(activity.result)) {
+    return {
+      result: "none",
+      syncRunId: null,
+      type: "idle",
+    };
+  }
+
   if (
     latestReadyCheck &&
     latestReadyCheck.diagnosticSyncRunId &&
@@ -313,6 +321,21 @@ export function resolveStateUpdateCurrentActivity({
     syncRunId: lastSync?.syncRunId ?? null,
     type: lastSync ? "sync" : "idle",
   };
+}
+
+export function isActiveStateUpdateActivity(
+  activity: ReturnType<typeof resolveStateUpdateCurrentActivity>,
+) {
+  return activity.result === "auth_pending" ||
+    activity.result === "reconnecting" ||
+    activity.result === "sync_started";
+}
+
+function isTerminalIdleStateUpdateActivityResult(result: string | null | undefined) {
+  return result === "noop" ||
+    result === "ready_confirmed" ||
+    result === "reconciled_success" ||
+    result === "success";
 }
 
 export function hasRecentStateUpdateTimeout({

@@ -439,6 +439,73 @@ describe("state-update sync diagnostics telemetry", () => {
     });
   });
 
+  it("closes an active sync indicator when a later run finishes with no pending operations", () => {
+    const current: StateUpdateSyncDiagnosticsTelemetry = {
+      currentConnectivity: { status: "online", updatedAt: "2026-08-27T10:00:00.000Z" },
+      lastReconnect: {
+        detected: true,
+        detectedAt: "2026-08-27T10:00:00.000Z",
+        previousConnectivityStatus: "offline",
+        resultingConnectivityStatus: "online",
+      },
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-27T10:00:01.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "sync_started",
+        startedAt: "2026-08-27T10:00:01.000Z",
+        syncRunId: "sync_no_pending",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+        type: "sync",
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-27T09:59:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-27T09:58:58.000Z",
+        syncRunId: "sync_previous_success",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+      lastVisibleErrorEvent: null,
+      requestHistory: [],
+    };
+
+    const next = mergeStateUpdateSyncDiagnosticsTelemetry({
+      completedAt: "2026-08-27T10:00:02.000Z",
+      current,
+      currentConnectivityStatus: "online",
+      operationsAttempted: 0,
+      operationsCompleted: 0,
+      operationsFailed: 0,
+      operationsSelected: 0,
+      reconciledAfterTimeout: false,
+      startedAt: "2026-08-27T10:00:01.000Z",
+      syncRunId: "sync_no_pending",
+      trigger: "reconnect",
+    });
+
+    expect(next.lastStateUpdateSync).toMatchObject({
+      result: "success",
+      syncRunId: "sync_previous_success",
+    });
+    expect(next.lastStateUpdateActivity).toMatchObject({
+      completedAt: "2026-08-27T10:00:02.000Z",
+      operationsCompleted: 0,
+      operationsFailed: 0,
+      result: "noop",
+      syncRunId: "sync_no_pending",
+      type: "sync",
+    });
+  });
+
   it("persists request diagnostics for a timeout that later reconciles successfully", () => {
     const next = mergeStateUpdateSyncDiagnosticsTelemetry({
       completedAt: "2026-08-27T10:00:13.000Z",

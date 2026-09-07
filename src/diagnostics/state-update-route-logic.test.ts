@@ -14,6 +14,7 @@ import {
   getStateUpdateDiagnosticsObservationPlan,
   getStateUpdateDiagnosticsRouteState,
   hasRecentStateUpdateTimeout,
+  isActiveStateUpdateActivity,
   resolveCurrentStateUpdateRunSummary,
   resolveLastFinishedStateUpdateRunSummary,
   resolveLatestStateUpdateRunSummary,
@@ -279,6 +280,49 @@ describe("state update diagnostics route readiness", () => {
       expect.objectContaining({ label: "Actividad actual", tone: "good", value: "idle" }),
       expect.objectContaining({ label: "Timeout reciente", tone: "good", value: "no" }),
     ]));
+  });
+
+  it("treats a no-pending terminal run as idle so the header indicator stops working immediately", () => {
+    const reconnect = reconnectDiagnostics({
+      currentConnectivity: {
+        status: "online",
+        updatedAt: "2026-08-29T10:00:02.000Z",
+      },
+      lastStateUpdateActivity: {
+        completedAt: "2026-08-29T10:00:02.000Z",
+        lastRequestDiagnostics: null,
+        operationsCompleted: 0,
+        operationsFailed: 0,
+        result: "noop",
+        startedAt: "2026-08-29T10:00:01.000Z",
+        syncRunId: "sync_no_pending",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+        type: "sync",
+      },
+      lastStateUpdateSync: {
+        completedAt: "2026-08-29T09:59:00.000Z",
+        lastRequestDiagnostics: null,
+        operationsAttempted: 1,
+        operationsCompleted: 1,
+        operationsFailed: 0,
+        operationsSelected: 1,
+        reconciledAfterTimeout: false,
+        result: "success",
+        startedAt: "2026-08-29T09:58:58.000Z",
+        syncRunId: "sync_previous_success",
+        timeoutOccurred: false,
+        trigger: "reconnect",
+      },
+    });
+    const currentActivity = resolveStateUpdateCurrentActivity({ pending: 0, reconnect });
+
+    expect(currentActivity).toEqual({
+      result: "none",
+      syncRunId: null,
+      type: "idle",
+    });
+    expect(isActiveStateUpdateActivity(currentActivity)).toBe(false);
   });
 
   it("keeps historical timeouts but excludes them from the recent timeout summary after the window", () => {

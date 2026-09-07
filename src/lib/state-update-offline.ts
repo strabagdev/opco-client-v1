@@ -404,13 +404,35 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
     status: currentConnectivityStatus,
     updatedAt: completedAt,
   };
+  const lastStateUpdateActivity = {
+    completedAt,
+    lastRequestDiagnostics,
+    operationsCompleted,
+    operationsFailed,
+    result: resolveStateUpdateSyncTelemetryResult({
+      operationsFailed,
+      operationsSelected,
+      reconciledAfterTimeout,
+    }),
+    startedAt,
+    syncRunId,
+    timeoutOccurred,
+    trigger,
+    type: "sync" as const,
+  };
 
   if (operationsSelected === 0 && (current.lastStateUpdateSync || current.lastStateUpdateActivity)) {
+    const currentActivity = current.lastStateUpdateActivity;
+    const shouldPreserveTerminalActivity = currentActivity?.completedAt &&
+      (currentActivity.result === "success" || currentActivity.result === "reconciled_success") &&
+      (currentActivity.type === "snapshot_reconciliation" || currentActivity.type === "sync");
+
     return {
-    ...current,
-    currentConnectivity,
-    requestHistory: current.requestHistory ?? [],
-  };
+      ...current,
+      currentConnectivity,
+      lastStateUpdateActivity: shouldPreserveTerminalActivity ? currentActivity : lastStateUpdateActivity,
+      requestHistory: current.requestHistory ?? [],
+    };
   }
 
   const lastStateUpdateSync = {
@@ -421,11 +443,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
     operationsFailed,
     operationsSelected,
     reconciledAfterTimeout,
-    result: resolveStateUpdateSyncTelemetryResult({
-      operationsFailed,
-      operationsSelected,
-      reconciledAfterTimeout,
-    }),
+    result: lastStateUpdateActivity.result,
     startedAt,
     syncRunId,
     timeoutOccurred,
@@ -454,18 +472,7 @@ export function mergeStateUpdateSyncDiagnosticsTelemetry({
   return {
     ...current,
     currentConnectivity,
-    lastStateUpdateActivity: {
-      completedAt,
-      lastRequestDiagnostics,
-      operationsCompleted,
-      operationsFailed,
-      result: lastStateUpdateSync.result,
-      startedAt,
-      syncRunId,
-      timeoutOccurred,
-      trigger,
-      type: "sync",
-    },
+    lastStateUpdateActivity,
     lastStateUpdateSync,
     lastReconnectPreflight: nextReconnectPreflight,
     reconnectRunHistory,
