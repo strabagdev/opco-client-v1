@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ReportResponse } from "@/lib/opco-api";
 
-import { buildReportMatrixModel, buildReportTableModel } from "./report-renderer-logic";
+import { buildReportCurrentStatusModel, buildReportMatrixModel, buildReportTableModel } from "./report-renderer-logic";
 
 describe("report renderer logic", () => {
   it("builds TABLE columns in configured order with SELECT labels", () => {
@@ -298,6 +298,51 @@ describe("report renderer logic", () => {
         },
       },
     })).toBeNull();
+  });
+
+  it("builds CURRENT_STATUS rows with optional date", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        presentationMode: "CURRENT_STATUS",
+        currentStatus: {
+          subjectFieldId: "field_person",
+          stateFieldId: "field_status",
+          dateFieldId: "field_date",
+        },
+      },
+    });
+
+    expect(model).toEqual({
+      showDate: true,
+      rows: [
+        { date: "2026-08-01", id: "record_1", name: "Juan Perez", state: "Presente" },
+        { date: "2026-08-02", id: "record_2", name: "Juan Perez", state: "Ausente" },
+      ],
+    });
+  });
+
+  it("does not use updatedAt as a CURRENT_STATUS date fallback", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        presentationMode: "CURRENT_STATUS",
+        currentStatus: {
+          subjectFieldId: "field_person",
+          stateFieldId: "field_status",
+        },
+      },
+    });
+
+    expect(model?.showDate).toBe(false);
+    expect(model?.rows[0]).toEqual({
+      date: null,
+      id: "record_1",
+      name: "Juan Perez",
+      state: "Presente",
+    });
   });
 });
 

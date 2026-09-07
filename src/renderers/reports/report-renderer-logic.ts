@@ -23,6 +23,16 @@ export type ReportMatrixModel = {
   }[];
 };
 
+export type ReportCurrentStatusModel = {
+  showDate: boolean;
+  rows: {
+    date: string | null;
+    id: string;
+    name: string;
+    state: string;
+  }[];
+};
+
 export function buildReportTableModel(report: ReportResponse): ReportTableModel | null {
   if (report.config.presentationMode !== "TABLE") {
     return null;
@@ -128,6 +138,53 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
         values: Object.fromEntries(Array.from(row.values.entries()).map(([key, values]) => [key, Array.from(values).join(", ")])),
       })),
   };
+}
+
+export function buildReportCurrentStatusModel(report: ReportResponse): ReportCurrentStatusModel | null {
+  if (report.config.presentationMode !== "CURRENT_STATUS") {
+    return null;
+  }
+
+  const fieldsById = fieldMap(report.fields);
+  const subjectField = report.config.currentStatus.subjectFieldId
+    ? fieldsById.get(report.config.currentStatus.subjectFieldId)
+    : null;
+  const stateField = fieldsById.get(report.config.currentStatus.stateFieldId);
+  const dateField = report.config.currentStatus.dateFieldId
+    ? fieldsById.get(report.config.currentStatus.dateFieldId)
+    : null;
+
+  if (!stateField) {
+    return null;
+  }
+
+  return {
+    showDate: Boolean(dateField),
+    rows: report.records
+      .map((record) => {
+        const state = displayRecordValue(stateField, record.values[stateField.key], report.config.valueDisplay?.[stateField.id]);
+
+        if (!state) {
+          return null;
+        }
+
+        return {
+          date: dateField ? displayRecordValue(dateField, record.values[dateField.key], report.config.valueDisplay?.[dateField.id]) || null : null,
+          id: record.id,
+          name: subjectField
+            ? displayRecordValue(subjectField, record.values[subjectField.key], report.config.valueDisplay?.[subjectField.id]) || record.displayName
+            : record.displayName,
+          state,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+  };
+}
+
+export function isCurrentStatusReport(reportOrConfig: ReportResponse | ReportResponse["config"]) {
+  const config = "config" in reportOrConfig ? reportOrConfig.config : reportOrConfig;
+
+  return config.presentationMode === "CURRENT_STATUS";
 }
 
 export function displayRecordValue(

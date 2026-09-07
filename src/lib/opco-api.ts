@@ -68,20 +68,27 @@ export type AppViewType = "RECORDS" | "WORKFLOW" | "REPORT" | "BOARD" | "DASHBOA
 
 export type RecordsAppViewConfig = {
   entityTypeId: string;
-  statusSubview?: {
-    template: "versioning";
-    stateFieldId: string;
-    dateFieldId?: string;
-  };
 };
 
-export type ReportAppViewConfig = {
-  entityTypeId: string;
-  dateFieldId: string;
-  timeFilter?: ReportTimeFilterConfig;
-  valueDisplay?: Record<string, ReportSelectValueDisplay>;
-} & (
+export type ReportAppViewConfig =
   | {
+      entityTypeId: string;
+      presentationMode: "CURRENT_STATUS";
+      currentStatus: {
+        subjectFieldId?: string;
+        stateFieldId: string;
+        dateFieldId?: string;
+      };
+      timeFilter?: ReportTimeFilterConfig;
+      valueDisplay?: Record<string, ReportSelectValueDisplay>;
+    }
+  | ({
+      entityTypeId: string;
+      dateFieldId: string;
+      timeFilter?: ReportTimeFilterConfig;
+      valueDisplay?: Record<string, ReportSelectValueDisplay>;
+    } & (
+      | {
       presentationMode: "TABLE";
       table: {
         visibleFieldIds: string[];
@@ -98,7 +105,7 @@ export type ReportAppViewConfig = {
         summaryFieldId?: string;
       };
     }
-);
+    ));
 
 export type ReportTimeFilterConfig = {
   mode: "RANGE" | "MONTH";
@@ -297,6 +304,7 @@ export type EntityRecordsResponse = {
 
 export type ReportQuery = {
   from?: string;
+  search?: string;
   to?: string;
 };
 
@@ -1224,6 +1232,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       if (query.to) {
         searchParams.set("to", query.to);
+      }
+
+      if (query.search?.trim()) {
+        searchParams.set("search", query.search.trim());
       }
 
       const serializedQuery = searchParams.toString();

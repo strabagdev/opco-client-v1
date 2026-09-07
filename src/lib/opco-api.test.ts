@@ -1105,53 +1105,6 @@ describe("createOpcoApi", () => {
     expect(result.views.map((view) => view.type)).toEqual(["RECORDS", "WORKFLOW", "BOARD", "DASHBOARD"]);
   });
 
-  it("preserves RECORDS statusSubview config from assigned app views", async () => {
-    const api = createOpcoApi({
-      apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
-      fetcher: async () =>
-        new Response(
-          JSON.stringify({
-            data: {
-              views: [
-                {
-                  config: {
-                    entityTypeId: "entity_1",
-                    statusSubview: {
-                      template: "versioning",
-                      stateFieldId: "field_status",
-                      dateFieldId: "field_date",
-                    },
-                  },
-                  icon: "warehouse",
-                  id: "view_records",
-                  name: "Maestro de Equipos",
-                  slug: "maestro-equipos",
-                  sortOrder: 1,
-                  type: "RECORDS",
-                },
-              ],
-            },
-            ok: true,
-          }),
-          { status: 200 },
-        ),
-    });
-
-    const result = await api.getAppViews("token_123", "contract_1");
-
-    expect(result.views[0]).toMatchObject({
-      config: {
-        statusSubview: {
-          template: "versioning",
-          stateFieldId: "field_status",
-          dateFieldId: "field_date",
-        },
-      },
-      type: "RECORDS",
-    });
-  });
-
   it("requests report data by AppView and date range", async () => {
     const urls: string[] = [];
     const api = createOpcoApi({
@@ -1193,6 +1146,48 @@ describe("createOpcoApi", () => {
 
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/reports/report_1?from=2026-08-01&to=2026-08-31");
     expect(result.config.presentationMode).toBe("TABLE");
+  });
+
+  it("requests current status reports with search", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              appView: { id: "report_1", name: "Dashboard Procedimientos", slug: "dashboard-procedimientos" },
+              config: {
+                entityTypeId: "versions",
+                presentationMode: "CURRENT_STATUS",
+                currentStatus: {
+                  subjectFieldId: "procedure_field",
+                  stateFieldId: "status_field",
+                  dateFieldId: "date_field",
+                },
+              },
+              entity: { id: "versions", name: "Versionado", slug: "versionado" },
+              fields: [],
+              from: "",
+              records: [],
+              to: "",
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const result = await api.getReport("token_123", "contract_1", "report_1", {
+      search: "PET",
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/reports/report_1?search=PET");
+    expect(result.config.presentationMode).toBe("CURRENT_STATUS");
   });
 
   it("parses users without assigned app views", async () => {

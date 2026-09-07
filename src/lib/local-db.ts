@@ -66,7 +66,7 @@ import {
   fingerprintRecordsScope,
   normalizeRecordValuesForPersistence,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -79,7 +79,7 @@ import { RecordsSyncStore } from "../sync/records-sync";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "8";
+const SCHEMA_VERSION = "9";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
@@ -116,10 +116,26 @@ export type LocalDatabase = AppNavigationCache &
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
+  getReportSnapshot(input: ReportSnapshotScope): Promise<CachedReportSnapshot | null>;
   setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
+  upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
+};
+
+export type ReportSnapshotScope = {
+  appViewId: string;
+  contractId: string;
+  from?: string | null;
+  ownerKey: string;
+  search?: string | null;
+  to?: string | null;
+};
+
+export type CachedReportSnapshot = {
+  report: ReportResponse;
+  syncedAt: string;
 };
 
 export function getLocalDatabase(): LocalDatabase {
@@ -149,6 +165,7 @@ export function getLocalDatabase(): LocalDatabase {
     listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
+    getReportSnapshot,
     listCachedRecords,
     listFailedRecordOperations,
     listProblemRecords,
@@ -185,6 +202,7 @@ export function getLocalDatabase(): LocalDatabase {
     updateLocalRecord,
     upsertAppViews,
     upsertAppViewDefinition,
+    upsertReportSnapshot,
     upsertContextSnapshot,
     upsertStateUpdateSnapshot,
     upsertRemoteRecords,
@@ -316,6 +334,15 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
       status TEXT NOT NULL,
       PRIMARY KEY (owner_key, contract_id, app_view_id)
     );
+    CREATE TABLE IF NOT EXISTS report_snapshots (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      query_key TEXT NOT NULL,
+      report_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id, query_key)
+    );
     CREATE TABLE IF NOT EXISTS entity_records (
       local_id TEXT PRIMARY KEY NOT NULL,
       server_id TEXT,
@@ -384,6 +411,7 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
   await migrateEntityRecordsTable(db);
   await migrateNavigationCacheTables(db);
   await migrateAppViewDefinitionsTable(db);
+  await migrateReportSnapshotsTable(db);
   await migrateSyncTelemetryTable(db);
 
   await db.runAsync(
@@ -754,6 +782,20 @@ async function migrateAppViewDefinitionsTable(db: SQLite.SQLiteDatabase) {
   `);
 }
 
+async function migrateReportSnapshotsTable(db: SQLite.SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS report_snapshots (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      query_key TEXT NOT NULL,
+      report_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id, query_key)
+    );
+  `);
+}
+
 async function migrateSyncTelemetryTable(db: SQLite.SQLiteDatabase) {
   const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(sync_telemetry)`);
   const columnNames = new Set(columns.map((column) => column.name));
@@ -902,12 +944,83 @@ async function getAppViews(ownerKey: string, contractId: string): Promise<Cached
   };
 }
 
+async function upsertReportSnapshot({
+  appViewId,
+  contractId,
+  from,
+  ownerKey,
+  report,
+  search,
+  syncedAt = new Date().toISOString(),
+  to,
+}: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      INSERT INTO report_snapshots (owner_key, contract_id, app_view_id, query_key, report_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_key, contract_id, app_view_id, query_key)
+      DO UPDATE SET report_json = excluded.report_json, synced_at = excluded.synced_at
+    `,
+    ownerKey,
+    contractId,
+    appViewId,
+    reportSnapshotQueryKey({ from, search, to }),
+    JSON.stringify(report),
+    syncedAt,
+  );
+
+  notifyLocalDatabaseCacheChangeListeners();
+}
+
+async function getReportSnapshot({
+  appViewId,
+  contractId,
+  from,
+  ownerKey,
+  search,
+  to,
+}: ReportSnapshotScope): Promise<CachedReportSnapshot | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ report_json: string; synced_at: string }>(
+    `
+      SELECT report_json, synced_at
+      FROM report_snapshots
+      WHERE owner_key = ? AND contract_id = ? AND app_view_id = ? AND query_key = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    contractId,
+    appViewId,
+    reportSnapshotQueryKey({ from, search, to }),
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    report: JSON.parse(row.report_json) as ReportResponse,
+    syncedAt: row.synced_at,
+  };
+}
+
+function reportSnapshotQueryKey({ from, search, to }: Pick<ReportSnapshotScope, "from" | "search" | "to">) {
+  return JSON.stringify({
+    from: from || "",
+    search: search?.trim() || "",
+    to: to || "",
+  });
+}
+
 async function clearNavigationCache() {
   const db = await getDatabase();
 
   await db.runAsync(`DELETE FROM context_snapshot`);
   await db.runAsync(`DELETE FROM app_views`);
   await db.runAsync(`DELETE FROM app_view_definitions`);
+  await db.runAsync(`DELETE FROM report_snapshots`);
 }
 
 async function upsertAppViewDefinition({

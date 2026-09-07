@@ -102,7 +102,7 @@ BOARD     -> UnsupportedRenderer
 DASHBOARD -> UnsupportedRenderer
 ```
 
-`REPORT` es consulta/presentacion: no crea, edita ni sincroniza registros locales. Soporta `TABLE` y `MATRIX`, `timeFilter.mode = RANGE | MONTH`, `defaultPeriod = CURRENT_MONTH`, `allowChange`, y `valueDisplay[fieldId] = LABEL | INTERNAL_VALUE`. `INTERNAL_VALUE` se muestra en reportes en mayusculas solo como presentacion; no modifica datos, opciones ni API. `REPORT` no es `BOARD` ni `DASHBOARD`.
+`REPORT` es consulta/presentacion: no crea, edita ni sincroniza registros locales. Soporta `TABLE`, `MATRIX` y `CURRENT_STATUS`. `TABLE`/`MATRIX` usan `timeFilter.mode = RANGE | MONTH`, `defaultPeriod = CURRENT_MONTH`, `allowChange`, y `valueDisplay[fieldId] = LABEL | INTERNAL_VALUE`. `CURRENT_STATUS` muestra una fila por procedimiento con nombre, estado actual y fecha solo cuando `currentStatus.dateFieldId` esta configurado; no usa fechas de auditoria como reemplazo. `INTERNAL_VALUE` se muestra en reportes en mayusculas solo como presentacion; no modifica datos, opciones ni API. `REPORT` no es `BOARD` ni `DASHBOARD`.
 
 `BOARD`, `DASHBOARD` y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
 

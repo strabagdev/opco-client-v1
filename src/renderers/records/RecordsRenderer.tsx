@@ -31,13 +31,6 @@ import {
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
 } from "@/renderers/records/records-renderer-state";
-import {
-  buildStatusSubviewQuery,
-  buildStatusSubviewRows,
-  hasStatusSubview,
-  statusSubviewFields,
-  type RecordsSubviewTab,
-} from "@/renderers/records/status-subview";
 import { AppViewRendererProps } from "@/renderers/types";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
@@ -52,11 +45,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
   const [pagination, setPagination] = useState<EntityRecordPagination | null>(null);
-  const [statusRecords, setStatusRecords] = useState<CachedEntityRecord[]>([]);
-  const [statusPagination, setStatusPagination] = useState<EntityRecordPagination | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [isStatusLoading, setIsStatusLoading] = useState(false);
-  const [isStatusLoadingMore, setIsStatusLoadingMore] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
   const [isOfflineData, setIsOfflineData] = useState(false);
@@ -67,23 +55,13 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [recordsSyncTelemetry, setRecordsSyncTelemetry] = useState<SyncTelemetry | null>(null);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [selectedTab, setSelectedTab] = useState<RecordsSubviewTab>("records");
   const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
-  const statusSubviewEnabled = hasStatusSubview(appView.config);
-  const activeTab: RecordsSubviewTab = statusSubviewEnabled ? selectedTab : "records";
 
   const listItems = useMemo(
     () => (definition ? records.map((record) => buildRecordListItem({ definition, record })) : []),
     [definition, records],
   );
-  const statusRows = useMemo(
-    () => definition && appView.config.statusSubview
-      ? buildStatusSubviewRows({ definition, records: statusRecords, statusSubview: appView.config.statusSubview })
-      : [],
-    [appView.config.statusSubview, definition, statusRecords],
-  );
   const canLoadMore = pagination ? pagination.page < pagination.totalPages : false;
-  const canLoadMoreStatus = statusPagination ? statusPagination.page < statusPagination.totalPages : false;
   const hasSyncIssues = recordsSyncSummary.failedCount > 0 || recordsSyncSummary.conflictCount > 0;
   const hasSyncActivity =
     recordsSyncSummary.pendingCount > 0 ||
@@ -151,9 +129,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setDefinition(null);
       setRecords([]);
       setPagination(null);
-      setStatusRecords([]);
-      setStatusPagination(null);
-      setStatusError(null);
       setFromCache(false);
       setIsOfflineData(false);
       setSyncedAt(null);
@@ -234,88 +209,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     token,
   ]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadStatusRecords() {
-      if (!statusSubviewEnabled || activeTab !== "status") {
-        return;
-      }
-
-      if (!token || !selectedContractId || !entityTypeId || !ownerKey || !definition || !appView.config.statusSubview) {
-        return;
-      }
-
-      const fields = statusSubviewFields(definition, appView.config);
-
-      setIsStatusLoading(true);
-      setStatusError(null);
-      setStatusRecords([]);
-      setStatusPagination(null);
-
-      try {
-        const query = buildStatusSubviewQuery({
-          config: appView.config,
-          page: 1,
-          pageSize: PAGE_SIZE,
-          search: debouncedSearch,
-        });
-        const result = await loadRecordsWithOfflineCache({
-          api,
-          contractId: selectedContractId,
-          direction: query.direction,
-          entityTypeId,
-          fieldIdHasValue: query.fieldIdHasValue,
-          fields: definition.fields,
-          ownerKey,
-          page: query.page,
-          pageSize: query.pageSize,
-          search: query.search,
-          sort: query.sort,
-          store: definitionCache,
-          token,
-        });
-
-        if (isMounted) {
-          setStatusRecords(result.records);
-          setStatusPagination(result.pagination);
-          setFromCache((current) => current || result.fromCache);
-          setIsOfflineData((current) => current || result.offline);
-        }
-      } catch (nextError) {
-        if (isMounted) {
-          const fallbackLabel = fields.stateField ? "No fue posible cargar estados." : "La subvista Estados no tiene un campo valido.";
-
-          setStatusError(nextError instanceof Error ? nextError.message : fallbackLabel);
-        }
-      } finally {
-        if (isMounted) {
-          setIsStatusLoading(false);
-        }
-      }
-    }
-
-    void loadStatusRecords();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
-    api,
-    appView.config,
-    debouncedSearch,
-    definition,
-    definitionCache,
-    entityTypeId,
-    ownerKey,
-    recordsReconnectRefreshKey,
-    retryCount,
-    selectedContractId,
-    activeTab,
-    statusSubviewEnabled,
-    token,
-  ]);
-
   async function loadMoreRecords() {
     if (!token || !selectedContractId || !entityTypeId || !ownerKey || !pagination || isLoadingMore) {
       return;
@@ -345,48 +238,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       setError(nextError instanceof Error ? nextError.message : "No fue posible cargar mas registros.");
     } finally {
       setIsLoadingMore(false);
-    }
-  }
-
-  async function loadMoreStatusRecords() {
-    if (!token || !selectedContractId || !entityTypeId || !ownerKey || !statusPagination || isStatusLoadingMore || !definition) {
-      return;
-    }
-
-    setIsStatusLoadingMore(true);
-    setStatusError(null);
-
-    try {
-      const query = buildStatusSubviewQuery({
-        config: appView.config,
-        page: statusPagination.page + 1,
-        pageSize: PAGE_SIZE,
-        search: debouncedSearch,
-      });
-      const result = await loadRecordsWithOfflineCache({
-        api,
-        contractId: selectedContractId,
-        direction: query.direction,
-        entityTypeId,
-        fieldIdHasValue: query.fieldIdHasValue,
-        fields: definition.fields,
-        ownerKey,
-        page: query.page,
-        pageSize: query.pageSize,
-        search: query.search,
-        sort: query.sort,
-        store: definitionCache,
-        token,
-      });
-
-      setStatusRecords((current) => [...current, ...result.records]);
-      setStatusPagination(result.pagination);
-      setFromCache((current) => current || result.fromCache);
-      setIsOfflineData((current) => current || result.offline);
-    } catch (nextError) {
-      setStatusError(nextError instanceof Error ? nextError.message : "No fue posible cargar mas estados.");
-    } finally {
-      setIsStatusLoadingMore(false);
     }
   }
 
@@ -447,63 +298,26 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           style={styles.searchInput}
           value={searchText}
         />
-        {activeTab === "records" ? (
-          <Link href={buildNewAppViewRecordHref(appView.id)} asChild>
-            <Pressable style={styles.createButton}>
-              <Text style={styles.createText}>Crear</Text>
-            </Pressable>
-          </Link>
-        ) : null}
+        <Link href={buildNewAppViewRecordHref(appView.id)} asChild>
+          <Pressable style={styles.createButton}>
+            <Text style={styles.createText}>Crear</Text>
+          </Pressable>
+        </Link>
       </View>
 
-      {statusSubviewEnabled ? (
-        <View style={styles.tabs}>
-          <Pressable
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === "records" }}
-            onPress={() => setSelectedTab("records")}
-            style={[styles.tabButton, activeTab === "records" && styles.tabButtonActive]}
-          >
-            <Text style={[styles.tabText, activeTab === "records" && styles.tabTextActive]}>Registros</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === "status" }}
-            onPress={() => setSelectedTab("status")}
-            style={[styles.tabButton, activeTab === "status" && styles.tabButtonActive]}
-          >
-            <Text style={[styles.tabText, activeTab === "status" && styles.tabTextActive]}>Estados</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {activeTab === "status" && appView.config.statusSubview ? (
-        <StatusSubviewContent
-          canLoadMore={canLoadMoreStatus}
-          error={statusError}
-          isLoading={isStatusLoading}
-          isLoadingMore={isStatusLoadingMore}
-          onLoadMore={loadMoreStatusRecords}
-          onRetry={() => setRetryCount((count) => count + 1)}
-          rows={statusRows}
-          showDate={Boolean(appView.config.statusSubview.dateFieldId)}
-          appViewId={appView.id}
-        />
-      ) : (
-        <RecordsListContent
-          canLoadMore={canLoadMore}
-          debouncedSearch={debouncedSearch}
-          error={error}
-          isLoading={isLoading}
-          isLoadingMore={isLoadingMore}
-          isOfflineData={isOfflineData}
-          items={listItems}
-          onLoadMore={loadMoreRecords}
-          onRetry={() => setRetryCount((count) => count + 1)}
-          records={records}
-          appViewId={appView.id}
-        />
-      )}
+      <RecordsListContent
+        canLoadMore={canLoadMore}
+        debouncedSearch={debouncedSearch}
+        error={error}
+        isLoading={isLoading}
+        isLoadingMore={isLoadingMore}
+        isOfflineData={isOfflineData}
+        items={listItems}
+        onLoadMore={loadMoreRecords}
+        onRetry={() => setRetryCount((count) => count + 1)}
+        records={records}
+        appViewId={appView.id}
+      />
     </ScrollView>
   );
 }
@@ -583,62 +397,6 @@ function RecordsListContent({
     </>
   );
 }
-
-function StatusSubviewContent({
-  appViewId,
-  canLoadMore,
-  error,
-  isLoading,
-  isLoadingMore,
-  onLoadMore,
-  onRetry,
-  rows,
-  showDate,
-}: {
-  appViewId: string;
-  canLoadMore: boolean;
-  error: string | null;
-  isLoading: boolean;
-  isLoadingMore: boolean;
-  onLoadMore: () => void;
-  onRetry: () => void;
-  rows: ReturnType<typeof buildStatusSubviewRows>;
-  showDate: boolean;
-}) {
-  return (
-    <>
-      {isLoading ? <ActivityIndicator /> : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {error && rows.length === 0 ? (
-        <Pressable onPress={onRetry} style={styles.retryButton}>
-          <Text style={styles.retryText}>Reintentar</Text>
-        </Pressable>
-      ) : null}
-      {!isLoading && !error && rows.length === 0 ? (
-        <Text style={styles.empty}>No hay registros con estado.</Text>
-      ) : null}
-
-      <View style={styles.recordList}>
-        {rows.map((row) => (
-          <Link href={buildAppViewRecordHref(appViewId, row.id)} key={row.id} asChild>
-            <Pressable style={styles.statusRow}>
-              <Text numberOfLines={1} style={styles.statusName}>{row.name}</Text>
-              <Text numberOfLines={1} style={styles.statusValue}>{row.state}</Text>
-              {showDate ? <Text numberOfLines={1} style={styles.statusDate}>{row.date ?? ""}</Text> : null}
-            </Pressable>
-          </Link>
-        ))}
-      </View>
-
-      {canLoadMore ? (
-        <Pressable disabled={isLoadingMore} onPress={onLoadMore} style={styles.loadMoreButton}>
-          {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
-        </Pressable>
-      ) : null}
-    </>
-  );
-}
-
 
 function SyncTelemetrySummary({
   connectivityStatus,
@@ -924,62 +682,6 @@ const styles = StyleSheet.create({
   syncText: {
     color: "#17363c",
     fontWeight: "800",
-  },
-  statusDate: {
-    color: "#587078",
-    flexBasis: 96,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  statusName: {
-    color: "#17363c",
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "800",
-    minWidth: 120,
-  },
-  statusRow: {
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    minHeight: 54,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  statusValue: {
-    color: "#135d66",
-    flexBasis: 120,
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  tabButton: {
-    alignItems: "center",
-    borderRadius: 8,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 42,
-  },
-  tabButtonActive: {
-    backgroundColor: "#ffffff",
-  },
-  tabs: {
-    backgroundColor: "#dce9eb",
-    borderRadius: 8,
-    flexDirection: "row",
-    gap: 4,
-    padding: 4,
-  },
-  tabText: {
-    color: "#587078",
-    fontWeight: "800",
-  },
-  tabTextActive: {
-    color: "#0f3036",
   },
   title: {
     color: "#0f3036",
