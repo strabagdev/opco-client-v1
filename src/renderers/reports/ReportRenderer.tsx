@@ -181,8 +181,17 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
 function CurrentStatusReport({ model }: { model: NonNullable<ReturnType<typeof buildReportCurrentStatusModel>> }) {
   return (
     <View style={styles.statusList}>
+      <View accessibilityRole="header" style={styles.statusHeaderRow}>
+        <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusName]}>{model.subjectHeading}</Text>
+        <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusValue]}>Estado</Text>
+        {model.showDate ? <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusDate]}>Fecha</Text> : null}
+      </View>
       {model.rows.map((row) => (
-        <View key={row.id} style={styles.statusRow}>
+        <View
+          accessibilityLabel={`${model.subjectHeading}: ${row.name}. Estado: ${row.state}${model.showDate && row.date ? `. Fecha: ${row.date}` : ""}`}
+          key={row.id}
+          style={styles.statusRow}
+        >
           <Text numberOfLines={1} style={styles.statusName}>{row.name}</Text>
           <Text numberOfLines={1} style={styles.statusValue}>{row.state}</Text>
           {model.showDate ? <Text numberOfLines={1} style={styles.statusDate}>{row.date ?? ""}</Text> : null}
@@ -464,6 +473,20 @@ const styles = StyleSheet.create({
     flexBasis: 104,
     fontSize: 13,
     fontWeight: "600",
+  },
+  statusHeaderRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    minHeight: 32,
+    paddingHorizontal: 12,
+  },
+  statusHeaderText: {
+    color: "#4b5563",
+    fontSize: 12,
+    fontWeight: "800",
+    textTransform: "uppercase",
   },
   statusList: {
     gap: 10,

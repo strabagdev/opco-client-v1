@@ -323,6 +323,12 @@ export type ReportResponse = {
   fields: EntityField[];
   from: string;
   records: EntityRecord[];
+  subjectEntity?: {
+    id: string;
+    name: string;
+    singularName?: string;
+    slug?: string;
+  };
   to: string;
 };
 

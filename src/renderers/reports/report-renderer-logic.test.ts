@@ -312,10 +312,12 @@ describe("report renderer logic", () => {
           dateFieldId: "field_date",
         },
       },
+      subjectEntity: { id: "procedures", name: "Procedimientos", slug: "procedimientos" },
     });
 
     expect(model).toEqual({
       showDate: true,
+      subjectHeading: "Persona",
       rows: [
         { date: "2026-08-01", id: "record_1", name: "Juan Perez", state: "Presente" },
         { date: "2026-08-02", id: "record_2", name: "Juan Perez", state: "Ausente" },
@@ -337,12 +339,86 @@ describe("report renderer logic", () => {
     });
 
     expect(model?.showDate).toBe(false);
+    expect(model?.subjectHeading).toBe("Persona");
     expect(model?.rows[0]).toEqual({
       date: null,
       id: "record_1",
       name: "Juan Perez",
       state: "Presente",
     });
+  });
+
+  it("uses the relation field label for equipment current status reports", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "equipment_versions",
+        presentationMode: "CURRENT_STATUS",
+        currentStatus: {
+          subjectFieldId: "field_equipment",
+          stateFieldId: "field_status",
+          dateFieldId: "field_date",
+        },
+      },
+      fields: [
+        relationField("field_equipment", "equipo", "Equipo"),
+        baseReport.fields[1],
+        baseReport.fields[2],
+      ],
+      records: [
+        {
+          displayName: "Excavadora 12 2026-08-01",
+          id: "equipment_record_1",
+          updatedAt: "2026-08-10T12:00:00.000Z",
+          values: {
+            equipo: { displayName: "Excavadora 12", entityTypeId: "equipment", id: "equipment_1" },
+            estado: "presente",
+            fecha: "2026-08-01",
+          },
+        },
+      ],
+      subjectEntity: { id: "equipment", name: "Equipos", slug: "equipos" },
+    });
+
+    expect(model).toEqual({
+      showDate: true,
+      subjectHeading: "Equipo",
+      rows: [
+        { date: "2026-08-01", id: "equipment_record_1", name: "Excavadora 12", state: "Presente" },
+      ],
+    });
+  });
+
+  it("uses explicit entity singular name when no relation field label is available", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "status_logs",
+        presentationMode: "CURRENT_STATUS",
+        currentStatus: {
+          stateFieldId: "field_status",
+        },
+      },
+      subjectEntity: { id: "people", name: "Personas", singularName: "Persona responsable", slug: "personas" },
+    });
+
+    expect(model?.subjectHeading).toBe("Persona responsable");
+  });
+
+  it("does not infer singular headings from irregular or unusual entity names", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "status_logs",
+        presentationMode: "CURRENT_STATUS",
+        currentStatus: {
+          stateFieldId: "field_status",
+        },
+      },
+      subjectEntity: { id: "status", name: "People / Species where used", slug: "status" },
+    });
+
+    expect(model?.subjectHeading).toBe("People / Species where used");
   });
 });
 
@@ -367,18 +443,7 @@ const baseReport: ReportResponse = {
     slug: "asistencias",
   },
   fields: [
-    {
-      active: true,
-      config: { display: {}, validation: {} },
-      id: "field_person",
-      key: "persona",
-      name: "Persona",
-      order: 1,
-      required: true,
-      searchable: true,
-      type: "RELATION",
-      unique: false,
-    },
+    relationField("field_person", "persona", "Persona"),
     {
       active: true,
       config: { display: {}, validation: {} },
@@ -433,3 +498,18 @@ const baseReport: ReportResponse = {
   ],
   to: "2026-08-31",
 };
+
+function relationField(id: string, key: string, name: string) {
+  return {
+    active: true,
+    config: { display: {}, validation: {} },
+    id,
+    key,
+    name,
+    order: 1,
+    required: true,
+    searchable: true,
+    type: "RELATION" as const,
+    unique: false,
+  };
+}

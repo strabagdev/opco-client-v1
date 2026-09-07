@@ -25,6 +25,7 @@ export type ReportMatrixModel = {
 
 export type ReportCurrentStatusModel = {
   showDate: boolean;
+  subjectHeading: string;
   rows: {
     date: string | null;
     id: string;
@@ -160,6 +161,7 @@ export function buildReportCurrentStatusModel(report: ReportResponse): ReportCur
 
   return {
     showDate: Boolean(dateField),
+    subjectHeading: currentStatusSubjectHeading(report, subjectField ?? null),
     rows: report.records
       .map((record) => {
         const state = displayRecordValue(stateField, record.values[stateField.key], report.config.valueDisplay?.[stateField.id]);
@@ -179,6 +181,22 @@ export function buildReportCurrentStatusModel(report: ReportResponse): ReportCur
       })
       .filter((row): row is NonNullable<typeof row> => Boolean(row)),
   };
+}
+
+function currentStatusSubjectHeading(report: ReportResponse, subjectField: EntityField | null) {
+  if (subjectField?.name) {
+    return subjectField.name;
+  }
+
+  if (report.subjectEntity?.singularName) {
+    return report.subjectEntity.singularName;
+  }
+
+  if (report.subjectEntity?.name) {
+    return report.subjectEntity.name;
+  }
+
+  return "Registro";
 }
 
 export function isCurrentStatusReport(reportOrConfig: ReportResponse | ReportResponse["config"]) {
