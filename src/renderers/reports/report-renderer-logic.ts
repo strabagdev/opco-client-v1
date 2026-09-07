@@ -24,13 +24,13 @@ export type ReportMatrixModel = {
 };
 
 export type ReportCurrentStatusModel = {
-  showDate: boolean;
-  subjectHeading: string;
-  rows: {
-    date: string | null;
+  columns: {
     id: string;
     name: string;
-    state: string;
+  }[];
+  rows: {
+    id: string;
+    values: string[];
   }[];
 };
 
@@ -142,67 +142,63 @@ export function buildReportMatrixModel(report: ReportResponse): ReportMatrixMode
 }
 
 export function buildReportCurrentStatusModel(report: ReportResponse): ReportCurrentStatusModel | null {
-  if (report.config.presentationMode !== "CURRENT_STATUS") {
+  if (!isCurrentStatusReport(report)) {
     return null;
   }
 
+  const config = report.config as Extract<ReportResponse["config"], { presentationMode: "CURRENT_STATUS" | "LATEST_BY_RELATION" }>;
   const fieldsById = fieldMap(report.fields);
-  const subjectField = report.config.currentStatus.subjectFieldId
-    ? fieldsById.get(report.config.currentStatus.subjectFieldId)
-    : null;
-  const stateField = fieldsById.get(report.config.currentStatus.stateFieldId);
-  const dateField = report.config.currentStatus.dateFieldId
-    ? fieldsById.get(report.config.currentStatus.dateFieldId)
-    : null;
+  const latestConfig = normalizeLatestByRelationConfig(config);
+  const displayFieldIds = latestConfig.displayFieldIds;
+  const columns = displayFieldIds
+    .map((fieldId) => fieldsById.get(fieldId))
+    .filter((field): field is EntityField => Boolean(field));
 
-  if (!stateField) {
+  if (columns.length === 0) {
     return null;
   }
 
   return {
-    showDate: Boolean(dateField),
-    subjectHeading: currentStatusSubjectHeading(report, subjectField ?? null),
+    columns: columns.map((field) => ({
+      id: field.id,
+      name: field.name,
+    })),
     rows: report.records
-      .map((record) => {
-        const state = displayRecordValue(stateField, record.values[stateField.key], report.config.valueDisplay?.[stateField.id]);
-
-        if (!state) {
-          return null;
-        }
-
-        return {
-          date: dateField ? displayRecordValue(dateField, record.values[dateField.key], report.config.valueDisplay?.[dateField.id]) || null : null,
-          id: record.id,
-          name: subjectField
-            ? displayRecordValue(subjectField, record.values[subjectField.key], report.config.valueDisplay?.[subjectField.id]) || record.displayName
-            : record.displayName,
-          state,
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+      .map((record) => ({
+        id: record.id,
+        values: columns.map((field) =>
+          displayRecordValue(field, record.values[field.key], report.config.valueDisplay?.[field.id]),
+        ),
+      })),
   };
-}
-
-function currentStatusSubjectHeading(report: ReportResponse, subjectField: EntityField | null) {
-  if (subjectField?.name) {
-    return subjectField.name;
-  }
-
-  if (report.subjectEntity?.singularName) {
-    return report.subjectEntity.singularName;
-  }
-
-  if (report.subjectEntity?.name) {
-    return report.subjectEntity.name;
-  }
-
-  return "Registro";
 }
 
 export function isCurrentStatusReport(reportOrConfig: ReportResponse | ReportResponse["config"]) {
   const config = "config" in reportOrConfig ? reportOrConfig.config : reportOrConfig;
 
-  return config.presentationMode === "CURRENT_STATUS";
+  return config.presentationMode === "CURRENT_STATUS" || config.presentationMode === "LATEST_BY_RELATION";
+}
+
+function normalizeLatestByRelationConfig(
+  config: Extract<ReportResponse["config"], { presentationMode: "CURRENT_STATUS" | "LATEST_BY_RELATION" }>,
+) {
+  if (config.presentationMode === "LATEST_BY_RELATION") {
+    return config.latestByRelation;
+  }
+
+  const relationFieldId = config.currentStatus.relationFieldId ?? config.currentStatus.subjectFieldId;
+  const requiredValueFieldId = config.currentStatus.requiredValueFieldId ?? config.currentStatus.stateFieldId;
+  const orderFieldId = config.currentStatus.orderFieldId ?? config.currentStatus.dateFieldId;
+  const displayFieldIds = config.currentStatus.displayFieldIds?.length
+    ? config.currentStatus.displayFieldIds
+    : [relationFieldId, requiredValueFieldId, orderFieldId].filter((fieldId): fieldId is string => Boolean(fieldId));
+
+  return {
+    displayFieldIds,
+    orderFieldId,
+    relationFieldId,
+    requiredValueFieldId,
+  };
 }
 
 export function displayRecordValue(

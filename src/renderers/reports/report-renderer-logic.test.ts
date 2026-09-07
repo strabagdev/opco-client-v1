@@ -300,27 +300,62 @@ describe("report renderer logic", () => {
     })).toBeNull();
   });
 
-  it("builds CURRENT_STATUS rows with optional date", () => {
+  it("builds latest-by-relation rows with configured display fields for procedure versioning", () => {
     const model = buildReportCurrentStatusModel({
       ...baseReport,
       config: {
         entityTypeId: "attendance",
-        presentationMode: "CURRENT_STATUS",
-        currentStatus: {
-          subjectFieldId: "field_person",
-          stateFieldId: "field_status",
-          dateFieldId: "field_date",
+        presentationMode: "LATEST_BY_RELATION",
+        latestByRelation: {
+          relatedEntityTypeId: "procedures",
+          relationFieldId: "field_person",
+          requiredValueFieldId: "field_status",
+          orderFieldId: "field_date",
+          displayFieldIds: ["field_person", "field_version", "field_status", "field_date"],
         },
       },
+      fields: [
+        relationField("field_person", "procedimiento", "Procedimiento"),
+        {
+          active: true,
+          config: { display: {}, validation: {} },
+          id: "field_version",
+          key: "version",
+          name: "Versión",
+          order: 2,
+          required: false,
+          searchable: false,
+          type: "TEXT",
+          unique: false,
+        },
+        baseReport.fields[2],
+        baseReport.fields[1],
+      ],
+      records: [
+        {
+          displayName: "PET-001 v2",
+          id: "record_version",
+          updatedAt: "2026-08-10T12:00:00.000Z",
+          values: {
+            estado: "presente",
+            fecha: "2026-08-01",
+            procedimiento: { displayName: "PET-001", entityTypeId: "procedures", id: "procedure_1" },
+            version: "2.0",
+          },
+        },
+      ],
       subjectEntity: { id: "procedures", name: "Procedimientos", slug: "procedimientos" },
     });
 
     expect(model).toEqual({
-      showDate: true,
-      subjectHeading: "Persona",
+      columns: [
+        { id: "field_person", name: "Procedimiento" },
+        { id: "field_version", name: "Versión" },
+        { id: "field_status", name: "Estado" },
+        { id: "field_date", name: "Fecha" },
+      ],
       rows: [
-        { date: "2026-08-01", id: "record_1", name: "Juan Perez", state: "Presente" },
-        { date: "2026-08-02", id: "record_2", name: "Juan Perez", state: "Ausente" },
+        { id: "record_version", values: ["PET-001", "2.0", "Presente", "2026-08-01"] },
       ],
     });
   });
@@ -338,26 +373,24 @@ describe("report renderer logic", () => {
       },
     });
 
-    expect(model?.showDate).toBe(false);
-    expect(model?.subjectHeading).toBe("Persona");
+    expect(model?.columns.map((column) => column.name)).toEqual(["Persona", "Estado"]);
     expect(model?.rows[0]).toEqual({
-      date: null,
       id: "record_1",
-      name: "Juan Perez",
-      state: "Presente",
+      values: ["Juan Perez", "Presente"],
     });
   });
 
-  it("uses the relation field label for equipment current status reports", () => {
+  it("does not require a status field for equipment latest-by-relation reports", () => {
     const model = buildReportCurrentStatusModel({
       ...baseReport,
       config: {
         entityTypeId: "equipment_versions",
-        presentationMode: "CURRENT_STATUS",
-        currentStatus: {
-          subjectFieldId: "field_equipment",
-          stateFieldId: "field_status",
-          dateFieldId: "field_date",
+        presentationMode: "LATEST_BY_RELATION",
+        latestByRelation: {
+          relatedEntityTypeId: "equipment",
+          relationFieldId: "field_equipment",
+          orderFieldId: "field_date",
+          displayFieldIds: ["field_equipment", "field_date"],
         },
       },
       fields: [
@@ -381,44 +414,14 @@ describe("report renderer logic", () => {
     });
 
     expect(model).toEqual({
-      showDate: true,
-      subjectHeading: "Equipo",
+      columns: [
+        { id: "field_equipment", name: "Equipo" },
+        { id: "field_date", name: "Fecha" },
+      ],
       rows: [
-        { date: "2026-08-01", id: "equipment_record_1", name: "Excavadora 12", state: "Presente" },
+        { id: "equipment_record_1", values: ["Excavadora 12", "2026-08-01"] },
       ],
     });
-  });
-
-  it("uses explicit entity singular name when no relation field label is available", () => {
-    const model = buildReportCurrentStatusModel({
-      ...baseReport,
-      config: {
-        entityTypeId: "status_logs",
-        presentationMode: "CURRENT_STATUS",
-        currentStatus: {
-          stateFieldId: "field_status",
-        },
-      },
-      subjectEntity: { id: "people", name: "Personas", singularName: "Persona responsable", slug: "personas" },
-    });
-
-    expect(model?.subjectHeading).toBe("Persona responsable");
-  });
-
-  it("does not infer singular headings from irregular or unusual entity names", () => {
-    const model = buildReportCurrentStatusModel({
-      ...baseReport,
-      config: {
-        entityTypeId: "status_logs",
-        presentationMode: "CURRENT_STATUS",
-        currentStatus: {
-          stateFieldId: "field_status",
-        },
-      },
-      subjectEntity: { id: "status", name: "People / Species where used", slug: "status" },
-    });
-
-    expect(model?.subjectHeading).toBe("People / Species where used");
   });
 });
 

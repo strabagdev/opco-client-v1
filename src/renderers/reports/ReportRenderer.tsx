@@ -15,7 +15,12 @@ import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 
-import { buildReportCurrentStatusModel, buildReportMatrixModel, buildReportTableModel } from "./report-renderer-logic";
+import {
+  buildReportCurrentStatusModel,
+  buildReportMatrixModel,
+  buildReportTableModel,
+  isCurrentStatusReport,
+} from "./report-renderer-logic";
 import {
   formatMonthLabel,
   initialReportPeriod,
@@ -37,7 +42,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const [fromCache, setFromCache] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshCount, setRefreshCount] = useState(0);
-  const isCurrentStatus = appView.config.presentationMode === "CURRENT_STATUS";
+  const isCurrentStatus = isCurrentStatusReport(appView.config);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -159,7 +164,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       ) : !report ||
         (report.config.presentationMode === "TABLE" && !table) ||
         (report.config.presentationMode === "MATRIX" && !matrix) ||
-        (report.config.presentationMode === "CURRENT_STATUS" && !currentStatus) ? (
+        (isCurrentStatusReport(report.config) && !currentStatus) ? (
         <View style={styles.stateBox}>
           <Text style={styles.stateText}>Este reporte necesita configuración.</Text>
         </View>
@@ -167,7 +172,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         <View style={styles.stateBox}>
           <Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text>
         </View>
-      ) : report.config.presentationMode === "CURRENT_STATUS" && currentStatus ? (
+      ) : isCurrentStatusReport(report.config) && currentStatus ? (
         <CurrentStatusReport model={currentStatus} />
       ) : report.config.presentationMode === "TABLE" && table ? (
         <ReportTable table={table} />
@@ -180,24 +185,28 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
 
 function CurrentStatusReport({ model }: { model: NonNullable<ReturnType<typeof buildReportCurrentStatusModel>> }) {
   return (
-    <View style={styles.statusList}>
+    <ScrollView horizontal style={styles.horizontalScroll}>
+      <View style={styles.statusTable}>
       <View accessibilityRole="header" style={styles.statusHeaderRow}>
-        <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusName]}>{model.subjectHeading}</Text>
-        <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusValue]}>Estado</Text>
-        {model.showDate ? <Text numberOfLines={1} style={[styles.statusHeaderText, styles.statusDate]}>Fecha</Text> : null}
+        {model.columns.map((column) => (
+          <Text key={column.id} numberOfLines={1} style={[styles.statusCell, styles.statusHeaderText]}>{column.name}</Text>
+        ))}
       </View>
       {model.rows.map((row) => (
         <View
-          accessibilityLabel={`${model.subjectHeading}: ${row.name}. Estado: ${row.state}${model.showDate && row.date ? `. Fecha: ${row.date}` : ""}`}
+          accessibilityLabel={row.values.map((value, index) => `${model.columns[index]?.name ?? "Campo"}: ${value || "-"}`).join(". ")}
           key={row.id}
           style={styles.statusRow}
         >
-          <Text numberOfLines={1} style={styles.statusName}>{row.name}</Text>
-          <Text numberOfLines={1} style={styles.statusValue}>{row.state}</Text>
-          {model.showDate ? <Text numberOfLines={1} style={styles.statusDate}>{row.date ?? ""}</Text> : null}
+          {row.values.map((value, index) => (
+            <Text key={`${row.id}-${model.columns[index]?.id ?? index}`} numberOfLines={1} style={styles.statusCell}>
+              {value || "-"}
+            </Text>
+          ))}
         </View>
       ))}
-    </View>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -468,11 +477,13 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     width: 180,
   },
-  statusDate: {
-    color: "#6b7280",
-    flexBasis: 104,
-    fontSize: 13,
-    fontWeight: "600",
+  statusCell: {
+    color: "#111827",
+    fontSize: 14,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    width: 156,
   },
   statusHeaderRow: {
     alignItems: "center",
@@ -488,34 +499,18 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textTransform: "uppercase",
   },
-  statusList: {
-    gap: 10,
-  },
-  statusName: {
-    color: "#111827",
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "700",
-    minWidth: 140,
-  },
   statusRow: {
     alignItems: "center",
     backgroundColor: "#ffffff",
+    borderBottomColor: "#e5e7eb",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+  },
+  statusTable: {
     borderColor: "#e5e7eb",
     borderRadius: 8,
     borderWidth: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    minHeight: 52,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  statusValue: {
-    color: "#135d66",
-    flexBasis: 120,
-    fontSize: 14,
-    fontWeight: "800",
+    overflow: "hidden",
   },
   subtitle: {
     color: "#6b7280",

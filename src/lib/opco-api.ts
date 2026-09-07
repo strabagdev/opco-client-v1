@@ -76,8 +76,25 @@ export type ReportAppViewConfig =
       presentationMode: "CURRENT_STATUS";
       currentStatus: {
         subjectFieldId?: string;
-        stateFieldId: string;
+        relationFieldId?: string;
+        stateFieldId?: string;
+        requiredValueFieldId?: string;
         dateFieldId?: string;
+        orderFieldId?: string;
+        displayFieldIds?: string[];
+      };
+      timeFilter?: ReportTimeFilterConfig;
+      valueDisplay?: Record<string, ReportSelectValueDisplay>;
+    }
+  | {
+      entityTypeId: string;
+      presentationMode: "LATEST_BY_RELATION";
+      latestByRelation: {
+        relatedEntityTypeId: string;
+        relationFieldId: string;
+        orderFieldId: string;
+        requiredValueFieldId?: string;
+        displayFieldIds: string[];
       };
       timeFilter?: ReportTimeFilterConfig;
       valueDisplay?: Record<string, ReportSelectValueDisplay>;
