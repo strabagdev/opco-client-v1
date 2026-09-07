@@ -68,6 +68,11 @@ export type AppViewType = "RECORDS" | "WORKFLOW" | "REPORT" | "BOARD" | "DASHBOA
 
 export type RecordsAppViewConfig = {
   entityTypeId: string;
+  statusSubview?: {
+    template: "versioning";
+    stateFieldId: string;
+    dateFieldId?: string;
+  };
 };
 
 export type ReportAppViewConfig = {
@@ -278,10 +283,11 @@ export type EntityDefinitionResponse = {
 
 export type EntityRecordsQuery = {
   direction?: "asc" | "desc";
+  fieldIdHasValue?: string;
   page?: number;
   pageSize?: number;
   search?: string;
-  sort?: "displayName" | "updatedAt" | `field:${string}`;
+  sort?: "displayName" | "updatedAt" | `field:${string}` | `fieldId:${string}`;
 };
 
 export type EntityRecordsResponse = {
@@ -1178,6 +1184,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       if (query.search?.trim()) {
         searchParams.set("search", query.search.trim());
+      }
+
+      if (query.fieldIdHasValue?.trim()) {
+        searchParams.set("fieldIdHasValue", query.fieldIdHasValue.trim());
       }
 
       if (query.sort) {

@@ -3,6 +3,7 @@ import {
   EntityField,
   EntityRecord,
   EntityRecordPagination,
+  EntityRecordsQuery,
   EntityRecordValue,
   OpcoApi,
   OpcoApiError,
@@ -172,9 +173,13 @@ type BaseScopedInput = {
 };
 
 export type ListCachedRecordsInput = BaseScopedInput & {
+  direction?: "asc" | "desc";
+  fieldIdHasValue?: string;
+  fields?: EntityField[];
   page?: number;
   pageSize?: number;
   search?: string;
+  sort?: EntityRecordsQuery["sort"];
 };
 
 export type ListProblemRecordsInput = BaseScopedInput;
@@ -218,9 +223,13 @@ export type ReconcileRemoteRecordsSnapshotInput = UpsertRemoteRecordsInput;
 
 export type LoadRecordsParams = BaseScopedInput & {
   api: Pick<OpcoApi, "getEntityRecords">;
+  direction?: "asc" | "desc";
+  fieldIdHasValue?: string;
+  fields?: EntityField[];
   page?: number;
   pageSize?: number;
   search?: string;
+  sort?: EntityRecordsQuery["sort"];
   store: OfflineRecordStore;
   token: string;
 };
@@ -229,10 +238,14 @@ export async function loadRecordsWithOfflineCache({
   api,
   contractId,
   entityTypeId,
+  direction,
+  fieldIdHasValue,
+  fields,
   ownerKey,
   page = 1,
   pageSize = 25,
   search,
+  sort,
   store,
   token,
 }: LoadRecordsParams): Promise<CachedRecordsResult> {
@@ -240,7 +253,10 @@ export async function loadRecordsWithOfflineCache({
     const remote = await api.getEntityRecords(token, contractId, entityTypeId, {
       page,
       pageSize,
+      direction,
+      fieldIdHasValue,
       search,
+      sort,
     });
 
     await store.upsertRemoteRecords({
@@ -256,7 +272,11 @@ export async function loadRecordsWithOfflineCache({
       ownerKey,
       page,
       pageSize,
+      direction,
+      fieldIdHasValue,
+      fields,
       search,
+      sort,
     });
   } catch (error) {
     if (isNetworkLikeError(error)) {
@@ -266,7 +286,11 @@ export async function loadRecordsWithOfflineCache({
         ownerKey,
         page,
         pageSize,
+        direction,
+        fieldIdHasValue,
+        fields,
         search,
+        sort,
       });
 
       return {

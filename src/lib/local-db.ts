@@ -1220,18 +1220,26 @@ async function reconcileRemoteRecordsSnapshot({
 
 async function listCachedRecords({
   contractId,
+  direction,
   entityTypeId,
+  fieldIdHasValue,
+  fields = [],
   ownerKey,
   page = 1,
   pageSize = 25,
   search,
+  sort,
 }: {
   contractId: string;
+  direction?: "asc" | "desc";
   entityTypeId: string;
+  fieldIdHasValue?: string;
+  fields?: EntityField[];
   ownerKey: string;
   page?: number;
   pageSize?: number;
   search?: string;
+  sort?: `field:${string}` | `fieldId:${string}` | "displayName" | "updatedAt";
 }) {
   const db = await getDatabase();
   const rows = await db.getAllAsync<EntityRecordRow>(
@@ -1246,7 +1254,17 @@ async function listCachedRecords({
     entityTypeId,
   );
   const normalizedSearch = search?.trim().toLocaleLowerCase("es-CL") ?? "";
+  const fieldById = new Map(fields.map((field) => [field.id, field]));
+  const fieldKeyHasValue = fieldIdHasValue ? fieldById.get(fieldIdHasValue)?.key : undefined;
   const filtered = rows.map(mapRecordRow).filter((record) => {
+    if (fieldIdHasValue && !fieldKeyHasValue) {
+      return false;
+    }
+
+    if (fieldKeyHasValue && !hasCachedRecordValue(record.values[fieldKeyHasValue])) {
+      return false;
+    }
+
     if (!normalizedSearch) {
       return true;
     }
@@ -1255,6 +1273,12 @@ async function listCachedRecords({
       record.displayName.toLocaleLowerCase("es-CL").includes(normalizedSearch) ||
       JSON.stringify(record.values).toLocaleLowerCase("es-CL").includes(normalizedSearch)
     );
+  });
+  const sorted = sortCachedRecords({
+    direction,
+    fieldById,
+    records: filtered,
+    sort,
   });
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1269,8 +1293,87 @@ async function listCachedRecords({
       total,
       totalPages,
     },
-    records: filtered.slice(offset, offset + pageSize),
+    records: sorted.slice(offset, offset + pageSize),
   };
+}
+
+function hasCachedRecordValue(value: EntityRecordValue | undefined) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  return true;
+}
+
+function sortCachedRecords({
+  direction = "desc",
+  fieldById,
+  records,
+  sort,
+}: {
+  direction?: "asc" | "desc";
+  fieldById: Map<string, EntityField>;
+  records: CachedEntityRecord[];
+  sort?: `field:${string}` | `fieldId:${string}` | "displayName" | "updatedAt";
+}) {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  if (sort === "displayName") {
+    return [...records].sort((left, right) =>
+      multiplier * left.displayName.localeCompare(right.displayName, "es-CL") || left.id.localeCompare(right.id),
+    );
+  }
+
+  if (sort === "updatedAt") {
+    return [...records].sort((left, right) =>
+      multiplier * left.updatedAt.localeCompare(right.updatedAt) ||
+      left.displayName.localeCompare(right.displayName, "es-CL") ||
+      left.id.localeCompare(right.id),
+    );
+  }
+
+  const fieldId = sort?.startsWith("fieldId:")
+    ? sort.slice("fieldId:".length)
+    : sort?.startsWith("field:")
+      ? sort.slice("field:".length)
+      : "";
+  const fieldKey = fieldById.get(fieldId)?.key;
+
+  if (!fieldKey) {
+    return records;
+  }
+
+  return [...records].sort((left, right) => {
+    const leftValue = sortableCachedValue(left.values[fieldKey]);
+    const rightValue = sortableCachedValue(right.values[fieldKey]);
+
+    if (leftValue === "" && rightValue !== "") return 1;
+    if (leftValue !== "" && rightValue === "") return -1;
+
+    return multiplier * leftValue.localeCompare(rightValue, "es-CL", { numeric: true }) ||
+      left.displayName.localeCompare(right.displayName, "es-CL") ||
+      left.id.localeCompare(right.id);
+  });
+}
+
+function sortableCachedValue(value: EntityRecordValue | undefined) {
+  if (!hasCachedRecordValue(value)) {
+    return "";
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
 }
 
 async function getCachedRecord({

@@ -747,6 +747,68 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
   });
 
+  it("filters cached records by populated fieldId before paginating and sorts by date fieldId", async () => {
+    db.getAllAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return [
+          recordsEntityRecordRow({
+            display_name: "Equipo antiguo",
+            local_id: "record_old",
+            server_id: "record_old",
+            values_json: JSON.stringify({
+              estado: "vigente",
+              fecha_estado: "2026-08-01",
+            }),
+          }),
+          recordsEntityRecordRow({
+            display_name: "Equipo sin estado",
+            local_id: "record_empty",
+            server_id: "record_empty",
+            values_json: JSON.stringify({
+              estado: "",
+              fecha_estado: "2026-09-03",
+            }),
+          }),
+          recordsEntityRecordRow({
+            display_name: "Equipo nuevo",
+            local_id: "record_new",
+            server_id: "record_new",
+            values_json: JSON.stringify({
+              estado: "revision",
+              fecha_estado: "2026-09-02",
+            }),
+          }),
+        ];
+      }
+
+      return [];
+    });
+    const store = getLocalDatabase();
+
+    const result = await store.listCachedRecords({
+      contractId: "contract_1",
+      direction: "desc",
+      entityTypeId: "entity_1",
+      fieldIdHasValue: "field_status",
+      fields: [
+        { id: "field_status", key: "estado", name: "Estado", required: false, type: "SELECT" },
+        { id: "field_date", key: "fecha_estado", name: "Fecha estado", required: false, type: "DATE" },
+      ],
+      ownerKey: "org_1:user_1",
+      page: 1,
+      pageSize: 1,
+      sort: "fieldId:field_date",
+    });
+
+    expect(result.pagination).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      total: 2,
+      totalPages: 2,
+    });
+    expect(result.records.map((record) => record.id)).toEqual(["record_new"]);
+  });
+
   it("lists durable failed RECORDS operations for global diagnostics", async () => {
     db.getAllAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM pending_operations") && sql.includes("entity_records.sync_status = 'failed'")) {

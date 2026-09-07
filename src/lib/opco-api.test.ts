@@ -998,6 +998,82 @@ describe("createOpcoApi", () => {
     expect(result.pagination.total).toBe(1);
   });
 
+  it("sends status subview record filters by stable field ids", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              pagination: {
+                page: 1,
+                pageSize: 25,
+                total: 1,
+                totalPages: 1,
+              },
+              records: [entityRecordFixture],
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await api.getEntityRecords("token_123", "contract_1", "entity_1", {
+      direction: "desc",
+      fieldIdHasValue: "field_status",
+      page: 1,
+      pageSize: 25,
+      search: " EQ ",
+      sort: "fieldId:field_date",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records?page=1&pageSize=25&search=EQ&fieldIdHasValue=field_status&sort=fieldId%3Afield_date&direction=desc",
+    );
+  });
+
+  it("keeps legacy field key sorting for entity records", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              pagination: {
+                page: 1,
+                pageSize: 25,
+                total: 0,
+                totalPages: 1,
+              },
+              records: [],
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await api.getEntityRecords("token_123", "contract_1", "entity_1", {
+      direction: "asc",
+      sort: "field:estado",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records?sort=field%3Aestado&direction=asc",
+    );
+  });
+
   it("parses assigned app views for a contract", async () => {
     const urls: string[] = [];
     const api = createOpcoApi({
@@ -1027,6 +1103,53 @@ describe("createOpcoApi", () => {
     }
     expect(result.views[0].config.entityTypeId).toBe("entity_1");
     expect(result.views.map((view) => view.type)).toEqual(["RECORDS", "WORKFLOW", "BOARD", "DASHBOARD"]);
+  });
+
+  it("preserves RECORDS statusSubview config from assigned app views", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              views: [
+                {
+                  config: {
+                    entityTypeId: "entity_1",
+                    statusSubview: {
+                      template: "versioning",
+                      stateFieldId: "field_status",
+                      dateFieldId: "field_date",
+                    },
+                  },
+                  icon: "warehouse",
+                  id: "view_records",
+                  name: "Maestro de Equipos",
+                  slug: "maestro-equipos",
+                  sortOrder: 1,
+                  type: "RECORDS",
+                },
+              ],
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        ),
+    });
+
+    const result = await api.getAppViews("token_123", "contract_1");
+
+    expect(result.views[0]).toMatchObject({
+      config: {
+        statusSubview: {
+          template: "versioning",
+          stateFieldId: "field_status",
+          dateFieldId: "field_date",
+        },
+      },
+      type: "RECORDS",
+    });
   });
 
   it("requests report data by AppView and date range", async () => {
