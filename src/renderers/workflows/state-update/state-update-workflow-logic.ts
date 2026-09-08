@@ -1,5 +1,6 @@
 import {
   EntityField,
+  EntityFieldType,
   EntityRecordValue,
   StateUpdateBatchResult,
   StateUpdateCurrentFieldValue,
@@ -304,7 +305,7 @@ export function stateFieldType(field: StateUpdateField) {
 }
 
 export function buildStateUpdateLatestRows(
-  response: Pick<StateUpdateResponse, "dateField" | "extraFields" | "stateFields"> | null,
+  response: Pick<StateUpdateResponse, "dateField" | "dateFieldId" | "extraFields" | "stateFields"> | null,
   item: StateUpdateLatestItem,
 ): StateUpdateLatestRow[] {
   if (!response) {
@@ -313,12 +314,33 @@ export function buildStateUpdateLatestRows(
 
   const rows: StateUpdateLatestRow[] = [];
   const renderedFieldIds = new Set<string>();
+  const dateFieldType = resolveStateUpdateDateFieldType(response);
+
+  for (const field of item.fields ?? []) {
+    appendStateUpdateLatestRow(rows, renderedFieldIds, {
+      fieldId: field.fieldId,
+      label: field.label,
+      value: formatStateUpdateLatestRowValue({
+        dateFieldId: response.dateFieldId,
+        dateFieldType,
+        fieldId: field.fieldId,
+        fallbackType: null,
+        value: field.value,
+      }),
+    });
+  }
 
   for (const field of response.stateFields) {
     appendStateUpdateLatestRow(rows, renderedFieldIds, {
       fieldId: field.fieldId,
       label: field.label,
-      value: formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)),
+      value: formatStateUpdateLatestRowValue({
+        dateFieldId: response.dateFieldId,
+        dateFieldType,
+        fieldId: field.fieldId,
+        fallbackType: stateFieldType(field),
+        value: formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)),
+      }),
     });
   }
 
@@ -326,7 +348,14 @@ export function buildStateUpdateLatestRows(
     appendStateUpdateLatestRow(rows, renderedFieldIds, {
       fieldId: field.id,
       label: field.name,
-      value: formatLatestExtraValue(field, item.extraValues?.[field.id] ?? item.extraValues?.[field.key]),
+      value: formatStateUpdateLatestRowValue({
+        dateFieldId: response.dateFieldId,
+        dateFieldType,
+        fieldId: field.id,
+        fallbackType: field.type,
+        value: item.extraValues?.[field.id] ?? item.extraValues?.[field.key],
+        valueField: field,
+      }),
     });
   }
 
@@ -334,7 +363,14 @@ export function buildStateUpdateLatestRows(
     appendStateUpdateLatestRow(rows, renderedFieldIds, {
       fieldId: response.dateField.id,
       label: response.dateField.name,
-      value: formatLatestExtraValue(response.dateField, item.date),
+      value: formatStateUpdateLatestRowValue({
+        dateFieldId: response.dateFieldId,
+        dateFieldType,
+        fieldId: response.dateField.id,
+        fallbackType: response.dateField.type,
+        value: item.date,
+        valueField: response.dateField,
+      }),
     });
   }
 
@@ -393,6 +429,52 @@ export function formatLatestExtraValue(field: EntityField, value: unknown) {
   }
 
   return String(value);
+}
+
+function formatStateUpdateLatestRowValue({
+  dateFieldId,
+  dateFieldType,
+  fallbackType,
+  fieldId,
+  value,
+  valueField,
+}: {
+  dateFieldId?: string;
+  dateFieldType: "DATE" | "DATETIME" | null;
+  fallbackType?: EntityFieldType | string | null;
+  fieldId: string;
+  value: unknown;
+  valueField?: EntityField;
+}) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (dateFieldId && fieldId === dateFieldId) {
+    const type = dateFieldType ?? (fallbackType === "DATETIME" ? "DATETIME" : "DATE");
+
+    return formatStateUpdateDateLikeValue(String(value), type);
+  }
+
+  if (valueField) {
+    return formatLatestExtraValue(valueField, value);
+  }
+
+  return String(value);
+}
+
+function resolveStateUpdateDateFieldType(
+  response: Pick<StateUpdateResponse, "dateField" | "dateFieldId" | "extraFields" | "stateFields">,
+) {
+  if (!response.dateFieldId) {
+    return null;
+  }
+
+  const type = response.dateField?.type ??
+    response.extraFields.find((field) => field.id === response.dateFieldId || field.key === response.dateFieldId)?.type ??
+    response.stateFields.find((field) => field.fieldId === response.dateFieldId)?.type;
+
+  return type === "DATETIME" ? "DATETIME" : type === "DATE" ? "DATE" : null;
 }
 
 function formatStateUpdateDateLikeValue(value: string, type: "DATE" | "DATETIME") {

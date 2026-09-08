@@ -347,6 +347,7 @@ describe("state-update latest updates", () => {
   it("does not duplicate dateFieldId when it is already included in dynamic fields", () => {
     const rows = buildStateUpdateLatestRows(latestResponse({
       dateField: dateExtraField("DATE"),
+      dateFieldId: "date_field",
       extraFields: [dateExtraField("DATE"), versionExtraField],
     }), {
       ...latestUpdate("state_1", "Procedimiento A"),
@@ -368,6 +369,7 @@ describe("state-update latest updates", () => {
   it("renders dateFieldId once as the workflow date when it is not included in dynamic fields", () => {
     const rows = buildStateUpdateLatestRows(latestResponse({
       dateField: dateExtraField("DATE"),
+      dateFieldId: "date_field",
       extraFields: [versionExtraField],
     }), {
       ...latestUpdate("state_1", "Procedimiento A"),
@@ -387,6 +389,7 @@ describe("state-update latest updates", () => {
   it("formats DATETIME latest values with time instead of rendering raw ISO values", () => {
     const rows = buildStateUpdateLatestRows(latestResponse({
       dateField: dateExtraField("DATETIME"),
+      dateFieldId: "date_field",
       extraFields: [dateExtraField("DATETIME")],
     }), {
       ...latestUpdate("state_1", "Procedimiento A"),
@@ -401,6 +404,59 @@ describe("state-update latest updates", () => {
     expect(rows[1]?.value).toContain("2026");
     expect(rows[1]?.value).toMatch(/\d{2}:\d{2}/);
     expect(rows[1]?.value).not.toBe("2026-09-06T14:45:00.000Z");
+  });
+
+  it("formats a production latest fields payload by configured dateFieldId even when the item field has no type", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATE"),
+      dateFieldId: "date_field",
+      extraFields: [],
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      date: "2026-09-06T00:00:00.000Z",
+      fields: [
+        { fieldId: "date_field", label: "Fecha", value: "2026-09-06T00:00:00.000Z" },
+        { fieldId: "version_field", label: "Version", value: "3" },
+      ],
+    });
+
+    expect(rows).toEqual([
+      { fieldId: "date_field", label: "Fecha", value: "06-09-2026" },
+      { fieldId: "version_field", label: "Version", value: "3" },
+      { fieldId: "status_field", label: "Estado", value: "Vigente" },
+    ]);
+    expect(rows.filter((row) => row.fieldId === "date_field")).toHaveLength(1);
+  });
+
+  it("uses DATETIME formatting for production latest fields when the configured dateField is DATETIME", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATETIME"),
+      dateFieldId: "date_field",
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      fields: [
+        { fieldId: "date_field", label: "Fecha y hora", value: "2026-09-06T14:45:00.000Z" },
+      ],
+    });
+
+    expect(rows[0]?.fieldId).toBe("date_field");
+    expect(rows[0]?.value).toContain("2026");
+    expect(rows[0]?.value).toMatch(/\d{2}:\d{2}/);
+    expect(rows[0]?.value).not.toBe("2026-09-06T14:45:00.000Z");
+  });
+
+  it("does not format ISO-looking text when the fieldId is not the configured dateFieldId", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATE"),
+      dateFieldId: "date_field",
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      fields: [
+        { fieldId: "comment_field", label: "Comentario", value: "2026-09-06T00:00:00.000Z" },
+      ],
+    });
+
+    expect(rows.find((row) => row.fieldId === "comment_field")?.value).toBe("2026-09-06T00:00:00.000Z");
   });
 
   it("deduplicates any dynamic field by fieldId before rendering", () => {
@@ -588,15 +644,18 @@ function dateExtraField(type: "DATE" | "DATETIME"): EntityField {
 
 function latestResponse({
   dateField = null,
+  dateFieldId = dateField?.id,
   extraFields = [],
   stateFields: fields = stateFields,
 }: {
   dateField?: EntityField | null;
+  dateFieldId?: string;
   extraFields?: EntityField[];
   stateFields?: StateUpdateField[];
-}): Pick<StateUpdateResponse, "dateField" | "extraFields" | "stateFields"> {
+}): Pick<StateUpdateResponse, "dateField" | "dateFieldId" | "extraFields" | "stateFields"> {
   return {
     dateField,
+    dateFieldId,
     extraFields,
     stateFields: fields,
   };

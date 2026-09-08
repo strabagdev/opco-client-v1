@@ -553,6 +553,11 @@ export type StateUpdateItem = {
 export type StateUpdateLatestItem = {
   date?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
+  fields?: {
+    fieldId: string;
+    label: string;
+    value: EntityRecordValue;
+  }[];
   recordId: string;
   stateValues?: StateUpdateCurrentFieldValue[];
   subject: StateUpdateSubject;
