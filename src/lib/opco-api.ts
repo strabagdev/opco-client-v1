@@ -491,6 +491,8 @@ export type StateUpdateHistoryMode = "append" | "update-current";
 
 export type StateUpdateWorkflowQuery = {
   date?: string;
+  page?: number;
+  pageSize?: number;
   search?: string;
   subjectRecordId?: string;
 };
@@ -549,10 +551,19 @@ export type StateUpdateItem = {
 };
 
 export type StateUpdateLatestItem = {
+  date?: string | null;
+  extraValues?: Record<string, EntityRecordValue>;
   recordId: string;
   stateValues?: StateUpdateCurrentFieldValue[];
   subject: StateUpdateSubject;
   updatedAt: string;
+};
+
+export type StateUpdateLatestPagination = {
+  hasMore: boolean;
+  page: number;
+  pageSize: number;
+  total: number;
 };
 
 export type StateUpdateSummary = {
@@ -567,11 +578,13 @@ export type StateUpdateResponse = {
     slug: string;
   };
   date?: string;
+  dateField?: EntityField | null;
   dateFieldId?: string;
   extraFields: EntityField[];
   historyMode: StateUpdateHistoryMode;
   items: StateUpdateItem[];
   latest?: StateUpdateLatestItem[];
+  latestPagination?: StateUpdateLatestPagination;
   sourceEntityType: {
     id: string;
     name: string;
@@ -600,6 +613,11 @@ type StateUpdateRawLatestItem = Omit<StateUpdateLatestItem, "stateValues"> & {
   states?: Record<string, { label?: string | null; optionId?: string | null } | EntityRecordValue>;
 };
 
+type StateUpdateRawLatest = StateUpdateRawLatestItem[] | {
+  items?: StateUpdateRawLatestItem[];
+  pagination?: Partial<StateUpdateLatestPagination>;
+};
+
 type StateUpdateRawField = StateUpdateField | {
   defaultOptionId?: string | null;
   field?: EntityField;
@@ -609,9 +627,9 @@ type StateUpdateRawField = StateUpdateField | {
   type?: EntityFieldType | string | null;
 };
 
-type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "sourceEntityType" | "stateFields"> & {
+type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "latestPagination" | "sourceEntityType" | "stateFields"> & {
   items?: StateUpdateRawItem[];
-  latest?: StateUpdateRawLatestItem[];
+  latest?: StateUpdateRawLatest;
   sourceEntityType?: StateUpdateResponse["sourceEntityType"];
   stateFields?: StateUpdateRawField[];
   subjectEntityType?: StateUpdateResponse["sourceEntityType"];
@@ -1341,6 +1359,14 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("date", query.date.trim());
       }
 
+      if (query.page !== undefined) {
+        searchParams.set("page", String(query.page));
+      }
+
+      if (query.pageSize !== undefined) {
+        searchParams.set("pageSize", String(query.pageSize));
+      }
+
       if (query.search?.trim()) {
         searchParams.set("search", query.search.trim());
       }
@@ -1488,7 +1514,8 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
     ...item,
     current: normalizeStateUpdateCurrent(item.current, stateFields),
   }));
-  const latest = (response.latest ?? []).map((item) => ({
+  const rawLatest = normalizeRawStateUpdateLatest(response.latest);
+  const latest = rawLatest.items.map((item) => ({
     ...item,
     stateValues: normalizeStateUpdateFieldValues(item.stateValues, item.states, stateFields),
   }));
@@ -1510,8 +1537,36 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
     extraFields,
     items,
     latest,
+    latestPagination: rawLatest.pagination,
     sourceEntityType,
     stateFields,
+  };
+}
+
+function normalizeRawStateUpdateLatest(rawLatest: StateUpdateRawLatest | undefined) {
+  if (Array.isArray(rawLatest)) {
+    return {
+      items: rawLatest,
+      pagination: {
+        hasMore: false,
+        page: 1,
+        pageSize: rawLatest.length,
+        total: rawLatest.length,
+      },
+    };
+  }
+
+  const items = rawLatest?.items ?? [];
+  const pagination = rawLatest?.pagination ?? {};
+
+  return {
+    items,
+    pagination: {
+      hasMore: pagination.hasMore === true,
+      page: typeof pagination.page === "number" ? pagination.page : 1,
+      pageSize: typeof pagination.pageSize === "number" ? pagination.pageSize : items.length,
+      total: typeof pagination.total === "number" ? pagination.total : items.length,
+    },
   };
 }
 

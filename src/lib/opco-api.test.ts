@@ -1531,6 +1531,101 @@ describe("createOpcoApi", () => {
     ]);
   });
 
+  it("normalizes paginated state-update latest updates", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      clientId: "opco_app_123",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "view_state", name: "Versionado", slug: "versionado" },
+            dateField: {
+              active: true,
+              id: "field_date",
+              key: "fecha",
+              name: "Fecha",
+              required: true,
+              type: "DATE",
+            },
+            dateFieldId: "field_date",
+            extraFields: [{
+              active: true,
+              id: "field_version",
+              key: "version",
+              name: "Version",
+              required: false,
+              type: "TEXT",
+            }],
+            historyMode: "append",
+            latest: {
+              items: [
+                {
+                  date: "2026-08-24T00:00:00.000Z",
+                  extraValues: { field_version: "3" },
+                  recordId: "version_3",
+                  states: {
+                    field_status: { label: "Publicado", optionId: "published" },
+                  },
+                  subject: { displayName: "Procedimiento reciente", id: "procedure_recent" },
+                  updatedAt: "2026-08-24T12:00:00.000Z",
+                },
+              ],
+              pagination: {
+                hasMore: true,
+                page: 1,
+                pageSize: 20,
+                total: 21,
+              },
+            },
+            sourceEntityType: { id: "procedures", name: "Procedimientos" },
+            stateFields: [
+              {
+                field: {
+                  active: true,
+                  id: "field_status",
+                  key: "estatus",
+                  name: "Estatus",
+                  required: true,
+                  type: "SELECT",
+                },
+                options: [{ label: "Publicado", optionId: "published", value: "publicado" }],
+                required: true,
+              },
+            ],
+            subjectFieldId: "field_procedure",
+            targetEntityType: { id: "versions", name: "Versionado" },
+            uniqueness: "subject-date",
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.getStateUpdateWorkflow("token_123", "contract_1", "view_state", {
+      page: 1,
+      pageSize: 20,
+      search: " procedimiento ",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?page=1&pageSize=20&search=procedimiento",
+    );
+    expect(result.latestPagination).toEqual({
+      hasMore: true,
+      page: 1,
+      pageSize: 20,
+      total: 21,
+    });
+    expect(result.latest?.[0]).toMatchObject({
+      date: "2026-08-24T00:00:00.000Z",
+      extraValues: { field_version: "3" },
+      stateValues: [{ fieldId: "field_status", label: "Publicado", optionId: "published" }],
+    });
+  });
+
   it("normalizes generic scalar state-update fields and states", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",

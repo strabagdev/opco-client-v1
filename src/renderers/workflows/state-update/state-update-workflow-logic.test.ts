@@ -7,6 +7,8 @@ import {
   defaultStateValues,
   formValueFromStateValue,
   formatStateValueLabel,
+  mergeStateUpdateLatestUpdates,
+  stateUpdateLatestMatchesSearch,
 } from "./state-update-workflow-logic";
 
 const stateFields: StateUpdateField[] = [{
@@ -323,6 +325,25 @@ describe("state-update effective state snapshot", () => {
   });
 });
 
+describe("state-update latest updates", () => {
+  it("inserts newly saved updates at the beginning and removes duplicates", () => {
+    const merged = mergeStateUpdateLatestUpdates([
+      latestUpdate("state_new", "Equipo nuevo"),
+      latestUpdate("state_existing", "Equipo actualizado"),
+    ], [
+      latestUpdate("state_existing", "Equipo actualizado"),
+      latestUpdate("state_old", "Equipo antiguo"),
+    ]);
+
+    expect(merged.map((item) => item.recordId)).toEqual(["state_new", "state_existing", "state_old"]);
+  });
+
+  it("respects active search when deciding whether to show a newly saved update", () => {
+    expect(stateUpdateLatestMatchesSearch(latestUpdate("state_1", "Bomba de agua"), " bomba ")).toBe(true);
+    expect(stateUpdateLatestMatchesSearch(latestUpdate("state_1", "Bomba de agua"), "equipo")).toBe(false);
+  });
+});
+
 describe("state-update conflict rows", () => {
   it("keeps state-only conflicts unchanged", () => {
     expect(buildStateUpdateConflictRows(conflictResult({
@@ -458,5 +479,15 @@ function conflictResult({
     },
     result: "CONFLICT",
     subjectRecordId: "person_1",
+  };
+}
+
+function latestUpdate(recordId: string, subjectName: string) {
+  return {
+    date: "2026-08-22",
+    recordId,
+    stateValues: [{ fieldId: "status_field", label: "Vigente", optionId: "status_active" }],
+    subject: { displayName: subjectName, id: `${recordId}_subject` },
+    updatedAt: "2026-08-22T12:00:00.000Z",
   };
 }

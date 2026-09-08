@@ -2312,13 +2312,26 @@ async function searchStateUpdateSubjects({
   return results;
 }
 
-async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date, items, ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
+async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date, items, latest = [], ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
   let staleSyncedRemoved = 0;
 
   await db.withTransactionAsync(async () => {
-    const currentItems = items.filter((item) => item.current);
+    const latestItems = latest.map((item) => ({
+      current: {
+        extraValues: item.extraValues,
+        recordId: item.recordId,
+        stateValues: item.stateValues ?? [],
+        updatedAt: item.updatedAt,
+      },
+      date: item.date ?? date,
+      subject: item.subject,
+    }));
+    const currentItems = [
+      ...items.filter((item) => item.current).map((item) => ({ ...item, date })),
+      ...latestItems,
+    ];
 
     for (const item of currentItems) {
       if (!item.current) {
@@ -2327,10 +2340,10 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
 
       const localRecordId = createStateUpdateLocalRecordId({
         appViewId,
-        date,
+        date: item.date,
         historyMode: "update-current",
         subjectRecordId: item.subject.id,
-        uniqueness: date ? "subject-date" : "subject",
+        uniqueness: item.date ? "subject-date" : "subject",
       });
       const existing = await getCachedRecord({
         contractId,
@@ -2365,7 +2378,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
 
       const values: OfflineStateUpdateValues = {
         appViewId,
-        date,
+        date: item.date,
         expectedUpdatedAt: item.current.updatedAt,
         extraValues: item.current.extraValues,
         stateValues: item.current.stateValues,
@@ -2516,8 +2529,31 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
   };
 }
 
-async function listStateUpdateLatest(input: StateUpdateScope & { limit?: number }) {
+async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }) {
   const db = await getDatabase();
+  const page = input.page && input.page > 0 ? input.page : 1;
+  const pageSize = input.pageSize && input.pageSize > 0 ? input.pageSize : 20;
+  const offset = (page - 1) * pageSize;
+  const search = input.search?.trim();
+  const searchPattern = search ? `%${search.toLowerCase()}%` : null;
+  const totalRow = await db.getFirstAsync<{ total: number }>(
+    `
+      SELECT COUNT(*) AS total
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND json_extract(values_json, '$.date') IS NOT NULL
+        AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
+    `,
+    input.ownerKey,
+    input.contractId,
+    input.targetEntityTypeId,
+    input.appViewId,
+    searchPattern,
+    searchPattern,
+  );
   const rows = await db.getAllAsync<EntityRecordRow>(
     `
       SELECT *
@@ -2526,32 +2562,45 @@ async function listStateUpdateLatest(input: StateUpdateScope & { limit?: number 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
-      ORDER BY cached_at DESC
-      LIMIT ?
+        AND json_extract(values_json, '$.date') IS NOT NULL
+        AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
+      ORDER BY json_extract(values_json, '$.date') DESC, local_id ASC
+      LIMIT ? OFFSET ?
     `,
     input.ownerKey,
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
-    input.date ?? null,
-    input.date ?? null,
-    input.limit ?? 10,
+    searchPattern,
+    searchPattern,
+    pageSize,
+    offset,
   );
+  const total = totalRow?.total ?? 0;
 
-  return rows.map((row) => {
-    const record = normalizeStateUpdateRecord(mapRecordRow(row));
+  return {
+    items: rows.map((row) => {
+      const record = normalizeStateUpdateRecord(mapRecordRow(row));
 
-    return {
-      recordId: record.localRecordId,
-      stateValues: record.stateValues.map((value) => ({
-        ...value,
-        label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label,
-      })),
-      subject: record.subject,
-      updatedAt: record.updatedAt ?? row.cached_at,
-    };
-  });
+      return {
+        date: record.date ?? null,
+        extraValues: record.extraValues,
+        recordId: record.localRecordId,
+        stateValues: record.stateValues.map((value) => ({
+          ...value,
+          label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label,
+        })),
+        subject: record.subject,
+        updatedAt: record.updatedAt ?? row.cached_at,
+      };
+    }),
+    pagination: {
+      hasMore: offset + rows.length < total,
+      page,
+      pageSize,
+      total,
+    },
+  };
 }
 
 async function listStateUpdateConflicts(input: StateUpdateScope) {

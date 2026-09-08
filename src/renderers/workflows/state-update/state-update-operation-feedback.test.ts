@@ -4,7 +4,9 @@ import {
   createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
+  stateUpdateLoadErrorMessage,
   stateUpdateRefreshErrorMessage,
+  stateUpdateStaleCacheMessage,
 } from "./state-update-operation-feedback";
 import { OpcoNetworkError } from "../../../lib/opco-api";
 import type { StateUpdateLastSyncTelemetry } from "../../../lib/state-update-offline";
@@ -313,6 +315,31 @@ describe("state update operation feedback", () => {
       pathTemplate: "/api/v1/contracts/:contractId/views/:appViewId/workflow/attendance",
       syncRunId: null,
       timeoutOccurred: true,
+    });
+  });
+
+  it("maps an online load-workflow network failure to a recoverable load error and clears it after success", () => {
+    const error = timeoutError("GET", "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update");
+    const loadMessage = stateUpdateLoadErrorMessage(error, "online");
+
+    expect(loadMessage).toBe("No fue posible cargar la información. Reintentar");
+    expect(loadMessage).not.toContain("conectar");
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      pendingCount: 0,
+      visibleError: loadMessage,
+    })).toMatchObject({
+      message: "No fue posible cargar la información. Reintentar",
+      phase: "FAILED",
+    });
+    expect(stateUpdateStaleCacheMessage(error)).toBe("Mostrando datos guardados. La actualización está pendiente.");
+    expect(resolveStateUpdateOperationFeedback({
+      connectivityStatus: "online",
+      pendingCount: 0,
+      visibleError: null,
+    })).toMatchObject({
+      message: null,
+      phase: "IDLE",
     });
   });
 });

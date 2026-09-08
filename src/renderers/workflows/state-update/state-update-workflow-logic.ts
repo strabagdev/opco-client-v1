@@ -5,6 +5,7 @@ import {
   StateUpdateCurrentFieldValue,
   StateUpdateEntry,
   StateUpdateField,
+  StateUpdateLatestItem,
   StateUpdateOption,
 } from "@/lib/opco-api";
 
@@ -330,6 +331,31 @@ export function stateUpdateSuccessLabel(result: StateUpdateBatchResult | undefin
   }
 
   return createLabel;
+}
+
+export function stateUpdateLatestMatchesSearch(item: StateUpdateLatestItem, search: string) {
+  const normalizedSearch = normalizeStateUpdateSearch(search).toLowerCase();
+
+  return !normalizedSearch || item.subject.displayName.toLowerCase().includes(normalizedSearch);
+}
+
+export function mergeStateUpdateLatestUpdates(
+  incoming: StateUpdateLatestItem[],
+  current: StateUpdateLatestItem[],
+) {
+  const merged: StateUpdateLatestItem[] = [];
+  const seen = new Set<string>();
+
+  for (const item of [...incoming, ...current]) {
+    if (seen.has(item.recordId)) {
+      continue;
+    }
+
+    seen.add(item.recordId);
+    merged.push(item);
+  }
+
+  return merged;
 }
 
 export type StateUpdateConflictRow = {

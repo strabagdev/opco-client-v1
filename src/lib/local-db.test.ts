@@ -1850,6 +1850,147 @@ describe("local database singleton", () => {
     });
   });
 
+  it("lists cached STATE_UPDATE latest updates with search, default page size, and pagination metadata", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 25 });
+    db.getAllAsync.mockResolvedValue([
+      stateUpdateEntityRecordRow({
+        cached_at: "2026-08-27T10:00:00.000Z",
+        local_id: "state_update_view_versioning_2026-08-27_procedure_a",
+        sync_status: "synced",
+        values_json: JSON.stringify({
+          appViewId: "view_versioning",
+          date: "2026-08-27",
+          extraValues: { version_field: "2" },
+          stateValues: [{ fieldId: "status_field", label: "Publicado", optionId: "status_published" }],
+          subjectDisplayName: "Procedimiento A",
+          subjectRecordId: "procedure_a",
+        }),
+      }),
+      stateUpdateEntityRecordRow({
+        cached_at: "2026-08-26T10:00:00.000Z",
+        local_id: "state_update_view_versioning_2026-08-26_procedure_b",
+        sync_status: "pending_create",
+        values_json: JSON.stringify({
+          appViewId: "view_versioning",
+          date: "2026-08-26",
+          stateValues: [{ fieldId: "status_field", label: "Borrador", optionId: "status_draft" }],
+          subjectDisplayName: "Procedimiento B",
+          subjectRecordId: "procedure_b",
+        }),
+      }),
+    ]);
+    const store = getLocalDatabase();
+
+    const result = await store.listStateUpdateLatest({
+      appViewId: "view_versioning",
+      contractId: "contract_real_1",
+      ownerKey: "org_1:user_1",
+      search: " Procedimiento ",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(result.pagination).toEqual({
+      hasMore: true,
+      page: 1,
+      pageSize: 20,
+      total: 25,
+    });
+    expect(result.items).toMatchObject([
+      {
+        date: "2026-08-27",
+        extraValues: { version_field: "2" },
+        recordId: "state_update_view_versioning_2026-08-27_procedure_a",
+        subject: { displayName: "Procedimiento A", id: "procedure_a" },
+      },
+      {
+        date: "2026-08-26",
+        recordId: "state_update_view_versioning_2026-08-26_procedure_b",
+        stateValues: [{ fieldId: "status_field", label: "Borrador (por sincronizar)", optionId: "status_draft" }],
+      },
+    ]);
+    const selectCall = db.getAllAsync.mock.calls.find(([sql]) => String(sql).includes("ORDER BY"));
+    expect(selectCall?.[0]).toContain("json_extract(values_json, '$.date') DESC, local_id ASC");
+    expect(selectCall).toEqual([
+      expect.any(String),
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "view_versioning",
+      "%procedimiento%",
+      "%procedimiento%",
+      20,
+      0,
+    ]);
+  });
+
+  it("loads more cached STATE_UPDATE latest updates with a real offset", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 45 });
+    db.getAllAsync.mockResolvedValue([
+      stateUpdateEntityRecordRow({
+        local_id: "state_update_view_versioning_2026-08-07_procedure_u",
+        sync_status: "synced",
+        values_json: JSON.stringify({
+          appViewId: "view_versioning",
+          date: "2026-08-07",
+          stateValues: [{ fieldId: "status_field", label: "Publicado", optionId: "status_published" }],
+          subjectDisplayName: "Procedimiento U",
+          subjectRecordId: "procedure_u",
+        }),
+      }),
+    ]);
+    const store = getLocalDatabase();
+
+    const result = await store.listStateUpdateLatest({
+      appViewId: "view_versioning",
+      contractId: "contract_real_1",
+      ownerKey: "org_1:user_1",
+      page: 2,
+      pageSize: 20,
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(result.pagination).toEqual({
+      hasMore: true,
+      page: 2,
+      pageSize: 20,
+      total: 45,
+    });
+    expect(db.getAllAsync.mock.calls.at(-1)).toEqual([
+      expect.any(String),
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "view_versioning",
+      null,
+      null,
+      20,
+      20,
+    ]);
+  });
+
+  it("returns an empty cached STATE_UPDATE latest page", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    db.getAllAsync.mockResolvedValue([]);
+    const store = getLocalDatabase();
+
+    const result = await store.listStateUpdateLatest({
+      appViewId: "view_versioning",
+      contractId: "contract_real_1",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    expect(result).toEqual({
+      items: [],
+      pagination: {
+        hasMore: false,
+        page: 1,
+        pageSize: 20,
+        total: 0,
+      },
+    });
+  });
+
   it("does not report local save success when the STATE_UPDATE outbox insert fails inside the transaction", async () => {
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("pending insert failed");

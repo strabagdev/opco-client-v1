@@ -763,6 +763,7 @@ export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
   complete?: boolean;
   items: StateUpdateItem[];
+  latest?: StateUpdateLatestItem[];
 };
 
 export type StateUpdateSnapshotReconcileResult = {
@@ -787,7 +788,15 @@ export type StateUpdateOfflineStore = {
   getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   listStateUpdateConflicts(input: StateUpdateScope): Promise<CachedStateUpdateRecord[]>;
-  listStateUpdateLatest(input: StateUpdateScope & { limit?: number }): Promise<StateUpdateLatestItem[]>;
+  listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }): Promise<{
+    items: StateUpdateLatestItem[];
+    pagination: {
+      hasMore: boolean;
+      page: number;
+      pageSize: number;
+      total: number;
+    };
+  }>;
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
   markStateUpdateOperationSyncing(operationId: string): Promise<void>;
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;

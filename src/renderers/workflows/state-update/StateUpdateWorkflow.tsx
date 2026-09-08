@@ -23,6 +23,7 @@ import {
 import { stableSubmitButtonStyle, stableTextInputStyle } from "@/lib/visual-stability";
 import {
   EntityDefinition,
+  OpcoNetworkError,
   StateUpdateBatchResult,
   StateUpdateEntry,
   StateUpdateField,
@@ -44,13 +45,14 @@ import {
   formatLocalDateInput,
   formatStateValueLabel,
   hasSuccessfulStateUpdateResult,
+  mergeStateUpdateLatestUpdates,
   normalizeStateUpdateSearch,
-  shiftLocalDate,
   shouldSearchStateUpdateSubjects,
   STATE_UPDATE_SEARCH_DEBOUNCE_MS,
   StateUpdateFormValues,
   stateFieldType,
   stateUpdateSuccessLabel,
+  stateUpdateLatestMatchesSearch,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
@@ -61,7 +63,9 @@ import {
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
   shouldShowStateUpdateVisibleErrorDiagnostics,
+  stateUpdateLoadErrorMessage,
   stateUpdateRefreshErrorMessage,
+  stateUpdateStaleCacheMessage,
   StateUpdateVisibleErrorDiagnostics,
   StateUpdateVisibleErrorOperation,
 } from "./state-update-operation-feedback";
@@ -71,6 +75,7 @@ type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
 };
 
 type StateValues = StateUpdateFormValues;
+const STATE_UPDATE_LATEST_PAGE_SIZE = 20;
 
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
   const {
@@ -92,6 +97,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
   const [items, setItems] = useState<StateUpdateItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<StateUpdateItem | null>(null);
+  const [latestPage, setLatestPage] = useState(1);
   const [stateValues, setStateValues] = useState<StateValues>({});
   const [extraValues, setExtraValues] = useState<RecordFormValues>({});
   const [extraErrors, setExtraErrors] = useState<RecordFormErrors>({});
@@ -104,6 +110,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const requestSequenceRef = useRef(0);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
@@ -117,7 +124,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
   const submitLabel = response?.historyMode === "update-current" ? "Actualizar estado" : "Registrar cambio";
   const latest = response?.latest ?? [];
-  const totalRegistered = readTotalRegistered(response);
+  const latestPagination = response?.latestPagination;
   const unresolvedCount = response
     ? readSummaryCount(response, "pendingCount") +
       readSummaryCount(response, "failedCount") +
@@ -188,24 +195,27 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
   }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
 
-  const loadOfflineWorkflow = useCallback(async (query: { search?: string; subjectRecordId?: string } = {}) => {
+  const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
-      return;
+      return false;
     }
 
     const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
 
     if (prepared?.definition.kind !== "state-update") {
-      setError("Abre este workflow con conexion para preparar su uso sin conexion.");
+      setError(query.fallbackReason === "network-load"
+        ? "No fue posible cargar la información. Reintentar"
+        : "Abre este workflow con conexion para preparar su uso sin conexion.");
       setResponse(null);
       setItems([]);
-      return;
+      return false;
     }
+    const definition = prepared.definition;
 
     const sourceTelemetry = await definitionCache.getSyncTelemetry({
       contractId: selectedContractId,
-      entityTypeId: prepared.definition.sourceEntityTypeId,
+      entityTypeId: definition.sourceEntityTypeId,
       ownerKey,
     });
     const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
@@ -213,13 +223,19 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     const scope = {
       appViewId: appView.id,
       contractId: selectedContractId,
-      date: prepared.definition.dateFieldId ? date : undefined,
+      date: definition.dateFieldId ? date : undefined,
       ownerKey,
-      targetEntityTypeId: prepared.definition.targetEntityTypeId,
+      targetEntityTypeId: definition.targetEntityTypeId,
     };
-    const [summary, latestItems, localConflicts] = await Promise.all([
+    const latestPageToLoad = query.page ?? 1;
+    const [summary, latestResult, localConflicts] = await Promise.all([
       definitionCache.getStateUpdateSummary(scope),
-      definitionCache.listStateUpdateLatest(scope),
+      definitionCache.listStateUpdateLatest({
+        ...scope,
+        page: latestPageToLoad,
+        pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
+        search: query.search,
+      }),
       definitionCache.listStateUpdateConflicts(scope),
     ]);
     let nextItems: StateUpdateItem[] = [];
@@ -228,7 +244,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       nextItems = await definitionCache.searchStateUpdateSubjects({
         ...scope,
         search: query.search,
-        sourceEntityTypeId: prepared.definition.sourceEntityTypeId,
+        sourceEntityTypeId: definition.sourceEntityTypeId,
       });
     }
 
@@ -236,29 +252,41 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       nextItems = await definitionCache.searchStateUpdateSubjects({
           ...scope,
           search: "",
-          sourceEntityTypeId: prepared.definition.sourceEntityTypeId,
+          sourceEntityTypeId: definition.sourceEntityTypeId,
         })
         .then((results) => results.filter((item) => item.subject.id === query.subjectRecordId));
     }
 
-    setResponse({
+    const nextResponse: StateUpdateResponse = {
       appView: {
         id: appView.id,
         name: appView.name,
         slug: appView.slug,
       },
       date: scope.date,
-      dateFieldId: prepared.definition.dateFieldId,
-      extraFields: prepared.definition.extraFields,
-      historyMode: prepared.definition.historyMode,
+      dateField: definition.dateFieldId
+        ? [...definition.stateFields.map((field) => ({
+            id: field.fieldId,
+            key: field.fieldId,
+            name: field.label,
+            options: [],
+            order: 0,
+            required: field.required,
+            type: field.type ?? "DATE",
+          })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
+        : null,
+      dateFieldId: definition.dateFieldId,
+      extraFields: definition.extraFields,
+      historyMode: definition.historyMode,
       items: nextItems,
-      latest: latestItems,
+      latest: latestResult.items,
+      latestPagination: latestResult.pagination,
       sourceEntityType: {
-        id: prepared.definition.sourceEntityTypeId,
-        name: prepared.definition.sourceEntityTypeId,
+        id: definition.sourceEntityTypeId,
+        name: definition.sourceEntityTypeId,
       },
-      stateFields: prepared.definition.stateFields,
-      subjectFieldId: prepared.definition.subjectFieldId,
+      stateFields: definition.stateFields,
+      subjectFieldId: definition.subjectFieldId,
       summary: {
         conflictCount: summary.conflictCount,
         failedCount: summary.failedCount,
@@ -267,21 +295,35 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         totalRegistered: summary.totalRegistered,
       },
       targetEntityType: {
-        id: prepared.definition.targetEntityTypeId,
-        name: prepared.definition.targetEntityTypeId,
+        id: definition.targetEntityTypeId,
+        name: definition.targetEntityTypeId,
       },
-      uniqueness: prepared.definition.uniqueness,
-    });
+      uniqueness: definition.uniqueness,
+    };
+    setResponse((current) => query.appendLatest && current
+      ? {
+          ...nextResponse,
+          latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextResponse.latest ?? []),
+        }
+      : nextResponse);
     setItems(nextItems);
+    setLatestPage(latestPageToLoad);
 
-    if (!sourceHydrated) {
-      setError("Abre este workflow con conexion para preparar sus datos sin conexion.");
+    const hasCachedWorkflowData = sourceHydrated || (nextResponse.latest ?? []).length > 0 || summary.totalRegistered > 0;
+
+    if (!hasCachedWorkflowData) {
+      setError(query.fallbackReason === "network-load"
+        ? "No fue posible cargar la información. Reintentar"
+        : "Abre este workflow con conexion para preparar sus datos sin conexion.");
+      return false;
     } else if (localConflicts.length > 0) {
       setError(`${localConflicts.length} conflictos por resolver.`);
     }
+
+    return true;
   }, [appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId]);
 
-  const loadWorkflow = useCallback(async (query: { operation?: StateUpdateVisibleErrorOperation; search?: string; subjectRecordId?: string } = {}) => {
+  const loadWorkflow = useCallback(async (query: { appendLatest?: boolean; operation?: StateUpdateVisibleErrorOperation; page?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!token || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
       setIsLoading(false);
@@ -290,12 +332,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     const requestId = ++requestSequenceRef.current;
     const hasSearch = Boolean(query.search);
+    const latestPageToLoad = query.page ?? 1;
     const operation = query.operation ?? (hasSearch ? "search" : query.subjectRecordId ? "source-load" : "load-workflow");
 
     if (hasSearch) {
       setIsSearching(true);
     } else {
       setIsLoading(true);
+    }
+    if (query.appendLatest) {
+      setIsLoadingMore(true);
     }
 
     if (operation === "refresh") {
@@ -313,6 +359,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       const nextResponse = await api.getStateUpdateWorkflow(token, selectedContractId, appView.id, {
         date: hasDate ? date : undefined,
+        page: latestPageToLoad,
+        pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
         search: query.search,
         subjectRecordId: query.subjectRecordId,
       });
@@ -321,8 +369,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         return;
       }
 
-      setResponse(nextResponse);
+      setResponse((current) => query.appendLatest && current
+        ? {
+            ...nextResponse,
+            latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextResponse.latest ?? []),
+          }
+        : nextResponse);
       setItems(nextResponse.items);
+      setLatestPage(latestPageToLoad);
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
@@ -331,6 +385,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           contractId: selectedContractId,
           date: nextResponse.date,
           items: nextResponse.items,
+          latest: nextResponse.latest ?? [],
           ownerKey,
           targetEntityTypeId: nextResponse.targetEntityType.id,
         });
@@ -343,19 +398,30 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           resolution: operation === "refresh" ? "refresh_failed" : "unresolved",
         });
 
-        if (operation === "refresh") {
+        if (isOnline && nextError instanceof OpcoNetworkError && isStateUpdateReadOperation(operation)) {
+          const loadedFromCache = await loadOfflineWorkflow({ ...query, fallbackReason: "network-load" });
+
+          if (loadedFromCache) {
+            setError(null);
+            setRefreshError(stateUpdateStaleCacheMessage(nextError));
+          } else {
+            setError(stateUpdateLoadErrorMessage(nextError, connectivityStatus));
+            setRefreshError(null);
+          }
+        } else if (operation === "refresh") {
           setRefreshError(stateUpdateRefreshErrorMessage(nextError));
         } else {
-          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar el workflow.");
+          setError(stateUpdateLoadErrorMessage(nextError, connectivityStatus));
         }
       }
     } finally {
       if (requestId === requestSequenceRef.current) {
         setIsLoading(false);
         setIsSearching(false);
+        setIsLoadingMore(false);
       }
     }
-  }, [api, appView.id, clearVisibleError, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, recordVisibleError, selectedContractId, token]);
+  }, [api, appView.id, clearVisibleError, connectivityStatus, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, recordVisibleError, selectedContractId, token]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -394,17 +460,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       if (!shouldSearchStateUpdateSubjects(searchText)) {
         setItems([]);
         setIsSearching(false);
+        void loadWorkflow({ operation: "search", page: 1 });
         return;
       }
 
-      void loadWorkflow({ operation: "search", search: normalizeStateUpdateSearch(searchText) });
+      void loadWorkflow({ operation: "search", page: 1, search: normalizeStateUpdateSearch(searchText) });
     }, STATE_UPDATE_SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
   }, [loadWorkflow, searchText]);
 
-  function clearSubjectFlow() {
-    setSearchText("");
+  function clearEditor() {
     setItems([]);
     setSelectedItem(null);
     setStateValues(response ? defaultStateValues(response.stateFields) : {});
@@ -478,7 +544,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           return;
         }
 
-        await definitionCache.saveStateUpdateLocally({
+        const localRecord = await definitionCache.saveStateUpdateLocally({
           appViewId: appView.id,
           contractId: selectedContractId,
           date: hasDate ? date : undefined,
@@ -495,9 +561,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           uniqueness: response.uniqueness,
         });
         setSuccessMessage("Guardado en este dispositivo.");
+        insertSavedLatestItem({
+          recordId: localRecord.localRecordId,
+          stateValues: stateSnapshot.stateValues,
+          subject: selectedItem.subject,
+          updatedAt: new Date().toISOString(),
+        });
         clearVisibleError();
-        clearSubjectFlow();
-        await loadWorkflow({ operation: "load-workflow" });
+        clearEditor();
         await refreshRecordsSyncSummary();
         return;
       }
@@ -525,9 +596,20 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       if (hasSuccessfulStateUpdateResult(result.results)) {
         setSuccessMessage(stateUpdateSuccessLabel(result.results[0], "Estado actualizado.", "Cambio registrado."));
+        const successfulResult = result.results.find((item): item is Extract<StateUpdateBatchResult, { result: "CREATED" | "UPDATED" | "UNCHANGED" }> =>
+          item.result === "CREATED" || item.result === "UPDATED" || item.result === "UNCHANGED"
+        );
+
+        if (successfulResult) {
+          insertSavedLatestItem({
+            recordId: successfulResult.recordId,
+            stateValues: stateSnapshot.stateValues,
+            subject: selectedItem.subject,
+            updatedAt: successfulResult.updatedAt,
+          });
+        }
         clearVisibleError();
-        clearSubjectFlow();
-        await loadWorkflow({ operation: "refresh" });
+        clearEditor();
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible guardar el cambio.");
@@ -540,6 +622,59 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
   }
 
+  function insertSavedLatestItem({
+    recordId,
+    stateValues: savedStateValues,
+    subject,
+    updatedAt,
+  }: {
+    recordId: string;
+    stateValues: StateUpdateEntry["stateValues"];
+    subject: StateUpdateItem["subject"];
+    updatedAt: string;
+  }) {
+    if (!stateUpdateLatestMatchesSearch({ recordId, stateValues: [], subject, updatedAt }, searchText)) {
+      return;
+    }
+
+    setResponse((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const item: StateUpdateLatestItem = {
+        date: hasDate ? date : null,
+        extraValues: buildSubmitValues(current.extraFields, extraValues),
+        recordId,
+        stateValues: savedStateValues.map((value) => {
+          const field = current.stateFields.find((candidate) => candidate.fieldId === value.fieldId);
+          const optionLabel = value.optionId && field
+            ? field.options.find((option) => option.optionId === value.optionId)?.label ?? null
+            : null;
+
+          return {
+            fieldId: value.fieldId,
+            label: optionLabel,
+            optionId: value.optionId ?? null,
+            value: value.value,
+          };
+        }),
+        subject,
+        updatedAt,
+      };
+      const latest = mergeStateUpdateLatestUpdates([item], current.latest ?? []);
+      const currentTotal = current.latestPagination?.total ?? latest.length;
+
+      return {
+        ...current,
+        latest,
+        latestPagination: current.latestPagination
+          ? { ...current.latestPagination, total: Math.max(currentTotal, latest.length) }
+          : { hasMore: false, page: 1, pageSize: STATE_UPDATE_LATEST_PAGE_SIZE, total: latest.length },
+      };
+    });
+  }
+
   async function confirmConflict() {
     if (!conflict) {
       return;
@@ -548,9 +683,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     await saveSelected(true, conflict.existing.updatedAt);
   }
 
-  function changeDate(amount: number) {
-    clearSubjectFlow();
-    setDate((current) => shiftLocalDate(current, amount));
+  function loadMoreLatest() {
+    if (isLoadingMore || !latestPagination?.hasMore) {
+      return;
+    }
+
+    void loadWorkflow({
+      appendLatest: true,
+      operation: "refresh",
+      page: latestPage + 1,
+      search: shouldSearchStateUpdateSubjects(searchText) ? normalizeStateUpdateSearch(searchText) : undefined,
+    });
   }
 
   return (
@@ -565,29 +708,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       </View>
 
-      {hasDate ? (
-        <View style={styles.dateBar}>
-          <Pressable onPress={() => changeDate(-1)} style={styles.dateButton}>
-            <Text style={styles.dateButtonText}>Anterior</Text>
-          </Pressable>
-          <Text style={styles.dateLabel}>{date}</Text>
-          <Pressable onPress={() => changeDate(1)} style={styles.dateButton}>
-            <Text style={styles.dateButtonText}>Siguiente</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {totalRegistered !== null ? (
-        <View style={styles.summaryBar}>
-          <Text style={styles.summaryLabel}>Registrados</Text>
-          <Text style={styles.summaryValue}>{totalRegistered}</Text>
-        </View>
-      ) : null}
-
       {operationFeedback.message ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}
         </Text>
+      ) : null}
+      {operationFeedback.phase === "FAILED" && visibleError ? (
+        <Pressable onPress={() => void loadWorkflow()} style={styles.secondaryButton}>
+          <Text style={styles.secondaryText}>Reintentar</Text>
+        </Pressable>
       ) : null}
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
       {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (
@@ -636,6 +765,18 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           </View>
 
           <View style={styles.form}>
+            {hasDate ? (
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>{response.dateField?.name ?? "Campo de fecha"}</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  onChangeText={setDate}
+                  placeholder="YYYY-MM-DD"
+                  style={styles.input}
+                  value={date}
+                />
+              </View>
+            ) : null}
             {response.stateFields.map((field) => (
               <StateFieldInput
                 field={field}
@@ -669,7 +810,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       ) : null}
 
-      {!normalizedSearch && !selectedItem ? <LatestList latest={latest} response={response} /> : null}
+      {!selectedItem ? (
+        <LatestList
+          isLoadingMore={isLoadingMore}
+          latest={latest}
+          onLoadMore={loadMoreLatest}
+          pagination={latestPagination}
+          response={response}
+        />
+      ) : null}
 
       <ConflictModal
         conflict={conflict}
@@ -713,46 +862,114 @@ function formatCurrentState(response: StateUpdateResponse | null, item: StateUpd
   return labels.length > 0 ? labels.join(" · ") : null;
 }
 
-function readTotalRegistered(response: StateUpdateResponse | null) {
-  const value = response?.summary?.totalRegistered;
-
-  return typeof value === "number" ? value : null;
-}
-
 function readSummaryCount(response: StateUpdateResponse | null, key: string) {
   const value = response?.summary?.[key];
 
   return typeof value === "number" ? value : 0;
 }
 
-function LatestList({ latest, response }: { latest: StateUpdateLatestItem[]; response: StateUpdateResponse | null }) {
+function isStateUpdateReadOperation(operation: StateUpdateVisibleErrorOperation) {
+  return operation === "load-workflow" ||
+    operation === "refresh" ||
+    operation === "search" ||
+    operation === "source-load";
+}
+
+function LatestList({
+  isLoadingMore,
+  latest,
+  onLoadMore,
+  pagination,
+  response,
+}: {
+  isLoadingMore: boolean;
+  latest: StateUpdateLatestItem[];
+  onLoadMore(): void;
+  pagination: StateUpdateResponse["latestPagination"] | undefined;
+  response: StateUpdateResponse | null;
+}) {
   return (
     <View style={styles.latestBlock}>
-      <Text style={styles.sectionTitle}>Ultimos cambios</Text>
-      {latest.length === 0 ? <Text style={styles.empty}>Sin cambios recientes.</Text> : null}
+      <Text style={styles.sectionTitle}>Últimas actualizaciones</Text>
+      {latest.length === 0 ? <Text style={styles.empty}>Sin actualizaciones</Text> : null}
       {latest.map((item) => (
         <View key={item.recordId} style={styles.latestRow}>
           <View style={styles.subjectText}>
             <Text style={styles.subjectName}>{item.subject.displayName}</Text>
-            <Text style={styles.statusMeta}>{formatLatestState(response, item) ?? "Sin estado"}</Text>
+            {latestRows(response, item).map((row) => (
+              <Text key={`${item.recordId}:${row.label}`} style={styles.statusMeta}>
+                {row.label}: {row.value}
+              </Text>
+            ))}
           </View>
-          {item.updatedAt ? <Text style={styles.latestTime}>{formatLocalTime(item.updatedAt)}</Text> : null}
         </View>
       ))}
+      {pagination?.hasMore ? (
+        <Pressable
+          disabled={isLoadingMore}
+          onPress={onLoadMore}
+          style={[styles.secondaryButton, isLoadingMore && styles.disabledButton]}
+        >
+          {isLoadingMore ? <ActivityIndicator color="#135d66" /> : <Text style={styles.secondaryText}>Cargar más</Text>}
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
-function formatLatestState(response: StateUpdateResponse | null, item: StateUpdateLatestItem) {
-  if (!response || !item.stateValues) {
+function latestRows(response: StateUpdateResponse | null, item: StateUpdateLatestItem) {
+  if (!response) {
+    return [];
+  }
+
+  return [
+    ...response.stateFields.map((field) => ({
+      label: field.label,
+      value: formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)),
+    })),
+    ...response.extraFields.map((field) => ({
+      label: field.name,
+      value: formatLatestExtraValue(field, item.extraValues?.[field.id] ?? item.extraValues?.[field.key]),
+    })),
+    ...(response.dateField && item.date ? [{ label: response.dateField.name, value: item.date }] : []),
+  ].filter((row): row is { label: string; value: string } => typeof row.value === "string" && row.value.trim().length > 0);
+}
+
+function formatLatestExtraValue(field: EntityDefinition["fields"][number], value: unknown) {
+  if (value === null || value === undefined || value === "") {
     return null;
   }
 
-  const labels = response.stateFields
-    .map((field) => formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)))
-    .filter(Boolean);
+  if (field.type === "SELECT") {
+    const normalized = String(value);
+    return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+  }
 
-  return labels.length > 0 ? labels.join(" · ") : null;
+  if (field.type === "MULTISELECT") {
+    const values = Array.isArray(value) ? value : [value];
+    const labels = values
+      .map((item) => {
+        const normalized = String(item);
+        return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+      })
+      .filter((item) => item.trim().length > 0);
+
+    return labels.length > 0 ? labels.join(", ") : null;
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Si" : "No";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(String).join(", ");
+  }
+
+  if (typeof value === "object") {
+    return "displayName" in value && typeof value.displayName === "string" ? value.displayName : JSON.stringify(value);
+  }
+
+  return String(value);
 }
 
 function StateFieldInput({
@@ -866,13 +1083,6 @@ function ConflictModal({
   );
 }
 
-function formatLocalTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 const styles = StyleSheet.create({
   conflictLabel: {
     color: "#0f3036",
@@ -892,28 +1102,6 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 18,
     paddingBottom: 32,
-  },
-  dateBar: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
-    justifyContent: "space-between",
-  },
-  dateButton: {
-    alignItems: "center",
-    backgroundColor: "#e4f1f2",
-    borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 42,
-    paddingHorizontal: 12,
-  },
-  dateButtonText: {
-    color: "#135d66",
-    fontWeight: "800",
-  },
-  dateLabel: {
-    color: "#0f3036",
-    fontWeight: "800",
   },
   diagnostic: {
     color: "#587078",
@@ -984,10 +1172,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     padding: 12,
-  },
-  latestTime: {
-    color: "#587078",
-    fontWeight: "700",
   },
   list: {
     gap: 10,
@@ -1126,6 +1310,20 @@ const styles = StyleSheet.create({
     minHeight: 46,
     paddingHorizontal: 12,
   },
+  secondaryButton: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#b8c7ca",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  secondaryText: {
+    color: "#135d66",
+    fontWeight: "800",
+  },
   sectionTitle: {
     color: "#0f3036",
     fontSize: 17,
@@ -1154,25 +1352,6 @@ const styles = StyleSheet.create({
   success: {
     color: "#087443",
     lineHeight: 20,
-  },
-  summaryBar: {
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    padding: 14,
-  },
-  summaryLabel: {
-    color: "#587078",
-    fontWeight: "700",
-  },
-  summaryValue: {
-    color: "#0f3036",
-    fontSize: 22,
-    fontWeight: "900",
   },
   title: {
     color: "#0f3036",

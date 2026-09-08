@@ -209,6 +209,22 @@ export function stateUpdateRefreshErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "No se pudo actualizar la vista. Intenta actualizar nuevamente.";
 }
 
+export function stateUpdateLoadErrorMessage(error: unknown, connectivityStatus: ConnectivityStatus) {
+  if (connectivityStatus === "online" && error instanceof OpcoNetworkError) {
+    return "No fue posible cargar la información. Reintentar";
+  }
+
+  return error instanceof Error ? error.message : "No fue posible cargar la información. Reintentar";
+}
+
+export function stateUpdateStaleCacheMessage(error: unknown) {
+  if (error instanceof OpcoNetworkError) {
+    return "Mostrando datos guardados. La actualización está pendiente.";
+  }
+
+  return "No se pudo actualizar la vista. Intenta actualizar nuevamente.";
+}
+
 export function shouldShowStateUpdateVisibleErrorDiagnostics() {
   if (typeof window === "undefined") {
     return false;

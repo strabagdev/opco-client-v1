@@ -277,7 +277,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }),
     ]);
 
-    const localVisibleLatest = localLatest.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
+    const localVisibleLatest = localLatest.items.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
     const visibleLatest = mergeAttendanceLatestWithLocalOverlay(remoteSnapshot?.latest ?? [], localVisibleLatest);
 
     setLatest(visibleLatest);
