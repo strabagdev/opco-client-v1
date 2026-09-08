@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField } from "@/lib/opco-api";
+import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField, StateUpdateResponse } from "@/lib/opco-api";
 import {
   buildEffectiveStateSnapshot,
+  buildStateUpdateLatestRows,
   buildStateUpdateConflictRows,
   defaultStateValues,
   formValueFromStateValue,
@@ -342,6 +343,79 @@ describe("state-update latest updates", () => {
     expect(stateUpdateLatestMatchesSearch(latestUpdate("state_1", "Bomba de agua"), " bomba ")).toBe(true);
     expect(stateUpdateLatestMatchesSearch(latestUpdate("state_1", "Bomba de agua"), "equipo")).toBe(false);
   });
+
+  it("does not duplicate dateFieldId when it is already included in dynamic fields", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATE"),
+      extraFields: [dateExtraField("DATE"), versionExtraField],
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      date: "2026-09-06T00:00:00.000Z",
+      extraValues: {
+        date_field: "2026-09-06T00:00:00.000Z",
+        version_field: "3",
+      },
+    });
+
+    expect(rows).toEqual([
+      { fieldId: "status_field", label: "Estado", value: "Vigente" },
+      { fieldId: "date_field", label: "Fecha", value: "06-09-2026" },
+      { fieldId: "version_field", label: "Version", value: "3" },
+    ]);
+    expect(rows.filter((row) => row.fieldId === "date_field")).toHaveLength(1);
+  });
+
+  it("renders dateFieldId once as the workflow date when it is not included in dynamic fields", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATE"),
+      extraFields: [versionExtraField],
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      date: "2026-09-06",
+      extraValues: {
+        version_field: "3",
+      },
+    });
+
+    expect(rows).toEqual([
+      { fieldId: "status_field", label: "Estado", value: "Vigente" },
+      { fieldId: "version_field", label: "Version", value: "3" },
+      { fieldId: "date_field", label: "Fecha", value: "06-09-2026" },
+    ]);
+  });
+
+  it("formats DATETIME latest values with time instead of rendering raw ISO values", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      dateField: dateExtraField("DATETIME"),
+      extraFields: [dateExtraField("DATETIME")],
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      date: "2026-09-06T14:45:00.000Z",
+      extraValues: {
+        date_field: "2026-09-06T14:45:00.000Z",
+      },
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.fieldId).toBe("date_field");
+    expect(rows[1]?.value).toContain("2026");
+    expect(rows[1]?.value).toMatch(/\d{2}:\d{2}/);
+    expect(rows[1]?.value).not.toBe("2026-09-06T14:45:00.000Z");
+  });
+
+  it("deduplicates any dynamic field by fieldId before rendering", () => {
+    const rows = buildStateUpdateLatestRows(latestResponse({
+      extraFields: [versionExtraField, { ...versionExtraField, name: "Version duplicada" }],
+    }), {
+      ...latestUpdate("state_1", "Procedimiento A"),
+      extraValues: {
+        version_field: "3",
+      },
+    });
+
+    expect(rows.filter((row) => row.fieldId === "version_field")).toHaveLength(1);
+    expect(rows.map((row) => row.label)).toEqual(["Estado", "Version"]);
+  });
 });
 
 describe("state-update conflict rows", () => {
@@ -489,5 +563,41 @@ function latestUpdate(recordId: string, subjectName: string) {
     stateValues: [{ fieldId: "status_field", label: "Vigente", optionId: "status_active" }],
     subject: { displayName: subjectName, id: `${recordId}_subject` },
     updatedAt: "2026-08-22T12:00:00.000Z",
+  };
+}
+
+const versionExtraField: EntityField = {
+  id: "version_field",
+  key: "version_field",
+  name: "Version",
+  order: 2,
+  required: false,
+  type: "TEXT",
+};
+
+function dateExtraField(type: "DATE" | "DATETIME"): EntityField {
+  return {
+    id: "date_field",
+    key: "date_field",
+    name: "Fecha",
+    order: 1,
+    required: false,
+    type,
+  };
+}
+
+function latestResponse({
+  dateField = null,
+  extraFields = [],
+  stateFields: fields = stateFields,
+}: {
+  dateField?: EntityField | null;
+  extraFields?: EntityField[];
+  stateFields?: StateUpdateField[];
+}): Pick<StateUpdateResponse, "dateField" | "extraFields" | "stateFields"> {
+  return {
+    dateField,
+    extraFields,
+    stateFields: fields,
   };
 }

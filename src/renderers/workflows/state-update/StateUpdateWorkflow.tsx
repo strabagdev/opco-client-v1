@@ -37,6 +37,7 @@ import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
 import {
   activeStateOptions,
   buildEffectiveStateSnapshot,
+  buildStateUpdateLatestRows,
   buildStateUpdateConflictRows,
   currentStateValue,
   defaultStateValues,
@@ -896,8 +897,8 @@ function LatestList({
         <View key={item.recordId} style={styles.latestRow}>
           <View style={styles.subjectText}>
             <Text style={styles.subjectName}>{item.subject.displayName}</Text>
-            {latestRows(response, item).map((row) => (
-              <Text key={`${item.recordId}:${row.label}`} style={styles.statusMeta}>
+            {buildStateUpdateLatestRows(response, item).map((row) => (
+              <Text key={`${item.recordId}:${row.fieldId}`} style={styles.statusMeta}>
                 {row.label}: {row.value}
               </Text>
             ))}
@@ -915,61 +916,6 @@ function LatestList({
       ) : null}
     </View>
   );
-}
-
-function latestRows(response: StateUpdateResponse | null, item: StateUpdateLatestItem) {
-  if (!response) {
-    return [];
-  }
-
-  return [
-    ...response.stateFields.map((field) => ({
-      label: field.label,
-      value: formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)),
-    })),
-    ...response.extraFields.map((field) => ({
-      label: field.name,
-      value: formatLatestExtraValue(field, item.extraValues?.[field.id] ?? item.extraValues?.[field.key]),
-    })),
-    ...(response.dateField && item.date ? [{ label: response.dateField.name, value: item.date }] : []),
-  ].filter((row): row is { label: string; value: string } => typeof row.value === "string" && row.value.trim().length > 0);
-}
-
-function formatLatestExtraValue(field: EntityDefinition["fields"][number], value: unknown) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  if (field.type === "SELECT") {
-    const normalized = String(value);
-    return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
-  }
-
-  if (field.type === "MULTISELECT") {
-    const values = Array.isArray(value) ? value : [value];
-    const labels = values
-      .map((item) => {
-        const normalized = String(item);
-        return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
-      })
-      .filter((item) => item.trim().length > 0);
-
-    return labels.length > 0 ? labels.join(", ") : null;
-  }
-
-  if (typeof value === "boolean") {
-    return value ? "Si" : "No";
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(String).join(", ");
-  }
-
-  if (typeof value === "object") {
-    return "displayName" in value && typeof value.displayName === "string" ? value.displayName : JSON.stringify(value);
-  }
-
-  return String(value);
 }
 
 function StateFieldInput({

@@ -7,11 +7,18 @@ import {
   StateUpdateField,
   StateUpdateLatestItem,
   StateUpdateOption,
+  StateUpdateResponse,
 } from "@/lib/opco-api";
 
 export const STATE_UPDATE_SEARCH_DEBOUNCE_MS = 300;
 
 export type StateUpdateFormValues = Record<string, string | boolean>;
+
+export type StateUpdateLatestRow = {
+  fieldId: string;
+  label: string;
+  value: string;
+};
 
 export function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
@@ -279,8 +286,14 @@ function formatStateScalarLabel(field: StateUpdateField, value: unknown) {
     return null;
   }
 
-  if (stateFieldType(field) === "BOOLEAN") {
+  const type = stateFieldType(field);
+
+  if (type === "BOOLEAN") {
     return value === true ? "Si" : "No";
+  }
+
+  if (type === "DATE" || type === "DATETIME") {
+    return formatStateUpdateDateLikeValue(String(value), type);
   }
 
   return String(value);
@@ -288,6 +301,121 @@ function formatStateScalarLabel(field: StateUpdateField, value: unknown) {
 
 export function stateFieldType(field: StateUpdateField) {
   return field.type ?? "SELECT";
+}
+
+export function buildStateUpdateLatestRows(
+  response: Pick<StateUpdateResponse, "dateField" | "extraFields" | "stateFields"> | null,
+  item: StateUpdateLatestItem,
+): StateUpdateLatestRow[] {
+  if (!response) {
+    return [];
+  }
+
+  const rows: StateUpdateLatestRow[] = [];
+  const renderedFieldIds = new Set<string>();
+
+  for (const field of response.stateFields) {
+    appendStateUpdateLatestRow(rows, renderedFieldIds, {
+      fieldId: field.fieldId,
+      label: field.label,
+      value: formatStateValueLabel(field, item.stateValues?.find((value) => value.fieldId === field.fieldId)),
+    });
+  }
+
+  for (const field of response.extraFields) {
+    appendStateUpdateLatestRow(rows, renderedFieldIds, {
+      fieldId: field.id,
+      label: field.name,
+      value: formatLatestExtraValue(field, item.extraValues?.[field.id] ?? item.extraValues?.[field.key]),
+    });
+  }
+
+  if (response.dateField && item.date) {
+    appendStateUpdateLatestRow(rows, renderedFieldIds, {
+      fieldId: response.dateField.id,
+      label: response.dateField.name,
+      value: formatLatestExtraValue(response.dateField, item.date),
+    });
+  }
+
+  return rows;
+}
+
+function appendStateUpdateLatestRow(
+  rows: StateUpdateLatestRow[],
+  renderedFieldIds: Set<string>,
+  row: { fieldId: string; label: string; value: string | null },
+) {
+  if (renderedFieldIds.has(row.fieldId) || !row.value?.trim()) {
+    return;
+  }
+
+  renderedFieldIds.add(row.fieldId);
+  rows.push({ fieldId: row.fieldId, label: row.label, value: row.value });
+}
+
+export function formatLatestExtraValue(field: EntityField, value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (field.type === "SELECT") {
+    const normalized = String(value);
+    return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+  }
+
+  if (field.type === "MULTISELECT") {
+    const values = Array.isArray(value) ? value : [value];
+    const labels = values
+      .map((item) => {
+        const normalized = String(item);
+        return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+      })
+      .filter((item) => item.trim().length > 0);
+
+    return labels.length > 0 ? labels.join(", ") : null;
+  }
+
+  if (field.type === "DATE" || field.type === "DATETIME") {
+    return formatStateUpdateDateLikeValue(String(value), field.type);
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Si" : "No";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(String).join(", ");
+  }
+
+  if (typeof value === "object") {
+    return "displayName" in value && typeof value.displayName === "string" ? value.displayName : JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function formatStateUpdateDateLikeValue(value: string, type: "DATE" | "DATETIME") {
+  if (type === "DATE") {
+    const dateOnly = value.slice(0, 10);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOnly);
+
+    return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("es-CL", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 function isValidStateDateValue(value: string) {
