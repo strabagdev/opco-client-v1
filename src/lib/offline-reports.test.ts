@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { OpcoNetworkError, ReportResponse } from "./opco-api";
 import { loadReportWithOfflineCache } from "./offline-reports";
+import { buildReportCurrentStatusModel } from "../renderers/reports/report-renderer-logic";
 
 describe("offline report cache", () => {
   it("stores successful REPORT responses and falls back to cached data on network errors", async () => {
@@ -39,6 +40,48 @@ describe("offline report cache", () => {
       fromCache: true,
       offline: true,
       report,
+    });
+  });
+
+  it("keeps latest-by-relation order and date formatting from cached reports", async () => {
+    const store = new MemoryReportStore();
+    const report = latestByRelationReport();
+    const api = {
+      getReport: vi.fn()
+        .mockResolvedValueOnce(report)
+        .mockRejectedValueOnce(new OpcoNetworkError()),
+    };
+
+    await loadReportWithOfflineCache({
+      api,
+      appViewId: "report_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: { search: "PET" },
+      store,
+      token: "token_1",
+    });
+    const cached = await loadReportWithOfflineCache({
+      api,
+      appViewId: "report_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: { search: "PET" },
+      store,
+      token: "token_1",
+    });
+
+    expect(cached.fromCache).toBe(true);
+    expect(buildReportCurrentStatusModel(cached.report)).toEqual({
+      columns: [
+        { id: "procedure_field", name: "Procedimiento" },
+        { id: "review_field", name: "Revisión" },
+        { id: "status_field", name: "Estatus" },
+        { id: "date_field", name: "Fecha" },
+      ],
+      rows: [
+        { id: "version_2", values: ["PET-001", "2", "Publicado", "06-09-2026"] },
+      ],
     });
   });
 });
@@ -116,6 +159,99 @@ function currentStatusReport(): ReportResponse {
     fields: [],
     from: "",
     records: [],
+    to: "",
+  };
+}
+
+function latestByRelationReport(): ReportResponse {
+  return {
+    appView: {
+      id: "report_1",
+      name: "Dashboard Procedimientos",
+      slug: "dashboard-procedimientos",
+    },
+    config: {
+      entityTypeId: "versions",
+      presentationMode: "LATEST_BY_RELATION",
+      latestByRelation: {
+        relatedEntityTypeId: "procedures",
+        relationFieldId: "procedure_field",
+        orderFieldId: "date_field",
+        requiredValueFieldId: "status_field",
+        displayFieldIds: ["review_field", "status_field", "date_field", "procedure_field"],
+      },
+    },
+    entity: {
+      id: "versions",
+      name: "Versionado",
+      slug: "versionado",
+    },
+    fields: [
+      {
+        active: true,
+        config: { display: {}, relationKind: "ONE", targetEntityTypeId: "procedures", validation: {} },
+        id: "procedure_field",
+        key: "procedimiento",
+        name: "Procedimiento",
+        order: 1,
+        required: true,
+        searchable: true,
+        type: "RELATION",
+        unique: false,
+      },
+      {
+        active: true,
+        config: { display: {}, validation: {} },
+        id: "review_field",
+        key: "revision",
+        name: "Revisión",
+        order: 2,
+        required: false,
+        searchable: false,
+        type: "TEXT",
+        unique: false,
+      },
+      {
+        active: true,
+        config: { display: {}, validation: {} },
+        id: "status_field",
+        key: "estatus",
+        name: "Estatus",
+        options: [{ active: true, id: "published_option", label: "Publicado", order: 1, value: "publicado" }],
+        order: 3,
+        required: false,
+        searchable: false,
+        type: "SELECT",
+        unique: false,
+      },
+      {
+        active: true,
+        config: { display: {}, validation: {} },
+        id: "date_field",
+        key: "fecha",
+        name: "Fecha",
+        order: 4,
+        required: false,
+        searchable: false,
+        type: "DATE",
+        unique: false,
+      },
+    ],
+    from: "",
+    records: [
+      {
+        displayName: "PET-001 v2",
+        id: "version_2",
+        updatedAt: "2026-09-06T12:00:00.000Z",
+        values: {
+          estatus: "publicado",
+          fecha: "2026-09-06",
+          procedimiento: { displayName: "PET-001", entityTypeId: "procedures", id: "procedure_1" },
+          revision: "2",
+        },
+      },
+    ],
+    subjectEntity: { id: "procedures", name: "Procedimientos", slug: "procedimientos" },
     to: "",
   };
 }

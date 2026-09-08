@@ -355,9 +355,60 @@ describe("report renderer logic", () => {
         { id: "field_date", name: "Fecha" },
       ],
       rows: [
-        { id: "record_version", values: ["PET-001", "2.0", "Presente", "2026-08-01"] },
+        { id: "record_version", values: ["PET-001", "2.0", "Presente", "01-08-2026"] },
       ],
     });
+  });
+
+  it("keeps the related entity first and then follows displayFieldIds order", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "attendance",
+        presentationMode: "LATEST_BY_RELATION",
+        latestByRelation: {
+          relatedEntityTypeId: "procedures",
+          relationFieldId: "field_person",
+          requiredValueFieldId: "field_status",
+          orderFieldId: "field_date",
+          displayFieldIds: ["field_version", "field_status", "field_date", "field_person"],
+        },
+      },
+      fields: [
+        relationField("field_person", "procedimiento", "Procedimiento"),
+        {
+          active: true,
+          config: { display: {}, validation: {} },
+          id: "field_version",
+          key: "version",
+          name: "Revisión",
+          order: 2,
+          required: false,
+          searchable: false,
+          type: "TEXT",
+          unique: false,
+        },
+        baseReport.fields[2],
+        baseReport.fields[1],
+      ],
+      records: [
+        {
+          displayName: "PET-001 v2",
+          id: "record_version",
+          updatedAt: "2026-08-10T12:00:00.000Z",
+          values: {
+            estado: "presente",
+            fecha: "2026-08-01",
+            procedimiento: { displayName: "PET-001", entityTypeId: "procedures", id: "procedure_1" },
+            version: "2.0",
+          },
+        },
+      ],
+      subjectEntity: { id: "procedures", name: "Procedimientos", slug: "procedimientos" },
+    });
+
+    expect(model?.columns.map((column) => column.name)).toEqual(["Procedimiento", "Revisión", "Estado", "Fecha"]);
+    expect(model?.rows[0]?.values).toEqual(["PET-001", "2.0", "Presente", "01-08-2026"]);
   });
 
   it("does not use updatedAt as a CURRENT_STATUS date fallback", () => {
@@ -419,9 +470,57 @@ describe("report renderer logic", () => {
         { id: "field_date", name: "Fecha" },
       ],
       rows: [
-        { id: "equipment_record_1", values: ["Excavadora 12", "2026-08-01"] },
+        { id: "equipment_record_1", values: ["Excavadora 12", "01-08-2026"] },
       ],
     });
+  });
+
+  it("formats DATETIME latest-by-relation fields with local date and time", () => {
+    const model = buildReportCurrentStatusModel({
+      ...baseReport,
+      config: {
+        entityTypeId: "equipment_versions",
+        presentationMode: "LATEST_BY_RELATION",
+        latestByRelation: {
+          relatedEntityTypeId: "equipment",
+          relationFieldId: "field_equipment",
+          orderFieldId: "field_reviewed_at",
+          displayFieldIds: ["field_reviewed_at"],
+        },
+      },
+      fields: [
+        relationField("field_equipment", "equipo", "Equipo"),
+        {
+          active: true,
+          config: { display: {}, validation: {} },
+          id: "field_reviewed_at",
+          key: "revisado_a_las",
+          name: "Revisado a las",
+          order: 2,
+          required: false,
+          searchable: false,
+          type: "DATETIME",
+          unique: false,
+        },
+      ],
+      records: [
+        {
+          displayName: "Excavadora 12",
+          id: "equipment_record_1",
+          updatedAt: "2026-08-10T12:00:00.000Z",
+          values: {
+            equipo: { displayName: "Excavadora 12", entityTypeId: "equipment", id: "equipment_1" },
+            revisado_a_las: "2026-08-01T14:30:00.000Z",
+          },
+        },
+      ],
+      subjectEntity: { id: "equipment", name: "Equipos", slug: "equipos" },
+    });
+
+    expect(model?.columns.map((column) => column.name)).toEqual(["Equipo", "Revisado a las"]);
+    expect(model?.rows[0]?.values[1]).toContain("2026");
+    expect(model?.rows[0]?.values[1]).toMatch(/\d{2}:\d{2}/);
+    expect(model?.rows[0]?.values[1]).not.toBe("2026-08-01T14:30:00.000Z");
   });
 });
 

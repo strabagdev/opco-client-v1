@@ -149,7 +149,7 @@ export function buildReportCurrentStatusModel(report: ReportResponse): ReportCur
   const config = report.config as Extract<ReportResponse["config"], { presentationMode: "CURRENT_STATUS" | "LATEST_BY_RELATION" }>;
   const fieldsById = fieldMap(report.fields);
   const latestConfig = normalizeLatestByRelationConfig(config);
-  const displayFieldIds = latestConfig.displayFieldIds;
+  const displayFieldIds = orderedCurrentStatusFieldIds(latestConfig.relationFieldId, latestConfig.displayFieldIds);
   const columns = displayFieldIds
     .map((fieldId) => fieldsById.get(fieldId))
     .filter((field): field is EntityField => Boolean(field));
@@ -167,7 +167,7 @@ export function buildReportCurrentStatusModel(report: ReportResponse): ReportCur
       .map((record) => ({
         id: record.id,
         values: columns.map((field) =>
-          displayRecordValue(field, record.values[field.key], report.config.valueDisplay?.[field.id]),
+          displayRecordValue(field, record.values[field.key], report.config.valueDisplay?.[field.id], { formatDates: true }),
         ),
       })),
   };
@@ -205,6 +205,7 @@ export function displayRecordValue(
   field: EntityField,
   value: EntityRecordValue | undefined,
   selectValueDisplay: ReportSelectValueDisplay = "LABEL",
+  options: { formatDates?: boolean } = {},
 ): string {
   if (value === null || value === undefined) {
     return "";
@@ -216,6 +217,14 @@ export function displayRecordValue(
     }
 
     return relationLabel(value);
+  }
+
+  if (options.formatDates && field.type === "DATE") {
+    return formatReportDateOnly(String(value));
+  }
+
+  if (options.formatDates && field.type === "DATETIME") {
+    return formatReportDateTime(String(value));
   }
 
   if (field.type === "SELECT") {
@@ -247,6 +256,17 @@ export function displayRecordValue(
   return String(value);
 }
 
+function orderedCurrentStatusFieldIds(relationFieldId: string | undefined, displayFieldIds: string[]) {
+  if (!relationFieldId) {
+    return displayFieldIds;
+  }
+
+  return [
+    relationFieldId,
+    ...displayFieldIds.filter((fieldId) => fieldId !== relationFieldId),
+  ];
+}
+
 function fieldMap(fields: EntityField[]) {
   return new Map(fields.map((field) => [field.id, field]));
 }
@@ -259,6 +279,28 @@ function relationLabel(value: unknown) {
 
 function internalValueLabel(internalValue: string | undefined, fallbackLabel: string | undefined, rawValue: unknown) {
   return internalValue ? internalValue.toUpperCase() : fallbackLabel ?? String(rawValue);
+}
+
+function formatReportDateOnly(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+}
+
+function formatReportDateTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("es-CL", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 function stableValueKey(value: EntityRecordValue | undefined): string {
