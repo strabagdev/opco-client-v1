@@ -633,6 +633,12 @@ type StateUpdateRawField = StateUpdateField | {
 };
 
 type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "latestPagination" | "sourceEntityType" | "stateFields"> & {
+  workflow?: {
+    dateFieldId?: string | null;
+    historyMode?: StateUpdateHistoryMode;
+    subjectFieldId?: string;
+    uniqueness?: StateUpdateUniqueness;
+  };
   items?: StateUpdateRawItem[];
   latest?: StateUpdateRawLatest;
   sourceEntityType?: StateUpdateResponse["sourceEntityType"];
@@ -1526,6 +1532,7 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
   }));
   const extraFields = response.extraFields ?? [];
   const sourceEntityType = normalizeStateUpdateSourceEntityType(response);
+  const dateFieldId = response.dateFieldId ?? response.workflow?.dateFieldId ?? undefined;
 
   latest.forEach((item) => {
     assertIsoDateTime(item.updatedAt, "Opco devolvio un updatedAt invalido para el ultimo cambio de estado.");
@@ -1539,12 +1546,16 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
 
   return {
     ...response,
+    dateFieldId: dateFieldId ?? undefined,
+    historyMode: response.historyMode ?? response.workflow?.historyMode,
     extraFields,
     items,
     latest,
     latestPagination: rawLatest.pagination,
     sourceEntityType,
     stateFields,
+    subjectFieldId: response.subjectFieldId ?? response.workflow?.subjectFieldId,
+    uniqueness: response.uniqueness ?? response.workflow?.uniqueness,
   };
 }
 

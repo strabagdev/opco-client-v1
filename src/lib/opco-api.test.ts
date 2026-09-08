@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_REFRESH_TIMEOUT_MS, createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope, parseServerTimingHeader } from "./opco-api";
+import { buildStateUpdateLatestRows } from "../renderers/workflows/state-update/state-update-workflow-logic";
 import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
 const meFixture = {
@@ -1550,7 +1551,6 @@ describe("createOpcoApi", () => {
               required: true,
               type: "DATE",
             },
-            dateFieldId: "field_date",
             extraFields: [{
               active: true,
               id: "field_version",
@@ -1559,12 +1559,15 @@ describe("createOpcoApi", () => {
               required: false,
               type: "TEXT",
             }],
-            historyMode: "append",
             latest: {
               items: [
                 {
                   date: "2026-08-24T00:00:00.000Z",
                   extraValues: { field_version: "3" },
+                  fields: [
+                    { fieldId: "field_date", label: "Fecha", value: "2026-08-24T00:00:00.000Z" },
+                    { fieldId: "field_version", label: "Version", value: "3" },
+                  ],
                   recordId: "version_3",
                   states: {
                     field_status: { label: "Publicado", optionId: "published" },
@@ -1580,7 +1583,7 @@ describe("createOpcoApi", () => {
                 total: 21,
               },
             },
-            sourceEntityType: { id: "procedures", name: "Procedimientos" },
+            subjectEntityType: { id: "procedures", name: "Procedimientos" },
             stateFields: [
               {
                 field: {
@@ -1595,9 +1598,14 @@ describe("createOpcoApi", () => {
                 required: true,
               },
             ],
-            subjectFieldId: "field_procedure",
             targetEntityType: { id: "versions", name: "Versionado" },
-            uniqueness: "subject-date",
+            workflow: {
+              dateFieldId: "field_date",
+              historyMode: "append",
+              subjectFieldId: "field_procedure",
+              uniqueness: "subject-date",
+              workflowKey: "state-update",
+            },
           },
           ok: true,
         });
@@ -1622,8 +1630,21 @@ describe("createOpcoApi", () => {
     expect(result.latest?.[0]).toMatchObject({
       date: "2026-08-24T00:00:00.000Z",
       extraValues: { field_version: "3" },
+      fields: [
+        { fieldId: "field_date", label: "Fecha", value: "2026-08-24T00:00:00.000Z" },
+        { fieldId: "field_version", label: "Version", value: "3" },
+      ],
       stateValues: [{ fieldId: "field_status", label: "Publicado", optionId: "published" }],
     });
+    expect(result.dateFieldId).toBe("field_date");
+    expect(result.historyMode).toBe("append");
+    expect(result.subjectFieldId).toBe("field_procedure");
+    expect(result.uniqueness).toBe("subject-date");
+    expect(buildStateUpdateLatestRows(result, result.latest![0])).toEqual([
+      { fieldId: "field_date", label: "Fecha", value: "24-08-2026" },
+      { fieldId: "field_version", label: "Version", value: "3" },
+      { fieldId: "field_status", label: "Estatus", value: "Publicado" },
+    ]);
   });
 
   it("normalizes generic scalar state-update fields and states", async () => {
