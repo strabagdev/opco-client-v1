@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { getEntityDefinitionWithCache, EntityDefinitionCache } from "./definition-cache";
+import { getRecordListFields } from "./entity-record-display";
 import { EntityDefinition } from "./opco-api";
 import { entityDefinitionFixture } from "../test/fixtures";
 
@@ -90,6 +91,44 @@ describe("getEntityDefinitionWithCache", () => {
       definition: freshDefinition,
       syncedAt: syncedAt.toISOString(),
     });
+  });
+
+  it("replaces cached visibility with explicit showInClient false from the API", async () => {
+    const cache = createMemoryCache();
+    const staleDefinition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: entityDefinitionFixture.fields.map((field) =>
+        field.key === "estado"
+          ? { ...field, config: { display: { showInList: true }, validation: {} } }
+          : field,
+      ),
+    };
+    const freshDefinition: EntityDefinition = {
+      ...entityDefinitionFixture,
+      fields: entityDefinitionFixture.fields.map((field) =>
+        field.key === "estado"
+          ? { ...field, config: { display: { showInClient: false, showInList: true }, validation: {} } }
+          : field,
+      ),
+    };
+
+    await cache.upsertEntityDefinition("contract_1", "entity_1", staleDefinition, "2026-08-14T10:00:00.000Z");
+
+    await getEntityDefinitionWithCache({
+      api: {
+        getEntityDefinition: vi.fn(async () => ({ entity: freshDefinition })),
+      },
+      cache,
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      now: () => new Date("2026-08-14T11:00:00.000Z"),
+      token: "token_123",
+    });
+
+    const cached = await cache.getEntityDefinition("contract_1", "entity_1");
+
+    expect(cached?.definition).toEqual(freshDefinition);
+    expect(getRecordListFields(cached!.definition).map((field) => field.key)).not.toContain("estado");
   });
 
   it("returns API definitions when cache writes fail", async () => {

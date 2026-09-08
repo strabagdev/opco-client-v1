@@ -318,7 +318,7 @@ describe("report renderer logic", () => {
         relationField("field_person", "procedimiento", "Procedimiento"),
         {
           active: true,
-          config: { display: {}, validation: {} },
+          config: { display: { showInClient: false, showInList: false }, validation: {} },
           id: "field_version",
           key: "version",
           name: "Versión",

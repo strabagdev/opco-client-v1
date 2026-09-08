@@ -52,7 +52,7 @@ describe("entity record display", () => {
       ],
     };
 
-    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["rut", "cargo"]);
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["estado", "rut", "cargo"]);
   });
 
   it("includes every configured showInClient field even after the first four", () => {
@@ -113,7 +113,7 @@ describe("entity record display", () => {
     ]);
   });
 
-  it("falls back to four useful active fields without display config", () => {
+  it("does not show arbitrary fallback fields without display config", () => {
     const definition: EntityDefinition = {
       ...entityDefinitionFixture,
       fields: [
@@ -126,7 +126,63 @@ describe("entity record display", () => {
       ],
     };
 
-    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(["nombre", "rut", "activo", "fecha"]);
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual([]);
+  });
+
+  it.each([
+    [true, true, ["target"]],
+    [true, false, []],
+    [false, true, ["target"]],
+    [false, false, []],
+    [true, undefined, ["target"]],
+    [false, undefined, []],
+  ])("applies client visibility per field when showInList=%s and showInClient=%s", (showInList, showInClient, expectedKeys) => {
+    const definition = definitionWithFields([
+      field({
+        config: { display: { primary: true }, validation: {} },
+        key: "nombre",
+        name: "Nombre",
+        order: 1,
+        type: "TEXT",
+      }),
+      visibleField("target", "Target", "TEXT", showInList, showInClient),
+    ]);
+
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual(expectedKeys);
+  });
+
+  it("applies client visibility across supported field types", () => {
+    const definition = definitionWithFields([
+      field({ key: "nombre", name: "Nombre", order: 1, type: "TEXT", config: { display: { primary: true }, validation: {} } }),
+      visibleField("texto", "Texto", "TEXT", true, undefined, 2),
+      visibleField("numero", "Numero", "DECIMAL", false, true, 3),
+      visibleField("monto", "Monto", "MONEY", true, false, 4),
+      visibleField("fecha", "Fecha", "DATE", true, undefined, 5),
+      visibleField("fecha_hora", "Fecha hora", "DATETIME", false, true, 6),
+      visibleField("estado", "Estado", "SELECT", true, undefined, 7),
+      visibleField("relacion", "Relacion", "RELATION", true, undefined, 8),
+      visibleField("activo", "Activo", "BOOLEAN", true, undefined, 9),
+    ]);
+
+    expect(getRecordListFields(definition).map((item) => item.key)).toEqual([
+      "texto",
+      "numero",
+      "fecha",
+      "fecha_hora",
+      "estado",
+      "relacion",
+      "activo",
+    ]);
+  });
+
+  it("keeps explicitly hidden client fields hidden even when every field is false", () => {
+    const definition = definitionWithFields([
+      field({ key: "nombre", name: "Nombre", order: 1, type: "TEXT", config: { display: { primary: true }, validation: {} } }),
+      visibleField("rut", "RUT", "TEXT", true, false, 2),
+      visibleField("fecha", "Fecha", "DATE", false, false, 3),
+    ]);
+
+    expect(getRecordListFields(definition)).toEqual([]);
   });
 
   it("omits empty configured values from a card without dropping populated records", () => {
@@ -356,4 +412,34 @@ function field({
     required: false,
     type,
   };
+}
+
+function definitionWithFields(fields: EntityField[]): EntityDefinition {
+  return {
+    ...entityDefinitionFixture,
+    fields,
+  };
+}
+
+function visibleField(
+  key: string,
+  name: string,
+  type: EntityField["type"],
+  showInList: boolean | undefined,
+  showInClient: boolean | undefined,
+  order = 2,
+) {
+  return field({
+    config: {
+      display: {
+        ...(typeof showInList === "boolean" ? { showInList } : {}),
+        ...(typeof showInClient === "boolean" ? { showInClient } : {}),
+      },
+      validation: {},
+    },
+    key,
+    name,
+    order,
+    type,
+  });
 }

@@ -1,7 +1,5 @@
 import { EntityDefinition, EntityField, EntityRecord, EntityRecordValue } from "./opco-api";
 
-const FALLBACK_LIST_FIELDS = 4;
-
 export type RecordListItem = {
   href: string;
   id: string;
@@ -26,30 +24,13 @@ export function getPrimaryDisplayField(definition: EntityDefinition) {
 export function getRecordListFields(definition: EntityDefinition) {
   const activeFields = getActiveFields(definition);
   const primaryField = getPrimaryDisplayField(definition);
-  const clientFields = activeFields.filter((field) => {
+
+  return activeFields.filter((field) => {
     const display = getFieldDisplayConfig(field);
+    const visible = display.showInClient ?? display.showInList ?? false;
 
-    return display.showInClient === true && field.id !== primaryField?.id;
+    return visible === true && field.id !== primaryField?.id;
   });
-
-  if (clientFields.length > 0) {
-    return clientFields;
-  }
-
-  const listFields = activeFields.filter((field) => {
-    const display = getFieldDisplayConfig(field);
-
-    return display.showInList === true && field.id !== primaryField?.id;
-  });
-
-  if (listFields.length > 0) {
-    return listFields;
-  }
-
-  return activeFields
-    .filter((field) => field.id !== primaryField?.id)
-    .filter(isUsefulFallbackField)
-    .slice(0, FALLBACK_LIST_FIELDS);
 }
 
 export function buildRecordListItem({
@@ -138,10 +119,6 @@ function getFieldDisplayConfig(field: EntityField) {
   return display && typeof display === "object" && !Array.isArray(display)
     ? (display as { primary?: boolean; showInClient?: boolean; showInList?: boolean })
     : {};
-}
-
-function isUsefulFallbackField(field: EntityField) {
-  return field.type !== "FILE" && field.type !== "IMAGE" && field.type !== "TEXTAREA";
 }
 
 function getOptionLabel(field: EntityField, value: unknown) {
