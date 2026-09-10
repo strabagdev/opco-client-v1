@@ -18,6 +18,8 @@ describe("records renderer diagnostics presentation", () => {
     expect(source).not.toContain("Diagnostico de records");
     expect(source).not.toContain("syncDiagnostics");
     expect(source).not.toContain("recordsDiagnostics");
+    expect(source).toContain("Volver a cargar");
+    expect(source).toContain("Ver cambios afectados");
   });
 });
 
@@ -223,11 +225,74 @@ describe("records diagnostics", () => {
     expect(rows).toContainEqual(["remoteTotal", "388"]);
     expect(rows).toContainEqual(["pagesFetched", "1:100, 2:100, 3:100, 4:88"]);
     expect(rows).toContainEqual(["local total", "388"]);
+    expect(rows).toContainEqual(["remoteRecordsDisappearedAfterReconcile", "no"]);
     expect(rows).toContainEqual(["outboxConsistency", "ISSUE"]);
     expect(rows).toContainEqual(["orphanedLocalIntent", "1"]);
     expect(rows).toContainEqual(["renderer records", "25"]);
     expect(rows).toContainEqual(["search", "empty"]);
     expect(rendered).not.toContain("org_sensitive:user_brenda");
     expect(rendered).not.toContain("entity_personas_sensitive");
+  });
+
+  it("flags remote records that disappear before rendering locally", () => {
+    const rows = getRecordsDiagnosticsRows({
+      appViewId: "view_personas_sensitive",
+      connectivityStatus: "online",
+      contractId: "contract_andes_sensitive",
+      entityTypeId: "entity_personas_sensitive",
+      error: "No pudimos cargar la lista de personas",
+      isLoading: false,
+      local: {
+        conflict: 0,
+        failed: 6,
+        pendingCreate: 0,
+        pendingUpdate: 0,
+        synced: 0,
+        total: 6,
+      },
+      ownerKey: "org_sensitive:user_brenda",
+      page: 1,
+      refresh: {
+        afterReconcile: {
+          conflict: 0,
+          failed: 6,
+          pendingCreate: 0,
+          pendingUpdate: 0,
+          synced: 0,
+          total: 6,
+        },
+        afterUpsert: {
+          conflict: 0,
+          failed: 6,
+          pendingCreate: 0,
+          pendingUpdate: 0,
+          synced: 0,
+          total: 6,
+        },
+        beforeRefresh: {
+          conflict: 0,
+          failed: 6,
+          pendingCreate: 0,
+          pendingUpdate: 0,
+          synced: 0,
+          total: 6,
+        },
+        lastHttpStatus: 200,
+        pages: [{ count: 25, page: 1, pageSize: 100 }],
+        recordsFetched: 25,
+        remoteTotal: 25,
+        totalPages: 1,
+      },
+      rendererRecords: 0,
+      search: "",
+      sessionStatus: "authenticated",
+    }, null);
+
+    expect(rows).toContainEqual(["remoteTotal", "25"]);
+    expect(rows).toContainEqual(["recordsFetched", "25"]);
+    expect(rows).toContainEqual(["localSyncedAfterReconcile", "0"]);
+    expect(rows).toContainEqual(["remoteRecordsDisappearedAfterReconcile", "yes"]);
+    expect(rows).toContainEqual(["local failed", "6"]);
+    expect(rows).toContainEqual(["rendererCount", "0"]);
   });
 });

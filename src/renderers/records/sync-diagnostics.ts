@@ -104,6 +104,12 @@ export function getRecordsDiagnosticsRows(diagnostics: RecordsDiagnosticsState |
   const local = diagnostics.local;
   const consistency = diagnostics.outboxConsistency;
   const pages = refresh?.pages.map((page) => `${page.page}:${page.count}`).join(", ") ?? "none";
+  const remoteRecordsDisappearedAfterReconcile = Boolean(
+    refresh &&
+    (refresh.remoteTotal ?? 0) > 0 &&
+    refresh.recordsFetched > 0 &&
+    refresh.afterReconcile?.synced === 0,
+  );
 
   return [
     ["connectivityStatus", diagnostics.connectivityStatus],
@@ -123,6 +129,7 @@ export function getRecordsDiagnosticsRows(diagnostics: RecordsDiagnosticsState |
     ["localCountAfterReconcile", String(refresh?.afterReconcile?.total ?? "none")],
     ["localSyncedAfterReconcile", String(refresh?.afterReconcile?.synced ?? "none")],
     ["localCountBeforeRender", String(refresh?.beforeRender?.total ?? local?.total ?? "none")],
+    ["remoteRecordsDisappearedAfterReconcile", remoteRecordsDisappearedAfterReconcile ? "yes" : "no"],
     ["local total", String(local?.total ?? "none")],
     ["local synced", String(local?.synced ?? "none")],
     ["local pending_create", String(local?.pendingCreate ?? "none")],

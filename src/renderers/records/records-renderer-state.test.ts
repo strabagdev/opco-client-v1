@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { SyncTelemetry } from "@/lib/sync-telemetry";
 
 import {
+  getRecordsInlineSyncSummary,
+  getRecordsListErrorMessage,
   getRecordsCacheBannerMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
@@ -161,5 +163,26 @@ describe("records renderer state", () => {
     expect(offlineBanner).toBeNull();
     expect(onlineBanner).toBeNull();
     expect(staleHistoricalError).toBe(false);
+  });
+
+  it("uses a user-facing list load error instead of leaking refresh internals", () => {
+    expect(getRecordsListErrorMessage(new Error("El refresco remoto devolvio registros, pero el cache local quedo sin registros sincronizados.")))
+      .toBe("No pudimos cargar la lista de personas");
+  });
+
+  it("keeps inline records sync messaging distinct from the global error count", () => {
+    expect(getRecordsInlineSyncSummary({
+      conflictCount: 0,
+      failedCount: 6,
+      pendingCount: 0,
+      syncingCount: 0,
+    })).toBe("Hay cambios que requieren revision.");
+
+    expect(getRecordsInlineSyncSummary({
+      conflictCount: 0,
+      failedCount: 6,
+      pendingCount: 2,
+      syncingCount: 1,
+    })).toBe("2 pendientes · 1 sincronizando");
   });
 });

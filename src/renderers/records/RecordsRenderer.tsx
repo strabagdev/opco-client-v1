@@ -27,6 +27,8 @@ import {
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
 } from "@/lib/visual-stability";
 import {
+  getRecordsInlineSyncSummary,
+  getRecordsListErrorMessage,
   getRecordsCacheBannerMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
@@ -56,6 +58,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
+  const loadedScopeRef = useRef<string | null>(null);
 
   const listItems = useMemo(
     () => (definition ? records.map((record) => buildRecordListItem({ definition, record })) : []),
@@ -68,6 +71,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.syncingCount > 0 ||
     recordsSyncSummary.failedCount > 0 ||
     recordsSyncSummary.conflictCount > 0;
+  const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
   const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading });
 
   useEffect(() => {
@@ -126,12 +130,16 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
       setIsLoading(true);
       setError(null);
-      setDefinition(null);
-      setRecords([]);
-      setPagination(null);
-      setFromCache(false);
-      setIsOfflineData(false);
-      setSyncedAt(null);
+      const scopeKey = `${ownerKey}:${selectedContractId}:${entityTypeId}`;
+
+      if (loadedScopeRef.current !== scopeKey) {
+        setDefinition(null);
+        setRecords([]);
+        setPagination(null);
+        setFromCache(false);
+        setIsOfflineData(false);
+        setSyncedAt(null);
+      }
 
       try {
         const definitionResult = await getEntityDefinitionWithCache({
@@ -141,6 +149,13 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           entityTypeId,
           token,
         });
+
+        if (isMounted) {
+          setDefinition(definitionResult.definition);
+          setSyncedAt(definitionResult.syncedAt);
+          setFromCache(definitionResult.source === "cache");
+        }
+
         const recordsResult = debouncedSearch
           ? await loadRecordsWithOfflineCache({
               api,
@@ -165,20 +180,46 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
             });
 
         if (isMounted) {
-          setDefinition(definitionResult.definition);
           setFromCache(definitionResult.source === "cache" || recordsResult.fromCache);
           setIsOfflineData(recordsResult.offline);
-          setSyncedAt(definitionResult.syncedAt);
           setRecords(recordsResult.records);
           setPagination(recordsResult.pagination);
+          loadedScopeRef.current = scopeKey;
         }
         await refreshRecordsSyncSummary();
         await refreshCurrentSyncTelemetry();
       } catch (nextError) {
         if (isMounted) {
-          const message = nextError instanceof Error ? nextError.message : "No fue posible cargar registros.";
+          const message = getRecordsListErrorMessage(nextError) ?? "No pudimos cargar la lista de personas";
+
+          try {
+            const cached = await definitionCache.listCachedRecords({
+              contractId: selectedContractId,
+              entityTypeId,
+              ownerKey,
+              page: 1,
+              pageSize: PAGE_SIZE,
+              search: debouncedSearch,
+            });
+
+            if (isMounted && cached.records.length > 0) {
+              setRecords(cached.records);
+              setPagination(cached.pagination);
+              setFromCache(true);
+              setIsOfflineData(true);
+              loadedScopeRef.current = scopeKey;
+            }
+          } catch {
+            // The original load error is more useful to the user and diagnostics.
+          }
 
           setError(message);
+        }
+        try {
+          await refreshRecordsSyncSummary();
+          await refreshCurrentSyncTelemetry();
+        } catch {
+          // Diagnostics refresh must not replace the list load failure.
         }
       } finally {
         if (isMounted) {
@@ -270,12 +311,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
       {hasSyncActivity ? (
         <View style={styles.syncBar}>
-          <Text style={styles.syncText}>{formatSyncSummary(recordsSyncSummary)}</Text>
+          <Text style={styles.syncText}>{inlineSyncSummary}</Text>
           <View style={styles.syncActions}>
             {hasSyncIssues ? (
               <Link href={buildAppViewProblemsHref(appView.id)} asChild>
                 <Pressable style={styles.secondarySyncButton}>
-                  <Text style={styles.secondarySyncButtonText}>Ver problemas</Text>
+                  <Text style={styles.secondarySyncButtonText}>Ver cambios afectados</Text>
                 </Pressable>
               </Link>
             ) : null}
@@ -353,7 +394,7 @@ function RecordsListContent({
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error && records.length === 0 ? (
         <Pressable onPress={onRetry} style={styles.retryButton}>
-          <Text style={styles.retryText}>Reintentar</Text>
+          <Text style={styles.retryText}>Volver a cargar</Text>
         </Pressable>
       ) : null}
       {!isLoading && !error && records.length === 0 ? (
@@ -440,20 +481,6 @@ function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {
       ]}>{label}</Text>
     </View>
   );
-}
-
-function formatSyncSummary(summary: {
-  conflictCount: number;
-  failedCount: number;
-  pendingCount: number;
-  syncingCount: number;
-}) {
-  return [
-    summary.pendingCount ? `${summary.pendingCount} pendientes` : null,
-    summary.syncingCount ? `${summary.syncingCount} sincronizando` : null,
-    summary.failedCount ? `${summary.failedCount} errores` : null,
-    summary.conflictCount ? `${summary.conflictCount} conflictos` : null,
-  ].filter(Boolean).join(" · ");
 }
 
 const styles = StyleSheet.create({
