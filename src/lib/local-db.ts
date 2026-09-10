@@ -2800,7 +2800,7 @@ async function markStateUpdateOperationSyncing(operationId: string) {
           updated_at = ?,
           last_error_code = NULL,
           last_error_message = NULL,
-          payload_json = json_remove(payload_json, '$.lastErrorDetails')
+          payload_json = json_remove(payload_json, '$.lastErrorDetails', '$.lastErrorHttpStatus')
       WHERE id = ? AND operation = ?
     `,
     new Date().toISOString(),
@@ -2993,7 +2993,7 @@ async function retryFailedStateUpdateOperations({
         SET updated_at = ?,
             last_error_code = NULL,
             last_error_message = NULL,
-            payload_json = json_remove(payload_json, '$.lastErrorDetails')
+            payload_json = json_remove(payload_json, '$.lastErrorDetails', '$.lastErrorHttpStatus')
         WHERE id = ? AND owner_key = ? AND operation = ?
       `,
       now,
@@ -3024,10 +3024,10 @@ async function failPendingOperation(operation: PendingOperation, code: string, m
   });
 }
 
-async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown) {
+async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
   const db = await getDatabase();
 
-  await setOperationError(db, operation, code, message, "failed", details);
+  await setOperationError(db, operation, code, message, "failed", details, httpStatus);
 }
 
 async function readRecordRemoteUpdatedAt(operation: PendingOperation) {
@@ -3550,12 +3550,14 @@ async function setOperationError(
   message: string,
   syncStatus: RecordSyncStatus,
   details?: unknown,
+  httpStatus?: number | null,
 ) {
   const now = new Date().toISOString();
   const payloadJson = operation.operation === STATE_UPDATE_OPERATION
     ? JSON.stringify({
         ...operation.payload,
         lastErrorDetails: normalizeStateUpdateSyncErrorDetails(details),
+        lastErrorHttpStatus: normalizeHttpStatus(httpStatus),
       })
     : null;
 
@@ -3775,6 +3777,12 @@ function parsePendingStateUpdatePayload(value: string): OfflineStateUpdatePayloa
   }
 }
 
+function normalizeHttpStatus(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : null;
+}
+
 function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow): StateUpdateOutboxDiagnostics["operations"][number] {
   const payload = parseJsonObject(row.payload_json);
   const definition = row.definition_json ? parseJsonObject(row.definition_json) as PreparedAppViewDefinition | null : null;
@@ -3813,7 +3821,7 @@ function mapStateUpdateOutboxDiagnosticsRow(row: StateUpdateOutboxDiagnosticsRow
     lastErrorCode: row.last_error_code ?? row.record_sync_error_code,
     lastErrorPhase: row.last_error_code || row.record_sync_error_code ? "pushing" : null,
     lastErrorMessage: row.last_error_message ?? row.record_sync_error_message,
-    lastHttpStatus: null,
+    lastHttpStatus: normalizeHttpStatus((payload as OfflineStateUpdatePayload).lastErrorHttpStatus),
     operationType: row.operation,
     payloadSchema: getDiagnosticPayloadSchema(payload),
     manualRetryToken: syncStatus === "failed" && row.operation === STATE_UPDATE_OPERATION ? stateUpdateManualRetryToken(row.id) : null,

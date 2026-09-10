@@ -41,6 +41,45 @@ describe("pending sync error presentation", () => {
     ]));
   });
 
+  it("formats INVALID_RELATION diagnostics with field, ids, http status, backend code, and cause", () => {
+    const error = operation({
+      lastBackendErrorCode: "INVALID_RELATION",
+      lastErrorCode: "INVALID_RELATION",
+      lastErrorDetails: {
+        fields: [{
+          expectedType: "RELATION_TARGET_RECORD",
+          fieldId: "cargo_field",
+          fieldLabel: "Cargo",
+          fieldType: "RELATION",
+          messages: ["foreign_record: Causa no determinada"],
+          relatedEntityTypeId: "cargo_entity",
+          relationIssues: [{
+            cause: "UNDETERMINED",
+            fieldId: "cargo_field",
+            relatedEntityTypeId: "cargo_entity",
+            targetRecordId: "foreign_record",
+          }],
+          rejectedValue: ["foreign_record"],
+          source: "relation",
+          submittedRecordIds: ["foreign_record"],
+        }],
+      },
+      lastHttpStatus: 400,
+    });
+
+    expect(formatPendingSyncErrorMessage(error)).toBe("El campo Cargo referencia registros que Opco no puede guardar.");
+    expect(getPendingSyncErrorTechnicalRows(error)).toEqual(expect.arrayContaining([
+      ["httpStatus", 400],
+      ["lastBackendErrorCode", "INVALID_RELATION"],
+      ["fieldId", "cargo_field"],
+      ["fieldType", "RELATION"],
+      ["expectedRelationEntityId", "cargo_entity"],
+      ["submittedRecordIds", "[\"foreign_record\"]"],
+      ["relationTargetRecordId", "foreign_record"],
+      ["cause", "Causa no determinada"],
+    ]));
+  });
+
   it("selects only failed operations with pending error codes", () => {
     expect(getPendingStateUpdateSyncErrors({
       consistency: "OK",

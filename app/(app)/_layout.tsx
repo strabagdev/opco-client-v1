@@ -340,12 +340,15 @@ export default function AppLayout() {
             </Text>
             {persistentFeedback?.id === "sync-error" ? (
               <Pressable
-                accessibilityLabel="Ver detalle de error de sincronizacion"
+                accessibilityLabel="Ver diagnostico de error de sincronizacion"
                 accessibilityRole="button"
-                onPress={() => setIsSyncErrorModalOpen(true)}
+                onPress={() => {
+                  setSelectedDiagnosticsTab(shouldShowRecordsSyncErrorDetail ? "records" : "state-update");
+                  setIsDiagnosticsOpen(true);
+                }}
                 style={styles.feedbackDetailButton}
               >
-                <Text style={styles.feedbackDetailText}>Ver detalle</Text>
+                <Text style={styles.feedbackDetailText}>Ver diagnostico</Text>
               </Pressable>
             ) : null}
             {!persistentFeedback ? (

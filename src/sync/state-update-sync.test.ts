@@ -524,6 +524,7 @@ describe("state-update sync engine", () => {
     expect(store.failed[0]).toMatchObject({
       code: "INVALID_FIELD_VALUE",
       details,
+      httpStatus: 400,
     });
   });
 
@@ -565,7 +566,7 @@ describe("state-update sync engine", () => {
 class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
   completed: { operation: PendingOperation; result: unknown }[] = [];
   conflicts: { operation: PendingOperation; result: unknown }[] = [];
-  failed: { code: string; details?: unknown; message: string; operation: PendingOperation }[] = [];
+  failed: { code: string; details?: unknown; httpStatus?: number | null; message: string; operation: PendingOperation }[] = [];
   operations: PendingOperation[] = [];
   retried: PendingOperation[] = [];
   telemetry = new Map<string, SyncTelemetry>();
@@ -575,8 +576,8 @@ class MemoryStateUpdateSyncStore implements StateUpdateSyncStore {
     this.operations = this.operations.filter((item) => item.id !== operation.id);
   }
 
-  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown) {
-    this.failed.push({ code, details, message, operation });
+  async failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
+    this.failed.push({ code, details, httpStatus, message, operation });
     this.operations = this.operations.filter((item) => item.id !== operation.id);
     this.operations.push({ ...operation, lastErrorCode: code, lastErrorMessage: message });
   }

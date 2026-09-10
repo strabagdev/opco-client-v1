@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -43,6 +44,7 @@ import {
   OpcoApiError,
   OpcoNetworkError,
 } from "@/lib/opco-api";
+import { getStateUpdateErrorDiagnosticRows } from "@/lib/pending-sync-errors";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import {
@@ -68,6 +70,12 @@ import {
 import { syncPendingWork } from "@/sync/pending-work-sync";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "@/sync/state-update-sync";
 import * as tokenStorage from "@/lib/token-storage";
+import {
+  getStateUpdateDiagnosticsCopyButtonText,
+  DiagnosticRowsData,
+  formatStateUpdateDiagnosticsCopyText,
+  StateUpdateDiagnosticsCopyState,
+} from "./state-update-diagnostics-copy";
 
 export { abbreviateDiagnosticValue } from "@/diagnostics/state-update-route-logic";
 
@@ -840,6 +848,8 @@ export function StateUpdateDiagnosticsPanel({
   run: StateUpdateDiagnosticRun | null;
   variant?: "embedded" | "overlay";
 }) {
+  const [copyState, setCopyState] = useState<StateUpdateDiagnosticsCopyState>("idle");
+  const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const summary = diagnostics?.summary;
   const pending = summary
     ? summary.pendingCreate + summary.pendingUpdate + summary.syncing + summary.failed + summary.conflict
@@ -1003,6 +1013,129 @@ export function StateUpdateDiagnosticsPanel({
     ["local pending_create", summary?.localPendingCreate ?? "loading"],
     ["local pending_update", summary?.localPendingUpdate ?? "loading"],
   ];
+  const operationSections = diagnostics?.operations.map((operation, index) => ({
+    key: `${operation.clientRequestId}:${index}`,
+    retryToken: operation.manualRetryToken,
+    retryable: operation.manualRetryable,
+    rows: [
+      ["appView", operation.appViewFingerprint],
+      ["contract", operation.contractFingerprint],
+      ["subject", operation.subjectFingerprint],
+      ["date", operation.date ?? "none"],
+      ["retryCount", operation.retryCount],
+      ["error details", operation.lastErrorDetails ? "available" : "none"],
+      ...getStateUpdateErrorDiagnosticRows(operation),
+      ["updatedAt local", operation.updatedAt],
+      ["payloadSchema", operation.payloadSchema],
+      ["stateValues count", operation.stateValuesCount],
+      ["extraValues count", operation.extraValuesCount],
+      ["AppView actual", operation.appViewResolved],
+      ["workflowKey", operation.config.workflowKey ?? "none"],
+      ["definition kind", operation.config.definitionKind],
+      ["stateFields", operation.config.stateFieldsCount],
+      ["status option", String(operation.config.statusOptionResolved)],
+      ["matching states", operation.config.matchingStateValuesCount],
+      ["missing states", operation.config.missingStateValuesCount],
+      ["source/target", operation.config.sourceTargetConfigured],
+      ["extra fields", operation.config.extraFieldsCount],
+    ] satisfies DiagnosticRowsData,
+    title: `#${index + 1}`,
+  })) ?? [];
+  const localRecordSections = diagnostics?.localRecords.map((record, index) => ({
+    key: `${record.localRecordFingerprint}:${index}`,
+    rows: [
+      ["sync_status", record.syncStatus],
+      ["has pending op", record.hasPendingOperation],
+      ["appView", record.appViewFingerprint],
+      ["contract", record.contractFingerprint],
+      ["subject", record.subjectFingerprint],
+      ["date", record.date ?? "none"],
+      ["local record", record.localRecordFingerprint],
+      ["remote/server exists", record.remoteRecordExists],
+      ["recoveryState", record.recoveryState],
+      ["stateValues count", record.stateValuesCount],
+      ["lastErrorCode", record.lastErrorCode ?? "none"],
+      ["AppView actual", record.appViewResolved],
+      ["workflowKey", record.workflowKey ?? "none"],
+      ["updatedAt local", record.updatedAt],
+    ] satisfies DiagnosticRowsData,
+    title: `local #${index + 1}`,
+  })) ?? [];
+  const runSummaryRows: DiagnosticRowsData = run ? [
+    ["invokedAt", run.invokedAt],
+    ["operationsSelected", run.operationsSelected],
+    ["operationsAttempted", run.operationsAttempted],
+    ["operationsCompleted", run.operationsCompleted],
+    ["operationsFailed", run.operationsFailed],
+  ] : [];
+  const runSections = run?.rows.map((row, index) => ({
+    key: `${row.clientRequestId}:${index}`,
+    rows: [
+      ["clientRequestId", row.clientRequestId],
+      ["selectedForSync", row.selectedForSync],
+      ["requestAttempted", row.requestAttempted],
+      ["endpoint", row.endpoint],
+      ["requestStartedAt", row.requestStartedAt ?? "none"],
+      ["fetchResolvedAt", row.fetchResolvedAt ?? "none"],
+      ["responseBodyStartedAt", row.responseBodyStartedAt ?? "none"],
+      ["responseParsedAt", row.responseParsedAt ?? "none"],
+      ["requestCompletedAt", row.requestCompletedAt ?? "none"],
+      ["timeoutMs", row.requestTimeoutMs ?? "none"],
+      ["requestDurationMs", row.requestDurationMs ?? "none"],
+      ["AbortController triggered", row.requestAbortControllerTriggered ?? "unknown"],
+      ["responseStarted", row.responseStarted ?? "unknown"],
+      ["HTTP status", row.httpStatus ?? "none"],
+      ["result/error", row.result],
+      ["final sync_status", row.finalSyncStatus],
+    ] satisfies DiagnosticRowsData,
+    title: `run #${index + 1}`,
+  })) ?? [];
+  const copyText = formatStateUpdateDiagnosticsCopyText([
+    { rows: summaryRows, title: "Summary" },
+    { rows: currentConnectivityRows, title: "Current connectivity" },
+    { rows: lastReconnectRows, title: "Last reconnect" },
+    { rows: formatStateUpdateRunRows(latestRun), title: "Ultimo run" },
+    { rows: reconnectPreflightRows, title: "Reconnect preflight" },
+    { rows: lastStateUpdateActivityRows, title: "Actividad actual" },
+    { rows: lastStateUpdateSyncRows, title: "Ultimo sync completado" },
+    { rows: lastVisibleErrorRows, title: "Last visible UI error" },
+    ...operationSections.map((section) => ({ rows: section.rows, title: `Operations ${section.title}` })),
+    ...localRecordSections.map((section) => ({ rows: section.rows, title: `Workflow Local Records ${section.title}` })),
+    ...(run ? [
+      { rows: runSummaryRows, title: "Diagnostic Run" },
+      ...runSections.map((section) => ({ rows: section.rows, title: `Diagnostic Run ${section.title}` })),
+    ] : [{ rows: [], title: "Diagnostic Run", empty: "No diagnostic run yet." }]),
+  ]);
+  const canCopy = copyText.trim().length > 0;
+  const copyButtonText = getStateUpdateDiagnosticsCopyButtonText(copyState);
+
+  async function handleCopyStateUpdate() {
+    if (!copyText.trim()) {
+      return;
+    }
+
+    if (copyResetTimeout.current) {
+      clearTimeout(copyResetTimeout.current);
+      copyResetTimeout.current = null;
+    }
+
+    try {
+      await copyTextToClipboard(copyText);
+      setCopyState("success");
+      copyResetTimeout.current = setTimeout(() => {
+        setCopyState("idle");
+        copyResetTimeout.current = null;
+      }, 2000);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  useEffect(() => () => {
+    if (copyResetTimeout.current) {
+      clearTimeout(copyResetTimeout.current);
+    }
+  }, []);
 
   return (
     <View style={variant === "embedded" ? diagnosticsPanelStyles.embeddedShell : diagnosticsPanelStyles.shell}>
@@ -1010,6 +1143,13 @@ export function StateUpdateDiagnosticsPanel({
         <View style={diagnosticsPanelStyles.header}>
           <Text style={diagnosticsPanelStyles.title}>STATE_UPDATE diagnostics</Text>
           <View style={diagnosticsPanelStyles.actions}>
+            <Pressable
+              disabled={!canCopy}
+              onPress={handleCopyStateUpdate}
+              style={[diagnosticsPanelStyles.button, !canCopy ? diagnosticsPanelStyles.buttonDisabled : null]}
+            >
+              <Text style={diagnosticsPanelStyles.buttonText}>{copyButtonText}</Text>
+            </Pressable>
             <Pressable onPress={onRefresh} style={diagnosticsPanelStyles.button}>
               <Text style={diagnosticsPanelStyles.buttonText}>Refrescar</Text>
             </Pressable>
@@ -1043,110 +1183,33 @@ export function StateUpdateDiagnosticsPanel({
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading operations...</Text>
         ) : diagnostics.operations.length ? diagnostics.operations.map((operation, index) => (
-          <View key={`${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
-            <Text style={diagnosticsPanelStyles.operationTitle}>#{index + 1}</Text>
-            {onRetryFailed && operation.manualRetryable && operation.manualRetryToken ? (
-              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operation.manualRetryToken)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
+          <View key={operationSections[index]?.key ?? `${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
+            <Text selectable style={diagnosticsPanelStyles.operationTitle}>{operationSections[index]?.title ?? `#${index + 1}`}</Text>
+            {onRetryFailed && operationSections[index]?.retryable && operationSections[index]?.retryToken ? (
+              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operationSections[index]?.retryToken ?? null)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
                 <Text style={diagnosticsPanelStyles.buttonText}>Reintentar</Text>
               </Pressable>
             ) : null}
-            <DiagnosticsRows
-              rows={[
-                ["sync_status", operation.syncStatus],
-                ["operation_type", operation.operationType],
-                ["retryable", operation.retryable],
-                ["appView", operation.appViewFingerprint],
-                ["contract", operation.contractFingerprint],
-                ["subject", operation.subjectFingerprint],
-                ["date", operation.date ?? "none"],
-                ["clientRequestId", operation.clientRequestId],
-                ["retryCount", operation.retryCount],
-                ["lastErrorCode", operation.lastErrorCode ?? "none"],
-                ["error details", operation.lastErrorDetails ? "available" : "none"],
-                ["error field", operation.lastErrorDetails?.fields[0]?.fieldId ?? "none"],
-                ["error rejected value", operation.lastErrorDetails?.fields[0]?.rejectedValue === undefined ? "none" : JSON.stringify(operation.lastErrorDetails.fields[0].rejectedValue)],
-                ["error expected type", operation.lastErrorDetails?.fields[0]?.expectedType ?? "none"],
-                ["lastErrorPhase", operation.lastErrorPhase ?? "none"],
-                ["lastHttpStatus", operation.lastHttpStatus ?? "not stored"],
-                ["lastBackendErrorCode", operation.lastBackendErrorCode ?? "none"],
-                ["updatedAt local", operation.updatedAt],
-                ["payloadSchema", operation.payloadSchema],
-                ["stateValues count", operation.stateValuesCount],
-                ["extraValues count", operation.extraValuesCount],
-                ["AppView actual", operation.appViewResolved],
-                ["workflowKey", operation.config.workflowKey ?? "none"],
-                ["definition kind", operation.config.definitionKind],
-                ["stateFields", operation.config.stateFieldsCount],
-                ["status option", String(operation.config.statusOptionResolved)],
-                ["matching states", operation.config.matchingStateValuesCount],
-                ["missing states", operation.config.missingStateValuesCount],
-                ["source/target", operation.config.sourceTargetConfigured],
-                ["extra fields", operation.config.extraFieldsCount],
-              ]}
-            />
+            <DiagnosticsRows rows={operationSections[index]?.rows ?? []} />
           </View>
         )) : <Text style={diagnosticsPanelStyles.empty}>No local STATE_UPDATE operations.</Text>}
         <Text style={diagnosticsPanelStyles.sectionTitle}>Workflow Local Records</Text>
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading local records...</Text>
         ) : diagnostics.localRecords.length ? diagnostics.localRecords.map((record, index) => (
-          <View key={`${record.localRecordFingerprint}:${index}`} style={diagnosticsPanelStyles.operation}>
-            <Text style={diagnosticsPanelStyles.operationTitle}>local #{index + 1}</Text>
-            <DiagnosticsRows
-              rows={[
-                ["sync_status", record.syncStatus],
-                ["has pending op", record.hasPendingOperation],
-                ["appView", record.appViewFingerprint],
-                ["contract", record.contractFingerprint],
-                ["subject", record.subjectFingerprint],
-                ["date", record.date ?? "none"],
-                ["local record", record.localRecordFingerprint],
-                ["remote/server exists", record.remoteRecordExists],
-                ["recoveryState", record.recoveryState],
-                ["stateValues count", record.stateValuesCount],
-                ["lastErrorCode", record.lastErrorCode ?? "none"],
-                ["AppView actual", record.appViewResolved],
-                ["workflowKey", record.workflowKey ?? "none"],
-                ["updatedAt local", record.updatedAt],
-              ]}
-            />
+          <View key={localRecordSections[index]?.key ?? `${record.localRecordFingerprint}:${index}`} style={diagnosticsPanelStyles.operation}>
+            <Text selectable style={diagnosticsPanelStyles.operationTitle}>{localRecordSections[index]?.title ?? `local #${index + 1}`}</Text>
+            <DiagnosticsRows rows={localRecordSections[index]?.rows ?? []} />
           </View>
         )) : <Text style={diagnosticsPanelStyles.empty}>No workflow local records.</Text>}
         <Text style={diagnosticsPanelStyles.sectionTitle}>Diagnostic Run</Text>
         {run ? (
           <>
-            <DiagnosticsRows
-              rows={[
-                ["invokedAt", run.invokedAt],
-                ["operationsSelected", run.operationsSelected],
-                ["operationsAttempted", run.operationsAttempted],
-                ["operationsCompleted", run.operationsCompleted],
-                ["operationsFailed", run.operationsFailed],
-              ]}
-            />
+            <DiagnosticsRows rows={runSummaryRows} />
             {run.rows.map((row, index) => (
-              <View key={`${row.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
-                <Text style={diagnosticsPanelStyles.operationTitle}>run #{index + 1}</Text>
-                <DiagnosticsRows
-                  rows={[
-                    ["clientRequestId", row.clientRequestId],
-                    ["selectedForSync", row.selectedForSync],
-                    ["requestAttempted", row.requestAttempted],
-                    ["endpoint", row.endpoint],
-                    ["requestStartedAt", row.requestStartedAt ?? "none"],
-                    ["fetchResolvedAt", row.fetchResolvedAt ?? "none"],
-                    ["responseBodyStartedAt", row.responseBodyStartedAt ?? "none"],
-                    ["responseParsedAt", row.responseParsedAt ?? "none"],
-                    ["requestCompletedAt", row.requestCompletedAt ?? "none"],
-                    ["timeoutMs", row.requestTimeoutMs ?? "none"],
-                    ["requestDurationMs", row.requestDurationMs ?? "none"],
-                    ["AbortController triggered", row.requestAbortControllerTriggered ?? "unknown"],
-                    ["responseStarted", row.responseStarted ?? "unknown"],
-                    ["HTTP status", row.httpStatus ?? "none"],
-                    ["result/error", row.result],
-                    ["final sync_status", row.finalSyncStatus],
-                  ]}
-                />
+              <View key={runSections[index]?.key ?? `${row.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
+                <Text selectable style={diagnosticsPanelStyles.operationTitle}>{runSections[index]?.title ?? `run #${index + 1}`}</Text>
+                <DiagnosticsRows rows={runSections[index]?.rows ?? []} />
               </View>
             ))}
           </>
@@ -1158,13 +1221,43 @@ export function StateUpdateDiagnosticsPanel({
   );
 }
 
-function DiagnosticsRows({ rows }: { rows: [string, string | number | boolean | null][] }) {
+async function copyTextToClipboard(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const copied = document.execCommand("copy");
+
+    if (!copied) {
+      throw new Error("Clipboard copy failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+function DiagnosticsRows({ rows }: { rows: DiagnosticRowsData }) {
   return (
     <View style={diagnosticsPanelStyles.rows}>
       {rows.map(([label, value]) => (
         <View key={label} style={diagnosticsPanelStyles.row}>
-          <Text style={diagnosticsPanelStyles.label}>{label}</Text>
-          <Text style={diagnosticsPanelStyles.value}>{String(value)}</Text>
+          <Text selectable style={diagnosticsPanelStyles.label}>{label}</Text>
+          <Text selectable style={diagnosticsPanelStyles.value}>{String(value)}</Text>
         </View>
       ))}
     </View>

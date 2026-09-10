@@ -9,6 +9,7 @@ import {
   isValidStateUpdateRemoteUpdatedAt,
   mergeStateUpdateReconnectPreflightTelemetryPatch,
   mergeStateUpdateSyncDiagnosticsTelemetry,
+  normalizeStateUpdateSyncErrorDetails,
   normalizeStateUpdateRecord,
   stateUpdateIntentsEqual,
   stateUpdateRemoteItemMatchesPayload,
@@ -20,6 +21,65 @@ import type { StateUpdateSyncDiagnosticsTelemetry } from "./state-update-offline
 import type { StateUpdateField } from "./opco-api";
 
 describe("state-update offline identity", () => {
+  it("normalizes legacy field validation details", () => {
+    expect(normalizeStateUpdateSyncErrorDetails({
+      entityTypeId: "attendance",
+      fields: [{
+        expectedType: "FIELD_OPTION_VALUE",
+        expectedValues: ["turno_a"],
+        fieldId: "shift_field",
+        fieldLabel: "Turno",
+        fieldType: "SELECT",
+        messages: ["La opción seleccionada no es válida."],
+        rejectedValue: "turno_b",
+        source: "extra",
+      }],
+    })).toMatchObject({
+      entityTypeId: "attendance",
+      fields: [{
+        expectedType: "FIELD_OPTION_VALUE",
+        expectedValues: ["turno_a"],
+        fieldId: "shift_field",
+        fieldLabel: "Turno",
+        rejectedValue: "turno_b",
+      }],
+    });
+  });
+
+  it("normalizes relation diagnostics without requiring legacy fields", () => {
+    expect(normalizeStateUpdateSyncErrorDetails({
+      relationDiagnostics: {
+        fields: [{
+          fieldId: "cargo_field",
+          fieldName: "Cargo",
+          issues: [{
+            cause: "UNDETERMINED",
+            fieldId: "cargo_field",
+            relatedEntityTypeId: "cargo_entity",
+            targetRecordId: "foreign_record",
+          }],
+          relatedEntityTypeId: "cargo_entity",
+          submittedRecordIds: ["foreign_record"],
+        }],
+      },
+    })).toMatchObject({
+      fields: [{
+        expectedType: "RELATION_TARGET_RECORD",
+        fieldId: "cargo_field",
+        fieldLabel: "Cargo",
+        fieldType: "RELATION",
+        relatedEntityTypeId: "cargo_entity",
+        relationIssues: [{
+          cause: "UNDETERMINED",
+          targetRecordId: "foreign_record",
+        }],
+        rejectedValue: ["foreign_record"],
+        source: "relation",
+        submittedRecordIds: ["foreign_record"],
+      }],
+    });
+  });
+
   it("consolidates update-current by appView, subject, and date when uniqueness is subject-date", () => {
     const first = createStateUpdateLocalRecordId({
       appViewId: "view_equipment_state",

@@ -4,7 +4,6 @@ import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from 
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
-  normalizeStateUpdateSyncErrorDetails,
   stateUpdateRequestDiagnosticsFromNetwork,
   stateUpdateRemoteItemMatchesPayload,
   workflowTelemetryScopeId,
@@ -13,7 +12,7 @@ import { classifySyncTelemetryError, SyncTelemetryStore } from "../lib/sync-tele
 
 export type StateUpdateSyncStore = {
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
-  failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown): Promise<void>;
+  failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
   markStateUpdateOperationSyncing(operationId: string): Promise<void>;
@@ -186,7 +185,8 @@ async function runSync({
         operation,
         classification.code,
         classification.message,
-        error instanceof OpcoApiError ? normalizeStateUpdateSyncErrorDetails(error.details) : undefined,
+        error instanceof OpcoApiError ? error.details : undefined,
+        error instanceof OpcoApiError ? error.status : null,
       );
       result.failed += 1;
     }

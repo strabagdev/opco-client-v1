@@ -27,6 +27,7 @@ export type OfflineStateUpdatePayload = {
   extraValues?: Record<string, EntityRecordValue>;
   historyMode: "append" | "update-current";
   lastErrorDetails?: StateUpdateSyncErrorDetails | null;
+  lastErrorHttpStatus?: number | null;
   overwrite?: boolean;
   stateValues: {
     fieldId: string;
@@ -39,6 +40,17 @@ export type OfflineStateUpdatePayload = {
   uniqueness: "none" | "subject" | "subject-date";
 };
 
+export type StateUpdateRelationValidationIssue = {
+  actualEntityTypeId?: string | null;
+  actualEntityTypeName?: string | null;
+  cause: string;
+  fieldId: string;
+  fieldName?: string | null;
+  relatedEntityTypeId?: string | null;
+  relatedEntityTypeName?: string | null;
+  targetRecordId: string;
+};
+
 export type StateUpdateSyncErrorFieldDetails = {
   expectedType?: string | null;
   expectedValues?: string[];
@@ -46,8 +58,12 @@ export type StateUpdateSyncErrorFieldDetails = {
   fieldLabel?: string | null;
   fieldType?: string | null;
   messages?: string[];
+  relatedEntityTypeId?: string | null;
+  relatedEntityTypeName?: string | null;
+  relationIssues?: StateUpdateRelationValidationIssue[];
   rejectedValue?: EntityRecordValue | EntityRecordValue[] | null;
   source?: "date" | "extra" | "state" | "subject" | "unknown" | string | null;
+  submittedRecordIds?: string[];
 };
 
 export type StateUpdateSyncErrorDetails = {
@@ -781,7 +797,7 @@ export type AttendanceDaySnapshotScope = StateUpdateScope & {
 export type StateUpdateOfflineStore = {
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
   discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }): Promise<void>;
-  failStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
+  failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
   getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
@@ -976,10 +992,12 @@ export function normalizeStateUpdateSyncErrorDetails(details: unknown): StateUpd
     return null;
   }
 
-  const raw = details as { entityTypeId?: unknown; fields?: unknown };
-  const fields = Array.isArray(raw.fields)
+  const raw = details as { entityTypeId?: unknown; fields?: unknown; relationDiagnostics?: unknown };
+  const legacyFields = Array.isArray(raw.fields)
     ? raw.fields.map(normalizeStateUpdateSyncErrorFieldDetails).filter((field): field is StateUpdateSyncErrorFieldDetails => Boolean(field))
     : [];
+  const relationFields = normalizeRelationDiagnosticsFields(raw.relationDiagnostics);
+  const fields = [...legacyFields, ...relationFields];
 
   if (fields.length === 0) {
     return null;
@@ -1014,9 +1032,96 @@ function normalizeStateUpdateSyncErrorFieldDetails(field: unknown): StateUpdateS
     messages: Array.isArray(raw.messages)
       ? raw.messages.filter((message): message is string => typeof message === "string")
       : undefined,
+    relatedEntityTypeId: typeof raw.relatedEntityTypeId === "string" ? raw.relatedEntityTypeId : null,
+    relatedEntityTypeName: typeof raw.relatedEntityTypeName === "string" ? raw.relatedEntityTypeName : null,
+    relationIssues: undefined,
     rejectedValue: normalizeStateUpdateDiagnosticRejectedValue(raw.rejectedValue),
     source: typeof raw.source === "string" ? raw.source : null,
+    submittedRecordIds: Array.isArray(raw.submittedRecordIds)
+      ? raw.submittedRecordIds.filter((value): value is string => typeof value === "string")
+      : undefined,
   };
+}
+
+function normalizeRelationDiagnosticsFields(details: unknown): StateUpdateSyncErrorFieldDetails[] {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return [];
+  }
+
+  const raw = details as { fields?: unknown };
+
+  if (!Array.isArray(raw.fields)) {
+    return [];
+  }
+
+  return raw.fields
+    .map(normalizeRelationDiagnosticsField)
+    .filter((field): field is StateUpdateSyncErrorFieldDetails => Boolean(field));
+}
+
+function normalizeRelationDiagnosticsField(field: unknown): StateUpdateSyncErrorFieldDetails | null {
+  if (!field || typeof field !== "object" || Array.isArray(field)) {
+    return null;
+  }
+
+  const raw = field as Record<string, unknown>;
+  const fieldId = raw.fieldId;
+
+  if (typeof fieldId !== "string" || !fieldId.trim()) {
+    return null;
+  }
+
+  const submittedRecordIds = Array.isArray(raw.submittedRecordIds)
+    ? raw.submittedRecordIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const relationIssues = Array.isArray(raw.issues)
+    ? raw.issues.map(normalizeRelationValidationIssue).filter((issue): issue is StateUpdateRelationValidationIssue => Boolean(issue))
+    : [];
+
+  return {
+    expectedType: "RELATION_TARGET_RECORD",
+    fieldId,
+    fieldLabel: typeof raw.fieldName === "string" ? raw.fieldName : null,
+    fieldType: "RELATION",
+    messages: relationIssues.length
+      ? relationIssues.map((issue) => relationIssueMessage(issue.cause, issue.targetRecordId))
+      : ["Causa no determinada"],
+    relatedEntityTypeId: typeof raw.relatedEntityTypeId === "string" ? raw.relatedEntityTypeId : null,
+    relatedEntityTypeName: typeof raw.relatedEntityTypeName === "string" ? raw.relatedEntityTypeName : null,
+    relationIssues,
+    rejectedValue: submittedRecordIds,
+    source: "relation",
+    submittedRecordIds,
+  };
+}
+
+function normalizeRelationValidationIssue(issue: unknown): StateUpdateRelationValidationIssue | null {
+  if (!issue || typeof issue !== "object" || Array.isArray(issue)) {
+    return null;
+  }
+
+  const raw = issue as Record<string, unknown>;
+
+  if (typeof raw.fieldId !== "string" || typeof raw.targetRecordId !== "string") {
+    return null;
+  }
+
+  return {
+    actualEntityTypeId: typeof raw.actualEntityTypeId === "string" ? raw.actualEntityTypeId : null,
+    actualEntityTypeName: typeof raw.actualEntityTypeName === "string" ? raw.actualEntityTypeName : null,
+    cause: typeof raw.cause === "string" && raw.cause.trim() ? raw.cause : "UNDETERMINED",
+    fieldId: raw.fieldId,
+    fieldName: typeof raw.fieldName === "string" ? raw.fieldName : null,
+    relatedEntityTypeId: typeof raw.relatedEntityTypeId === "string" ? raw.relatedEntityTypeId : null,
+    relatedEntityTypeName: typeof raw.relatedEntityTypeName === "string" ? raw.relatedEntityTypeName : null,
+    targetRecordId: raw.targetRecordId,
+  };
+}
+
+function relationIssueMessage(cause: string, targetRecordId: string) {
+  const reason = cause === "UNDETERMINED" ? "Causa no determinada" : cause;
+
+  return `${targetRecordId}: ${reason}`;
 }
 
 function normalizeStateUpdateDiagnosticRejectedValue(value: unknown): StateUpdateSyncErrorFieldDetails["rejectedValue"] {

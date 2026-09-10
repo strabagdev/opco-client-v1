@@ -968,6 +968,7 @@ describe("local database singleton", () => {
                   source: "extra",
                 }],
               },
+              lastErrorHttpStatus: 400,
             }),
             record_sync_status: "failed",
           }),
@@ -1039,6 +1040,7 @@ describe("local database singleton", () => {
           rejectedValue: "shift_option_id",
         })],
       },
+      lastHttpStatus: 400,
       payloadSchema: "legacy-batch",
       retryable: false,
       syncStatus: "failed",
@@ -1086,7 +1088,10 @@ describe("local database singleton", () => {
       expect.stringContaining("sync_status = 'pending_update'"),
       "state_update_local_record_1",
     );
-    expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("json_remove(payload_json, '$.lastErrorDetails')"))).toBe(true);
+    expect(db.runAsync.mock.calls.some(([sql]) =>
+      typeof sql === "string" &&
+      sql.includes("json_remove(payload_json, '$.lastErrorDetails', '$.lastErrorHttpStatus')")
+    )).toBe(true);
     expect(db.runAsync.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("client_request_id"))).toBe(false);
   });
 

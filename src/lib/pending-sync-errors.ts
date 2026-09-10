@@ -30,6 +30,10 @@ export function formatPendingSyncErrorMessage(error: PendingStateUpdateSyncError
 
   const field = error.lastErrorDetails?.fields[0];
 
+  if (field?.fieldType === "RELATION") {
+    return `El campo ${field.fieldLabel ?? field.fieldId} referencia registros que Opco no puede guardar.`;
+  }
+
   if (field?.fieldLabel) {
     return `El campo ${field.fieldLabel} tiene un valor que Opco no puede guardar.`;
   }
@@ -44,21 +48,36 @@ export function formatPendingSyncErrorMessage(error: PendingStateUpdateSyncError
 export function getPendingSyncErrorTechnicalRows(
   error: PendingStateUpdateSyncError | null,
 ): [string, string | number | boolean | null][] {
+  return getStateUpdateErrorDiagnosticRows(error);
+}
+
+export function getStateUpdateErrorDiagnosticRows(
+  error: PendingStateUpdateSyncError | null,
+): [string, string | number | boolean | null][] {
   if (!error) {
     return [["detalle", "sin operacion seleccionada"]];
   }
 
   const field = error.lastErrorDetails?.fields[0] ?? null;
+  const relationIssue = field?.relationIssues?.[0] ?? null;
 
   return [
     ["sync_status", error.syncStatus],
     ["operation_type", error.operationType],
+    ["httpStatus", error.lastHttpStatus ?? "not stored"],
     ["lastErrorCode", error.lastErrorCode ?? "none"],
     ["lastBackendErrorCode", error.lastBackendErrorCode ?? "none"],
     ["fieldId", field?.fieldId ?? "none"],
     ["fieldLabel", field?.fieldLabel ?? "none"],
     ["fieldType", field?.fieldType ?? "none"],
     ["source", field?.source ?? "none"],
+    ["expectedRelationEntityId", field?.relatedEntityTypeId ?? relationIssue?.relatedEntityTypeId ?? "none"],
+    ["expectedRelationEntityName", field?.relatedEntityTypeName ?? relationIssue?.relatedEntityTypeName ?? "none"],
+    ["submittedRecordIds", formatDiagnosticFieldValue(field?.submittedRecordIds ?? field?.rejectedValue)],
+    ["relationTargetRecordId", relationIssue?.targetRecordId ?? "none"],
+    ["relationActualEntityId", relationIssue?.actualEntityTypeId ?? "not exposed"],
+    ["relationActualEntityName", relationIssue?.actualEntityTypeName ?? "not exposed"],
+    ["cause", formatRelationCause(relationIssue?.cause)],
     ["rejectedValue", formatDiagnosticFieldValue(field?.rejectedValue)],
     ["expectedType", field?.expectedType ?? "none"],
     ["expectedValues", field?.expectedValues?.join(", ") ?? "none"],
@@ -71,6 +90,14 @@ export function getPendingSyncErrorTechnicalRows(
 
 function formatDiagnosticMessages(field: StateUpdateSyncErrorFieldDetails | null) {
   return field?.messages?.join(" ") || "none";
+}
+
+function formatRelationCause(cause: string | null | undefined) {
+  if (!cause || cause === "UNDETERMINED") {
+    return "Causa no determinada";
+  }
+
+  return cause;
 }
 
 function formatDiagnosticFieldValue(value: unknown): string {
