@@ -570,7 +570,7 @@ Reset protections:
 `src/lib/opco-api.ts` owns:
 
 - Base URL from `EXPO_PUBLIC_OPCO_API_URL`.
-- Public client id from `EXPO_PUBLIC_OPCO_CLIENT_ID`.
+- Public client id from `?clientId=...`, persisted client id, or the compatible `EXPO_PUBLIC_OPCO_CLIENT_ID` fallback.
 - Bearer auth headers.
 - Web refresh through HttpOnly cookie.
 - Native refresh token transport through SecureStore.

@@ -21,6 +21,10 @@ import {
   prewarmAssignedAppViewsOnce,
 } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
+import {
+  clientIdFromCurrentLocation,
+  resolveEffectiveClientId,
+} from "@/lib/client-id";
 import { selectContractId } from "@/lib/contract-selection";
 import {
   getLocalDatabase,
@@ -66,6 +70,7 @@ type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
 type SessionContextValue = {
   api: OpcoApi;
+  apiClientId: string;
   connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
@@ -139,6 +144,8 @@ export type { StateUpdateDiagnosticRun, StateUpdateReconnectDiagnostics } from "
 export function SessionProvider({ children }: PropsWithChildren) {
   const definitionCache = useMemo(() => getLocalDatabase(), []);
   const [status, setStatus] = useState<SessionStatus>("loading");
+  const [apiClientId, setApiClientId] = useState("");
+  const [apiClientIdReady, setApiClientIdReady] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -170,10 +177,45 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setToken(tokens.accessToken);
         },
         platformOS: Platform.OS,
+        clientId: apiClientId,
         tokenStore: tokenStorage,
       }),
-    [],
+    [apiClientId],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function resolveClientId() {
+      const urlClientId = clientIdFromCurrentLocation();
+      const persistedClientId = await tokenStorage.getApiClientId();
+      const nextClientId = resolveEffectiveClientId({
+        persistedClientId,
+        urlClientId,
+      });
+
+      if (urlClientId && urlClientId !== persistedClientId) {
+        const previousClientId = resolveEffectiveClientId({ persistedClientId });
+
+        await tokenStorage.setApiClientId(urlClientId);
+
+        if (previousClientId && previousClientId !== urlClientId) {
+          await tokenStorage.clearSession();
+        }
+      }
+
+      if (isMounted) {
+        setApiClientId(nextClientId);
+        setApiClientIdReady(true);
+      }
+    }
+
+    void resolveClientId();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const {
     getRecoverySummary,
@@ -378,6 +420,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
 
     async function bootstrap() {
+      if (!apiClientIdReady) {
+        return;
+      }
+
       try {
         const restored = await restoreSession(tokenStorage, api, definitionCache);
 
@@ -421,7 +467,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [api, bootstrapAttempt, definitionCache, loadContext]);
+  }, [api, apiClientIdReady, bootstrapAttempt, definitionCache, loadContext]);
 
   useEffect(() => {
     async function refreshCount() {
@@ -550,6 +596,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     <SessionContext.Provider
       value={{
         api,
+        apiClientId,
         connectivityStatus,
         context,
         definitionCache,

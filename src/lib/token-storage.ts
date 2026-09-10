@@ -4,6 +4,7 @@ import { Platform } from "react-native";
 export const TOKEN_STORAGE_KEY = "opco.accessToken";
 export const REFRESH_TOKEN_STORAGE_KEY = "opco.refreshToken";
 export const SESSION_OWNER_KEY_STORAGE_KEY = "opco.sessionOwnerKey";
+export const API_CLIENT_ID_STORAGE_KEY = "opco.apiClientId";
 
 type SecureTokenStore = Pick<typeof SecureStore, "deleteItemAsync" | "getItemAsync" | "setItemAsync">;
 
@@ -20,10 +21,12 @@ export type TokenStorage = {
   deleteAccessToken(): Promise<void>;
   deleteToken(): Promise<void>;
   getAccessToken(): Promise<string | null>;
+  getApiClientId(): Promise<string | null>;
   getRefreshToken(): Promise<string | null>;
   getSessionOwnerKey(): Promise<string | null>;
   getToken(): Promise<string | null>;
   setAccessToken(token: string): Promise<void>;
+  setApiClientId(clientId: string): Promise<void>;
   setRefreshToken(token: string): Promise<void>;
   setSession(tokens: { accessToken: string; refreshToken?: string | null }): Promise<void>;
   setSessionOwnerKey(ownerKey: string): Promise<void>;
@@ -51,6 +54,9 @@ export function createTokenStorage({
       async getAccessToken() {
         return webStorage?.getItem(TOKEN_STORAGE_KEY) ?? null;
       },
+      async getApiClientId() {
+        return webStorage?.getItem(API_CLIENT_ID_STORAGE_KEY) ?? null;
+      },
       async getRefreshToken() {
         return null;
       },
@@ -62,6 +68,9 @@ export function createTokenStorage({
       },
       async setAccessToken(token: string) {
         webStorage?.setItem(TOKEN_STORAGE_KEY, token);
+      },
+      async setApiClientId(clientId: string) {
+        webStorage?.setItem(API_CLIENT_ID_STORAGE_KEY, clientId);
       },
       async setRefreshToken() {
         // Web refresh tokens are intentionally held only in the HttpOnly cookie.
@@ -97,6 +106,9 @@ export function createTokenStorage({
     getAccessToken() {
       return secureStore.getItemAsync(TOKEN_STORAGE_KEY);
     },
+    getApiClientId() {
+      return secureStore.getItemAsync(API_CLIENT_ID_STORAGE_KEY);
+    },
     getRefreshToken() {
       return secureStore.getItemAsync(REFRESH_TOKEN_STORAGE_KEY);
     },
@@ -108,6 +120,9 @@ export function createTokenStorage({
     },
     setAccessToken(token: string) {
       return secureStore.setItemAsync(TOKEN_STORAGE_KEY, token);
+    },
+    setApiClientId(clientId: string) {
+      return secureStore.setItemAsync(API_CLIENT_ID_STORAGE_KEY, clientId);
     },
     setRefreshToken(token: string) {
       return secureStore.setItemAsync(REFRESH_TOKEN_STORAGE_KEY, token);
@@ -142,6 +157,10 @@ export function getAccessToken() {
   return tokenStorage.getAccessToken();
 }
 
+export function getApiClientId() {
+  return tokenStorage.getApiClientId();
+}
+
 export function getRefreshToken() {
   return tokenStorage.getRefreshToken();
 }
@@ -156,6 +175,10 @@ export function setToken(token: string) {
 
 export function setAccessToken(token: string) {
   return tokenStorage.setAccessToken(token);
+}
+
+export function setApiClientId(clientId: string) {
+  return tokenStorage.setApiClientId(clientId);
 }
 
 export function setRefreshToken(token: string) {

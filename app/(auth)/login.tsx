@@ -11,11 +11,10 @@ import {
   View,
 } from "react-native";
 
-import { config } from "@/lib/config";
 import { useSession } from "@/state/session";
 
 export default function LoginScreen() {
-  const { signIn, status } = useSession();
+  const { apiClientId, signIn, status } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +70,7 @@ export default function LoginScreen() {
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Pressable
-            disabled={isSubmitting || !email || !password || !config.clientId}
+            disabled={isSubmitting || !email || !password || !apiClientId}
             onPress={handleSubmit}
             style={({ pressed }) => [
               styles.button,
@@ -81,8 +80,8 @@ export default function LoginScreen() {
             {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
           </Pressable>
 
-          {!config.clientId ? (
-            <Text style={styles.configWarning}>Configura EXPO_PUBLIC_OPCO_CLIENT_ID.</Text>
+          {!apiClientId ? (
+            <Text style={styles.configWarning}>Abre el enlace de acceso de tu aplicación.</Text>
           ) : null}
         </View>
       </View>

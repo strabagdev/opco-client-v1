@@ -64,7 +64,7 @@ export type EntitySummary = {
   active: boolean;
 };
 
-export type AppViewType = "RECORDS" | "WORKFLOW" | "REPORT" | "BOARD" | "DASHBOARD";
+export type AppViewType = "RECORDS" | "WORKFLOW" | "REPORT" | "BOARD" | "DASHBOARD" | "PANEL";
 
 export type RecordsAppViewConfig = {
   entityTypeId: string;
@@ -166,6 +166,7 @@ export type WorkflowAppViewConfig =
   | (Record<string, unknown> & { workflowKey?: string });
 export type BoardAppViewConfig = Record<string, unknown>;
 export type DashboardAppViewConfig = Record<string, unknown>;
+export type PanelAppViewConfig = Record<string, unknown>;
 
 export type RecordsAppView = {
   config: RecordsAppViewConfig;
@@ -216,8 +217,17 @@ export type DashboardAppView = {
   sortOrder: number;
   type: "DASHBOARD";
 };
+export type PanelAppView = {
+  config: PanelAppViewConfig;
+  icon: string | null;
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  type: "PANEL";
+};
 
-export type AppView = RecordsAppView | WorkflowAppView | ReportAppView | BoardAppView | DashboardAppView;
+export type AppView = RecordsAppView | WorkflowAppView | ReportAppView | BoardAppView | DashboardAppView | PanelAppView;
 
 export type EntityFieldType =
   | "BOOLEAN"

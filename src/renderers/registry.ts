@@ -13,6 +13,7 @@ import { UnsupportedWorkflow } from "@/renderers/workflows/unsupported/Unsupport
 export const rendererRegistry: Record<AppViewType, ComponentType<AppViewRendererProps>> = {
   BOARD: UnsupportedRenderer,
   DASHBOARD: UnsupportedRenderer,
+  PANEL: UnsupportedRenderer,
   REPORT: ReportRenderer as ComponentType<AppViewRendererProps>,
   RECORDS: RecordsRenderer as ComponentType<AppViewRendererProps>,
   WORKFLOW: UnsupportedRenderer,

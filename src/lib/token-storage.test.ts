@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createTokenStorage, REFRESH_TOKEN_STORAGE_KEY, SESSION_OWNER_KEY_STORAGE_KEY, TOKEN_STORAGE_KEY } from "./token-storage";
+import {
+  API_CLIENT_ID_STORAGE_KEY,
+  createTokenStorage,
+  REFRESH_TOKEN_STORAGE_KEY,
+  SESSION_OWNER_KEY_STORAGE_KEY,
+  TOKEN_STORAGE_KEY,
+} from "./token-storage";
 
 vi.mock("react-native", () => ({
   Platform: {
@@ -48,11 +54,13 @@ describe("token storage", () => {
     await storage.setToken("native-token");
     await expect(storage.getToken()).resolves.toBe("secure-token");
     await storage.setRefreshToken("refresh-token");
+    await storage.setApiClientId("opco_app_nativeclient123");
     await storage.setSessionOwnerKey("org_1:user_1");
     await storage.deleteToken();
 
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "native-token");
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "refresh-token");
+    expect(secureStore.setItemAsync).toHaveBeenCalledWith(API_CLIENT_ID_STORAGE_KEY, "opco_app_nativeclient123");
     expect(secureStore.setItemAsync).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY, "org_1:user_1");
     expect(secureStore.getItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
@@ -67,6 +75,7 @@ describe("token storage", () => {
     });
 
     await storage.setSession({ accessToken: "access-token", refreshToken: "refresh-token" });
+    await storage.setApiClientId("opco_app_nativeclient123");
     await storage.setSessionOwnerKey("org_1:user_1");
     await storage.clearSession();
 
@@ -75,6 +84,7 @@ describe("token storage", () => {
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);
     expect(secureStore.deleteItemAsync).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY);
+    expect(secureStore.deleteItemAsync).not.toHaveBeenCalledWith(API_CLIENT_ID_STORAGE_KEY);
   });
 
   it("uses localStorage on web without storing refresh tokens", async () => {
@@ -87,15 +97,18 @@ describe("token storage", () => {
     });
 
     await storage.setToken("web-token");
+    await storage.setApiClientId("opco_app_webclient12345");
     await storage.setSessionOwnerKey("org_1:user_1");
     await storage.setRefreshToken("ignored-refresh-token");
     await expect(storage.getToken()).resolves.toBe("web-token");
+    await expect(storage.getApiClientId()).resolves.toBe("opco_app_webclient12345");
     await expect(storage.getSessionOwnerKey()).resolves.toBe("org_1:user_1");
     await expect(storage.getRefreshToken()).resolves.toBeNull();
     await storage.deleteToken();
     await expect(storage.getToken()).resolves.toBeNull();
 
     expect(webStorage.setItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY, "web-token");
+    expect(webStorage.setItem).toHaveBeenCalledWith(API_CLIENT_ID_STORAGE_KEY, "opco_app_webclient12345");
     expect(webStorage.setItem).toHaveBeenCalledWith(SESSION_OWNER_KEY_STORAGE_KEY, "org_1:user_1");
     expect(webStorage.setItem).not.toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY, "ignored-refresh-token");
     expect(webStorage.removeItem).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);
@@ -113,12 +126,14 @@ describe("token storage", () => {
     });
 
     await storage.setSession({ accessToken: "access-token-a", refreshToken: "ignored-refresh-token-a" });
+    await storage.setApiClientId("opco_app_webclient12345");
     await storage.setSessionOwnerKey("org_a:user_a");
     await storage.setSession({ accessToken: "access-token-b", refreshToken: "ignored-refresh-token-b" });
     await expect(storage.getAccessToken()).resolves.toBe("access-token-b");
     await storage.clearSession();
 
     await expect(storage.getAccessToken()).resolves.toBeNull();
+    await expect(storage.getApiClientId()).resolves.toBe("opco_app_webclient12345");
     await expect(storage.getSessionOwnerKey()).resolves.toBeNull();
     expect(webStorage.removeItem).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
     expect(webStorage.removeItem).toHaveBeenCalledWith(REFRESH_TOKEN_STORAGE_KEY);

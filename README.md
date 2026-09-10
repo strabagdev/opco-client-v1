@@ -24,6 +24,14 @@ EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 
 `EXPO_PUBLIC_OPCO_CLIENT_ID` es publico y se envia en `/api/v1/auth/login`. No agregues secretos server-side de Opco a este repositorio: no `API_AUTH_SECRET`, no `AUTH_SECRET`, no `DATABASE_URL`.
 
+En deployments multiempresa, el `clientId` principal llega por enlace:
+
+```text
+https://client.opco.cl/?clientId=opco_app_...
+```
+
+El cliente valida ese valor, lo persiste para siguientes inicios y lo usa en login. `EXPO_PUBLIC_OPCO_CLIENT_ID` queda solo como fallback compatible para instalaciones antiguas o ambientes con una única aplicación. Un valor vacío o inválido en la URL no reemplaza un `clientId` válido ya persistido.
+
 ## Arquitectura
 
 - `app/`: rutas Expo Router.
@@ -51,23 +59,24 @@ EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 ## Flujo
 
 1. Al iniciar se lee el token desde SecureStore.
-2. Si no existe token, se muestra login.
-3. Si existe token, se llama `GET /api/v1/me`.
-4. Si `/me` responde 401, se borra el token y se vuelve a login.
-5. Si falla por red, el token se conserva para el futuro modo offline-first.
-6. Luego se llama `GET /api/v1/context`.
-7. Con cero contratos se muestra empty state.
-8. Con un contrato se selecciona automaticamente.
-9. Con multiples contratos se muestra selector y se persiste el ultimo `contractId`.
-10. Con contrato seleccionado se llama `GET /api/v1/contracts/:contractId/views`.
-11. La home muestra solo AppViews activas/asignadas retornadas por Opco, ordenadas por `sortOrder`.
-12. Al abrir una AppView se usa la ruta generica `/view/:appViewId`.
-13. Si `AppView.type` es `RECORDS`, `config.entityTypeId` define que EntityType se lee.
-14. El titulo principal viene de `AppView.name`; la EntityType se muestra como metadata secundaria.
-15. Al abrir un record se conserva el contexto de AppView en `/view/:appViewId/record/:recordId`.
-16. Crear en AppViews `RECORDS` escribe primero en SQLite con `local_id` y `clientRequestId`, y luego intenta sincronizar.
-17. Editar en AppViews `RECORDS` actualiza SQLite primero, consolida la cola y luego intenta `PATCH`.
-18. La cola se sincroniza al iniciar sesion, al recuperar conectividad web, despues de crear/editar y con el boton `Sincronizar`.
+2. Se resuelve el `clientId` efectivo desde `?clientId=...`, persistencia local y fallback de build.
+3. Si no existe token, se muestra login.
+4. Si existe token, se llama `GET /api/v1/me`.
+5. Si `/me` responde 401, se borra el token y se vuelve a login.
+6. Si falla por red, el token se conserva para el futuro modo offline-first.
+7. Luego se llama `GET /api/v1/context`.
+8. Con cero contratos se muestra empty state.
+9. Con un contrato se selecciona automaticamente.
+10. Con multiples contratos se muestra selector y se persiste el ultimo `contractId`.
+11. Con contrato seleccionado se llama `GET /api/v1/contracts/:contractId/views`.
+12. La home muestra solo AppViews activas/asignadas retornadas por Opco, ordenadas por `sortOrder`.
+13. Al abrir una AppView se usa la ruta generica `/view/:appViewId`.
+14. Si `AppView.type` es `RECORDS`, `config.entityTypeId` define que EntityType se lee.
+15. El titulo principal viene de `AppView.name`; la EntityType se muestra como metadata secundaria.
+16. Al abrir un record se conserva el contexto de AppView en `/view/:appViewId/record/:recordId`.
+17. Crear en AppViews `RECORDS` escribe primero en SQLite con `local_id` y `clientRequestId`, y luego intenta sincronizar.
+18. Editar en AppViews `RECORDS` actualiza SQLite primero, consolida la cola y luego intenta `PATCH`.
+19. La cola se sincroniza al iniciar sesion, al recuperar conectividad web, despues de crear/editar y con el boton `Sincronizar`.
 
 ## AppViews y EntityTypes
 
@@ -81,12 +90,13 @@ type AppView =
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "WORKFLOW"; config: Record<string, unknown> }
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "REPORT"; config: Record<string, unknown> }
   | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "BOARD"; config: Record<string, unknown> }
-  | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "DASHBOARD"; config: Record<string, unknown> };
+  | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "DASHBOARD"; config: Record<string, unknown> }
+  | { id: string; name: string; slug: string; icon: string | null; sortOrder: number; type: "PANEL"; config: Record<string, unknown> };
 ```
 
 Si `/views` retorna `[]`, la home muestra: `No tienes experiencias asignadas para este contrato.` No hay fallback automatico al listado global de entidades.
 
-Home clasifica experiencias por `AppView.type`: `RECORDS` bajo Registros, `WORKFLOW` bajo Flujos, y `REPORT`, `BOARD`, `DASHBOARD` o tipos futuros desconocidos bajo Analisis. Las secciones vacias no se renderizan.
+Home clasifica experiencias por `AppView.type`: `RECORDS` bajo Registros, `WORKFLOW` bajo Flujos, y `REPORT`, `BOARD`, `DASHBOARD`, `PANEL` o tipos futuros desconocidos bajo Analisis. Las secciones vacias no se renderizan.
 
 ## Renderers
 
@@ -100,6 +110,7 @@ WORKFLOW + desconocido   -> UnsupportedRenderer
 REPORT    -> ReportRenderer
 BOARD     -> UnsupportedRenderer
 DASHBOARD -> UnsupportedRenderer
+PANEL     -> UnsupportedRenderer
 ```
 
 `REPORT` es consulta/presentacion: no crea, edita ni sincroniza registros locales. Soporta `TABLE`, `MATRIX`, `LATEST_BY_RELATION` y el alias compatible `CURRENT_STATUS`. `TABLE`/`MATRIX` usan `timeFilter.mode = RANGE | MONTH`, `defaultPeriod = CURRENT_MONTH`, `allowChange`, y `valueDisplay[fieldId] = LABEL | INTERNAL_VALUE`. `LATEST_BY_RELATION` muestra una fila por registro relacionado usando las columnas ordenadas de `latestByRelation.displayFieldIds`; no hardcodea encabezados de dominio, no usa fechas de auditoria como reemplazo y no singulariza nombres por heuristica. `CURRENT_STATUS` sigue leyendo `currentStatus` solo como compatibilidad legacy. `INTERNAL_VALUE` se muestra en reportes en mayusculas solo como presentacion; no modifica datos, opciones ni API. `REPORT` no es `BOARD` ni `DASHBOARD`.
@@ -374,7 +385,7 @@ app_view_definitions (
 )
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `app_view_definitions` guarda el shell preparado por owner/contrato/AppView. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`/`STATE_UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`; el `clientId` efectivo se guarda en el storage de sesión, separado de credenciales secretas. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `app_view_definitions` guarda el shell preparado por owner/contrato/AppView. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`/`STATE_UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
 
 Las migraciones SQLite no resetean la DB local. Agregan columnas/tablas nuevas y conservan `local_id`, `server_id`, cache, telemetria y pending operations existentes.
 
@@ -431,7 +442,7 @@ Build Command: npm run build:web
 Start Command: npm run start:web
 ```
 
-`npm run build:web` ejecuta `expo export --platform web`. Las variables `EXPO_PUBLIC_OPCO_API_URL` y `EXPO_PUBLIC_OPCO_CLIENT_ID` se incorporan al bundle durante ese build, por lo que deben existir en el servicio de Railway antes de compilar.
+`npm run build:web` ejecuta `expo export --platform web`. `EXPO_PUBLIC_OPCO_API_URL` se incorpora al bundle durante ese build. `EXPO_PUBLIC_OPCO_CLIENT_ID` tambien se incorpora si existe, pero se usa solo como fallback; los accesos multiempresa deben llegar con `?clientId=...`.
 
 `npm run start:web` ejecuta `node scripts/start-web.mjs`. Railway inyecta `PORT` automaticamente y el proceso escucha en `0.0.0.0` para ser accesible desde el proxy externo. El server sirve archivos desde `dist` y usa `dist/index.html` como fallback SPA. No hay puerto fijo en codigo.
 
