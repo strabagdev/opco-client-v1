@@ -820,6 +820,33 @@ describe("local database singleton", () => {
             last_error_message: "Nombre requerido.",
             local_record_id: "local_record_123456",
             operation: "UPDATE",
+            payload_json: JSON.stringify({
+              lastErrorDetails: {
+                relationDiagnostics: {
+                  fields: [
+                    {
+                      fieldId: "field_cargo_full",
+                      fieldName: "Cargo",
+                      issues: [
+                        {
+                          cause: "REFERENCE_NOT_FOUND",
+                          fieldId: "field_cargo_full",
+                          fieldName: "Cargo",
+                          relatedEntityTypeId: "entity_cargo_full",
+                          relatedEntityTypeName: "Cargos",
+                          targetRecordId: "cargo_missing_full",
+                        },
+                      ],
+                      relatedEntityTypeId: "entity_cargo_full",
+                      relatedEntityTypeName: "Cargos",
+                      submittedRecordIds: ["cargo_missing_full"],
+                    },
+                  ],
+                },
+              },
+              lastErrorHttpStatus: 400,
+              values: { cargo: "cargo_missing_full" },
+            }),
             record_sync_error_code: "VALIDATION_ERROR",
             record_sync_error_message: "Nombre requerido.",
             record_sync_status: "failed",
@@ -841,9 +868,42 @@ describe("local database singleton", () => {
     expect(operations).toEqual([
       {
         entityTypeId: "entity_people_abcdef",
+        hasStructuredDetails: true,
         lastErrorCode: "VALIDATION_ERROR",
+        lastErrorDetails: {
+          entityTypeId: null,
+          fields: [
+            {
+              expectedType: "RELATION_TARGET_RECORD",
+              fieldId: "field_cargo_full",
+              fieldLabel: "Cargo",
+              fieldType: "RELATION",
+              messages: ["cargo_missing_full: REFERENCE_NOT_FOUND"],
+              rejectedValue: ["cargo_missing_full"],
+              relatedEntityTypeId: "entity_cargo_full",
+              relatedEntityTypeName: "Cargos",
+              relationIssues: [
+                {
+                  actualEntityTypeId: null,
+                  actualEntityTypeName: null,
+                  cause: "REFERENCE_NOT_FOUND",
+                  fieldId: "field_cargo_full",
+                  fieldName: "Cargo",
+                  relatedEntityTypeId: "entity_cargo_full",
+                  relatedEntityTypeName: "Cargos",
+                  targetRecordId: "cargo_missing_full",
+                },
+              ],
+              source: "relation",
+              submittedRecordIds: ["cargo_missing_full"],
+            },
+          ],
+        },
+        lastHttpStatus: 400,
         lastErrorMessage: "Nombre requerido.",
         localRecordId: "local_record_123456",
+        manualRetryToken: "records:local_record_123456",
+        manualRetryable: true,
         operation: "UPDATE",
         retryCount: 2,
         serverRecordId: "server_record_654321",
@@ -2502,7 +2562,18 @@ describe("local database singleton", () => {
   it("commits RECORDS definitive failure as one transaction", async () => {
     const store = getLocalDatabase();
 
-    await store.failPendingOperation(recordsPendingOperation(), "VALIDATION", "invalid");
+    await store.failPendingOperation(recordsPendingOperation(), "INVALID_RELATION", "invalid", {
+      relationDiagnostics: {
+        fields: [
+          {
+            fieldId: "field_cargo_full",
+            fieldName: "Cargo",
+            relatedEntityTypeId: "entity_cargo_full",
+            submittedRecordIds: ["cargo_missing_full"],
+          },
+        ],
+      },
+    }, 400);
 
     expect(db.withTransactionAsync).toHaveBeenCalledOnce();
     const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
@@ -2511,6 +2582,8 @@ describe("local database singleton", () => {
     await transactionTask();
 
     expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE pending_operations");
+    expect(db.runAsync.mock.calls[0][4]).toEqual(expect.stringContaining("\"lastErrorHttpStatus\":400"));
+    expect(db.runAsync.mock.calls[0][4]).toEqual(expect.stringContaining("\"field_cargo_full\""));
     expect(db.runAsync.mock.calls[1][0]).toContain("UPDATE entity_records");
   });
 

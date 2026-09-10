@@ -119,6 +119,7 @@ type SessionContextValue = {
     trigger: StateUpdateSyncTrigger;
   }): Promise<void>;
   refreshRecordsSyncSummary(): Promise<void>;
+  retryFailedRecordOperation(manualRetryToken: string): Promise<void>;
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
@@ -394,6 +395,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
     token,
   });
 
+  const retryFailedRecordOperation = useCallback(async (manualRetryToken: string) => {
+    if (!ownerKey || !selectedContractIdState) {
+      return;
+    }
+
+    const operation = recordsFailedOperations.find((item) => item.manualRetryToken === manualRetryToken);
+
+    if (!operation || !operation.manualRetryable) {
+      return;
+    }
+
+    await definitionCache.retryFailedRecord({
+      contractId: selectedContractIdState,
+      entityTypeId: operation.entityTypeId,
+      ownerKey,
+      recordId: operation.localRecordId,
+    });
+    await syncPendingRecords();
+  }, [definitionCache, ownerKey, recordsFailedOperations, selectedContractIdState, syncPendingRecords]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -639,6 +660,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         recordOfflinePreparationDiagnostics,
         recordStateUpdateSyncRun,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
+        retryFailedRecordOperation,
         selectedContractId: selectedContractIdState,
         setSelectedContractId,
         signIn,

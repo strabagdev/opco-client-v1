@@ -38,6 +38,9 @@ export function getSyncDiagnosticsRows({
 }
 
 export type RecordsFailedOperationDiagnosticsSection = {
+  copyRows: [string, string | number | boolean | null][];
+  manualRetryToken: string | null;
+  manualRetryable: boolean;
   rows: [string, string | number | boolean | null][];
   title: string;
 };
@@ -46,24 +49,67 @@ export function getRecordsFailedOperationDiagnosticsSections(
   operations: RecordsFailedOperationDiagnostics[],
 ): RecordsFailedOperationDiagnosticsSection[] {
   return operations.map((operation, index) => {
-    const recordFingerprint = operation.serverRecordId ?? operation.localRecordId;
     const code = operation.lastErrorCode ?? operation.syncErrorCode ?? "none";
     const message = operation.lastErrorMessage ?? operation.syncErrorMessage ?? "none";
+    const firstField = operation.lastErrorDetails?.fields[0] ?? null;
+    const firstIssue = firstField?.relationIssues?.[0] ?? null;
+    const relationDiagnosticsJson = operation.lastErrorDetails
+      ? JSON.stringify(operation.lastErrorDetails)
+      : "Este rechazo no contiene detalle técnico; reintenta para actualizarlo";
+    const diagnosticRows: [string, string | number | boolean | null][] = [
+      ["Operacion", operation.operation],
+      ["Entidad", operation.entityTypeId],
+      ["Registro local", operation.localRecordId],
+      ["Registro servidor", operation.serverRecordId ?? "none"],
+      ["Intentos", String(operation.retryCount)],
+      ["HTTP status", operation.lastHttpStatus ?? "not stored"],
+      ["Codigo", code],
+      ["Mensaje", message],
+      ["Estado local", operation.syncStatus],
+      ["Actualizado", operation.updatedAt],
+      ["Detalle estructurado", operation.hasStructuredDetails ? "available" : "none"],
+      ["fieldId", firstField?.fieldId ?? "none"],
+      ["fieldName", firstField?.fieldLabel ?? firstIssue?.fieldName ?? "none"],
+      ["fieldType", firstField?.fieldType ?? "none"],
+      ["expectedRelationEntityId", firstField?.relatedEntityTypeId ?? firstIssue?.relatedEntityTypeId ?? "none"],
+      ["expectedRelationEntityName", firstField?.relatedEntityTypeName ?? firstIssue?.relatedEntityTypeName ?? "none"],
+      ["submittedRecordIds", formatDiagnosticValue(firstField?.submittedRecordIds ?? firstField?.rejectedValue)],
+      ["relationTargetRecordId", firstIssue?.targetRecordId ?? "none"],
+      ["relationActualEntityId", firstIssue?.actualEntityTypeId ?? "not exposed"],
+      ["relationActualEntityName", firstIssue?.actualEntityTypeName ?? "not exposed"],
+      ["cause", formatRelationCause(firstIssue?.cause)],
+      ["relationDiagnostics", relationDiagnosticsJson],
+      ["manualRetryable", operation.manualRetryable],
+    ];
 
     return {
       title: `#${index + 1}`,
-      rows: [
-        ["Operacion", operation.operation],
-        ["Entidad", abbreviateScopeValue(operation.entityTypeId)],
-        ["Registro", abbreviateScopeValue(recordFingerprint)],
-        ["Intentos", String(operation.retryCount)],
-        ["Codigo", code],
-        ["Mensaje", message],
-        ["Estado local", operation.syncStatus],
-        ["Actualizado", operation.updatedAt],
-      ],
+      copyRows: diagnosticRows,
+      manualRetryToken: operation.manualRetryToken,
+      manualRetryable: operation.manualRetryable,
+      rows: diagnosticRows.map(([label, value]) => {
+        if (label === "Entidad" || label === "Registro local" || label === "Registro servidor") {
+          return [label, typeof value === "string" ? abbreviateScopeValue(value) : value];
+        }
+
+        return [label, value];
+      }),
     };
   });
+}
+
+export function formatRecordsFailedOperationDiagnosticsCopyText(
+  sections: RecordsFailedOperationDiagnosticsSection[],
+) {
+  return sections
+    .map((section) => {
+      const body = section.copyRows
+        .map(([label, value]) => `${label}: ${formatDiagnosticCopyValue(value)}`)
+        .join("\n");
+
+      return `[RECORDS ${section.title}]\n${body}`;
+    })
+    .join("\n\n");
 }
 
 export function getRecordsFailedOperationsNotice(summary: RecordsSyncDiagnosticsSummary) {
@@ -174,4 +220,46 @@ function abbreviateScopeValue(value: string) {
   }
 
   return `...${value.slice(-6)}`;
+}
+
+function formatRelationCause(cause: string | null | undefined) {
+  if (!cause || cause === "UNDETERMINED") {
+    return "Causa no determinada";
+  }
+
+  return cause;
+}
+
+function formatDiagnosticValue(value: unknown) {
+  if (value === undefined) {
+    return "none";
+  }
+
+  if (typeof value === "string") {
+    return value || "empty";
+  }
+
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
+}
+
+function formatDiagnosticCopyValue(value: string | number | boolean | null) {
+  if (typeof value !== "string") {
+    return String(value);
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return value;
+  }
 }

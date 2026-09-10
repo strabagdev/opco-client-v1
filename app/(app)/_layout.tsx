@@ -22,6 +22,7 @@ import {
 } from "@/lib/pending-sync-errors";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import {
+  formatRecordsFailedOperationDiagnosticsCopyText,
   getRecordsFailedOperationDiagnosticsSections,
   getRecordsFailedOperationsNotice,
   getSyncDiagnosticsRows,
@@ -46,6 +47,7 @@ export default function AppLayout() {
     pendingRecordsCount,
     recordsFailedOperations,
     recordsSyncSummary,
+    retryFailedRecordOperation,
     selectedContractId,
     signOut,
     stateUpdateReconnectDiagnostics,
@@ -220,6 +222,7 @@ export default function AppLayout() {
     telemetry: null,
   });
   const recordsFailedDiagnosticsSections = getRecordsFailedOperationDiagnosticsSections(recordsFailedOperations);
+  const recordsFailedDiagnosticsCopyText = formatRecordsFailedOperationDiagnosticsCopyText(recordsFailedDiagnosticsSections);
   const recordsFailedOperationsNotice = getRecordsFailedOperationsNotice(recordsSyncSummary);
   const firstPendingSyncError = pendingStateUpdateSyncErrors[0] ?? null;
   const shouldShowRecordsSyncErrorDetail = recordsSyncSummary.failedCount > 0 && !firstPendingSyncError;
@@ -427,8 +430,10 @@ export default function AppLayout() {
               ) : null}
               {selectedDiagnosticsTab === "records" ? (
                 <RecordsGlobalDiagnostics
+                  copyText={recordsFailedDiagnosticsCopyText}
                   failedSections={recordsFailedDiagnosticsSections}
                   notice={recordsFailedOperationsNotice}
+                  onRetryOperation={retryFailedRecordOperation}
                   rows={recordsDiagnosticsRows}
                   totalFailedCount={recordsSyncSummary.failedCount}
                 />
@@ -475,8 +480,10 @@ export default function AppLayout() {
               ) : null}
               {shouldShowRecordsSyncErrorDetail ? (
                 <RecordsFailedDiagnostics
+                  copyText={recordsFailedDiagnosticsCopyText}
                   failedSections={recordsFailedDiagnosticsSections}
                   notice={recordsFailedOperationsNotice}
+                  onRetryOperation={retryFailedRecordOperation}
                   totalFailedCount={recordsSyncSummary.failedCount}
                 />
               ) : null}
@@ -606,13 +613,17 @@ function PwaDiagnostics({
 }
 
 function RecordsGlobalDiagnostics({
+  copyText,
   failedSections,
   notice,
+  onRetryOperation,
   rows,
   totalFailedCount,
 }: {
+  copyText: string;
   failedSections: ReturnType<typeof getRecordsFailedOperationDiagnosticsSections>;
   notice: string | null;
+  onRetryOperation(manualRetryToken: string): Promise<void>;
   rows: [string, string | number | boolean | null][];
   totalFailedCount: number;
 }) {
@@ -626,8 +637,10 @@ function RecordsGlobalDiagnostics({
         </View>
       ))}
       <RecordsFailedDiagnostics
+        copyText={copyText}
         failedSections={failedSections}
         notice={notice}
+        onRetryOperation={onRetryOperation}
         totalFailedCount={totalFailedCount}
       />
     </View>
@@ -635,26 +648,107 @@ function RecordsGlobalDiagnostics({
 }
 
 function RecordsFailedDiagnostics({
+  copyText,
   failedSections,
   notice,
+  onRetryOperation,
   totalFailedCount,
 }: {
+  copyText: string;
   failedSections: ReturnType<typeof getRecordsFailedOperationDiagnosticsSections>;
   notice: string | null;
+  onRetryOperation(manualRetryToken: string): Promise<void>;
   totalFailedCount: number;
 }) {
+  const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
+  const [retryingToken, setRetryingToken] = useState<string | null>(null);
+  const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copyResetTimeout.current) {
+      clearTimeout(copyResetTimeout.current);
+    }
+  }, []);
+
   if (totalFailedCount <= 0) {
     return null;
   }
 
+  async function handleCopyRecordsDiagnostics() {
+    if (!copyText.trim()) {
+      return;
+    }
+
+    if (copyResetTimeout.current) {
+      clearTimeout(copyResetTimeout.current);
+      copyResetTimeout.current = null;
+    }
+
+    try {
+      await copyTextToClipboard(copyText);
+      setCopyState("success");
+      copyResetTimeout.current = setTimeout(() => {
+        setCopyState("idle");
+        copyResetTimeout.current = null;
+      }, 2000);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  async function handleRetryOperation(manualRetryToken: string) {
+    setRetryingToken(manualRetryToken);
+
+    try {
+      await onRetryOperation(manualRetryToken);
+    } finally {
+      setRetryingToken(null);
+    }
+  }
+
+  const canCopy = copyText.trim().length > 0;
+  const copyButtonText = copyState === "success"
+    ? "Copiado"
+    : copyState === "error"
+      ? "No se pudo copiar"
+      : "Copiar diagnóstico";
+
   return (
     <View style={styles.diagnosticsSection}>
-      <Text style={styles.diagnosticsTitle}>Errores de RECORDS</Text>
+      <View style={styles.diagnosticsSectionHeader}>
+        <Text style={styles.diagnosticsTitle}>Errores de RECORDS</Text>
+        <Pressable
+          accessibilityRole="button"
+          disabled={!canCopy}
+          onPress={handleCopyRecordsDiagnostics}
+          style={[styles.secondaryModalButton, !canCopy ? styles.primaryModalButtonDisabled : null]}
+        >
+          <Text style={styles.secondaryModalButtonText}>{copyButtonText}</Text>
+        </Pressable>
+      </View>
       {notice ? <Text style={styles.diagnosticsNotice}>{notice}</Text> : null}
       {failedSections.length > 0 ? (
         failedSections.map((section) => (
           <View key={section.title} style={styles.diagnosticsSubsection}>
-            <Text style={styles.diagnosticsSectionTitle}>{section.title}</Text>
+            <View style={styles.diagnosticsSectionHeader}>
+              <Text style={styles.diagnosticsSectionTitle}>{section.title}</Text>
+              {section.manualRetryable && section.manualRetryToken ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={retryingToken === section.manualRetryToken}
+                  onPress={() => {
+                    if (section.manualRetryToken) {
+                      void handleRetryOperation(section.manualRetryToken);
+                    }
+                  }}
+                  style={[styles.secondaryModalButton, retryingToken === section.manualRetryToken ? styles.primaryModalButtonDisabled : null]}
+                >
+                  <Text style={styles.secondaryModalButtonText}>
+                    {retryingToken === section.manualRetryToken ? "Reintentando" : "Reintentar"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
             {section.rows.map(([label, value]) => (
               <View key={`${section.title}:${label}`} style={styles.diagnosticsRow}>
                 <Text style={styles.diagnosticsLabel}>{label}</Text>
@@ -670,6 +764,36 @@ function RecordsFailedDiagnostics({
       )}
     </View>
   );
+}
+
+async function copyTextToClipboard(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const copied = document.execCommand("copy");
+
+    if (!copied) {
+      throw new Error("Clipboard copy failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function getOfflinePreparationRows(diagnostics: OfflinePreparationDiagnostics | null) {
@@ -808,6 +932,13 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 10,
     paddingTop: 10,
+  },
+  diagnosticsSectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
   },
   diagnosticsSectionTitle: {
     color: "#17363c",

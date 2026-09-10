@@ -9,6 +9,7 @@ import {
   OpcoApiError,
   OpcoNetworkError,
 } from "./opco-api";
+import type { StateUpdateSyncErrorDetails } from "./state-update-offline";
 import { classifySyncTelemetryError, SyncTelemetryStore } from "./sync-telemetry";
 
 export type RecordSyncStatus = "synced" | "pending_create" | "pending_update" | "syncing" | "failed" | "conflict";
@@ -46,6 +47,8 @@ export type PendingOperation = {
 
 export type OfflineRecordPayload = {
   clientRequestId?: string;
+  lastErrorDetails?: StateUpdateSyncErrorDetails | null;
+  lastErrorHttpStatus?: number | null;
   values: Record<string, EntityRecordValue>;
 };
 
@@ -65,9 +68,14 @@ export type RecordsSyncSummary = {
 
 export type RecordsFailedOperationDiagnostics = {
   entityTypeId: string;
+  hasStructuredDetails: boolean;
   lastErrorCode: string | null;
+  lastErrorDetails: StateUpdateSyncErrorDetails | null;
+  lastHttpStatus: number | null;
   lastErrorMessage: string | null;
   localRecordId: string;
+  manualRetryToken: string | null;
+  manualRetryable: boolean;
   operation: Extract<PendingOperationType, "CREATE" | "UPDATE">;
   retryCount: number;
   serverRecordId: string | null;

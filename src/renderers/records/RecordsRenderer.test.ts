@@ -101,9 +101,14 @@ describe("records sync diagnostics", () => {
     const sections = getRecordsFailedOperationDiagnosticsSections([
       {
         entityTypeId: "entity_personas_sensitive_abcdef",
+        hasStructuredDetails: false,
         lastErrorCode: "VALIDATION_ERROR",
+        lastErrorDetails: null,
+        lastHttpStatus: null,
         lastErrorMessage: "El campo requerido falta.",
         localRecordId: "local_record_sensitive_123456",
+        manualRetryToken: "records:local_record_sensitive_123456",
+        manualRetryable: true,
         operation: "UPDATE",
         retryCount: 1,
         serverRecordId: "server_record_sensitive_654321",
@@ -113,7 +118,7 @@ describe("records sync diagnostics", () => {
         updatedAt: "2026-09-02T10:20:00.000Z",
       },
     ]);
-    const rendered = JSON.stringify(sections);
+    const renderedRows = JSON.stringify(sections[0]?.rows);
 
     expect(telemetryRows).toContainEqual(["Ultimo error", "none"]);
     expect(telemetryRows).toContainEqual(["Errores", "1"]);
@@ -122,10 +127,11 @@ describe("records sync diagnostics", () => {
     expect(sections[0]?.rows).toContainEqual(["Codigo", "VALIDATION_ERROR"]);
     expect(sections[0]?.rows).toContainEqual(["Mensaje", "El campo requerido falta."]);
     expect(sections[0]?.rows).toContainEqual(["Entidad", "...abcdef"]);
-    expect(sections[0]?.rows).toContainEqual(["Registro", "...654321"]);
-    expect(rendered).not.toContain("entity_personas_sensitive_abcdef");
-    expect(rendered).not.toContain("server_record_sensitive_654321");
-    expect(rendered).not.toContain("local_record_sensitive_123456");
+    expect(sections[0]?.rows).toContainEqual(["Registro servidor", "...654321"]);
+    expect(sections[0]?.copyRows).toContainEqual(["Entidad", "entity_personas_sensitive_abcdef"]);
+    expect(renderedRows).not.toContain("entity_personas_sensitive_abcdef");
+    expect(renderedRows).not.toContain("server_record_sensitive_654321");
+    expect(renderedRows).not.toContain("local_record_sensitive_123456");
   });
 
   it("explains retained failed RECORDS separately from pending operations", () => {

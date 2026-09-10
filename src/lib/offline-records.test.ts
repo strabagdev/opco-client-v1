@@ -1050,9 +1050,14 @@ class MemoryRecordStore implements OfflineRecordStore {
 
         return record ? {
           entityTypeId: operation.entityTypeId,
+          hasStructuredDetails: false,
           lastErrorCode: operation.lastErrorCode,
+          lastErrorDetails: null,
+          lastHttpStatus: null,
           lastErrorMessage: operation.lastErrorMessage,
           localRecordId: operation.localRecordId,
+          manualRetryToken: `records:${operation.localRecordId}`,
+          manualRetryable: true,
           operation: operation.operation,
           retryCount: operation.attempts,
           serverRecordId: operation.serverRecordId,

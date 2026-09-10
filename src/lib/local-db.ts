@@ -56,6 +56,7 @@ import {
   buildLocalDisplayName,
   CachedEntityRecord,
   createLocalRecordId,
+  OfflineRecordPayload,
   OfflineRecordStore,
   PendingOperation,
   RecordsReconcileDiagnostics,
@@ -1956,6 +1957,7 @@ async function listFailedRecordOperations({
         pending_operations.attempts AS attempts,
         pending_operations.last_error_code AS last_error_code,
         pending_operations.last_error_message AS last_error_message,
+        pending_operations.payload_json AS payload_json,
         pending_operations.updated_at AS updated_at,
         entity_records.sync_status AS record_sync_status,
         entity_records.sync_error_code AS record_sync_error_code,
@@ -3179,11 +3181,11 @@ async function retryFailedStateUpdateOperations({
   return selectedRows.length;
 }
 
-async function failPendingOperation(operation: PendingOperation, code: string, message: string) {
+async function failPendingOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
   const db = await getDatabase();
 
   await db.withTransactionAsync(async () => {
-    await setOperationError(db, operation, code, message, "failed");
+    await setOperationError(db, operation, code, message, "failed", details, httpStatus);
   });
 }
 
@@ -3716,7 +3718,7 @@ async function setOperationError(
   httpStatus?: number | null,
 ) {
   const now = new Date().toISOString();
-  const payloadJson = operation.operation === STATE_UPDATE_OPERATION
+  const payloadJson = operation.operation === STATE_UPDATE_OPERATION || operation.operation === "CREATE" || operation.operation === "UPDATE"
     ? JSON.stringify({
         ...operation.payload,
         lastErrorDetails: normalizeStateUpdateSyncErrorDetails(details),
@@ -3807,6 +3809,7 @@ type FailedRecordOperationDiagnosticsRow = {
   last_error_message: string | null;
   local_record_id: string;
   operation: "CREATE" | "UPDATE";
+  payload_json: string;
   record_sync_error_code: string | null;
   record_sync_error_message: string | null;
   record_sync_status: RecordSyncStatus;
@@ -3917,11 +3920,19 @@ function mapPendingOperationRow(row: PendingOperationRow): PendingOperation {
 }
 
 function mapFailedRecordOperationDiagnosticsRow(row: FailedRecordOperationDiagnosticsRow) {
+  const payload = parseJsonObject(row.payload_json) as OfflineRecordPayload | null;
+  const lastErrorDetails = normalizeStateUpdateSyncErrorDetails(payload?.lastErrorDetails);
+
   return {
     entityTypeId: row.entity_type_id,
+    hasStructuredDetails: Boolean(lastErrorDetails),
     lastErrorCode: row.last_error_code,
+    lastErrorDetails,
+    lastHttpStatus: normalizeHttpStatus(payload?.lastErrorHttpStatus),
     lastErrorMessage: row.last_error_message,
     localRecordId: row.local_record_id,
+    manualRetryToken: row.record_sync_status === "failed" ? recordsManualRetryToken(row.local_record_id) : null,
+    manualRetryable: row.record_sync_status === "failed",
     operation: row.operation,
     retryCount: row.attempts,
     serverRecordId: row.server_record_id,
@@ -3930,6 +3941,10 @@ function mapFailedRecordOperationDiagnosticsRow(row: FailedRecordOperationDiagno
     syncStatus: row.record_sync_status,
     updatedAt: row.updated_at,
   };
+}
+
+function recordsManualRetryToken(localRecordId: string) {
+  return `records:${localRecordId}`;
 }
 
 function parsePendingStateUpdatePayload(value: string): OfflineStateUpdatePayload | null {

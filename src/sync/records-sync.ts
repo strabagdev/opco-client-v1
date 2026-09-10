@@ -5,7 +5,7 @@ import { classifySyncTelemetryError, SyncErrorCode, SyncErrorPhase, SyncPhase, S
 
 export type RecordsSyncStore = {
   completePendingOperation(operation: PendingOperation, record: EntityRecord): Promise<void>;
-  failPendingOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
+  failPendingOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   listPendingOperations(ownerKey: string): Promise<PendingOperation[]>;
   markPendingOperationConflict(operation: PendingOperation, remoteRecord: EntityRecord, code: string, message: string): Promise<void>;
   markPendingOperationSyncing(operationId: string): Promise<void>;
@@ -115,7 +115,13 @@ async function runSync({
         continue;
       }
 
-      await store.failPendingOperation(operation, classification.code, classification.message);
+      await store.failPendingOperation(
+        operation,
+        classification.code,
+        classification.message,
+        error instanceof OpcoApiError ? error.details : undefined,
+        error instanceof OpcoApiError ? error.status : null,
+      );
       result.failed += 1;
     }
   }

@@ -200,6 +200,58 @@ describe("records sync engine", () => {
     expect(store.completed).toEqual([]);
   });
 
+  it("passes API relation diagnostics and HTTP status to durable RECORDS failures", async () => {
+    const details = {
+      relationDiagnostics: {
+        fields: [
+          {
+            fieldId: "field_cargo_full",
+            fieldName: "Cargo",
+            issues: [
+              {
+                cause: "REFERENCE_NOT_FOUND",
+                fieldId: "field_cargo_full",
+                fieldName: "Cargo",
+                relatedEntityTypeId: "entity_cargo_full",
+                relatedEntityTypeName: "Cargos",
+                targetRecordId: "cargo_missing_full",
+              },
+            ],
+            relatedEntityTypeId: "entity_cargo_full",
+            relatedEntityTypeName: "Cargos",
+            submittedRecordIds: ["cargo_missing_full"],
+          },
+        ],
+      },
+    };
+    store.operations = [
+      operation({
+        localRecordId: "local_1",
+        operation: "CREATE",
+        payload: { clientRequestId: "request_1", values: { cargo: "cargo_missing_full" } },
+      }),
+    ];
+    const api = {
+      createEntityRecord: vi.fn(async () => {
+        throw new OpcoApiError("Cargo contiene registros relacionados no validos.", "INVALID_RELATION", 400, details);
+      }),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(store.failed).toEqual([
+      {
+        code: "INVALID_RELATION",
+        details,
+        httpStatus: 400,
+        message: "Cargo contiene registros relacionados no validos.",
+        operation: store.operations[0],
+      },
+    ]);
+  });
+
   it("runs as a single-flight sync", async () => {
     store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
     const api = {
@@ -362,7 +414,7 @@ function operation(partial: Partial<PendingOperation> & Pick<PendingOperation, "
 class MemorySyncStore implements RecordsSyncStore {
   completed: { operation: PendingOperation; record: EntityRecord }[] = [];
   conflicts: { code: string; message: string; operation: PendingOperation; record: EntityRecord }[] = [];
-  failed: { code: string; message: string; operation: PendingOperation }[] = [];
+  failed: { code: string; details?: unknown; httpStatus?: number | null; message: string; operation: PendingOperation }[] = [];
   operations: PendingOperation[] = [];
   remoteUpdatedAt: string | null = "2026-08-20T12:00:00.000Z";
   retried: { code: string; message: string; operation: PendingOperation }[] = [];
@@ -373,8 +425,8 @@ class MemorySyncStore implements RecordsSyncStore {
     this.completed.push({ operation: operationItem, record: recordItem });
   }
 
-  async failPendingOperation(operationItem: PendingOperation, code: string, message: string) {
-    this.failed.push({ code, message, operation: operationItem });
+  async failPendingOperation(operationItem: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
+    this.failed.push({ code, details, httpStatus, message, operation: operationItem });
   }
 
   async listPendingOperations(ownerKey: string) {
