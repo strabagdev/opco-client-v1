@@ -8,7 +8,11 @@ import {
   displayPanelValue,
   normalizePanelFilters,
   panelDatasetQueryKey,
+  panelTableColumnMinWidth,
+  panelTableColumnWeight,
 } from "./panel-renderer-logic";
+
+declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
 
 describe("panel table model", () => {
   it("renders TABLE columns exactly as configured without prepending or reordering fields", () => {
@@ -20,6 +24,37 @@ describe("panel table model", () => {
 
     expect(table?.columns.map((column) => column.name)).toEqual(["Estatus", "Revisión", "Fecha"]);
     expect(table?.rows[0]?.values).toEqual(["Publicado", "2", "06-09-2026"]);
+  });
+
+  it("uses the full module width with balanced column distribution metadata", () => {
+    const table = buildPanelTableModel(tableModule([
+      { fieldId: "procedure_field" },
+      { fieldId: "status_field" },
+      { fieldId: "review_field" },
+      { fieldId: "date_field" },
+    ]), panelDataset());
+
+    expect(table?.columns.map((column) => column.name)).toEqual(["Procedimiento", "Estatus", "Revisión", "Fecha"]);
+    expect(table?.columns.map((column) => column.type)).toEqual(["RELATION", "SELECT", "TEXT", "DATE"]);
+    expect(table?.columns.map((column) => column.weight)).toEqual([
+      panelTableColumnWeight("RELATION"),
+      panelTableColumnWeight("SELECT"),
+      panelTableColumnWeight("TEXT"),
+      panelTableColumnWeight("DATE"),
+    ]);
+    expect(table?.minWidth).toBe(
+      panelTableColumnMinWidth("RELATION")
+      + panelTableColumnMinWidth("SELECT")
+      + panelTableColumnMinWidth("TEXT")
+      + panelTableColumnMinWidth("DATE"),
+    );
+  });
+
+  it("gives RELATION and TEXT fields more space than compact DATE and numeric fields", () => {
+    expect(panelTableColumnWeight("RELATION")).toBeGreaterThan(panelTableColumnWeight("DATE"));
+    expect(panelTableColumnWeight("TEXT")).toBeGreaterThan(panelTableColumnWeight("INTEGER"));
+    expect(panelTableColumnMinWidth("RELATION")).toBeGreaterThan(panelTableColumnMinWidth("DATE"));
+    expect(panelTableColumnMinWidth("INTEGER")).toBeLessThan(panelTableColumnMinWidth("TEXT"));
   });
 
   it("formats SELECT, MULTISELECT, DATE, DATETIME, RELATION, and null values for display only", () => {
@@ -58,6 +93,39 @@ describe("panel table model", () => {
       ...tableModule([{ fieldId: "status_field" }]),
       visualization: { config: {}, type: "KPI" },
     }, panelDataset())).toBeNull();
+  });
+
+  it("keeps long text values complete for accessible rendering while the UI may truncate", () => {
+    const longValue = "Procedimiento con un nombre muy largo que debe seguir disponible completo";
+    const table = buildPanelTableModel(tableModule([{ fieldId: "review_field" }]), panelDataset({
+      rows: [{
+        id: "version_2",
+        values: {
+          review_field: longValue,
+        },
+      }],
+    }));
+
+    expect(table?.rows[0]?.values[0]).toBe(longValue);
+  });
+});
+
+describe("panel TABLE renderer structure", () => {
+  const { readFileSync } = require("fs");
+  const source = readFileSync("src/renderers/panels/PanelRenderer.tsx", "utf8");
+
+  it("renders PANEL tables at full width with internal horizontal overflow", () => {
+    expect(source).toContain("horizontal");
+    expect(source).toContain("maxWidth: \"100%\"");
+    expect(source).toContain("minWidth: \"100%\"");
+    expect(source).toContain("width: \"100%\"");
+    expect(source).not.toContain("width: 160");
+  });
+
+  it("keeps pagination attached to the table with disabled previous and next states", () => {
+    expect(source.indexOf("<PanelTable table={table} />")).toBeLessThan(source.indexOf("styles.pagination"));
+    expect(source).toContain("disabled={page <= 1}");
+    expect(source).toContain("disabled={!dataset.pagination.hasMore}");
   });
 });
 

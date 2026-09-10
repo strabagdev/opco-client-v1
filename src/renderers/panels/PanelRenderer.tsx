@@ -371,11 +371,25 @@ function PanelModule({
 
 function PanelTable({ table }: { table: ReturnType<typeof buildPanelTableModel> & {} }) {
   return (
-    <ScrollView horizontal style={styles.horizontalScroll}>
-      <View style={styles.table}>
+    <ScrollView
+      contentContainerStyle={styles.horizontalScrollContent}
+      horizontal
+      showsHorizontalScrollIndicator
+      style={styles.horizontalScroll}
+    >
+      <View style={[styles.table, { minWidth: table.minWidth }]}>
         <View accessibilityRole="header" style={styles.tableHeaderRow}>
           {table.columns.map((column) => (
-            <Text key={column.fieldId} numberOfLines={1} style={[styles.tableCell, styles.tableHeaderText]}>
+            <Text
+              accessibilityLabel={column.name}
+              key={column.fieldId}
+              numberOfLines={1}
+              style={[
+                styles.tableCell,
+                styles.tableHeaderText,
+                { flexGrow: column.weight, minWidth: column.minWidth },
+              ]}
+            >
               {column.name}
             </Text>
           ))}
@@ -387,7 +401,18 @@ function PanelTable({ table }: { table: ReturnType<typeof buildPanelTableModel> 
             style={styles.tableRow}
           >
             {row.values.map((value, index) => (
-              <Text key={`${row.id}-${table.columns[index]?.fieldId ?? index}`} numberOfLines={1} style={styles.tableCell}>
+              <Text
+                accessibilityLabel={`${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`}
+                key={`${row.id}-${table.columns[index]?.fieldId ?? index}`}
+                numberOfLines={1}
+                style={[
+                  styles.tableCell,
+                  {
+                    flexGrow: table.columns[index]?.weight ?? 1,
+                    minWidth: table.columns[index]?.minWidth ?? 144,
+                  },
+                ]}
+              >
                 {value || "-"}
               </Text>
             ))}
@@ -457,6 +482,10 @@ const styles = StyleSheet.create({
   },
   horizontalScroll: {
     alignSelf: "stretch",
+    maxWidth: "100%",
+  },
+  horizontalScrollContent: {
+    minWidth: "100%",
   },
   module: {
     padding: 6,
@@ -516,18 +545,19 @@ const styles = StyleSheet.create({
     borderColor: "#d1d5db",
     borderLeftWidth: 1,
     borderTopWidth: 1,
-    minWidth: 640,
+    width: "100%",
   },
   tableCell: {
     borderBottomWidth: 1,
     borderColor: "#d1d5db",
     borderRightWidth: 1,
     color: "#111827",
+    flexBasis: 0,
+    flexShrink: 1,
     fontSize: 13,
     minHeight: 42,
     paddingHorizontal: 10,
     paddingVertical: 11,
-    width: 160,
   },
   tableHeaderRow: {
     backgroundColor: "#f3f4f6",

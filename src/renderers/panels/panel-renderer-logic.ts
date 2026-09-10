@@ -11,8 +11,12 @@ import {
 export type PanelTableModel = {
   columns: {
     fieldId: string;
+    minWidth: number;
     name: string;
+    type: PanelField["type"];
+    weight: number;
   }[];
+  minWidth: number;
   rows: {
     id: string;
     values: string[];
@@ -61,13 +65,49 @@ export function buildPanelTableModel(module: PanelModuleConfig, dataset: PanelDa
   return {
     columns: columns.map((column) => ({
       fieldId: column.fieldId,
+      minWidth: panelTableColumnMinWidth(column.field.type),
       name: column.name,
+      type: column.field.type,
+      weight: panelTableColumnWeight(column.field.type),
     })),
+    minWidth: columns.reduce((total, column) => total + panelTableColumnMinWidth(column.field.type), 0),
     rows: dataset.rows.map((row) => ({
       id: row.id,
       values: columns.map((column) => displayPanelValue(column.field, row.values[column.fieldId], column.valueDisplay)),
     })),
   };
+}
+
+export function panelTableColumnWeight(fieldType: PanelField["type"]) {
+  if (fieldType === "RELATION" || fieldType === "TEXTAREA") {
+    return 2;
+  }
+
+  if (fieldType === "TEXT" || fieldType === "EMAIL" || fieldType === "URL" || fieldType === "PHONE") {
+    return 1.5;
+  }
+
+  if (fieldType === "DATE" || fieldType === "TIME" || fieldType === "BOOLEAN" || fieldType === "INTEGER" || fieldType === "DECIMAL" || fieldType === "MONEY") {
+    return 0.9;
+  }
+
+  return 1.2;
+}
+
+export function panelTableColumnMinWidth(fieldType: PanelField["type"]) {
+  if (fieldType === "RELATION" || fieldType === "TEXTAREA") {
+    return 180;
+  }
+
+  if (fieldType === "DATE" || fieldType === "TIME" || fieldType === "BOOLEAN") {
+    return 112;
+  }
+
+  if (fieldType === "INTEGER" || fieldType === "DECIMAL" || fieldType === "MONEY") {
+    return 120;
+  }
+
+  return 144;
 }
 
 export function displayPanelValue(
