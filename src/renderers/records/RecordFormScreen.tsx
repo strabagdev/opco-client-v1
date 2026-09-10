@@ -11,7 +11,7 @@ import {
 
 import { buildAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
-import { CachedEntityRecord, loadRecordWithOfflineCache, saveRecordLocally } from "@/lib/offline-records";
+import { CachedEntityRecord, loadRecordWithOfflineCache, loadRecordsWithOfflineCache, saveRecordLocally } from "@/lib/offline-records";
 import { EntityDefinition, RecordsAppView } from "@/lib/opco-api";
 import { stableSubmitButtonStyle } from "@/lib/visual-stability";
 import {
@@ -19,7 +19,10 @@ import {
   buildInitialFormValues,
   buildSubmitValues,
   extractApiFieldErrors,
+  getRelationTargetEntityTypeId,
+  getUnknownRelationValueErrors,
   getWritableFields,
+  RecordRelationOption,
   RecordFormErrors,
   RecordFormValues,
   validateFormFields,
@@ -33,6 +36,14 @@ type Props = {
   recordId?: string;
 };
 
+type RelationOptionsState = {
+  error: string | null;
+  isLoaded: boolean;
+  isLoading: boolean;
+  options: RecordRelationOption[];
+  targetEntityTypeId: string | null;
+};
+
 export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
   const { api, definitionCache, localDatabaseStorageState, ownerKey, selectedContractId, syncPendingRecords, token } =
@@ -42,6 +53,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const [initialValues, setInitialValues] = useState<RecordFormValues>({});
   const [values, setValues] = useState<RecordFormValues>({});
   const [fieldErrors, setFieldErrors] = useState<RecordFormErrors>({});
+  const [relationOptionsByField, setRelationOptionsByField] = useState<Record<string, RelationOptionsState>>({});
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -116,6 +128,99 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     };
   }, [api, definitionCache, entityTypeId, mode, ownerKey, recordId, retryCount, selectedContractId, token]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRelationOptions() {
+      if (!definition || !token || !selectedContractId || !ownerKey) {
+        setRelationOptionsByField({});
+        return;
+      }
+
+      const relationFields = getWritableFields(definition)
+        .filter((field) => field.type === "RELATION")
+        .map((field) => ({
+          field,
+          targetEntityTypeId: getRelationTargetEntityTypeId(field),
+        }));
+
+      if (relationFields.length === 0) {
+        setRelationOptionsByField({});
+        return;
+      }
+
+      setRelationOptionsByField(Object.fromEntries(
+        relationFields.map(({ field, targetEntityTypeId }) => [
+          field.key,
+          {
+            error: targetEntityTypeId ? null : "Este campo de relacion no tiene un catalogo configurado.",
+            isLoaded: false,
+            isLoading: Boolean(targetEntityTypeId),
+            options: [],
+            targetEntityTypeId,
+          },
+        ]),
+      ));
+
+      await Promise.all(relationFields.map(async ({ field, targetEntityTypeId }) => {
+        if (!targetEntityTypeId) {
+          return;
+        }
+
+        try {
+          const result = await loadRecordsWithOfflineCache({
+            api,
+            contractId: selectedContractId,
+            direction: "asc",
+            entityTypeId: targetEntityTypeId,
+            ownerKey,
+            page: 1,
+            pageSize: 100,
+            sort: "displayName",
+            store: definitionCache,
+            token,
+          });
+          const options = result.records.map((record) => ({
+            displayName: record.displayName || record.id,
+            id: record.id,
+          }));
+
+          if (isMounted) {
+            setRelationOptionsByField((current) => ({
+              ...current,
+              [field.key]: {
+                error: null,
+                isLoaded: true,
+                isLoading: false,
+                options,
+                targetEntityTypeId,
+              },
+            }));
+          }
+        } catch {
+          if (isMounted) {
+            setRelationOptionsByField((current) => ({
+              ...current,
+              [field.key]: {
+                error: "No pudimos cargar el catalogo de registros relacionados.",
+                isLoaded: false,
+                isLoading: false,
+                options: [],
+                targetEntityTypeId,
+              },
+            }));
+          }
+        }
+      }));
+    }
+
+    void loadRelationOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [api, definition, definitionCache, ownerKey, selectedContractId, token]);
+
   function setFieldValue(key: string, value: string | boolean | string[]) {
     setValues((current) => ({
       ...current,
@@ -139,7 +244,11 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       return;
     }
 
-    const requiredErrors = validateFormFields(fields, values);
+    const requiredErrors = {
+      ...validateFormFields(fields, values),
+      ...getRelationCatalogAvailabilityErrors(fields, values, relationOptionsByField),
+      ...getUnknownRelationValueErrors(fields, values, relationOptionsByField),
+    };
 
     if (Object.keys(requiredErrors).length > 0) {
       setFieldErrors(requiredErrors);
@@ -209,6 +318,15 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
               field={field}
               key={field.key}
               onChange={(value) => setFieldValue(field.key, value)}
+              relationOptions={relationOptionsByField[field.key]?.options}
+              relationOptionsError={relationOptionsByField[field.key]?.error}
+              relationOptionsLoading={
+                relationOptionsByField[field.key]?.isLoading ??
+                (field.type === "RELATION" && Boolean(getRelationTargetEntityTypeId(field)))
+              }
+              relationTargetEntityTypeId={
+                relationOptionsByField[field.key]?.targetEntityTypeId ?? getRelationTargetEntityTypeId(field)
+              }
               value={values[field.key]}
             />
           ))}
@@ -234,6 +352,40 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       ) : null}
     </ScrollView>
   );
+}
+
+function getRelationCatalogAvailabilityErrors(
+  fields: ReturnType<typeof getWritableFields>,
+  values: RecordFormValues,
+  relationOptionsByField: Record<string, RelationOptionsState>,
+) {
+  return fields.reduce<RecordFormErrors>((errors, field) => {
+    if (field.type !== "RELATION") {
+      return errors;
+    }
+
+    const selected = values[field.key];
+    const hasSelectedValue = Array.isArray(selected)
+      ? selected.length > 0
+      : typeof selected === "string" && selected.trim().length > 0;
+
+    if (!hasSelectedValue) {
+      return errors;
+    }
+
+    const state = relationOptionsByField[field.key];
+
+    if (!state?.targetEntityTypeId) {
+      errors[field.key] = "Este campo de relacion no tiene un catalogo configurado.";
+      return errors;
+    }
+
+    if (state.isLoading || !state.isLoaded) {
+      errors[field.key] = state.error ?? "No pudimos cargar el catalogo de registros relacionados.";
+    }
+
+    return errors;
+  }, {});
 }
 
 const styles = StyleSheet.create({

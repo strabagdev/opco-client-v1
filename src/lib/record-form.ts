@@ -4,6 +4,11 @@ export type RecordFormValues = Record<string, string | boolean | string[]>;
 
 export type RecordFormErrors = Record<string, string>;
 
+export type RecordRelationOption = {
+  displayName: string;
+  id: string;
+};
+
 export const WRITABLE_FIELD_TYPES = new Set([
   "BOOLEAN",
   "DATE",
@@ -93,6 +98,70 @@ export function validateFormFields(fields: EntityField[], values: RecordFormValu
   return errors;
 }
 
+export function getRelationTargetEntityTypeId(field: EntityField) {
+  if (field.type !== "RELATION") {
+    return null;
+  }
+
+  const config = readRecord(field.config);
+  const relation = readRecord(config?.relation);
+  const candidates = [
+    relation?.targetEntityTypeId,
+    relation?.relatedEntityTypeId,
+    config?.targetEntityTypeId,
+    config?.relatedEntityTypeId,
+  ];
+
+  return candidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ?? null;
+}
+
+export function isRelationFieldMultiple(field: EntityField) {
+  if (field.multiple) {
+    return true;
+  }
+
+  const relation = readRecord(field.config?.relation);
+
+  if (relation?.relationKind === "MANY") {
+    return true;
+  }
+
+  return field.config?.relationKind === "MANY";
+}
+
+export function getUnknownRelationValueErrors(
+  fields: EntityField[],
+  values: RecordFormValues,
+  relationOptionsByField: Record<string, { isLoaded: boolean; options: RecordRelationOption[] }>,
+): RecordFormErrors {
+  return fields.reduce<RecordFormErrors>((errors, field) => {
+    if (field.type !== "RELATION" || errors[field.key]) {
+      return errors;
+    }
+
+    const state = relationOptionsByField[field.key];
+
+    if (!state?.isLoaded) {
+      return errors;
+    }
+
+    const selectedIds = getSelectedRelationIds(values[field.key]);
+
+    if (selectedIds.length === 0) {
+      return errors;
+    }
+
+    const optionIds = new Set(state.options.map((option) => option.id));
+    const unknownIds = selectedIds.filter((id) => !optionIds.has(id));
+
+    if (unknownIds.length > 0) {
+      errors[field.key] = "Selecciona un registro valido del catalogo.";
+    }
+
+    return errors;
+  }, {});
+}
+
 export function buildSubmitValues(fields: EntityField[], values: RecordFormValues) {
   return fields.reduce<Record<string, EntityRecordValue>>((payload, field) => {
     if (isFieldUnsupported(field)) {
@@ -136,7 +205,7 @@ function formValueFromRecordValue(value: EntityRecordValue | undefined, field: E
     return Array.isArray(value) ? value.map((item) => String(readRelationId(item) ?? item)) : [];
   }
 
-  if (field.type === "RELATION" && field.multiple) {
+  if (field.type === "RELATION" && isRelationFieldMultiple(field)) {
     return Array.isArray(value) ? value.map((item) => String(readRelationId(item) ?? item)) : [];
   }
 
@@ -182,6 +251,18 @@ function recordValueFromFormValue(
   }
 
   return textValue;
+}
+
+function getSelectedRelationIds(value: string | boolean | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item.trim().length > 0);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+
+  return [];
 }
 
 export function isValidTimeValue(value: string) {
@@ -355,6 +436,12 @@ function readRelationId(value: unknown) {
   }
 
   return null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function readFieldErrors(details: unknown): RecordFormErrors {

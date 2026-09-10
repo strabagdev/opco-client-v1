@@ -1,8 +1,9 @@
+import { useMemo, useState } from "react";
 import { Text, TextInput, Pressable, StyleSheet, View } from "react-native";
 
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { EntityField } from "@/lib/opco-api";
-import { isFieldUnsupported } from "@/lib/record-form";
+import { isFieldUnsupported, isRelationFieldMultiple, RecordRelationOption } from "@/lib/record-form";
 
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./temporal-input";
 
@@ -10,10 +11,23 @@ type FieldInputProps = {
   error?: string;
   field: EntityField;
   onChange(value: string | boolean | string[]): void;
+  relationOptions?: RecordRelationOption[];
+  relationOptionsError?: string | null;
+  relationOptionsLoading?: boolean;
+  relationTargetEntityTypeId?: string | null;
   value: string | boolean | string[] | undefined;
 };
 
-export function RecordFieldInput({ error, field, onChange, value }: FieldInputProps) {
+export function RecordFieldInput({
+  error,
+  field,
+  onChange,
+  relationOptions = [],
+  relationOptionsError = null,
+  relationOptionsLoading = false,
+  relationTargetEntityTypeId = null,
+  value,
+}: FieldInputProps) {
   if (isFieldUnsupported(field)) {
     return (
       <View style={styles.fieldGroup}>
@@ -80,6 +94,21 @@ export function RecordFieldInput({ error, field, onChange, value }: FieldInputPr
     );
   }
 
+  if (field.type === "RELATION") {
+    return (
+      <RelationFieldInput
+        error={error}
+        field={field}
+        onChange={onChange}
+        options={relationOptions}
+        optionsError={relationOptionsError}
+        optionsLoading={relationOptionsLoading}
+        targetEntityTypeId={relationTargetEntityTypeId}
+        value={value}
+      />
+    );
+  }
+
   const textValue = Array.isArray(value) ? value.join(", ") : typeof value === "boolean" ? "" : value ?? "";
 
   if (field.type === "DATE" || field.type === "TIME" || field.type === "DATETIME") {
@@ -110,23 +139,112 @@ export function RecordFieldInput({ error, field, onChange, value }: FieldInputPr
         keyboardType={getKeyboardType(field.type)}
         multiline={multiline}
         onChangeText={(nextValue) => {
-          if (field.type === "RELATION" && field.multiple) {
-            onChange(
-              nextValue
-                .split(",")
-                .map((item) => item.trim())
-                .filter(Boolean),
-            );
-            return;
-          }
-
           onChange(nextValue);
         }}
         placeholder={getPlaceholder(field)}
         style={[styles.input, multiline && styles.textarea]}
         value={textValue}
       />
-      {field.type === "RELATION" ? <Text style={styles.help}>Ingresa el id del registro relacionado.</Text> : null}
+      <FieldError error={error} />
+    </View>
+  );
+}
+
+function RelationFieldInput({
+  error,
+  field,
+  onChange,
+  options,
+  optionsError,
+  optionsLoading,
+  targetEntityTypeId,
+  value,
+}: {
+  error?: string;
+  field: EntityField;
+  onChange(value: string | boolean | string[]): void;
+  options: RecordRelationOption[];
+  optionsError: string | null;
+  optionsLoading: boolean;
+  targetEntityTypeId: string | null;
+  value: string | boolean | string[] | undefined;
+}) {
+  const [search, setSearch] = useState("");
+  const isMultiple = isRelationFieldMultiple(field);
+  const selectedValues = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
+  const optionIds = useMemo(() => new Set(options.map((option) => option.id)), [options]);
+  const unknownValues = selectedValues.filter((item) => !optionIds.has(item));
+  const normalizedSearch = search.trim().toLocaleLowerCase("es-CL");
+  const filteredOptions = useMemo(
+    () =>
+      normalizedSearch
+        ? options.filter((option) =>
+            option.displayName.toLocaleLowerCase("es-CL").includes(normalizedSearch) ||
+            option.id.toLocaleLowerCase("es-CL").includes(normalizedSearch)
+          )
+        : options,
+    [normalizedSearch, options],
+  );
+
+  return (
+    <View style={styles.fieldGroup}>
+      <Text style={styles.label}>{field.name}</Text>
+      {targetEntityTypeId ? (
+        <>
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setSearch}
+            placeholder="Buscar en catalogo"
+            style={styles.input}
+            value={search}
+          />
+          {optionsLoading ? <Text style={styles.help}>Cargando catalogo...</Text> : null}
+          {optionsError ? <Text style={styles.fieldError}>{optionsError}</Text> : null}
+          {unknownValues.length > 0 ? (
+            <Text style={styles.fieldError}>
+              El valor guardado no corresponde a un registro disponible del catalogo. Selecciona un registro valido para conservar el cambio y reintentar.
+            </Text>
+          ) : null}
+          {!optionsLoading && !optionsError && options.length === 0 ? (
+            <Text style={styles.fieldError}>No hay registros disponibles en el catalogo para seleccionar.</Text>
+          ) : null}
+          <View style={styles.optionList}>
+            {filteredOptions.map((option) => {
+              const selected = selectedValues.includes(option.id);
+
+              return (
+                <Pressable
+                  key={option.id}
+                  onPress={() => {
+                    if (isMultiple) {
+                      onChange(
+                        selected
+                          ? selectedValues.filter((item) => item !== option.id)
+                          : [...selectedValues.filter((item) => optionIds.has(item)), option.id],
+                      );
+                    } else {
+                      onChange(selected ? "" : option.id);
+                    }
+                  }}
+                  style={[styles.optionButton, selected && styles.optionButtonSelected]}
+                >
+                  <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.displayName}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {selectedValues.length > 0 ? (
+            <Pressable
+              onPress={() => onChange(isMultiple ? [] : "")}
+              style={styles.clearButton}
+            >
+              <Text style={styles.clearButtonText}>Limpiar seleccion</Text>
+            </Pressable>
+          ) : null}
+        </>
+      ) : (
+        <Text style={styles.fieldError}>Este campo de relacion no tiene un catalogo configurado.</Text>
+      )}
       <FieldError error={error} />
     </View>
   );
@@ -158,6 +276,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     minHeight: 20,
+  },
+  clearButton: {
+    alignSelf: "flex-start",
+    borderColor: "#b8c7ca",
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  clearButtonText: {
+    color: "#17363c",
+    fontSize: 14,
+    fontWeight: "800",
   },
   fieldGroup: {
     backgroundColor: "#ffffff",

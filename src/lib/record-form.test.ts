@@ -6,7 +6,10 @@ import {
   buildSubmitValues,
   composeDateTimeValue,
   extractApiFieldErrors,
+  getRelationTargetEntityTypeId,
+  getUnknownRelationValueErrors,
   getWritableFields,
+  isRelationFieldMultiple,
   isValidDateTimeValue,
   isValidDateValue,
   isValidTimeValue,
@@ -139,6 +142,56 @@ describe("record form", () => {
     expect(payload).not.toHaveProperty("foto");
   });
 
+  it("resolves RELATION target entity and validates selected ids against loaded catalog options", () => {
+    const cargoField = field({
+      key: "cargo",
+      required: true,
+      type: "RELATION",
+      config: {
+        relation: {
+          relationKind: "ONE",
+          targetEntityTypeId: "entity_cargos",
+        },
+      },
+    });
+    const responsablesField = field({
+      key: "responsables",
+      required: false,
+      type: "RELATION",
+      config: {
+        relation: {
+          relationKind: "MANY",
+          targetEntityTypeId: "entity_personas",
+        },
+      },
+    });
+
+    expect(getRelationTargetEntityTypeId(cargoField)).toBe("entity_cargos");
+    expect(isRelationFieldMultiple(responsablesField)).toBe(true);
+    expect(getUnknownRelationValueErrors(
+      [cargoField],
+      { cargo: "AYUDANTE-ADQUSICIONES" },
+      {
+        cargo: {
+          isLoaded: true,
+          options: [{ displayName: "Ayudante adquisiciones", id: "cargo_record_123" }],
+        },
+      },
+    )).toEqual({
+      cargo: "Selecciona un registro valido del catalogo.",
+    });
+    expect(getUnknownRelationValueErrors(
+      [cargoField],
+      { cargo: "cargo_record_123" },
+      {
+        cargo: {
+          isLoaded: true,
+          options: [{ displayName: "Ayudante adquisiciones", id: "cargo_record_123" }],
+        },
+      },
+    )).toEqual({});
+  });
+
   it("preloads and submits TIME values without converting them to datetimes", () => {
     const fields = [field({ key: "hora", required: false, type: "TIME" })];
 
@@ -194,17 +247,19 @@ describe("record form", () => {
 });
 
 function field({
+  config,
   key,
   required,
   type,
 }: {
+  config?: EntityField["config"];
   key: string;
   required: boolean;
   type: EntityField["type"];
 }): EntityField {
   return {
     active: true,
-    config: { display: {}, validation: {} },
+    config: config ?? { display: {}, validation: {} },
     id: `field_${key}`,
     key,
     name: key,

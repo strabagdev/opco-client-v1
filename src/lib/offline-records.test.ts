@@ -611,6 +611,44 @@ describe("offline records cache", () => {
     expect(operations[0].payload.values).toMatchObject({ codigo: "EQ-local", estado: "operativo" });
   });
 
+  it("recovers an old pending CREATE relation value by updating the same operation with a selected record id", async () => {
+    const fields = [
+      recordField("cargo", "RELATION", { relationKind: "ONE", targetEntityTypeId: "entity_cargos" }),
+      recordField("nombre", "TEXT"),
+    ];
+
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_create_original",
+      fields,
+      localId: "local_person_1",
+      values: {
+        cargo: "AYUDANTE-ADQUSICIONES",
+        nombre: "Jose Enrique",
+      },
+    });
+
+    await store.updateLocalRecord({
+      ...scope,
+      fields,
+      recordId: "local_person_1",
+      values: { cargo: "cargo_record_real_123" },
+    });
+
+    const operations = await store.listPendingOperations(scope.ownerKey);
+
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({
+      clientRequestId: "request_create_original",
+      localRecordId: "local_person_1",
+      operation: "CREATE",
+    });
+    expect(operations[0].payload.values).toEqual({
+      cargo: "cargo_record_real_123",
+      nombre: "Jose Enrique",
+    });
+  });
+
   it("consolidates multiple UPDATE operations into the final state", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -829,7 +867,7 @@ function record(id: string, displayName: string, values: Record<string, EntityRe
 function recordField(
   key: string,
   type: EntityField["type"],
-  relationConfig?: { relationKind: "ONE" | "MANY" },
+  relationConfig?: { relationKind: "ONE" | "MANY"; targetEntityTypeId?: string },
   multiple = false,
 ): EntityField {
   return {
