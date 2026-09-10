@@ -1225,6 +1225,87 @@ describe("createOpcoApi", () => {
     expect(result.config.presentationMode).toBe("CURRENT_STATUS");
   });
 
+  it("requests panel datasets with pagination, search, and filters", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "panel_1", name: "Panel Operativo", slug: "panel-operativo" },
+            calculatedAt: "2026-09-09T12:00:00.000Z",
+            configRevision: "revision_1",
+            datasets: [
+              {
+                id: "records",
+                pagination: { hasMore: false, page: 2, pageSize: 10, total: 1 },
+                rows: [],
+                schema: { fields: [] },
+              },
+            ],
+            filters: [],
+            modules: [],
+            schemaVersion: 1,
+          },
+          ok: true,
+        });
+      },
+    });
+
+    const result = await api.getPanel("token_123", "contract_1", "panel_1", {
+      datasetId: "records",
+      filters: { status: "option_1" },
+      page: 2,
+      pageSize: 10,
+      search: "PET",
+    });
+
+    expect(urls[0]).toBe(
+      "https://opco.test/api/v1/contracts/contract_1/panels/panel_1?datasetId=records&page=2&pageSize=10&search=PET&filters=%7B%22status%22%3A%22option_1%22%7D",
+    );
+    expect(result.configRevision).toBe("revision_1");
+    expect(result.datasets[0]?.id).toBe("records");
+  });
+
+  it("requests panel discovery without datasetId", async () => {
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async (url) => {
+        urls.push(String(url));
+
+        return jsonResponse({
+          data: {
+            appView: { id: "panel_1", name: "Panel Operativo", slug: "panel-operativo" },
+            calculatedAt: "2026-09-09T12:00:00.000Z",
+            configRevision: "revision_1",
+            datasets: [
+              {
+                id: "first-dataset",
+                pagination: { hasMore: false, page: 1, pageSize: 25, total: 0 },
+                rows: [],
+                schema: { fields: [] },
+              },
+            ],
+            filters: [],
+            modules: [],
+            schemaVersion: 1,
+          },
+          ok: true,
+        });
+      },
+    });
+
+    await api.getPanel("token_123", "contract_1", "panel_1", {
+      page: 1,
+      pageSize: 25,
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/panels/panel_1?page=1&pageSize=25");
+  });
+
   it("parses users without assigned app views", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",

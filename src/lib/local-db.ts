@@ -66,7 +66,7 @@ import {
   fingerprintRecordsScope,
   normalizeRecordValuesForPersistence,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, PanelResponse, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -79,7 +79,7 @@ import { RecordsSyncStore } from "../sync/records-sync";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
 
 const DATABASE_NAME = "opco-client.db";
-const SCHEMA_VERSION = "9";
+const SCHEMA_VERSION = "10";
 const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
@@ -116,11 +116,13 @@ export type LocalDatabase = AppNavigationCache &
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
+  getPanelSnapshot(input: PanelSnapshotScope): Promise<CachedPanelSnapshot | null>;
   getReportSnapshot(input: ReportSnapshotScope): Promise<CachedReportSnapshot | null>;
   setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
+  upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }): Promise<void>;
   upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
 };
 
@@ -135,6 +137,23 @@ export type ReportSnapshotScope = {
 
 export type CachedReportSnapshot = {
   report: ReportResponse;
+  syncedAt: string;
+};
+
+export type PanelSnapshotScope = {
+  appViewId: string;
+  configRevision?: string | null;
+  contractId: string;
+  datasetId: string;
+  filters?: Record<string, unknown> | null;
+  ownerKey: string;
+  page: number;
+  pageSize: number;
+  search?: string | null;
+};
+
+export type CachedPanelSnapshot = {
+  panel: PanelResponse;
   syncedAt: string;
 };
 
@@ -165,6 +184,7 @@ export function getLocalDatabase(): LocalDatabase {
     listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
+    getPanelSnapshot,
     getReportSnapshot,
     listCachedRecords,
     listFailedRecordOperations,
@@ -200,6 +220,7 @@ export function getLocalDatabase(): LocalDatabase {
     setOfflinePreparationDiagnostics,
     setStateUpdateSyncDiagnosticsTelemetry,
     updateLocalRecord,
+    upsertPanelSnapshot,
     upsertAppViews,
     upsertAppViewDefinition,
     upsertReportSnapshot,
@@ -343,6 +364,17 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
       synced_at TEXT NOT NULL,
       PRIMARY KEY (owner_key, contract_id, app_view_id, query_key)
     );
+    CREATE TABLE IF NOT EXISTS panel_snapshots (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      dataset_id TEXT NOT NULL,
+      query_key TEXT NOT NULL,
+      config_revision TEXT NOT NULL,
+      panel_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision)
+    );
     CREATE TABLE IF NOT EXISTS entity_records (
       local_id TEXT PRIMARY KEY NOT NULL,
       server_id TEXT,
@@ -412,6 +444,7 @@ async function runMigrations(db: SQLite.SQLiteDatabase) {
   await migrateNavigationCacheTables(db);
   await migrateAppViewDefinitionsTable(db);
   await migrateReportSnapshotsTable(db);
+  await migratePanelSnapshotsTable(db);
   await migrateSyncTelemetryTable(db);
 
   await db.runAsync(
@@ -796,6 +829,22 @@ async function migrateReportSnapshotsTable(db: SQLite.SQLiteDatabase) {
   `);
 }
 
+async function migratePanelSnapshotsTable(db: SQLite.SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS panel_snapshots (
+      owner_key TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      app_view_id TEXT NOT NULL,
+      dataset_id TEXT NOT NULL,
+      query_key TEXT NOT NULL,
+      config_revision TEXT NOT NULL,
+      panel_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL,
+      PRIMARY KEY (owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision)
+    );
+  `);
+}
+
 async function migrateSyncTelemetryTable(db: SQLite.SQLiteDatabase) {
   const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(sync_telemetry)`);
   const columnNames = new Set(columns.map((column) => column.name));
@@ -1006,6 +1055,89 @@ async function getReportSnapshot({
   };
 }
 
+async function upsertPanelSnapshot({
+  appViewId,
+  configRevision,
+  contractId,
+  datasetId,
+  filters,
+  ownerKey,
+  page,
+  pageSize,
+  panel,
+  search,
+  syncedAt = new Date().toISOString(),
+}: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }) {
+  const db = await getDatabase();
+  const revision = configRevision || panel.configRevision;
+
+  await db.runAsync(
+    `
+      INSERT INTO panel_snapshots (owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision, panel_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision)
+      DO UPDATE SET panel_json = excluded.panel_json, synced_at = excluded.synced_at
+    `,
+    ownerKey,
+    contractId,
+    appViewId,
+    datasetId,
+    panelSnapshotQueryKey({ filters, page, pageSize, search }),
+    revision,
+    JSON.stringify(panel),
+    syncedAt,
+  );
+
+  notifyLocalDatabaseCacheChangeListeners();
+}
+
+async function getPanelSnapshot({
+  appViewId,
+  configRevision,
+  contractId,
+  datasetId,
+  filters,
+  ownerKey,
+  page,
+  pageSize,
+  search,
+}: PanelSnapshotScope): Promise<CachedPanelSnapshot | null> {
+  const db = await getDatabase();
+  const params = [
+    ownerKey,
+    contractId,
+    appViewId,
+    datasetId,
+    panelSnapshotQueryKey({ filters, page, pageSize, search }),
+  ];
+  const revisionClause = configRevision?.trim() ? "AND config_revision = ?" : "";
+
+  if (configRevision?.trim()) {
+    params.push(configRevision.trim());
+  }
+
+  const row = await db.getFirstAsync<{ panel_json: string; synced_at: string }>(
+    `
+      SELECT panel_json, synced_at
+      FROM panel_snapshots
+      WHERE owner_key = ? AND contract_id = ? AND app_view_id = ? AND dataset_id = ? AND query_key = ?
+      ${revisionClause}
+      ORDER BY synced_at DESC
+      LIMIT 1
+    `,
+    ...params,
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    panel: JSON.parse(row.panel_json) as PanelResponse,
+    syncedAt: row.synced_at,
+  };
+}
+
 function reportSnapshotQueryKey({ from, search, to }: Pick<ReportSnapshotScope, "from" | "search" | "to">) {
   return JSON.stringify({
     from: from || "",
@@ -1014,12 +1146,43 @@ function reportSnapshotQueryKey({ from, search, to }: Pick<ReportSnapshotScope, 
   });
 }
 
+function panelSnapshotQueryKey({
+  filters,
+  page,
+  pageSize,
+  search,
+}: Pick<PanelSnapshotScope, "filters" | "page" | "pageSize" | "search">) {
+  return JSON.stringify({
+    filters: stableSnapshotValue(filters ?? {}),
+    page,
+    pageSize,
+    search: search?.trim() || "",
+  });
+}
+
+function stableSnapshotValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableSnapshotValue);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableSnapshotValue(item)]),
+    );
+  }
+
+  return value ?? null;
+}
+
 async function clearNavigationCache() {
   const db = await getDatabase();
 
   await db.runAsync(`DELETE FROM context_snapshot`);
   await db.runAsync(`DELETE FROM app_views`);
   await db.runAsync(`DELETE FROM app_view_definitions`);
+  await db.runAsync(`DELETE FROM panel_snapshots`);
   await db.runAsync(`DELETE FROM report_snapshots`);
 }
 

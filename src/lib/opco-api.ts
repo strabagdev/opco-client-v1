@@ -184,7 +184,68 @@ export type WorkflowAppViewConfig =
   | (Record<string, unknown> & { workflowKey?: string });
 export type BoardAppViewConfig = Record<string, unknown>;
 export type DashboardAppViewConfig = Record<string, unknown>;
-export type PanelAppViewConfig = Record<string, unknown>;
+export type PanelFilterValueType = "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "OPTION" | "RECORD";
+
+export type PanelFilterConfig = {
+  id: string;
+  label?: string;
+  required?: boolean;
+  valueType: PanelFilterValueType;
+};
+
+export type PanelDatasetConfig = {
+  id: string;
+  name?: string;
+  source: {
+    entityTypeId: string;
+    type: "ENTITY";
+  };
+  transformation: {
+    fieldIds: string[];
+    pagination?: {
+      pageSize: number;
+    };
+    type: "RECORDS" | "LATEST_BY_RELATION";
+  } & Record<string, unknown>;
+};
+
+export type PanelModuleConfig = {
+  datasetId: string;
+  id: string;
+  layout: {
+    h: number;
+    w: number;
+    x: number;
+    y: number;
+  };
+  title?: string;
+  visualization: {
+    config: {
+      columns?: {
+        fieldId: string;
+        format?: string;
+        label?: string;
+        valueDisplay?: ReportSelectValueDisplay;
+      }[];
+      paginated?: boolean;
+      searchable?: boolean;
+    };
+    type: string;
+  };
+};
+
+export type PanelAppViewConfig = {
+  calculatedFields?: [];
+  datasets?: PanelDatasetConfig[];
+  filters?: PanelFilterConfig[];
+  layout?: {
+    columns: number;
+    rowHeight?: number;
+  };
+  metrics?: [];
+  modules?: PanelModuleConfig[];
+  schemaVersion?: 1;
+};
 
 export type RecordsAppView = {
   config: RecordsAppViewConfig;
@@ -327,6 +388,56 @@ export type EntitiesResponse = {
 
 export type AppViewsResponse = {
   views: AppView[];
+};
+
+export type PanelQuery = {
+  datasetId?: string;
+  filters?: Record<string, unknown>;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+};
+
+export type PanelField = {
+  id: string;
+  name: string;
+  options?: {
+    id: string;
+    label: string;
+    value: string;
+  }[];
+  type: EntityFieldType;
+};
+
+export type PanelDataset = {
+  id: string;
+  pagination: {
+    hasMore: boolean;
+    page: number;
+    pageSize: number;
+    total: number;
+  };
+  rows: {
+    id: string;
+    values: Record<string, EntityRecordValue>;
+  }[];
+  schema: {
+    fields: PanelField[];
+  };
+};
+
+export type PanelResponse = {
+  appView: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  calculatedAt: string;
+  configRevision: string;
+  datasets: PanelDataset[];
+  filters: PanelFilterConfig[];
+  modules: PanelModuleConfig[];
+  schemaVersion: 1;
 };
 
 export type EntityDefinitionResponse = {
@@ -1334,6 +1445,38 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       return authenticatedRequest<ReportResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/reports/${encodeURIComponent(appViewId)}${
+          serializedQuery ? `?${serializedQuery}` : ""
+        }`,
+        token,
+      );
+    },
+    getPanel(token: string, contractId: string, appViewId: string, query: PanelQuery = {}) {
+      const searchParams = new URLSearchParams();
+
+      if (query.datasetId?.trim()) {
+        searchParams.set("datasetId", query.datasetId.trim());
+      }
+
+      if (query.page !== undefined) {
+        searchParams.set("page", String(query.page));
+      }
+
+      if (query.pageSize !== undefined) {
+        searchParams.set("pageSize", String(query.pageSize));
+      }
+
+      if (query.search?.trim()) {
+        searchParams.set("search", query.search.trim());
+      }
+
+      if (query.filters && Object.keys(query.filters).length > 0) {
+        searchParams.set("filters", JSON.stringify(query.filters));
+      }
+
+      const serializedQuery = searchParams.toString();
+
+      return authenticatedRequest<PanelResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/panels/${encodeURIComponent(appViewId)}${
           serializedQuery ? `?${serializedQuery}` : ""
         }`,
         token,

@@ -78,14 +78,14 @@ describe("local database singleton", () => {
     expect(db.runAsync).toHaveBeenCalledWith(
         `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
       "schema_version",
-      "9",
+      "10",
     );
     expect(db.runAsync.mock.calls.filter((call) => call[1] === "schema_version")).toHaveLength(1);
     expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
       hasDatabase: true,
       hasDatabasePromise: true,
       hasMigrationPromise: false,
-      migratedSchemaVersion: "9",
+      migratedSchemaVersion: "10",
     });
   });
 

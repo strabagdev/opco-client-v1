@@ -110,12 +110,16 @@ WORKFLOW + desconocido   -> UnsupportedRenderer
 REPORT    -> ReportRenderer
 BOARD     -> UnsupportedRenderer
 DASHBOARD -> UnsupportedRenderer
-PANEL     -> UnsupportedRenderer
+PANEL     -> PanelRenderer
 ```
 
 `REPORT` es consulta/presentacion: no crea, edita ni sincroniza registros locales. Soporta `TABLE`, `MATRIX`, `LATEST_BY_RELATION` y el alias compatible `CURRENT_STATUS`. `TABLE`/`MATRIX` usan `timeFilter.mode = RANGE | MONTH`, `defaultPeriod = CURRENT_MONTH`, `allowChange`, y `valueDisplay[fieldId] = LABEL | INTERNAL_VALUE`. `LATEST_BY_RELATION` muestra una fila por registro relacionado usando las columnas ordenadas de `latestByRelation.displayFieldIds`; no hardcodea encabezados de dominio, no usa fechas de auditoria como reemplazo y no singulariza nombres por heuristica. `CURRENT_STATUS` sigue leyendo `currentStatus` solo como compatibilidad legacy. `INTERNAL_VALUE` se muestra en reportes en mayusculas solo como presentacion; no modifica datos, opciones ni API. `REPORT` no es `BOARD` ni `DASHBOARD`.
 
-`BOARD`, `DASHBOARD` y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
+`PANEL` es la superficie modular futura. En esta etapa consume `/api/v1/contracts/:contractId/panels/:appViewId`, ejecuta datasets server-side en Core y renderiza unicamente modulos `TABLE`. Cada request ejecuta el dataset seleccionado por `datasetId`; filtros, busqueda y paginacion se envian al endpoint, y si varios modulos usan el mismo dataset el renderer deduplica la carga local. Las columnas TABLE se toman exactamente desde `visualization.config.columns`: no se antepone relacion, no se infiere desde `fieldIds`, no se reordena y no se duplican columnas. SELECT/MULTISELECT usan metadata de opciones, DATE se muestra como `DD-MM-YYYY`, DATETIME como fecha/hora local `es-CL`, y RELATION usa el nombre visible. PANEL no calcula formulas ni agregaciones en Client.
+
+Los snapshots offline de PANEL son read-only y se guardan separados de REPORT por `contractId`, `appViewId`, `datasetId`, filtros normalizados, busqueda, pagina, pageSize y `configRevision`. PANEL no crea `pending_operations`, no usa `STATE_UPDATE` y no reutiliza la cache de REPORT como fuente paralela.
+
+`BOARD`, `DASHBOARD`, modulos PANEL no soportados y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
 
 ## CRUD Records
 

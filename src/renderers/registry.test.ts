@@ -10,6 +10,12 @@ vi.mock("@/renderers/records/RecordsRenderer", () => ({
   },
 }));
 
+vi.mock("@/renderers/panels/PanelRenderer", () => ({
+  PanelRenderer() {
+    return null;
+  },
+}));
+
 vi.mock("@/renderers/reports/ReportRenderer", () => ({
   ReportRenderer() {
     return null;
@@ -79,6 +85,10 @@ const reportView: ReportAppView = {
 describe("workflow renderer registry", () => {
   it("resolves report renderer as its own AppView type", () => {
     expect(resolveAppViewRenderer(reportView.type).name).toBe("ReportRenderer");
+  });
+
+  it("resolves panel renderer as its own AppView type", () => {
+    expect(resolveAppViewRenderer("PANEL").name).toBe("PanelRenderer");
   });
 
   it("resolves attendance workflow by workflowKey", () => {
