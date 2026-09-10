@@ -6,7 +6,6 @@ import { appViewsFixture, entityRecordFixture } from "../test/fixtures";
 
 const meFixture = {
   app: {
-    clientId: "opco_app_123",
     id: "app_1",
     name: "Materiales App",
     slug: "materiales-app",
@@ -56,11 +55,10 @@ function createSessionTokenStore(refreshToken: string | null) {
 }
 
 describe("createOpcoApi", () => {
-  it("sends clientId when logging in", async () => {
+  it("logs in neutrally without sending a clientId", async () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -80,10 +78,75 @@ describe("createOpcoApi", () => {
 
     await api.login("user@example.com", "secret");
 
-    expect(JSON.parse(String(requests[0].body))).toMatchObject({
-      clientId: "opco_app_123",
+    expect(JSON.parse(String(requests[0].body))).toEqual({
       email: "user@example.com",
       password: "secret",
+    });
+  });
+
+  it("sends a remembered organization as a server-revalidated login preference", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            challenge: "challenge_123",
+            expiresIn: 300,
+            organizations: [
+              { organization: { name: "Empresa A" }, selectionId: "selection_1" },
+            ],
+            preferredSelectionId: "selection_1",
+            status: "selection_required",
+          },
+          ok: true,
+        });
+      },
+    });
+
+    await expect(api.login("user@example.com", "secret", {
+      preferredOrganizationId: "org_1",
+    })).resolves.toMatchObject({
+      status: "selection_required",
+    });
+
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      email: "user@example.com",
+      password: "secret",
+      preferredOrganizationId: "org_1",
+    });
+  });
+
+  it("completes organization selection without resending the password", async () => {
+    const requests: RequestInit[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async (_url, init) => {
+        requests.push(init ?? {});
+
+        return jsonResponse({
+          data: {
+            accessToken: "access-token",
+            expiresIn: 3600,
+            tokenType: "Bearer",
+          },
+          ok: true,
+        });
+      },
+      platformOS: "web",
+    });
+
+    await api.completeLoginSelection({
+      challenge: "challenge_123",
+      selectionId: "selection_1",
+    });
+
+    expect(requests[0].credentials).toBe("include");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      challenge: "challenge_123",
+      selectionId: "selection_1",
     });
   });
 
@@ -91,7 +154,6 @@ describe("createOpcoApi", () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -118,7 +180,6 @@ describe("createOpcoApi", () => {
     const store = createSessionTokenStore("refresh-token-1");
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -152,7 +213,6 @@ describe("createOpcoApi", () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -174,7 +234,6 @@ describe("createOpcoApi", () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -199,7 +258,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         const path = new URL(String(url)).pathname;
         const headers = new Headers(init?.headers);
@@ -265,7 +323,6 @@ describe("createOpcoApi", () => {
     let refreshSignal: AbortSignal | null = null;
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         const path = new URL(String(url)).pathname;
 
@@ -328,7 +385,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
@@ -362,7 +418,6 @@ describe("createOpcoApi", () => {
     const paths: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         const path = new URL(String(url)).pathname;
         paths.push(path);
@@ -403,7 +458,6 @@ describe("createOpcoApi", () => {
     const paths: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         const path = new URL(String(url)).pathname;
         paths.push(path);
@@ -462,7 +516,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         const path = new URL(String(url)).pathname;
 
@@ -511,7 +564,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse(
         {
           error: {
@@ -542,7 +594,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         const path = new URL(String(url)).pathname;
 
@@ -576,7 +627,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         const path = new URL(String(url)).pathname;
 
@@ -619,7 +669,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse(
         {
           reason: "database",
@@ -641,7 +690,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test/",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -649,7 +697,6 @@ describe("createOpcoApi", () => {
           JSON.stringify({
             data: {
               app: {
-                clientId: "opco_app_123",
                 id: "app_1",
                 name: "Materiales App",
                 slug: "materiales-app",
@@ -678,7 +725,6 @@ describe("createOpcoApi", () => {
 
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
@@ -718,7 +764,6 @@ describe("createOpcoApi", () => {
     const diagnostics = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse({ status: "ready" }),
       onRequestDiagnostics: diagnostics,
       timeoutMs: 12_000,
@@ -746,7 +791,6 @@ describe("createOpcoApi", () => {
   it("does not reject a valid /ready 200 when diagnostics recording throws", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse({ status: "ready" }),
       onRequestDiagnostics: () => {
         throw new Error("diagnostics unavailable");
@@ -766,7 +810,6 @@ describe("createOpcoApi", () => {
     const diagnostics = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse({ ready: true }),
       onRequestDiagnostics: diagnostics,
       timeoutMs: 12_000,
@@ -792,7 +835,6 @@ describe("createOpcoApi", () => {
     const diagnostics = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -832,7 +874,6 @@ describe("createOpcoApi", () => {
     const onSessionInvalid = vi.fn();
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         const path = new URL(String(url)).pathname;
         const headers = new Headers(init?.headers);
@@ -905,7 +946,6 @@ describe("createOpcoApi", () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -964,7 +1004,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1003,7 +1042,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1043,7 +1081,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1079,7 +1116,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1110,7 +1146,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1153,7 +1188,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1194,7 +1228,6 @@ describe("createOpcoApi", () => {
   it("parses users without assigned app views", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         new Response(
           JSON.stringify({
@@ -1214,7 +1247,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1282,7 +1314,6 @@ describe("createOpcoApi", () => {
   it("maps attendance stateFields options when the backend returns the state-update preset shape", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => jsonResponse({
         data: {
           appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
@@ -1343,7 +1374,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         urls.push(String(url));
         requests.push(init ?? {});
@@ -1379,7 +1409,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1445,7 +1474,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1536,7 +1564,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1650,7 +1677,6 @@ describe("createOpcoApi", () => {
   it("normalizes generic scalar state-update fields and states", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -1716,7 +1742,6 @@ describe("createOpcoApi", () => {
   it("normalizes omitted state-update collections to empty arrays", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -1744,7 +1769,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -1798,7 +1822,6 @@ describe("createOpcoApi", () => {
   it("rejects state-update latest snapshots without authoritative updatedAt", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -1832,7 +1855,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         urls.push(String(url));
         requests.push(init ?? {});
@@ -1877,7 +1899,6 @@ describe("createOpcoApi", () => {
     const requests: RequestInit[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (_url, init) => {
         requests.push(init ?? {});
 
@@ -1912,7 +1933,6 @@ describe("createOpcoApi", () => {
   it("rejects successful state-update results without authoritative updatedAt", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -1933,7 +1953,6 @@ describe("createOpcoApi", () => {
   it("normalizes backend state-update conflict differences to generic stateValues", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -1979,7 +1998,6 @@ describe("createOpcoApi", () => {
   it("normalizes backend state-update conflict differences with generic extraValues", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -2044,7 +2062,6 @@ describe("createOpcoApi", () => {
   it("parses attendance conflicts with expected overwrite data", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         jsonResponse({
           data: {
@@ -2091,7 +2108,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url) => {
         urls.push(String(url));
 
@@ -2116,7 +2132,6 @@ describe("createOpcoApi", () => {
   it("rejects entity records without ISO updatedAt", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () =>
         new Response(
           JSON.stringify({
@@ -2142,7 +2157,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         urls.push(String(url));
         requests.push(init ?? {});
@@ -2181,7 +2195,6 @@ describe("createOpcoApi", () => {
     const urls: string[] = [];
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async (url, init) => {
         urls.push(String(url));
         requests.push(init ?? {});

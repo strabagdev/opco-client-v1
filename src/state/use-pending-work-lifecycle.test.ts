@@ -217,7 +217,6 @@ describe("pending work lifecycle guards", () => {
   it("treats a real /ready 200 body as ready on the first attempt even when diagnostics reject", async () => {
     const api = createOpcoApi({
       apiUrl: "https://opco.test",
-      clientId: "opco_app_123",
       fetcher: async () => new Response(JSON.stringify({ status: "ready" }), { status: 200 }),
       onRequestDiagnostics: () => {
         throw new Error("diagnostics unavailable");

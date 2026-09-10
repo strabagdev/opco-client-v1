@@ -21,10 +21,6 @@ import {
   prewarmAssignedAppViewsOnce,
 } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
-import {
-  clientIdFromCurrentLocation,
-  resolveEffectiveClientId,
-} from "@/lib/client-id";
 import { selectContractId } from "@/lib/contract-selection";
 import {
   getLocalDatabase,
@@ -37,7 +33,16 @@ import {
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
 import { RecordsFailedOperationDiagnostics, RecordsSyncSummary } from "@/lib/offline-records";
-import { ContextResponse, createOpcoApi, MeResponse, OpcoApi, OpcoNetworkError } from "@/lib/opco-api";
+import {
+  ContextResponse,
+  createOpcoApi,
+  LoginResponse,
+  LoginSelectionRequiredResponse,
+  MeResponse,
+  OpcoApi,
+  OpcoApiError,
+  OpcoNetworkError,
+} from "@/lib/opco-api";
 import { restoreSession } from "@/lib/session-logic";
 import { persistSelectedContractId, readPersistedContractId } from "@/lib/session-persistence";
 import {
@@ -70,7 +75,7 @@ type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
 type SessionContextValue = {
   api: OpcoApi;
-  apiClientId: string;
+  completeSignInSelection(selectionId: string): Promise<void>;
   connectivityStatus: ReturnType<typeof useConnectivityStatus>;
   context: ContextResponse | null;
   definitionCache: LocalDatabase;
@@ -90,6 +95,7 @@ type SessionContextValue = {
   offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
   ownerKey: string | null;
   pendingRecordsCount: number;
+  pendingLoginSelection: LoginSelectionRequiredResponse | null;
   recordsFailedOperations: RecordsFailedOperationDiagnostics[];
   localDatabaseStorageState: LocalDatabaseStorageState;
   localStorageRecoveryNotice: string | null;
@@ -144,12 +150,11 @@ export type { StateUpdateDiagnosticRun, StateUpdateReconnectDiagnostics } from "
 export function SessionProvider({ children }: PropsWithChildren) {
   const definitionCache = useMemo(() => getLocalDatabase(), []);
   const [status, setStatus] = useState<SessionStatus>("loading");
-  const [apiClientId, setApiClientId] = useState("");
-  const [apiClientIdReady, setApiClientIdReady] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [context, setContext] = useState<ContextResponse | null>(null);
+  const [pendingLoginSelection, setPendingLoginSelection] = useState<LoginSelectionRequiredResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
   const [offlinePreparationDiagnostics, setOfflinePreparationDiagnostics] = useState<OfflinePreparationDiagnostics | null>(null);
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
@@ -177,45 +182,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setToken(tokens.accessToken);
         },
         platformOS: Platform.OS,
-        clientId: apiClientId,
         tokenStore: tokenStorage,
       }),
-    [apiClientId],
+    [],
   );
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function resolveClientId() {
-      const urlClientId = clientIdFromCurrentLocation();
-      const persistedClientId = await tokenStorage.getApiClientId();
-      const nextClientId = resolveEffectiveClientId({
-        persistedClientId,
-        urlClientId,
-      });
-
-      if (urlClientId && urlClientId !== persistedClientId) {
-        const previousClientId = resolveEffectiveClientId({ persistedClientId });
-
-        await tokenStorage.setApiClientId(urlClientId);
-
-        if (previousClientId && previousClientId !== urlClientId) {
-          await tokenStorage.clearSession();
-        }
-      }
-
-      if (isMounted) {
-        setApiClientId(nextClientId);
-        setApiClientIdReady(true);
-      }
-    }
-
-    void resolveClientId();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   const {
     getRecoverySummary,
@@ -420,10 +390,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
 
     async function bootstrap() {
-      if (!apiClientIdReady) {
-        return;
-      }
-
       try {
         const restored = await restoreSession(tokenStorage, api, definitionCache);
 
@@ -467,7 +433,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [api, apiClientIdReady, bootstrapAttempt, definitionCache, loadContext]);
+  }, [api, bootstrapAttempt, definitionCache, loadContext]);
 
   useEffect(() => {
     async function refreshCount() {
@@ -496,7 +462,48 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [definitionCache, ownerKey]);
 
   async function signIn(email: string, password: string) {
-    const loginResponse = await api.login(email, password);
+    const preferredOrganizationId = await tokenStorage.getPreferredOrganizationId();
+    const loginResponse = await api.login(email, password, {
+      preferredOrganizationId,
+    });
+
+    if (isLoginSelectionRequired(loginResponse)) {
+      setPendingLoginSelection(loginResponse);
+      return;
+    }
+
+    await finalizeSignIn(loginResponse);
+  }
+
+  async function completeSignInSelection(selectionId: string) {
+    if (!pendingLoginSelection) {
+      throw new Error("No hay una selección de empresa pendiente.");
+    }
+
+    let loginResponse: LoginResponse;
+
+    try {
+      loginResponse = await api.completeLoginSelection({
+        challenge: pendingLoginSelection.challenge,
+        challengeNonce: pendingLoginSelection.challengeNonce,
+        selectionId,
+      });
+    } catch (error) {
+      if (
+        error instanceof OpcoApiError &&
+        (error.code === "LOGIN_SELECTION_EXPIRED" || error.code === "LOGIN_SELECTION_INVALID")
+      ) {
+        setPendingLoginSelection(null);
+      }
+
+      throw error;
+    }
+
+    await finalizeSignIn(loginResponse);
+  }
+
+  async function finalizeSignIn(loginResponse: LoginResponse) {
+    const previousOwnerKey = ownerKey;
 
     if (Platform.OS !== "web" && !loginResponse.refreshToken) {
       throw new Error("Opco no devolvio refresh token para la sesion nativa.");
@@ -512,12 +519,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
     const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
     const nextContractId = selectContractId(nextContext.contracts, await readPersistedContractId(definitionCache, nextOwnerKey));
 
+    if (previousOwnerKey && previousOwnerKey !== nextOwnerKey) {
+      void persistSelectedContractId(definitionCache, null, previousOwnerKey);
+    }
+
     await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+    await tokenStorage.setPreferredOrganizationId(nextContext.organization.id);
     await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
 
     setToken(loginResponse.accessToken);
     setMe(nextMe);
     setContext(nextContext);
+    setPendingLoginSelection(null);
     setSelectedContractIdState(nextContractId);
     setStatus("authenticated");
     void syncPendingWork({
@@ -557,6 +570,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setToken(null);
     setMe(null);
     setContext(null);
+    setPendingLoginSelection(null);
     setSelectedContractIdState(null);
     setStatus("anonymous");
   }
@@ -596,7 +610,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     <SessionContext.Provider
       value={{
         api,
-        apiClientId,
+        completeSignInSelection,
         connectivityStatus,
         context,
         definitionCache,
@@ -608,6 +622,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         offlinePreparationDiagnostics,
         ownerKey,
         pendingRecordsCount,
+        pendingLoginSelection,
         recordsFailedOperations,
         localDatabaseStorageState,
         localStorageRecoveryNotice,
@@ -651,6 +666,12 @@ export function useSession() {
   }
 
   return value;
+}
+
+function isLoginSelectionRequired(
+  loginResponse: LoginResponse | LoginSelectionRequiredResponse,
+): loginResponse is LoginSelectionRequiredResponse {
+  return "status" in loginResponse && loginResponse.status === "selection_required";
 }
 
 function LocalStorageRecoveryScreen({

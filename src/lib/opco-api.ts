@@ -21,6 +21,24 @@ export type LoginResponse = {
   refreshToken?: string;
 };
 
+export type LoginSelectionOption = {
+  organization: {
+    name: string;
+  };
+  selectionId: string;
+};
+
+export type LoginSelectionRequiredResponse = {
+  challenge: string;
+  challengeNonce?: string;
+  expiresIn: number;
+  organizations: LoginSelectionOption[];
+  preferredSelectionId?: string;
+  status: "selection_required";
+};
+
+export type LoginResult = LoginResponse | LoginSelectionRequiredResponse;
+
 export type RefreshResponse = {
   accessToken: string;
   tokenType: "Bearer";
@@ -855,7 +873,6 @@ type FetchLike = typeof fetch;
 
 type ApiClientOptions = {
   apiUrl?: string;
-  clientId?: string;
   fetcher?: FetchLike;
   onSessionInvalid?: (diagnostics: OpcoSessionTerminationDiagnostics) => void;
   onRequestDiagnostics?: (diagnostics: OpcoNetworkDiagnostics) => void;
@@ -923,7 +940,6 @@ function parseReadyResponse(body: unknown, status = 200, diagnosticRequestId?: s
 
 export function createOpcoApi(options: ApiClientOptions = {}) {
   const apiUrl = trimTrailingSlash(options.apiUrl ?? config.apiUrl);
-  const clientId = options.clientId ?? config.clientId;
   const fetcher = options.fetcher ?? fetch;
   const platformOS = options.platformOS ?? getDefaultPlatformOS();
   const tokenStore = options.tokenStore;
@@ -1192,13 +1208,27 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
   return {
     refreshSession,
-    login(email: string, password: string) {
-      return request<LoginResponse>("/api/v1/auth/login", {
+    login(email: string, password: string, options: { preferredOrganizationId?: string | null } = {}) {
+      return request<LoginResult>("/api/v1/auth/login", {
         body: JSON.stringify({
           email,
           password,
-          clientId,
+          ...(options.preferredOrganizationId
+            ? { preferredOrganizationId: options.preferredOrganizationId }
+            : {}),
         }),
+        credentials: platformOS === "web" ? "include" : undefined,
+        headers: nativePlatformHeaders(),
+        method: "POST",
+      });
+    },
+    completeLoginSelection(input: {
+      challenge: string;
+      challengeNonce?: string;
+      selectionId: string;
+    }) {
+      return request<LoginResponse>("/api/v1/auth/login", {
+        body: JSON.stringify(input),
         credentials: platformOS === "web" ? "include" : undefined,
         headers: nativePlatformHeaders(),
         method: "POST",

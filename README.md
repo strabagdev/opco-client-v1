@@ -19,18 +19,17 @@ Copia `.env.example` a `.env` y ajusta:
 
 ```bash
 EXPO_PUBLIC_OPCO_API_URL=http://localhost:3000
-EXPO_PUBLIC_OPCO_CLIENT_ID=opco_app_example
 ```
 
-`EXPO_PUBLIC_OPCO_CLIENT_ID` es publico y se envia en `/api/v1/auth/login`. No agregues secretos server-side de Opco a este repositorio: no `API_AUTH_SECRET`, no `AUTH_SECRET`, no `DATABASE_URL`.
+No agregues secretos server-side de Opco a este repositorio: no `API_AUTH_SECRET`, no `AUTH_SECRET`, no `DATABASE_URL`.
 
-En deployments multiempresa, el `clientId` principal llega por enlace:
+En deployments multiempresa, todos los usuarios ingresan por el dominio neutral:
 
 ```text
-https://client.opco.cl/?clientId=opco_app_...
+https://client.opco.cl
 ```
 
-El cliente valida ese valor, lo persiste para siguientes inicios y lo usa en login. `EXPO_PUBLIC_OPCO_CLIENT_ID` queda solo como fallback compatible para instalaciones antiguas o ambientes con una única aplicación. Un valor vacío o inválido en la URL no reemplaza un `clientId` válido ya persistido.
+El usuario escribe email/password. Si la API detecta una sola empresa válida, completa el login; si detecta varias, devuelve un desafío temporal y el cliente muestra un selector con esas empresas. La organización seleccionada se recuerda localmente solo como preferencia para preselección y siempre se revalida en el servidor.
 
 ## Arquitectura
 
@@ -59,24 +58,25 @@ El cliente valida ese valor, lo persiste para siguientes inicios y lo usa en log
 ## Flujo
 
 1. Al iniciar se lee el token desde SecureStore.
-2. Se resuelve el `clientId` efectivo desde `?clientId=...`, persistencia local y fallback de build.
-3. Si no existe token, se muestra login.
-4. Si existe token, se llama `GET /api/v1/me`.
-5. Si `/me` responde 401, se borra el token y se vuelve a login.
-6. Si falla por red, el token se conserva para el futuro modo offline-first.
-7. Luego se llama `GET /api/v1/context`.
-8. Con cero contratos se muestra empty state.
-9. Con un contrato se selecciona automaticamente.
-10. Con multiples contratos se muestra selector y se persiste el ultimo `contractId`.
-11. Con contrato seleccionado se llama `GET /api/v1/contracts/:contractId/views`.
-12. La home muestra solo AppViews activas/asignadas retornadas por Opco, ordenadas por `sortOrder`.
-13. Al abrir una AppView se usa la ruta generica `/view/:appViewId`.
-14. Si `AppView.type` es `RECORDS`, `config.entityTypeId` define que EntityType se lee.
-15. El titulo principal viene de `AppView.name`; la EntityType se muestra como metadata secundaria.
-16. Al abrir un record se conserva el contexto de AppView en `/view/:appViewId/record/:recordId`.
-17. Crear en AppViews `RECORDS` escribe primero en SQLite con `local_id` y `clientRequestId`, y luego intenta sincronizar.
-18. Editar en AppViews `RECORDS` actualiza SQLite primero, consolida la cola y luego intenta `PATCH`.
-19. La cola se sincroniza al iniciar sesion, al recuperar conectividad web, despues de crear/editar y con el boton `Sincronizar`.
+2. Si no existe token, se muestra login neutral con email/password.
+3. Si la API devuelve `selection_required`, se muestra el selector de empresas permitido por el desafío temporal.
+4. Al elegir empresa, se completa login sin reenviar password y se emite la sesión definitiva.
+5. Si existe token, se llama `GET /api/v1/me`.
+6. Si `/me` responde 401, se borra el token y se vuelve a login.
+7. Si falla por red, el token se conserva para el futuro modo offline-first.
+8. Luego se llama `GET /api/v1/context`.
+9. Con cero contratos se muestra empty state.
+10. Con un contrato se selecciona automaticamente.
+11. Con multiples contratos se muestra selector y se persiste el ultimo `contractId`.
+12. Con contrato seleccionado se llama `GET /api/v1/contracts/:contractId/views`.
+13. La home muestra solo AppViews activas/asignadas retornadas por Opco, ordenadas por `sortOrder`.
+14. Al abrir una AppView se usa la ruta generica `/view/:appViewId`.
+15. Si `AppView.type` es `RECORDS`, `config.entityTypeId` define que EntityType se lee.
+16. El titulo principal viene de `AppView.name`; la EntityType se muestra como metadata secundaria.
+17. Al abrir un record se conserva el contexto de AppView en `/view/:appViewId/record/:recordId`.
+18. Crear en AppViews `RECORDS` escribe primero en SQLite con `local_id` y `clientRequestId`, y luego intenta sincronizar.
+19. Editar en AppViews `RECORDS` actualiza SQLite primero, consolida la cola y luego intenta `PATCH`.
+20. La cola se sincroniza al iniciar sesion, al recuperar conectividad web, despues de crear/editar y con el boton `Sincronizar`.
 
 ## AppViews y EntityTypes
 
@@ -385,7 +385,7 @@ app_view_definitions (
 )
 ```
 
-`app_metadata` guarda `schema_version` y el `selected_contract_id`; el `clientId` efectivo se guarda en el storage de sesión, separado de credenciales secretas. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `app_view_definitions` guarda el shell preparado por owner/contrato/AppView. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`/`STATE_UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
+`app_metadata` guarda `schema_version` y el `selected_contract_id`; la organización elegida previamente se guarda en el storage de sesión como preferencia, separado de credenciales secretas. `context_snapshot` guarda identidad/contexto operativo minimo para bootstrap offline. `app_views` guarda las experiencias asignadas por contrato. `app_view_definitions` guarda el shell preparado por owner/contrato/AppView. `entity_definitions` guarda el JSON completo de la definicion retornada por Opco y su `synced_at`. `entity_records` guarda datos renderizables, version remota base, snapshot de conflicto y estado de sync. `pending_operations` guarda cola `CREATE`/`UPDATE`/`STATE_UPDATE`, payload final, errores y attempts. `sync_telemetry` guarda fases y timestamps de sync por owner/contract/entityType, sin payloads, record IDs, tokens ni mensajes remotos completos.
 
 Las migraciones SQLite no resetean la DB local. Agregan columnas/tablas nuevas y conservan `local_id`, `server_id`, cache, telemetria y pending operations existentes.
 
@@ -442,7 +442,7 @@ Build Command: npm run build:web
 Start Command: npm run start:web
 ```
 
-`npm run build:web` ejecuta `expo export --platform web`. `EXPO_PUBLIC_OPCO_API_URL` se incorpora al bundle durante ese build. `EXPO_PUBLIC_OPCO_CLIENT_ID` tambien se incorpora si existe, pero se usa solo como fallback; los accesos multiempresa deben llegar con `?clientId=...`.
+`npm run build:web` ejecuta `expo export --platform web`. `EXPO_PUBLIC_OPCO_API_URL` se incorpora al bundle durante ese build. El build no requiere un `clientId` fijo; la empresa se resuelve durante el login en el servidor.
 
 `npm run start:web` ejecuta `node scripts/start-web.mjs`. Railway inyecta `PORT` automaticamente y el proceso escucha en `0.0.0.0` para ser accesible desde el proxy externo. El server sirve archivos desde `dist` y usa `dist/index.html` como fallback SPA. No hay puerto fijo en codigo.
 

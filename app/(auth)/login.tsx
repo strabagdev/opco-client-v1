@@ -14,11 +14,17 @@ import {
 import { useSession } from "@/state/session";
 
 export default function LoginScreen() {
-  const { apiClientId, signIn, status } = useSession();
+  const {
+    completeSignInSelection,
+    pendingLoginSelection,
+    signIn,
+    status,
+  } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedOrganization, setSelectedOrganization] = useState<string | null>(null);
 
   if (status === "authenticated") {
     return <Redirect href="/(app)" />;
@@ -37,6 +43,19 @@ export default function LoginScreen() {
     }
   }
 
+  async function handleSelection(selectionId: string) {
+    setError(null);
+    setSelectedOrganization(selectionId);
+
+    try {
+      await completeSignInSelection(selectionId);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No fue posible seleccionar la empresa.");
+    } finally {
+      setSelectedOrganization(null);
+    }
+  }
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.select({ ios: "padding", default: undefined })}
@@ -46,44 +65,63 @@ export default function LoginScreen() {
         <Text style={styles.title}>Opco</Text>
         <Text style={styles.subtitle}>Cliente generico movil</Text>
 
-        <View style={styles.form}>
-          <TextInput
-            autoCapitalize="none"
-            autoComplete="email"
-            editable={!isSubmitting}
-            inputMode="email"
-            onChangeText={setEmail}
-            placeholder="Email"
-            style={styles.input}
-            value={email}
-          />
-          <TextInput
-            autoCapitalize="none"
-            editable={!isSubmitting}
-            onChangeText={setPassword}
-            placeholder="Password"
-            secureTextEntry
-            style={styles.input}
-            value={password}
-          />
+        {pendingLoginSelection ? (
+          <View style={styles.form}>
+            {pendingLoginSelection.organizations.map((option) => (
+              <Pressable
+                disabled={Boolean(selectedOrganization)}
+                key={option.selectionId}
+                onPress={() => {
+                  void handleSelection(option.selectionId);
+                }}
+                style={({ pressed }) => [
+                  styles.companyButton,
+                  (pressed || selectedOrganization === option.selectionId) && styles.buttonPressed,
+                  pendingLoginSelection.preferredSelectionId === option.selectionId && styles.companyButtonPreferred,
+                ]}
+              >
+                <Text style={styles.companyButtonText}>{option.organization.name}</Text>
+              </Pressable>
+            ))}
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+          </View>
+        ) : (
+          <View style={styles.form}>
+            <TextInput
+              autoCapitalize="none"
+              autoComplete="email"
+              editable={!isSubmitting}
+              inputMode="email"
+              onChangeText={setEmail}
+              placeholder="Email"
+              style={styles.input}
+              value={email}
+            />
+            <TextInput
+              autoCapitalize="none"
+              editable={!isSubmitting}
+              onChangeText={setPassword}
+              placeholder="Password"
+              secureTextEntry
+              style={styles.input}
+              value={password}
+            />
 
-          <Pressable
-            disabled={isSubmitting || !email || !password || !apiClientId}
-            onPress={handleSubmit}
-            style={({ pressed }) => [
-              styles.button,
-              (pressed || isSubmitting) && styles.buttonPressed,
-            ]}
-          >
-            {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
-          </Pressable>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          {!apiClientId ? (
-            <Text style={styles.configWarning}>Abre el enlace de acceso de tu aplicación.</Text>
-          ) : null}
-        </View>
+            <Pressable
+              disabled={isSubmitting || !email || !password}
+              onPress={handleSubmit}
+              style={({ pressed }) => [
+                styles.button,
+                (pressed || isSubmitting) && styles.buttonPressed,
+              ]}
+            >
+              {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
+            </Pressable>
+          </View>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -105,9 +143,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
   },
-  configWarning: {
-    color: "#9a3412",
-    lineHeight: 20,
+  companyButton: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#9fb8b8",
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 52,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  companyButtonPreferred: {
+    borderColor: "#135d66",
+    borderWidth: 2,
+  },
+  companyButtonText: {
+    color: "#0f3036",
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "center",
   },
   error: {
     color: "#b42318",
