@@ -8,9 +8,12 @@ import {
   CachedEntityRecord,
   getConflictDifferences,
   loadRecordWithOfflineCache,
+  loadRecordsWithOfflineCache,
 } from "@/lib/offline-records";
-import { EntityDefinition, EntityRecordValue, RecordsAppView } from "@/lib/opco-api";
+import { getRelationTargetEntityTypeId } from "@/lib/record-form";
+import { EntityDefinition, RecordsAppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
+import { formatConflictValue, formatTechnicalConflictValue } from "./record-conflict-values";
 
 type Props = {
   appView: RecordsAppView;
@@ -25,6 +28,7 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isResolving, setIsResolving] = useState(false);
+  const [relationLabels, setRelationLabels] = useState<Record<string, Record<string, string>>>({});
   const [retryCount, setRetryCount] = useState(0);
 
   const differences = useMemo(
@@ -90,6 +94,61 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
     };
   }, [api, definitionCache, entityTypeId, ownerKey, recordId, retryCount, selectedContractId, token]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRelationLabels() {
+      if (!definition || !token || !selectedContractId || !ownerKey) {
+        setRelationLabels({});
+        return;
+      }
+
+      const relationFields = definition.fields
+        .filter((field) => field.type === "RELATION")
+        .map((field) => ({
+          fieldKey: field.key,
+          targetEntityTypeId: getRelationTargetEntityTypeId(field),
+        }))
+        .filter((field): field is { fieldKey: string; targetEntityTypeId: string } =>
+          Boolean(field.targetEntityTypeId)
+        );
+
+      const entries = await Promise.all(relationFields.map(async ({ fieldKey, targetEntityTypeId }) => {
+        try {
+          const result = await loadRecordsWithOfflineCache({
+            api,
+            contractId: selectedContractId,
+            direction: "asc",
+            entityTypeId: targetEntityTypeId,
+            ownerKey,
+            page: 1,
+            pageSize: 100,
+            sort: "displayName",
+            store: definitionCache,
+            token,
+          });
+
+          return [fieldKey, Object.fromEntries(result.records.map((item) => [
+            item.id,
+            item.displayName || item.id,
+          ]))] as const;
+        } catch {
+          return [fieldKey, {}] as const;
+        }
+      }));
+
+      if (isMounted) {
+        setRelationLabels(Object.fromEntries(entries));
+      }
+    }
+
+    void loadRelationLabels();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [api, definition, definitionCache, ownerKey, selectedContractId, token]);
+
   async function useLocalVersion() {
     if (!record || !selectedContractId || !ownerKey || !token) {
       return;
@@ -103,6 +162,7 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
         api,
         contractId: selectedContractId,
         entityTypeId,
+        fields: definition?.fields ?? [],
         ownerKey,
         recordId: record.id,
         token,
@@ -120,7 +180,7 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
   function confirmUseRemoteVersion() {
     Alert.alert(
       "Usar version de Opco",
-      "Se descartarán tus cambios locales.",
+      "Se descartará todo el cambio pendiente local mostrado en esta pantalla.",
       [
         { style: "cancel", text: "Cancelar" },
         { onPress: useRemoteVersion, style: "destructive", text: "Usar Opco" },
@@ -160,6 +220,7 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
         <Text style={styles.kicker}>{appView.name}</Text>
         <Text style={styles.title}>Revisar conflicto</Text>
         <Text style={styles.meta}>Este registro cambió en Opco mientras tenías modificaciones locales pendientes.</Text>
+        <Text style={styles.meta}>Las acciones aplican a todo el cambio pendiente; revisa todas las diferencias antes de continuar.</Text>
       </View>
 
       {isLoading ? <ActivityIndicator /> : null}
@@ -178,16 +239,22 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
         {differences.map((difference) => (
           <View key={difference.fieldKey} style={styles.diffCard}>
             <Text style={styles.diffLabel}>{difference.label}</Text>
+            {difference.fieldId ? <Text style={styles.technicalText}>fieldId: {difference.fieldId}</Text> : null}
             <View style={styles.versionGrid}>
               <View style={styles.versionColumn}>
                 <Text style={styles.versionTitle}>Local</Text>
-                <Text style={styles.versionValue}>{formatConflictValue(difference.localValue)}</Text>
+                <Text style={styles.versionValue}>{formatConflictValue(difference.localValue, difference.fieldKey, difference.fieldType, relationLabels)}</Text>
+                <Text style={styles.technicalText}>{formatTechnicalConflictValue(difference.technicalLocalValue)}</Text>
               </View>
               <View style={styles.versionColumn}>
                 <Text style={styles.versionTitle}>Opco</Text>
-                <Text style={styles.versionValue}>{formatConflictValue(difference.remoteValue)}</Text>
+                <Text style={styles.versionValue}>{formatConflictValue(difference.remoteValue, difference.fieldKey, difference.fieldType, relationLabels)}</Text>
+                <Text style={styles.technicalText}>{formatTechnicalConflictValue(difference.technicalRemoteValue)}</Text>
               </View>
             </View>
+            {difference.fieldType === "RELATION" && difference.relationTargetEntityTypeId ? (
+              <Text style={styles.technicalText}>relatedEntityTypeId: {difference.relationTargetEntityTypeId}</Text>
+            ) : null}
           </View>
         ))}
       </View>
@@ -204,34 +271,6 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
       ) : null}
     </ScrollView>
   );
-}
-
-function formatConflictValue(value: EntityRecordValue | undefined): string {
-  if (value === undefined || value === null || value === "") {
-    return "Sin valor";
-  }
-
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(formatConflictArrayItem).join(", ") || "Sin valor";
-  }
-
-  if (typeof value === "object" && "displayName" in value && typeof value.displayName === "string") {
-    return value.displayName;
-  }
-
-  return "Valor complejo";
-}
-
-function formatConflictArrayItem(value: unknown) {
-  if (typeof value === "object" && value && "displayName" in value && typeof value.displayName === "string") {
-    return value.displayName;
-  }
-
-  return String(value);
 }
 
 const styles = StyleSheet.create({
@@ -310,6 +349,11 @@ const styles = StyleSheet.create({
   secondaryText: {
     color: "#17363c",
     fontWeight: "800",
+  },
+  technicalText: {
+    color: "#587078",
+    fontSize: 12,
+    lineHeight: 17,
   },
   title: {
     color: "#0f3036",

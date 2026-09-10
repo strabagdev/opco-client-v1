@@ -4,6 +4,7 @@ import {
   OfflineRecordStore,
   PendingOperation,
   fingerprintRecordsScope,
+  getConflictDifferences,
   loadRecordWithOfflineCache,
   loadRecordsWithOfflineCache,
   normalizeRecordValuesForPersistence,
@@ -75,6 +76,43 @@ describe("offline records cache", () => {
       relation_many: null,
       relation_one: null,
     });
+  });
+
+  it("compares RELATION conflicts by record identity instead of representation", () => {
+    const fields = [
+      recordField("cargo", "RELATION", { relationKind: "ONE", targetEntityTypeId: "entity_cargos" }),
+      recordField("nombre", "TEXT"),
+    ];
+
+    expect(getConflictDifferences(fields, {
+      conflictRemoteValues: {
+        cargo: { displayName: "Asistente administrativo", entityTypeId: "entity_cargos", id: "cargo_1" },
+        nombre: "Jose",
+      },
+      values: {
+        cargo: "cargo_1",
+        nombre: "Jose",
+      },
+    })).toEqual([]);
+
+    expect(getConflictDifferences(fields, {
+      conflictRemoteValues: {
+        cargo: { displayName: "Asistente administrativo", entityTypeId: "entity_cargos", id: "cargo_2" },
+      },
+      values: {
+        cargo: "cargo_1",
+      },
+    })).toMatchObject([
+      {
+        fieldId: "field_cargo",
+        fieldKey: "cargo",
+        fieldType: "RELATION",
+        label: "cargo",
+        relationTargetEntityTypeId: "entity_cargos",
+        technicalLocalValue: "cargo_1",
+        technicalRemoteValue: "cargo_2",
+      },
+    ]);
   });
 
   it("stores remote records and reads them back from cache", async () => {

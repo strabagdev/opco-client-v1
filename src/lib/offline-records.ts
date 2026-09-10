@@ -218,7 +218,9 @@ export type UpdateLocalRecordInput = BaseScopedInput & {
   values: Record<string, EntityRecordValue>;
 };
 
-export type ResolveRecordConflictInput = RecordIdentityInput;
+export type ResolveRecordConflictInput = RecordIdentityInput & {
+  fields?: EntityField[];
+};
 
 export type RetryFailedRecordInput = RecordIdentityInput;
 
@@ -604,9 +606,14 @@ export async function saveRecordLocally({
 }
 
 export type ConflictDifference = {
+  fieldId: string | null;
   fieldKey: string;
+  fieldType: EntityField["type"] | null;
   label: string;
   localValue: EntityRecordValue | undefined;
+  relationTargetEntityTypeId: string | null;
+  technicalLocalValue: unknown;
+  technicalRemoteValue: unknown;
   remoteValue: EntityRecordValue | undefined;
 };
 
@@ -623,15 +630,22 @@ export function getConflictDifferences(
     const localValue = record.values[key];
     const remoteValue = remoteValues[key];
 
-    if (JSON.stringify(localValue) === JSON.stringify(remoteValue)) {
+    const field = fieldsByKey.get(key) ?? null;
+
+    if (areConflictValuesEqual(field, localValue, remoteValue)) {
       continue;
     }
 
     differences.push({
+      fieldId: field?.id ?? null,
       fieldKey: key,
-      label: fieldsByKey.get(key)?.name ?? "Campo",
+      fieldType: field?.type ?? null,
+      label: field?.name ?? "Campo",
       localValue,
+      relationTargetEntityTypeId: field ? getRelationTargetEntityTypeId(field) : null,
       remoteValue,
+      technicalLocalValue: field?.type === "RELATION" ? normalizeRelationConflictIdentity(field, localValue) : localValue,
+      technicalRemoteValue: field?.type === "RELATION" ? normalizeRelationConflictIdentity(field, remoteValue) : remoteValue,
     });
   }
 
@@ -641,6 +655,33 @@ export function getConflictDifferences(
 
     return aOrder - bOrder || a.label.localeCompare(b.label);
   });
+}
+
+function areConflictValuesEqual(
+  field: EntityField | null,
+  localValue: EntityRecordValue | undefined,
+  remoteValue: EntityRecordValue | undefined,
+) {
+  if (field?.type === "RELATION") {
+    return JSON.stringify(normalizeRelationConflictIdentity(field, localValue)) ===
+      JSON.stringify(normalizeRelationConflictIdentity(field, remoteValue));
+  }
+
+  return JSON.stringify(localValue) === JSON.stringify(remoteValue);
+}
+
+function normalizeRelationConflictIdentity(field: EntityField, value: EntityRecordValue | undefined): unknown {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (isManyRelationField(field)) {
+    const items = Array.isArray(value) ? value : [value];
+
+    return items.map((item) => readRelationRecordId(item)).filter(Boolean).sort();
+  }
+
+  return readRelationRecordId(value);
 }
 
 export function createLocalRecordId() {
@@ -722,6 +763,23 @@ function isManyRelationField(field: EntityField) {
   }
 
   return field.config?.relationKind === "MANY";
+}
+
+function getRelationTargetEntityTypeId(field: EntityField) {
+  if (field.type !== "RELATION") {
+    return null;
+  }
+
+  const config = readObject(field.config);
+  const relationConfig = readObject(config?.relation);
+  const candidates = [
+    relationConfig?.targetEntityTypeId,
+    relationConfig?.relatedEntityTypeId,
+    config?.targetEntityTypeId,
+    config?.relatedEntityTypeId,
+  ];
+
+  return candidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ?? null;
 }
 
 function readRelationRecordId(value: unknown) {

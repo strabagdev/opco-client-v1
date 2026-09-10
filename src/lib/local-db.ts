@@ -3421,6 +3421,7 @@ async function resolveRecordConflictWithLocal({
   api,
   contractId,
   entityTypeId,
+  fields = [],
   ownerKey,
   recordId,
   token,
@@ -3428,6 +3429,7 @@ async function resolveRecordConflictWithLocal({
   api: Pick<OpcoApi, "getEntityRecord">;
   contractId: string;
   entityTypeId: string;
+  fields?: EntityField[];
   ownerKey: string;
   recordId: string;
   token: string;
@@ -3445,6 +3447,12 @@ async function resolveRecordConflictWithLocal({
 
   const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
   const now = new Date().toISOString();
+  const payloadValues = await normalizeRecordValuesForConflictSubmission(db, {
+    contractId,
+    fields,
+    ownerKey,
+    values: existing.values,
+  });
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
@@ -3471,7 +3479,7 @@ async function resolveRecordConflictWithLocal({
             last_error_message = NULL
         WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
       `,
-      JSON.stringify({ values: existing.values }),
+      JSON.stringify({ values: payloadValues }),
       now,
       ownerKey,
       existing.localId,
@@ -3485,6 +3493,172 @@ async function resolveRecordConflictWithLocal({
   }
 
   return record;
+}
+
+async function normalizeRecordValuesForConflictSubmission(
+  db: SQLite.SQLiteDatabase,
+  {
+    contractId,
+    fields,
+    ownerKey,
+    values,
+  }: {
+    contractId: string;
+    fields: EntityField[];
+    ownerKey: string;
+    values: Record<string, EntityRecordValue>;
+  },
+) {
+  if (fields.length === 0) {
+    return values;
+  }
+
+  const entries = await Promise.all(Object.entries(values).map(async ([key, value]) => {
+    const field = fields.find((item) => item.key === key);
+
+    if (!field || field.type !== "RELATION") {
+      return [key, value] as const;
+    }
+
+    return [key, await normalizeConflictRelationValue(db, {
+      contractId,
+      field,
+      ownerKey,
+      value,
+    })] as const;
+  }));
+
+  return Object.fromEntries(entries) as Record<string, EntityRecordValue>;
+}
+
+async function normalizeConflictRelationValue(
+  db: SQLite.SQLiteDatabase,
+  {
+    contractId,
+    field,
+    ownerKey,
+    value,
+  }: {
+    contractId: string;
+    field: EntityField;
+    ownerKey: string;
+    value: EntityRecordValue;
+  },
+): Promise<EntityRecordValue> {
+  const targetEntityTypeId = getRelationTargetEntityTypeId(field);
+
+  if (!targetEntityTypeId || value === null) {
+    return normalizeRecordValuesForPersistence([field], { [field.key]: value })[field.key];
+  }
+
+  if (isManyRelationField(field)) {
+    const values = Array.isArray(value) ? value : [value];
+    const ids = await Promise.all(values.map((item) => resolveRelationServerRecordId(db, {
+      contractId,
+      ownerKey,
+      targetEntityTypeId,
+      value: readRelationRecordId(item),
+    })));
+
+    return ids.filter((item): item is string => Boolean(item));
+  }
+
+  return await resolveRelationServerRecordId(db, {
+    contractId,
+    ownerKey,
+    targetEntityTypeId,
+    value: readRelationRecordId(value),
+  }) ?? normalizeRecordValuesForPersistence([field], { [field.key]: value })[field.key];
+}
+
+function getRelationTargetEntityTypeId(field: EntityField) {
+  if (field.type !== "RELATION") {
+    return null;
+  }
+
+  const config = readLocalRecordObject(field.config);
+  const relationConfig = readLocalRecordObject(config?.relation);
+  const candidates = [
+    relationConfig?.targetEntityTypeId,
+    relationConfig?.relatedEntityTypeId,
+    config?.targetEntityTypeId,
+    config?.relatedEntityTypeId,
+  ];
+
+  return candidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ?? null;
+}
+
+function isManyRelationField(field: EntityField) {
+  if (field.multiple) {
+    return true;
+  }
+
+  const relationConfig = readLocalRecordObject(field.config?.relation);
+
+  if (relationConfig?.relationKind === "MANY") {
+    return true;
+  }
+
+  return field.config?.relationKind === "MANY";
+}
+
+function readRelationRecordId(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") {
+    return value.id;
+  }
+
+  return null;
+}
+
+function readLocalRecordObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+async function resolveRelationServerRecordId(
+  db: SQLite.SQLiteDatabase,
+  {
+    contractId,
+    ownerKey,
+    targetEntityTypeId,
+    value,
+  }: {
+    contractId: string;
+    ownerKey: string;
+    targetEntityTypeId: string;
+    value: string | null;
+  },
+) {
+  if (!value) {
+    return null;
+  }
+
+  const row = await db.getFirstAsync<{ server_id: string | null }>(
+    `
+      SELECT server_id
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND local_id = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    contractId,
+    targetEntityTypeId,
+    value,
+  );
+
+  if (row && !row.server_id) {
+    throw new Error("La referencia relacionada aun no tiene un registro remoto verificable.");
+  }
+
+  return row?.server_id ?? value;
 }
 
 async function resolveRecordConflictWithRemote({

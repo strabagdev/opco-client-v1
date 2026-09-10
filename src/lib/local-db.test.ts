@@ -2538,6 +2538,74 @@ describe("local database singleton", () => {
     expect(db.runAsync.mock.calls[1][0]).toContain("sync_status = 'conflict'");
   });
 
+  it("resolves RECORDS conflict with local relation cache keys as server record ids", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes("FROM entity_records") && sql.includes("(local_id = ? OR server_id = ?)")) {
+        return recordsEntityRecordRow({
+          local_id: "local_person_1",
+          remote_updated_at: "2026-09-10T10:00:00.000Z",
+          server_id: "person_server_1",
+          sync_status: "conflict",
+          values_json: JSON.stringify({
+            cargo: "local_cargo_cache_1",
+            nombre: "Jose",
+          }),
+        });
+      }
+
+      if (sql.includes("SELECT server_id") && params.includes("local_cargo_cache_1")) {
+        return { server_id: "cargo_server_1" };
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    await store.resolveRecordConflictWithLocal({
+      api: {
+        getEntityRecord: async () => ({
+          record: {
+            displayName: "Jose",
+            id: "person_server_1",
+            updatedAt: "2026-09-10T12:00:00.000Z",
+            values: { cargo: { displayName: "Opco Cargo", entityTypeId: "entity_cargo", id: "other_cargo" } },
+          },
+        }),
+      },
+      contractId: "contract_1",
+      entityTypeId: "entity_1",
+      fields: [
+        {
+          active: true,
+          config: {
+            relation: {
+              relationKind: "ONE",
+              targetEntityTypeId: "entity_cargo",
+            },
+          },
+          id: "field_cargo",
+          key: "cargo",
+          name: "Cargo",
+          order: 1,
+          required: false,
+          type: "RELATION",
+        },
+      ],
+      ownerKey: "org_1:user_1",
+      recordId: "local_person_1",
+      token: "token_1",
+    });
+
+    const pendingUpdateCall = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("UPDATE pending_operations"));
+
+    expect(pendingUpdateCall?.[1]).toBe(JSON.stringify({
+      values: {
+        cargo: "cargo_server_1",
+        nombre: "Jose",
+      },
+    }));
+  });
+
   it("does not leave RECORDS conflict half-applied when the record conflict write fails inside the transaction", async () => {
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("conflict failed");
