@@ -11,12 +11,13 @@ import {
 } from "react-native";
 
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "@/lib/offline-panels";
-import { PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse } from "@/lib/opco-api";
+import { PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useSession } from "@/state/session";
 
 import {
+  buildPanelKpiModel,
   buildPanelTableModel,
   datasetIdsForPanelModules,
   defaultPageSizeForDataset,
@@ -31,6 +32,13 @@ type DatasetState = {
   panel: PanelResponse | null;
   queryKey: string | null;
   syncedAt: string | null;
+};
+
+type PanelTableModuleConfig = PanelModuleConfig & {
+  visualization: {
+    config: PanelTableConfig;
+    type: "TABLE";
+  };
 };
 
 const DATASET_KEY_SEPARATOR = "\u0000";
@@ -311,6 +319,10 @@ function PanelModule({
 }) {
   const dataset = state?.panel?.datasets.find((item) => item.id === module.datasetId);
   const table = buildPanelTableModel(module, dataset);
+  const kpi = buildPanelKpiModel(module, state?.panel?.metrics);
+  const isTable = module.visualization.type === "TABLE";
+  const isKpi = module.visualization.type === "KPI";
+  const tableConfig = isPanelTableModule(module) ? module.visualization.config : null;
 
   return (
     <View style={styles.moduleContent}>
@@ -319,7 +331,7 @@ function PanelModule({
         {state?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
       </View>
 
-      {module.visualization.config.searchable ? (
+      {tableConfig?.searchable ? (
         <TextInput
           autoCapitalize="none"
           clearButtonMode="while-editing"
@@ -331,8 +343,16 @@ function PanelModule({
         />
       ) : null}
 
-      {module.visualization.type !== "TABLE" ? (
+      {!isTable && !isKpi ? (
         <PanelState message="Este módulo todavía no está soportado." />
+      ) : isKpi ? (
+        <PanelKpi
+          error={state?.error ?? null}
+          isLoading={Boolean(state?.isLoading && !kpi?.calculatedAt)}
+          kpi={kpi}
+          offline={Boolean(state?.fromCache)}
+          onRetry={onRetry}
+        />
       ) : state?.isLoading && !dataset ? (
         <View style={styles.stateBox}>
           <ActivityIndicator />
@@ -352,7 +372,7 @@ function PanelModule({
       ) : (
         <>
           <PanelTable table={table} />
-          {module.visualization.config.paginated !== false ? (
+          {tableConfig?.paginated !== false ? (
             <View style={styles.pagination}>
               <Pressable accessibilityRole="button" disabled={page <= 1} onPress={onPreviousPage} style={[styles.actionButton, page <= 1 ? styles.disabledButton : null]}>
                 <Text style={styles.actionButtonText}>Anterior</Text>
@@ -365,6 +385,67 @@ function PanelModule({
           ) : null}
         </>
       )}
+    </View>
+  );
+}
+
+function isPanelTableModule(module: PanelModuleConfig): module is PanelTableModuleConfig {
+  return module.visualization.type === "TABLE";
+}
+
+function PanelKpi({
+  error,
+  isLoading,
+  kpi,
+  offline,
+  onRetry,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  kpi: ReturnType<typeof buildPanelKpiModel>;
+  offline: boolean;
+  onRetry(): void;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.kpiCard}>
+        <ActivityIndicator />
+        <Text style={styles.stateText}>Cargando indicador...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.kpiCard}>
+        <Text style={styles.stateText}>{error}</Text>
+        <Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}>
+          <Text style={styles.actionButtonText}>Reintentar</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!kpi) {
+    return <PanelState message="Este KPI necesita configuración." />;
+  }
+
+  return (
+    <View
+      accessibilityLabel={`${kpi.label}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}
+      style={styles.kpiCard}
+    >
+      <Text numberOfLines={2} style={styles.kpiLabel}>{kpi.label}</Text>
+      <Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>
+      {kpi.configurationIssue ? (
+        <Text style={styles.kpiMeta}>{kpi.configurationIssue}</Text>
+      ) : kpi.missing ? (
+        <Text style={styles.kpiMeta}>Métrica no disponible.</Text>
+      ) : offline ? (
+        <Text style={styles.kpiMeta}>Datos guardados.</Text>
+      ) : kpi.calculatedAt ? (
+        <Text style={styles.kpiMeta}>Actualizado {formatPanelKpiTimestamp(kpi.calculatedAt)}</Text>
+      ) : null}
     </View>
   );
 }
@@ -437,6 +518,22 @@ function configuredPageSize(appView: PanelAppView, panel: PanelResponse | null, 
   return configured && configured > 0 ? configured : defaultPageSizeForDataset(panel, datasetId);
 }
 
+function formatPanelKpiTimestamp(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("es-CL", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
 const styles = StyleSheet.create({
   actionButton: {
     alignItems: "center",
@@ -486,6 +583,30 @@ const styles = StyleSheet.create({
   },
   horizontalScrollContent: {
     minWidth: "100%",
+  },
+  kpiCard: {
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    gap: 8,
+    justifyContent: "center",
+    minHeight: 120,
+    padding: 16,
+  },
+  kpiLabel: {
+    color: "#4b5563",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  kpiMeta: {
+    color: "#6b7280",
+    fontSize: 12,
+  },
+  kpiValue: {
+    color: "#111827",
+    fontSize: 34,
+    fontWeight: "800",
   },
   module: {
     padding: 6,

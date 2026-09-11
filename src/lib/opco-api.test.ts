@@ -1246,7 +1246,45 @@ describe("createOpcoApi", () => {
               },
             ],
             filters: [],
-            modules: [],
+            metrics: [
+              {
+                calculatedAt: "2026-09-09T12:00:00.000Z",
+                datasetId: "records",
+                id: "total-registros",
+                value: 3,
+                valueType: "NUMBER",
+              },
+            ],
+            modules: [
+              {
+                datasetId: "records",
+                id: "amount-kpi",
+                layout: { h: 2, w: 4, x: 0, y: 0 },
+                visualization: {
+                  type: "KPI",
+                  config: {
+                    currencyCode: "CLP",
+                    format: "MONEY",
+                    label: "Monto",
+                    metricId: "total-registros",
+                  },
+                },
+              },
+              {
+                datasetId: "records",
+                id: "progress-kpi",
+                layout: { h: 2, w: 4, x: 4, y: 0 },
+                visualization: {
+                  type: "KPI",
+                  config: {
+                    format: "PERCENT",
+                    label: "Avance",
+                    metricId: "total-registros",
+                    percentScale: "WHOLE",
+                  },
+                },
+              },
+            ],
             schemaVersion: 1,
           },
           ok: true,
@@ -1267,6 +1305,24 @@ describe("createOpcoApi", () => {
     );
     expect(result.configRevision).toBe("revision_1");
     expect(result.datasets[0]?.id).toBe("records");
+    expect(result.metrics?.[0]).toMatchObject({
+      datasetId: "records",
+      id: "total-registros",
+      value: 3,
+      valueType: "NUMBER",
+    });
+    expect(result.modules).toEqual([
+      expect.objectContaining({
+        visualization: expect.objectContaining({
+          config: expect.objectContaining({ currencyCode: "CLP", format: "MONEY" }),
+        }),
+      }),
+      expect.objectContaining({
+        visualization: expect.objectContaining({
+          config: expect.objectContaining({ format: "PERCENT", percentScale: "WHOLE" }),
+        }),
+      }),
+    ]);
   });
 
   it("requests panel discovery without datasetId", async () => {
@@ -1304,6 +1360,29 @@ describe("createOpcoApi", () => {
     });
 
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/panels/panel_1?page=1&pageSize=25");
+  });
+
+  it("keeps panel responses without metrics compatible", async () => {
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async () =>
+        jsonResponse({
+          data: {
+            appView: { id: "panel_1", name: "Panel Operativo", slug: "panel-operativo" },
+            calculatedAt: "2026-09-09T12:00:00.000Z",
+            configRevision: "revision_1",
+            datasets: [],
+            filters: [],
+            modules: [],
+            schemaVersion: 1,
+          },
+          ok: true,
+        }),
+    });
+
+    await expect(api.getPanel("token_123", "contract_1", "panel_1")).resolves.toMatchObject({
+      configRevision: "revision_1",
+    });
   });
 
   it("parses users without assigned app views", async () => {

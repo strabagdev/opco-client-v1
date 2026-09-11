@@ -3,7 +3,10 @@ import {
   PanelDataset,
   PanelField,
   PanelFilterConfig,
+  PanelKpiFormat,
+  PanelMetricResult,
   PanelModuleConfig,
+  PanelRuntimeKpiConfig,
   PanelResponse,
   ReportSelectValueDisplay,
 } from "@/lib/opco-api";
@@ -28,6 +31,16 @@ export type PanelDatasetQueryState = {
   page: number;
   pageSize: number;
   search: string;
+};
+
+export type PanelKpiModel = {
+  calculatedAt: string | null;
+  configurationIssue: string | null;
+  fullValue: string;
+  label: string;
+  metricId: string;
+  missing: boolean;
+  value: string;
 };
 
 type ResolvedPanelColumn = {
@@ -75,6 +88,31 @@ export function buildPanelTableModel(module: PanelModuleConfig, dataset: PanelDa
       id: row.id,
       values: columns.map((column) => displayPanelValue(column.field, row.values[column.fieldId], column.valueDisplay)),
     })),
+  };
+}
+
+export function buildPanelKpiModel(module: PanelModuleConfig, metrics: PanelMetricResult[] | undefined): PanelKpiModel | null {
+  if (module.visualization.type !== "KPI") {
+    return null;
+  }
+
+  const metricId = typeof module.visualization.config.metricId === "string"
+    ? module.visualization.config.metricId
+    : "";
+  const label = typeof module.visualization.config.label === "string" && module.visualization.config.label.trim()
+    ? module.visualization.config.label.trim()
+    : module.title ?? "Indicador";
+  const metric = metrics?.find((item) => item.id === metricId && item.datasetId === module.datasetId);
+  const formatted = formatPanelMetricValue(metric?.value, module.visualization.config);
+
+  return {
+    calculatedAt: metric?.calculatedAt ?? null,
+    configurationIssue: formatted.configurationIssue,
+    fullValue: formatted.value,
+    label,
+    metricId,
+    missing: !metric,
+    value: formatted.value,
   };
 }
 
@@ -156,6 +194,83 @@ export function displayPanelValue(
   }
 
   return displayUnknownPanelValue(value);
+}
+
+export function formatPanelMetricValue(
+  value: PanelMetricResult["value"] | undefined,
+  configOrFormat: PanelKpiFormat | PanelRuntimeKpiConfig,
+): { configurationIssue: string | null; value: string } {
+  const config = typeof configOrFormat === "string"
+    ? { format: configOrFormat }
+    : configOrFormat;
+  const format = panelKpiFormat(config.format);
+
+  if (value === null || value === undefined || value === "") {
+    return { configurationIssue: null, value: "-" };
+  }
+
+  if (format === "DATE") {
+    return { configurationIssue: null, value: formatPanelDateOnly(String(value)) || "-" };
+  }
+
+  if (format === "DATETIME") {
+    return { configurationIssue: null, value: formatPanelDateTime(String(value)) || "-" };
+  }
+
+  const numericValue = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return { configurationIssue: null, value: typeof value === "string" ? value : "-" };
+  }
+
+  if (format === "INTEGER") {
+    return { configurationIssue: null, value: new Intl.NumberFormat("es-CL", {
+      maximumFractionDigits: 0,
+    }).format(numericValue) };
+  }
+
+  if (format === "DECIMAL") {
+    return { configurationIssue: null, value: new Intl.NumberFormat("es-CL", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    }).format(numericValue) };
+  }
+
+  if (format === "MONEY") {
+    const currencyCode = typeof config.currencyCode === "string" ? config.currencyCode : "";
+
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
+      return { configurationIssue: "Configura la moneda de este KPI.", value: "-" };
+    }
+
+    try {
+      return { configurationIssue: null, value: new Intl.NumberFormat("es-CL", {
+        currency: currencyCode,
+        style: "currency",
+      }).format(numericValue) };
+    } catch {
+      return { configurationIssue: "Configura la moneda de este KPI.", value: "-" };
+    }
+  }
+
+  if (format === "PERCENT") {
+    if (config.percentScale !== "RATIO" && config.percentScale !== "WHOLE") {
+      return { configurationIssue: "Configura la escala de este KPI.", value: "-" };
+    }
+
+    const presentationValue = config.percentScale === "WHOLE" ? numericValue / 100 : numericValue;
+
+    return { configurationIssue: null, value: new Intl.NumberFormat("es-CL", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+      style: "percent",
+    }).format(presentationValue) };
+  }
+
+  return { configurationIssue: null, value: new Intl.NumberFormat("es-CL", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  }).format(numericValue) };
 }
 
 export function datasetIdsForPanelModules(modules: PanelModuleConfig[]) {
@@ -245,6 +360,17 @@ function formatPanelDateTime(value: string) {
     month: "2-digit",
     year: "numeric",
   });
+}
+
+function panelKpiFormat(value: unknown): PanelKpiFormat {
+  return value === "INTEGER"
+    || value === "DECIMAL"
+    || value === "MONEY"
+    || value === "PERCENT"
+    || value === "DATE"
+    || value === "DATETIME"
+    ? value
+    : "NUMBER";
 }
 
 function stableValue(value: unknown): unknown {

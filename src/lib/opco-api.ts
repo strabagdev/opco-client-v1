@@ -193,6 +193,56 @@ export type PanelFilterConfig = {
   valueType: PanelFilterValueType;
 };
 
+export type PanelKpiFormat =
+  | "NUMBER"
+  | "INTEGER"
+  | "DECIMAL"
+  | "MONEY"
+  | "PERCENT"
+  | "DATE"
+  | "DATETIME";
+
+export type PanelPercentScale = "RATIO" | "WHOLE";
+
+export type PanelKpiConfig =
+  | {
+      metricId: string;
+      label: string;
+      format: Exclude<PanelKpiFormat, "MONEY" | "PERCENT">;
+      currencyCode?: never;
+      percentScale?: never;
+    }
+  | {
+      metricId: string;
+      label: string;
+      format: "MONEY";
+      currencyCode: string;
+      percentScale?: never;
+    }
+  | {
+      metricId: string;
+      label: string;
+      format: "PERCENT";
+      percentScale: PanelPercentScale;
+      currencyCode?: never;
+    };
+
+export type PanelRuntimeKpiConfig = {
+  currencyCode?: string;
+  format?: PanelKpiFormat;
+  label?: string;
+  metricId?: string;
+  percentScale?: PanelPercentScale;
+} & Record<string, unknown>;
+
+export type PanelMetricResult = {
+  calculatedAt: string;
+  datasetId: string;
+  id: string;
+  value: number | string | null;
+  valueType: "NUMBER" | "DATE" | "DATETIME";
+};
+
 export type PanelDatasetConfig = {
   id: string;
   name?: string;
@@ -209,7 +259,18 @@ export type PanelDatasetConfig = {
   } & Record<string, unknown>;
 };
 
-export type PanelModuleConfig = {
+export type PanelTableConfig = {
+  columns: {
+    fieldId: string;
+    format?: string;
+    label?: string;
+    valueDisplay?: ReportSelectValueDisplay;
+  }[];
+  paginated?: boolean;
+  searchable?: boolean;
+};
+
+type PanelModuleBase = {
   datasetId: string;
   id: string;
   layout: {
@@ -219,20 +280,22 @@ export type PanelModuleConfig = {
     y: number;
   };
   title?: string;
-  visualization: {
-    config: {
-      columns?: {
-        fieldId: string;
-        format?: string;
-        label?: string;
-        valueDisplay?: ReportSelectValueDisplay;
-      }[];
-      paginated?: boolean;
-      searchable?: boolean;
-    };
-    type: string;
-  };
 };
+
+export type PanelModuleConfig = PanelModuleBase & (
+  | {
+      visualization: {
+        config: PanelTableConfig;
+        type: "TABLE";
+      };
+    }
+  | {
+      visualization: {
+        config: PanelKpiConfig;
+        type: "KPI";
+      };
+    }
+);
 
 export type PanelAppViewConfig = {
   calculatedFields?: [];
@@ -242,7 +305,14 @@ export type PanelAppViewConfig = {
     columns: number;
     rowHeight?: number;
   };
-  metrics?: [];
+  metrics?: {
+    aggregation: "COUNT" | "COUNT_VALUES" | "COUNT_DISTINCT" | "SUM" | "AVG" | "MIN" | "MAX";
+    datasetId: string;
+    fieldId?: string | null;
+    filterIds: string[];
+    id: string;
+    name: string;
+  }[];
   modules?: PanelModuleConfig[];
   schemaVersion?: 1;
 };
@@ -436,6 +506,7 @@ export type PanelResponse = {
   configRevision: string;
   datasets: PanelDataset[];
   filters: PanelFilterConfig[];
+  metrics?: PanelMetricResult[];
   modules: PanelModuleConfig[];
   schemaVersion: 1;
 };

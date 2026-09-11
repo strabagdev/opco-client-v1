@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { PanelDataset, PanelModuleConfig, PanelResponse } from "@/lib/opco-api";
+import { PanelDataset, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
 
 import {
+  buildPanelKpiModel,
   buildPanelTableModel,
   datasetIdsForPanelModules,
   displayPanelValue,
+  formatPanelMetricValue,
   normalizePanelFilters,
   panelDatasetQueryKey,
   panelTableColumnMinWidth,
@@ -92,7 +94,7 @@ describe("panel table model", () => {
     expect(buildPanelTableModel({
       ...tableModule([{ fieldId: "status_field" }]),
       visualization: { config: {}, type: "KPI" },
-    }, panelDataset())).toBeNull();
+    } as unknown as PanelModuleConfig, panelDataset())).toBeNull();
   });
 
   it("keeps long text values complete for accessible rendering while the UI may truncate", () => {
@@ -107,6 +109,261 @@ describe("panel table model", () => {
     }));
 
     expect(table?.rows[0]?.values[0]).toBe(longValue);
+  });
+});
+
+describe("panel KPI model", () => {
+  it("finds KPI metrics by metricId without deriving values from rows or pagination", () => {
+    const model = buildPanelKpiModel(kpiModule("total-count", "records"), [
+      {
+        calculatedAt: "2026-09-10T12:00:00.000Z",
+        datasetId: "records",
+        id: "total-count",
+        value: 42,
+        valueType: "NUMBER",
+      },
+    ]);
+
+    expect(model).toMatchObject({
+      calculatedAt: "2026-09-10T12:00:00.000Z",
+      label: "Total",
+      metricId: "total-count",
+      missing: false,
+      value: "42",
+    });
+
+    const missing = buildPanelKpiModel(kpiModule("missing", "records"), []);
+
+    expect(missing).toMatchObject({
+      missing: true,
+      value: "-",
+    });
+  });
+
+  it("does not render a KPI metric from another dataset", () => {
+    expect(buildPanelKpiModel(kpiModule("total-count", "records"), [
+      {
+        calculatedAt: "2026-09-10T12:00:00.000Z",
+        datasetId: "other",
+        id: "total-count",
+        value: 99,
+        valueType: "NUMBER",
+      },
+    ])).toMatchObject({
+      missing: true,
+      value: "-",
+    });
+  });
+
+  it("keeps incomplete runtime KPI payloads controlled without crashing", () => {
+    expect(buildPanelKpiModel({
+      ...kpiModule("amount", "records"),
+      visualization: {
+        type: "KPI",
+        config: {
+          format: "MONEY",
+          label: "Monto",
+          metricId: "amount",
+        },
+      },
+    } as unknown as PanelModuleConfig, [
+      {
+        calculatedAt: "2026-09-10T12:00:00.000Z",
+        datasetId: "records",
+        id: "amount",
+        value: 1200,
+        valueType: "NUMBER",
+      },
+    ])).toMatchObject({
+      configurationIssue: "Configura la moneda de este KPI.",
+      missing: false,
+      value: "-",
+    });
+  });
+
+  it("formats KPI NUMBER, INTEGER, DECIMAL, DATE, DATETIME, null, and missing values for es-CL", () => {
+    expect(formatPanelMetricValue(1234.5, "NUMBER").value).toBe("1.234,5");
+    expect(formatPanelMetricValue(1234.8, "INTEGER").value).toBe("1.235");
+    expect(formatPanelMetricValue(1234.567, "DECIMAL").value).toBe("1.234,57");
+    expect(formatPanelMetricValue("2026-09-10", "DATE").value).toBe("10-09-2026");
+    expect(formatPanelMetricValue("2026-09-10T12:30:00.000Z", "DATETIME").value).not.toContain("T12:30:00.000Z");
+    expect(formatPanelMetricValue(null, "NUMBER").value).toBe("-");
+    expect(formatPanelMetricValue(undefined, "NUMBER").value).toBe("-");
+  });
+
+  it("formats MONEY with the configured currency without assuming CLP", () => {
+    expect(formatPanelMetricValue(1234.5, {
+      currencyCode: "CLP",
+      format: "MONEY",
+      label: "Monto",
+      metricId: "amount",
+    }).value).toBe(new Intl.NumberFormat("es-CL", {
+      currency: "CLP",
+      style: "currency",
+    }).format(1234.5));
+    expect(formatPanelMetricValue(1234.5, {
+      currencyCode: "USD",
+      format: "MONEY",
+      label: "Monto",
+      metricId: "amount",
+    }).value).toBe(new Intl.NumberFormat("es-CL", {
+      currency: "USD",
+      style: "currency",
+    }).format(1234.5));
+  });
+
+  it("returns a controlled state for MONEY without a currencyCode", () => {
+    expect(formatPanelMetricValue(1234.5, {
+      format: "MONEY",
+      label: "Monto",
+      metricId: "amount",
+    })).toEqual({
+      configurationIssue: "Configura la moneda de este KPI.",
+      value: "-",
+    });
+  });
+
+  it("formats PERCENT according to the explicit percentScale", () => {
+    expect(formatPanelMetricValue(0.25, {
+      format: "PERCENT",
+      label: "Avance",
+      metricId: "progress",
+      percentScale: "RATIO",
+    }).value).toBe(new Intl.NumberFormat("es-CL", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+      style: "percent",
+    }).format(0.25));
+    expect(formatPanelMetricValue(25, {
+      format: "PERCENT",
+      label: "Avance",
+      metricId: "progress",
+      percentScale: "WHOLE",
+    }).value).toBe(new Intl.NumberFormat("es-CL", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+      style: "percent",
+    }).format(0.25));
+  });
+
+  it("returns a controlled state for PERCENT without percentScale", () => {
+    expect(formatPanelMetricValue(25, {
+      format: "PERCENT",
+      label: "Avance",
+      metricId: "progress",
+    })).toEqual({
+      configurationIssue: "Configura la escala de este KPI.",
+      value: "-",
+    });
+  });
+
+  it("ignores incompatible MONEY and PERCENT properties on other formats", () => {
+    expect(formatPanelMetricValue(25, {
+      currencyCode: "CLP",
+      format: "NUMBER",
+      label: "Total",
+      metricId: "total",
+      percentScale: "RATIO",
+    }).value).toBe("25");
+  });
+
+  it("formats KPI modules from a Core-like PANEL response without changing metric values", () => {
+    const panel: PanelResponse = {
+      ...panelResponse(),
+      metrics: [
+        {
+          calculatedAt: "2026-09-10T12:00:00.000Z",
+          datasetId: "records",
+          id: "amount",
+          value: 1234.5,
+          valueType: "NUMBER",
+        },
+        {
+          calculatedAt: "2026-09-10T12:00:00.000Z",
+          datasetId: "records",
+          id: "progress-ratio",
+          value: 0.25,
+          valueType: "NUMBER",
+        },
+      ],
+      modules: [
+        {
+          datasetId: "records",
+          id: "amount-kpi",
+          layout: { h: 2, w: 4, x: 0, y: 0 },
+          title: "Monto",
+          visualization: {
+            config: {
+              currencyCode: "CLP",
+              format: "MONEY",
+              label: "Monto",
+              metricId: "amount",
+            },
+            type: "KPI",
+          },
+        },
+        {
+          datasetId: "records",
+          id: "progress-kpi",
+          layout: { h: 2, w: 4, x: 4, y: 0 },
+          title: "Avance",
+          visualization: {
+            config: {
+              format: "PERCENT",
+              label: "Avance",
+              metricId: "progress-ratio",
+              percentScale: "RATIO",
+            },
+            type: "KPI",
+          },
+        },
+      ],
+    };
+
+    const metrics = panel.metrics ?? [];
+
+    expect(buildPanelKpiModel(panel.modules[0]!, metrics)).toMatchObject({
+      configurationIssue: null,
+      metricId: "amount",
+      value: new Intl.NumberFormat("es-CL", {
+        currency: "CLP",
+        style: "currency",
+      }).format(1234.5),
+    });
+    expect(buildPanelKpiModel(panel.modules[1]!, metrics)).toMatchObject({
+      configurationIssue: null,
+      metricId: "progress-ratio",
+      value: new Intl.NumberFormat("es-CL", {
+        maximumFractionDigits: 2,
+        minimumFractionDigits: 0,
+        style: "percent",
+      }).format(0.25),
+    });
+    expect(metrics[1]?.value).toBe(0.25);
+  });
+
+  it("keeps TABLE and KPI dataset discovery deduplicated for shared datasets", () => {
+    expect(datasetIdsForPanelModules([
+      tableModule([{ fieldId: "status_field" }], "table", "records"),
+      kpiModule("total-count", "records", "kpi_1"),
+      kpiModule("total-count", "records", "kpi_2"),
+      kpiModule("latest-count", "latest", "kpi_3"),
+    ])).toEqual(["records", "latest"]);
+  });
+
+  it("supports a row with several KPI modules and a TABLE through configured layout metadata", () => {
+    const modules = [
+      kpiModule("total-count", "records", "kpi_1"),
+      { ...kpiModule("open-count", "records", "kpi_2"), layout: { h: 2, w: 4, x: 4, y: 0 } },
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 1 } },
+    ];
+
+    expect(modules.map((module) => module.layout)).toEqual([
+      { h: 2, w: 4, x: 0, y: 0 },
+      { h: 2, w: 4, x: 4, y: 0 },
+      { h: 6, w: 12, x: 0, y: 1 },
+    ]);
+    expect(datasetIdsForPanelModules(modules)).toEqual(["records"]);
   });
 });
 
@@ -126,6 +383,27 @@ describe("panel TABLE renderer structure", () => {
     expect(source.indexOf("<PanelTable table={table} />")).toBeLessThan(source.indexOf("styles.pagination"));
     expect(source).toContain("disabled={page <= 1}");
     expect(source).toContain("disabled={!dataset.pagination.hasMore}");
+  });
+
+  it("renders KPI modules from server metrics with loading, error, and offline states", () => {
+    expect(source).toContain("buildPanelKpiModel(module, state?.panel?.metrics)");
+    expect(source).toContain("<PanelKpi");
+    expect(source).toContain("Cargando indicador...");
+    expect(source).toContain("Métrica no disponible.");
+    expect(source).toContain("Datos guardados.");
+    expect(source).not.toContain("pagination.total}");
+  });
+
+  it("keeps late responses and dataset errors isolated", () => {
+    expect(source).toContain("requestSeq.current !== seq");
+    expect(source).toContain("[datasetId]: {");
+    expect(source).toContain("error: error instanceof Error ? error.message");
+  });
+
+  it("applies module layout to TABLE and KPI containers", () => {
+    expect(source).toContain("module.layout.w / renderedColumns");
+    expect(source).toContain("module.layout.h * configuredRowHeight");
+    expect(source).toContain("orderedModules");
   });
 });
 
@@ -173,7 +451,7 @@ describe("panel dataset state helpers", () => {
 });
 
 function tableModule(
-  columns: NonNullable<PanelModuleConfig["visualization"]["config"]["columns"]>,
+  columns: PanelTableConfig["columns"],
   id = "module_table",
   datasetId = "records",
 ): PanelModuleConfig {
@@ -189,6 +467,23 @@ function tableModule(
         searchable: true,
       },
       type: "TABLE",
+    },
+  };
+}
+
+function kpiModule(metricId: string, datasetId = "records", id = "module_kpi"): PanelModuleConfig {
+  return {
+    datasetId,
+    id,
+    layout: { h: 2, w: 4, x: 0, y: 0 },
+    title: "Total",
+    visualization: {
+      config: {
+        format: "NUMBER",
+        label: "Total",
+        metricId,
+      },
+      type: "KPI",
     },
   };
 }
@@ -242,6 +537,7 @@ export function panelResponse(dataset: PanelDataset = panelDataset()): PanelResp
     configRevision: "revision_1",
     datasets: [dataset],
     filters: [],
+    metrics: [],
     modules: [tableModule([{ fieldId: "status_field" }])],
     schemaVersion: 1,
   };

@@ -4,6 +4,8 @@ import { PanelSnapshotScope } from "./local-db";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "./offline-panels";
 import { OpcoNetworkError, PanelResponse } from "./opco-api";
 
+declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
+
 describe("offline panel cache", () => {
   it("stores successful PANEL dataset responses and falls back to compatible snapshots on network errors", async () => {
     const store = new MemoryPanelStore();
@@ -52,7 +54,14 @@ describe("offline panel cache", () => {
     })).resolves.toMatchObject({
       fromCache: true,
       offline: true,
-      panel,
+      panel: {
+        metrics: [
+          expect.objectContaining({
+            id: "total-records",
+            value: 7,
+          }),
+        ],
+      },
     });
   });
 
@@ -92,6 +101,107 @@ describe("offline panel cache", () => {
       store,
       token: "token_1",
     })).rejects.toBeInstanceOf(OpcoNetworkError);
+  });
+
+  it("preserves KPI currencyCode and percentScale in offline PANEL snapshots", async () => {
+    const store = new MemoryPanelStore();
+    const panel: PanelResponse = {
+      ...panelResponse("revision_1"),
+      metrics: [
+        {
+          calculatedAt: "2026-09-09T12:00:00.000Z",
+          datasetId: "records",
+          id: "amount",
+          value: 1200,
+          valueType: "NUMBER",
+        },
+        {
+          calculatedAt: "2026-09-09T12:00:00.000Z",
+          datasetId: "records",
+          id: "progress",
+          value: 0.25,
+          valueType: "NUMBER",
+        },
+      ],
+      modules: [
+        {
+          datasetId: "records",
+          id: "amount-kpi",
+          layout: { h: 2, w: 4, x: 0, y: 0 },
+          visualization: {
+            type: "KPI",
+            config: {
+              currencyCode: "CLP",
+              format: "MONEY",
+              label: "Monto",
+              metricId: "amount",
+            },
+          },
+        },
+        {
+          datasetId: "records",
+          id: "progress-kpi",
+          layout: { h: 2, w: 4, x: 4, y: 0 },
+          visualization: {
+            type: "KPI",
+            config: {
+              format: "PERCENT",
+              label: "Avance",
+              metricId: "progress",
+              percentScale: "RATIO",
+            },
+          },
+        },
+      ],
+    };
+    const api = {
+      getPanel: vi.fn()
+        .mockResolvedValueOnce(panel)
+        .mockRejectedValueOnce(new OpcoNetworkError()),
+    };
+
+    await loadPanelDatasetWithOfflineCache({
+      api,
+      appViewId: "panel_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: {
+        datasetId: "records",
+        page: 1,
+        pageSize: 25,
+      },
+      store,
+      token: "token_1",
+    });
+
+    const cached = await loadPanelDatasetWithOfflineCache({
+      api,
+      appViewId: "panel_1",
+      configRevision: "revision_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: {
+        datasetId: "records",
+        page: 1,
+        pageSize: 25,
+      },
+      store,
+      token: "token_1",
+    });
+
+    expect(cached.panel.modules).toEqual([
+      expect.objectContaining({
+        visualization: expect.objectContaining({
+          config: expect.objectContaining({ currencyCode: "CLP", format: "MONEY" }),
+        }),
+      }),
+      expect.objectContaining({
+        visualization: expect.objectContaining({
+          config: expect.objectContaining({ format: "PERCENT", percentScale: "RATIO" }),
+        }),
+      }),
+    ]);
+    expect(cached.panel.metrics).toHaveLength(2);
   });
 
   it("loads discovery without datasetId and can recover the latest discovery snapshot offline", async () => {
@@ -135,6 +245,14 @@ describe("offline panel cache", () => {
       fromCache: true,
       panel,
     });
+  });
+
+  it("does not create pending operations for PANEL snapshots", () => {
+    const { readFileSync } = require("fs");
+    const source = readFileSync("src/lib/offline-panels.ts", "utf8");
+
+    expect(source).not.toContain("pending_operations");
+    expect(source).not.toContain("enqueue");
   });
 });
 
@@ -201,6 +319,15 @@ function panelResponse(configRevision: string): PanelResponse {
     ],
     filters: [],
     modules: [],
+    metrics: [
+      {
+        calculatedAt: "2026-09-09T12:00:00.000Z",
+        datasetId: "records",
+        id: "total-records",
+        value: 7,
+        valueType: "NUMBER",
+      },
+    ],
     schemaVersion: 1,
   };
 }
