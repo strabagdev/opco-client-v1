@@ -1300,6 +1300,12 @@ class MemoryRecordStore implements OfflineRecordStore {
     };
   }
 
+  async listUniqueValidationRecords(input: Parameters<OfflineRecordStore["listUniqueValidationRecords"]>[0]) {
+    return [...this.records.values()].filter((item) =>
+      this.recordMatches(item, input.ownerKey, input.contractId, input.entityTypeId),
+    );
+  }
+
   async updateLocalRecord(input: Parameters<OfflineRecordStore["updateLocalRecord"]>[0]) {
     const existing = await this.getCachedRecord(input);
 

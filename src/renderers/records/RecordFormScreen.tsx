@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -12,7 +12,13 @@ import {
 import { buildAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { CachedEntityRecord, loadRecordWithOfflineCache, loadRecordsWithOfflineCache, saveRecordLocally } from "@/lib/offline-records";
-import { EntityDefinition, RecordsAppView } from "@/lib/opco-api";
+import {
+  getPreventiveUniqueFields,
+  isUniqueValidationResultCurrent,
+  validateUniqueFieldsBeforeSave,
+  UniqueValidationResult,
+} from "@/lib/offline-unique-validation";
+import { EntityDefinition, EntityRecordValue, RecordsAppView } from "@/lib/opco-api";
 import { stableSubmitButtonStyle } from "@/lib/visual-stability";
 import {
   buildChangedSubmitValues,
@@ -46,7 +52,7 @@ type RelationOptionsState = {
 
 export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, localDatabaseStorageState, ownerKey, selectedContractId, syncPendingRecords, token } =
+  const { api, connectivityStatus, definitionCache, localDatabaseStorageState, ownerKey, selectedContractId, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
@@ -55,12 +61,19 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const [fieldErrors, setFieldErrors] = useState<RecordFormErrors>({});
   const [relationOptionsByField, setRelationOptionsByField] = useState<Record<string, RelationOptionsState>>({});
   const [error, setError] = useState<string | null>(null);
+  const [uniqueNotice, setUniqueNotice] = useState<string | null>(null);
+  const [checkingUniqueFieldKey, setCheckingUniqueFieldKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const latestValuesRef = useRef(values);
 
   const fields = useMemo(() => (definition ? getWritableFields(definition) : []), [definition]);
   const title = mode === "create" ? `Crear en ${appView.name}` : `Editar ${record?.displayName ?? "registro"}`;
+
+  useEffect(() => {
+    latestValuesRef.current = values;
+  }, [values]);
 
   useEffect(() => {
     let isMounted = true;
@@ -232,9 +245,75 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
       return next;
     });
+    setUniqueNotice(null);
+  }
+
+  async function validateUniqueValues(
+    submitValues: Record<string, EntityRecordValue | undefined>,
+  ): Promise<UniqueValidationResult> {
+    if (!token || !selectedContractId || !ownerKey) {
+      return { reason: "REMOTE_VALIDATION_FAILED", status: "inconclusive" };
+    }
+
+    return validateUniqueFieldsBeforeSave({
+      api,
+      connectivityStatus,
+      contractId: selectedContractId,
+      entityTypeId,
+      fields,
+      localRecordId: mode === "edit" ? recordId ?? record?.localId ?? null : null,
+      ownerKey,
+      serverRecordId: mode === "edit" ? record?.serverId ?? null : null,
+      store: definitionCache,
+      token,
+      values: submitValues,
+    });
+  }
+
+  async function validateUniqueFieldOnBlur(fieldKey: string) {
+    const field = getPreventiveUniqueFields(fields).find((item) => item.key === fieldKey);
+
+    if (!field || !token || !selectedContractId || !ownerKey || isSubmitting) {
+      return;
+    }
+
+    const capturedValue = values[fieldKey];
+
+    if (mode === "edit" && JSON.stringify(capturedValue) === JSON.stringify(initialValues[fieldKey])) {
+      return;
+    }
+
+    setCheckingUniqueFieldKey(fieldKey);
+    setUniqueNotice(null);
+
+    try {
+      const result = await validateUniqueValues({ [fieldKey]: capturedValue });
+
+      if (!isUniqueValidationResultCurrent(latestValuesRef.current[fieldKey], capturedValue)) {
+        return;
+      }
+
+      if (result.status === "conflict") {
+        setFieldErrors((current) => ({
+          ...current,
+          [fieldKey]: result.conflicts[0]?.message ?? "Este valor ya existe en otro registro.",
+        }));
+        return;
+      }
+
+      if (result.status === "inconclusive") {
+        setUniqueNotice(uniqueValidationNotice(result));
+      }
+    } finally {
+      setCheckingUniqueFieldKey(null);
+    }
   }
 
   async function handleSubmit() {
+    if (isSubmitting) {
+      return;
+    }
+
     if (!definition || !token || !selectedContractId || !ownerKey) {
       return;
     }
@@ -266,8 +345,21 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     setIsSubmitting(true);
     setError(null);
     setFieldErrors({});
+    setUniqueNotice(null);
 
     try {
+      const uniqueResult = await validateUniqueValues(submitValues);
+
+      if (uniqueResult.status === "conflict") {
+        setFieldErrors(uniqueConflictsToFieldErrors(uniqueResult));
+        setError("Corrige los campos unicos antes de guardar.");
+        return;
+      }
+
+      if (uniqueResult.status === "inconclusive") {
+        setUniqueNotice(uniqueValidationNotice(uniqueResult));
+      }
+
       const localRecord = await saveRecordLocally({
         contractId: selectedContractId,
         entityTypeId,
@@ -304,6 +396,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
       {isLoading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {uniqueNotice ? <Text style={styles.notice}>{uniqueNotice}</Text> : null}
       {error && !definition ? (
         <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>
           <Text style={styles.primaryText}>Reintentar</Text>
@@ -318,6 +411,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
               field={field}
               key={field.key}
               onChange={(value) => setFieldValue(field.key, value)}
+              onBlur={() => validateUniqueFieldOnBlur(field.key)}
               relationOptions={relationOptionsByField[field.key]?.options}
               relationOptionsError={relationOptionsByField[field.key]?.error}
               relationOptionsLoading={
@@ -330,6 +424,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
               value={values[field.key]}
             />
           ))}
+          {checkingUniqueFieldKey ? <Text style={styles.notice}>Comprobando valor unico...</Text> : null}
         </View>
       ) : null}
 
@@ -388,6 +483,26 @@ function getRelationCatalogAvailabilityErrors(
   }, {});
 }
 
+function uniqueConflictsToFieldErrors(result: Extract<UniqueValidationResult, { status: "conflict" }>) {
+  return result.conflicts.reduce<RecordFormErrors>((errors, conflict) => {
+    errors[conflict.fieldKey] = conflict.message;
+
+    return errors;
+  }, {});
+}
+
+function uniqueValidationNotice(result: Extract<UniqueValidationResult, { status: "inconclusive" }>) {
+  if (result.reason === "NETWORK_UNAVAILABLE") {
+    return "No pudimos confirmar unicidad con el servidor. El guardado local continuara y el servidor validara al sincronizar.";
+  }
+
+  if (result.reason === "LOCAL_CACHE_PARTIAL") {
+    return "Validamos contra los registros disponibles localmente. El servidor confirmara unicidad al sincronizar.";
+  }
+
+  return "No pudimos completar la comprobacion preventiva. El servidor validara al sincronizar.";
+}
+
 const styles = StyleSheet.create({
   actions: {
     flexDirection: "row",
@@ -422,6 +537,10 @@ const styles = StyleSheet.create({
   },
   meta: {
     color: "#587078",
+  },
+  notice: {
+    color: "#6f5b00",
+    lineHeight: 20,
   },
   primaryButton: {
     alignItems: "center",

@@ -158,6 +158,7 @@ export type OfflineRecordStore = {
   listCachedRecords(input: ListCachedRecordsInput): Promise<CachedRecordsResult>;
   listFailedRecordOperations(input: ListFailedRecordOperationsInput): Promise<RecordsFailedOperationDiagnostics[]>;
   listProblemRecords(input: ListProblemRecordsInput): Promise<CachedEntityRecord[]>;
+  listUniqueValidationRecords(input: BaseScopedInput): Promise<CachedEntityRecord[]>;
   reconcileRemoteRecordsSnapshot(input: ReconcileRemoteRecordsSnapshotInput): Promise<RecordsReconcileDiagnostics | void>;
   retryFailedRecord(input: RetryFailedRecordInput): Promise<CachedEntityRecord>;
   resolveRecordConflictWithLocal(input: ResolveRecordConflictInput & { api: Pick<OpcoApi, "getEntityRecord">; token: string }): Promise<CachedEntityRecord>;

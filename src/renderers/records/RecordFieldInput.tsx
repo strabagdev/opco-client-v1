@@ -10,6 +10,7 @@ import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./temporal-i
 type FieldInputProps = {
   error?: string;
   field: EntityField;
+  onBlur?(): void;
   onChange(value: string | boolean | string[]): void;
   relationOptions?: RecordRelationOption[];
   relationOptionsError?: string | null;
@@ -21,6 +22,7 @@ type FieldInputProps = {
 export function RecordFieldInput({
   error,
   field,
+  onBlur,
   onChange,
   relationOptions = [],
   relationOptionsError = null,
@@ -44,7 +46,9 @@ export function RecordFieldInput({
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{field.name}</Text>
         <Pressable
-          onPress={() => onChange(!selected)}
+          onPress={() => {
+            onChange(!selected);
+          }}
           style={[styles.optionButton, selected && styles.optionButtonSelected]}
         >
           <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{selected ? "Si" : "No"}</Text>
@@ -138,6 +142,7 @@ export function RecordFieldInput({
         autoCapitalize="none"
         keyboardType={getKeyboardType(field.type)}
         multiline={multiline}
+        onBlur={onBlur}
         onChangeText={(nextValue) => {
           onChange(nextValue);
         }}

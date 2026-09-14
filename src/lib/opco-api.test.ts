@@ -2385,4 +2385,48 @@ describe("createOpcoApi", () => {
       },
     });
   });
+
+  it("validates unique fields before storing local record operations", async () => {
+    const requests: RequestInit[] = [];
+    const urls: string[] = [];
+    const api = createOpcoApi({
+      apiUrl: "https://opco.test",
+      fetcher: async (url, init) => {
+        urls.push(String(url));
+        requests.push(init ?? {});
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              available: false,
+              conflicts: [{
+                conflictingRecordId: "record_2",
+                fieldId: "field_rut",
+                fieldName: "RUT",
+                message: "Ya existe un registro con este valor en \"RUT\".",
+                rejectedValue: "76.123.456-7",
+              }],
+            },
+            ok: true,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await expect(api.validateUniqueEntityRecord("token_123", "contract_1", "entity_1", {
+      fields: [{ fieldId: "field_rut", value: "76.123.456-7" }],
+      recordId: "record_1",
+    })).resolves.toMatchObject({
+      available: false,
+      conflicts: [{ fieldId: "field_rut" }],
+    });
+
+    expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records/validate-unique");
+    expect(requests[0].method).toBe("POST");
+    expect(JSON.parse(String(requests[0].body))).toEqual({
+      fields: [{ fieldId: "field_rut", value: "76.123.456-7" }],
+      recordId: "record_1",
+    });
+  });
 });

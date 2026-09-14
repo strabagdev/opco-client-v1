@@ -192,6 +192,7 @@ export function getLocalDatabase(): LocalDatabase {
     listCachedRecords,
     listFailedRecordOperations,
     listProblemRecords,
+    listUniqueValidationRecords,
     listPendingOperations,
     listPendingStateUpdateOperations,
     listStateUpdateLatest,
@@ -1574,6 +1575,34 @@ async function listCachedRecords({
     },
     records: sorted.slice(offset, offset + pageSize),
   };
+}
+
+async function listUniqueValidationRecords({
+  contractId,
+  entityTypeId,
+  ownerKey,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+}) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<EntityRecordRow>(
+    `
+      SELECT *
+      FROM entity_records
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND sync_status IN ('synced', 'pending_create', 'pending_update', 'syncing', 'failed', 'conflict')
+      ORDER BY cached_at DESC, display_name ASC
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+  );
+
+  return rows.map(mapRecordRow);
 }
 
 function hasCachedRecordValue(value: EntityRecordValue | undefined) {

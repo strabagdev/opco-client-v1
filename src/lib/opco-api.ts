@@ -960,6 +960,27 @@ export type UpdateEntityRecordInput = {
   values: Record<string, EntityRecordValue>;
 };
 
+export type ValidateUniqueEntityRecordInput = {
+  fields: {
+    fieldId: string;
+    value: EntityRecordValue | undefined;
+  }[];
+  recordId?: string | null;
+};
+
+export type UniqueEntityRecordConflict = {
+  conflictingRecordId: string | null;
+  fieldId: string;
+  fieldName: string;
+  message: string;
+  rejectedValue: string | number | boolean | null | (string | number | boolean | null)[];
+};
+
+export type UniqueEntityRecordValidationResponse = {
+  available: boolean;
+  conflicts: UniqueEntityRecordConflict[];
+};
+
 export class OpcoApiError extends Error {
   constructor(
     message: string,
@@ -1580,6 +1601,21 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           method: "PATCH",
         },
       ).then(normalizeEntityRecordResponse);
+    },
+    validateUniqueEntityRecord(
+      token: string,
+      contractId: string,
+      entityTypeId: string,
+      input: ValidateUniqueEntityRecordInput,
+    ) {
+      return authenticatedRequest<UniqueEntityRecordValidationResponse>(
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/entities/${encodeURIComponent(entityTypeId)}/records/validate-unique`,
+        token,
+        {
+          body: JSON.stringify(input),
+          method: "POST",
+        },
+      );
     },
     getAttendanceWorkflow(
       token: string,
