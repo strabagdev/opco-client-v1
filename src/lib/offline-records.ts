@@ -148,6 +148,7 @@ export type RecordOutboxConsistency = {
 
 export type OfflineRecordStore = {
   countPendingOperations(ownerKey: string): Promise<number>;
+  clearOrphanedFailedRecordNotice(input: RecordIdentityInput): Promise<CachedEntityRecord>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
   discardFailedRecord(input: DiscardFailedRecordInput): Promise<CachedEntityRecord | null>;
   getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;

@@ -7,6 +7,7 @@ import { CachedEntityRecord, RecordsFailedOperationDiagnostics } from "@/lib/off
 import { RecordsAppView } from "@/lib/opco-api";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
+import { confirmWebRecordProblemAction, findRecordProblemOperation, getRecordProblemActionState } from "./record-problem-actions";
 
 type Props = {
   appView: RecordsAppView;
@@ -18,9 +19,11 @@ const noTranslateProps = Platform.OS === "web"
 
 export function RecordProblemsScreen({ appView }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { definitionCache, discardFailedRecordOperation, ownerKey, recordsFailedOperations, refreshRecordsSyncSummary, retryFailedRecordOperation, selectedContractId } = useSession();
+  const { api, connectivityStatus, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
+  const [failedOperations, setFailedOperations] = useState<RecordsFailedOperationDiagnostics[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [recordErrors, setRecordErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [busyRecordId, setBusyRecordId] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -40,14 +43,22 @@ export function RecordProblemsScreen({ appView }: Props) {
       setError(null);
 
       try {
-        const result = await definitionCache.listProblemRecords({
-          contractId: selectedContractId,
-          entityTypeId,
-          ownerKey,
-        });
+        const [result, operations] = await Promise.all([
+          definitionCache.listProblemRecords({
+            contractId: selectedContractId,
+            entityTypeId,
+            ownerKey,
+          }),
+          definitionCache.listFailedRecordOperations({
+            contractId: selectedContractId,
+            limit: 100,
+            ownerKey,
+          }),
+        ]);
 
         if (isMounted) {
           setRecords(result);
+          setFailedOperations(operations);
         }
       } catch (nextError) {
         if (isMounted) {
@@ -67,8 +78,18 @@ export function RecordProblemsScreen({ appView }: Props) {
     };
   }, [definitionCache, entityTypeId, ownerKey, retryCount, selectedContractId]);
 
-  async function retryRecord(record: CachedEntityRecord) {
+  async function retryRecord(record: CachedEntityRecord, operation: RecordsFailedOperationDiagnostics | null) {
     if (!record.syncErrorCode || isUniqueRecordError(record)) {
+      return;
+    }
+
+    if (!selectedContractId || !ownerKey) {
+      setRecordError(record, "Selecciona un contrato y vuelve a intentar.");
+      return;
+    }
+
+    if (!operation) {
+      setRecordError(record, "No se encontro la operacion local asociada a este error.");
       return;
     }
 
@@ -78,19 +99,33 @@ export function RecordProblemsScreen({ appView }: Props) {
 
     busyRecordsRef.current.add(record.localId);
     setBusyRecordId(record.localId);
+    setRecordError(record, null);
     try {
-      await retryFailedRecordOperation(`records:${record.localId}`);
+      await definitionCache.retryFailedRecord({
+        contractId: selectedContractId,
+        entityTypeId: operation.entityTypeId,
+        ownerKey,
+        recordId: operation.localRecordId,
+      });
       await refreshRecordsSyncSummary();
+      void syncPendingRecords();
       setRetryCount((count) => count + 1);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible reintentar.");
+      setRecordError(record, nextError instanceof Error ? nextError.message : "No fue posible reintentar.");
     } finally {
       busyRecordsRef.current.delete(record.localId);
       setBusyRecordId(null);
     }
   }
 
-  function confirmDiscard(record: CachedEntityRecord) {
+  function confirmDiscard(record: CachedEntityRecord, operation: RecordsFailedOperationDiagnostics | null) {
+    const state = getRecordProblemActionState({ connectivityStatus, operation, record });
+
+    if (!state.canDiscard) {
+      setRecordError(record, state.reason ?? "No se puede descartar este error.");
+      return;
+    }
+
     const title = record.serverId
       ? "Descartar cambios locales"
       : "Descartar registro local";
@@ -98,35 +133,134 @@ export function RecordProblemsScreen({ appView }: Props) {
       ? "Se conservara el registro del servidor y se eliminaran los cambios locales retenidos."
       : "Se eliminara solo el borrador local y su operacion pendiente.";
 
+    if (Platform.OS === "web") {
+      if (confirmWebRecordProblemAction({
+        getWindow: () => typeof window === "undefined" ? undefined : window,
+        message,
+        title,
+      })) {
+        void discardRecord(record, operation);
+      }
+      return;
+    }
+
     Alert.alert(title, message, [
       { style: "cancel", text: "Cancelar" },
       {
         style: "destructive",
         text: "Descartar",
         onPress: () => {
-          void discardRecord(record);
+          void discardRecord(record, operation);
         },
       },
     ]);
   }
 
-  async function discardRecord(record: CachedEntityRecord) {
+  async function discardRecord(record: CachedEntityRecord, operation: RecordsFailedOperationDiagnostics | null) {
+    if (!selectedContractId || !ownerKey || !token) {
+      setRecordError(record, "Selecciona un contrato y vuelve a intentar.");
+      return;
+    }
+
+    const state = getRecordProblemActionState({ connectivityStatus, operation, record });
+
+    if (!state.canDiscard) {
+      setRecordError(record, state.reason ?? "No se puede descartar este error.");
+      return;
+    }
+
     if (busyRecordsRef.current.has(record.localId)) {
       return;
     }
 
     busyRecordsRef.current.add(record.localId);
     setBusyRecordId(record.localId);
+    setRecordError(record, null);
     try {
-      await discardFailedRecordOperation(`records:${record.localId}`);
+      await definitionCache.discardFailedRecord({
+        api,
+        contractId: selectedContractId,
+        entityTypeId,
+        ownerKey,
+        recordId: record.localId,
+        token,
+      });
       await refreshRecordsSyncSummary();
       setRetryCount((count) => count + 1);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible descartar el cambio local.");
+      setRecordError(record, nextError instanceof Error ? nextError.message : "No fue posible descartar el cambio local.");
     } finally {
       busyRecordsRef.current.delete(record.localId);
       setBusyRecordId(null);
     }
+  }
+
+  function confirmCloseOrphanNotice(record: CachedEntityRecord) {
+    const title = "Cerrar aviso obsoleto";
+    const message = "Se cerrara solo el aviso local porque no hay una operacion pendiente asociada. No se eliminara ningun registro.";
+
+    if (Platform.OS === "web") {
+      if (confirmWebRecordProblemAction({
+        getWindow: () => typeof window === "undefined" ? undefined : window,
+        message,
+        title,
+      })) {
+        void closeOrphanNotice(record);
+      }
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { style: "cancel", text: "Cancelar" },
+      {
+        text: "Cerrar aviso",
+        onPress: () => {
+          void closeOrphanNotice(record);
+        },
+      },
+    ]);
+  }
+
+  async function closeOrphanNotice(record: CachedEntityRecord) {
+    if (!selectedContractId || !ownerKey) {
+      setRecordError(record, "Selecciona un contrato y vuelve a intentar.");
+      return;
+    }
+
+    if (busyRecordsRef.current.has(record.localId)) {
+      return;
+    }
+
+    busyRecordsRef.current.add(record.localId);
+    setBusyRecordId(record.localId);
+    setRecordError(record, null);
+    try {
+      await definitionCache.clearOrphanedFailedRecordNotice({
+        contractId: selectedContractId,
+        entityTypeId,
+        ownerKey,
+        recordId: record.localId,
+      });
+      await refreshRecordsSyncSummary();
+      setRetryCount((count) => count + 1);
+    } catch (nextError) {
+      setRecordError(record, nextError instanceof Error ? nextError.message : "No fue posible cerrar el aviso obsoleto.");
+    } finally {
+      busyRecordsRef.current.delete(record.localId);
+      setBusyRecordId(null);
+    }
+  }
+
+  function setRecordError(record: CachedEntityRecord, message: string | null) {
+    setRecordErrors((current) => {
+      const next = { ...current };
+      if (message) {
+        next[record.localId] = message;
+      } else {
+        delete next[record.localId];
+      }
+      return next;
+    });
   }
 
   return (
@@ -151,9 +285,11 @@ export function RecordProblemsScreen({ appView }: Props) {
       <View style={styles.list}>
         {records.map((record) => {
           const uniqueError = isUniqueRecordError(record);
-          const failedOperation = recordsFailedOperations.find((operation) => operation.localRecordId === record.localId) ?? null;
+          const failedOperation = findRecordProblemOperation({ entityTypeId, operations: failedOperations, record });
+          const actionState = getRecordProblemActionState({ connectivityStatus, operation: failedOperation, record });
           const conflictDetail = formatConflictDetail(failedOperation);
           const isBusy = busyRecordId === record.localId;
+          const inlineError = recordErrors[record.localId] ?? null;
 
           return (
             <View key={record.localId} style={styles.card}>
@@ -168,37 +304,55 @@ export function RecordProblemsScreen({ appView }: Props) {
                     <Text {...noTranslateProps} style={styles.metaStrong}>{conflictDetail}</Text>
                   ) : null}
                   {uniqueError ? <Text style={styles.warning}>Corrige el valor antes de reintentar.</Text> : null}
+                  {actionState.reason ? <Text style={styles.warning}>{actionState.reason}</Text> : null}
+                  {inlineError ? <Text style={styles.error}>{inlineError}</Text> : null}
                 </Pressable>
               </Link>
               {record.syncStatus === "failed" ? (
                 <View style={styles.cardActions}>
-                  <Link href={buildEditAppViewRecordHref(appView.id, record.id)} asChild>
-                    <Pressable accessibilityRole="button" style={styles.primaryButton}>
-                      <Text style={styles.primaryText}>Resolver error</Text>
-                    </Pressable>
-                  </Link>
+                  {actionState.canResolve ? (
+                    <Link href={buildEditAppViewRecordHref(appView.id, record.id)} asChild>
+                      <Pressable accessibilityRole="button" style={styles.primaryButton}>
+                        <Text {...noTranslateProps} style={styles.primaryText}>Resolver error</Text>
+                      </Pressable>
+                    </Link>
+                  ) : null}
                   {uniqueError ? null : (
                     <Pressable
                       accessibilityRole="button"
-                      disabled={isBusy}
+                      disabled={isBusy || !failedOperation}
                       onPress={() => {
-                        void retryRecord(record);
+                        void retryRecord(record, failedOperation);
                       }}
-                      style={[styles.secondaryButton, isBusy ? styles.buttonDisabled : null]}
+                      style={[styles.secondaryButton, isBusy || !failedOperation ? styles.buttonDisabled : null]}
                     >
                       <Text style={styles.secondaryText}>{isBusy ? "Reintentando" : "Reintentar"}</Text>
                     </Pressable>
                   )}
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={isBusy}
-                    onPress={() => confirmDiscard(record)}
-                    style={[styles.dangerButton, isBusy ? styles.buttonDisabled : null]}
-                  >
-                    <Text style={styles.dangerText}>
-                      {record.serverId ? "Descartar cambios locales" : "Descartar registro local"}
-                    </Text>
-                  </Pressable>
+                  {actionState.canDiscard ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isBusy}
+                      onPress={() => confirmDiscard(record, failedOperation)}
+                      style={[styles.dangerButton, isBusy ? styles.buttonDisabled : null]}
+                    >
+                      <Text style={styles.dangerText}>
+                        {failedOperation?.operation === "UPDATE" ? "Descartar cambios locales" : "Descartar registro local"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {actionState.canCloseOrphan ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isBusy}
+                      onPress={() => {
+                        confirmCloseOrphanNotice(record);
+                      }}
+                      style={[styles.secondaryButton, isBusy ? styles.buttonDisabled : null]}
+                    >
+                      <Text style={styles.secondaryText}>Cerrar aviso obsoleto</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
             </View>

@@ -996,6 +996,105 @@ describe("offline records cache", () => {
     expect(await store.listPendingOperations(scope.ownerKey)).toHaveLength(1);
   });
 
+  it("closes an orphaned failed notice without deleting a remote-backed record", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo remoto", { codigo: "REMOTE" })],
+    });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "INVALID_RELATION",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    const closed = await store.clearOrphanedFailedRecordNotice({ ...scope, recordId: "record_1" });
+
+    expect(closed.syncStatus).toBe("synced");
+    expect(closed.serverId).toBe("record_1");
+    expect(closed.syncErrorCode).toBeNull();
+    expect(closed.syncErrorMessage).toBeNull();
+    expect(await store.getCachedRecord({ ...scope, recordId: "record_1" })).toBeTruthy();
+  });
+
+  it("does not let another contract operation block an orphaned failed notice", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo remoto", { codigo: "REMOTE" })],
+    });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "INVALID_RELATION",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+    store.operations.set("UPDATE:other_contract", {
+      attempts: 0,
+      clientRequestId: "request_other",
+      contractId: "contract_other",
+      createdAt: "2026-09-14T12:00:00.000Z",
+      entityTypeId: scope.entityTypeId,
+      id: "UPDATE:other_contract",
+      lastErrorCode: "INVALID_RELATION",
+      lastErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      localRecordId: existing!.localId,
+      operation: "UPDATE",
+      ownerKey: scope.ownerKey,
+      payload: { values: { codigo: "LOCAL" } },
+      serverRecordId: existing!.serverId,
+      updatedAt: "2026-09-14T12:00:00.000Z",
+    });
+
+    const closed = await store.clearOrphanedFailedRecordNotice({ ...scope, recordId: "record_1" });
+
+    expect(closed.syncStatus).toBe("synced");
+    expect(store.operations.has("UPDATE:other_contract")).toBe(true);
+  });
+
+  it("does not close a failed notice while a scoped operation exists", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo remoto", { codigo: "REMOTE" })],
+    });
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { codigo: "LOCAL" } });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "INVALID_RELATION",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    await expect(store.clearOrphanedFailedRecordNotice({ ...scope, recordId: "record_1" })).rejects.toThrow("operacion local pendiente");
+    expect((await store.getCachedRecord({ ...scope, recordId: "record_1" }))?.syncStatus).toBe("failed");
+  });
+
+  it("does not close an orphaned failed local draft without remote identity", async () => {
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "LOCAL" },
+    });
+    store.operations.clear();
+    const existing = await store.getCachedRecord({ ...scope, recordId: "local_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "INVALID_RELATION",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    await expect(store.clearOrphanedFailedRecordNotice({ ...scope, recordId: "local_1" })).rejects.toThrow("identidad remota");
+    expect((await store.getCachedRecord({ ...scope, recordId: "local_1" }))?.syncStatus).toBe("failed");
+  });
+
   it("isolates records by owner key", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -1044,6 +1143,41 @@ class MemoryRecordStore implements OfflineRecordStore {
 
   async countPendingOperations(ownerKey: string) {
     return [...this.operations.values()].filter((operation) => operation.ownerKey === ownerKey).length;
+  }
+
+  async clearOrphanedFailedRecordNotice(input: Parameters<OfflineRecordStore["clearOrphanedFailedRecordNotice"]>[0]) {
+    const existing = await this.getCachedRecord(input);
+
+    if (!existing || existing.syncStatus !== "failed") {
+      throw new Error("missing");
+    }
+
+    if (!existing.serverId) {
+      throw new Error("No se puede cerrar un aviso huerfano sin identidad remota.");
+    }
+
+    const operation = [...this.operations.values()].find((item) =>
+      item.ownerKey === input.ownerKey &&
+      item.contractId === input.contractId &&
+      item.entityTypeId === input.entityTypeId &&
+      item.localRecordId === existing.localId &&
+      (item.operation === "CREATE" || item.operation === "UPDATE")
+    );
+
+    if (operation) {
+      throw new Error("El registro todavia tiene una operacion local pendiente.");
+    }
+
+    const closed = {
+      ...existing,
+      syncErrorCode: null,
+      syncErrorMessage: null,
+      syncStatus: "synced" as const,
+    };
+
+    this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId), closed);
+
+    return closed;
   }
 
   async createLocalRecord(input: Parameters<OfflineRecordStore["createLocalRecord"]>[0]) {

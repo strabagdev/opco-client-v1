@@ -161,6 +161,7 @@ export type CachedPanelSnapshot = {
 export function getLocalDatabase(): LocalDatabase {
   return {
     clearNavigationCache,
+    clearOrphanedFailedRecordNotice,
     completePendingOperation,
     completeStateUpdateOperation,
     countPendingOperations,
@@ -2296,6 +2297,76 @@ async function listProblemRecords({
   );
 
   return rows.map(mapRecordRow);
+}
+
+async function clearOrphanedFailedRecordNotice({
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+}: {
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  recordId: string;
+}) {
+  const db = await getDatabase();
+  const existing = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (!existing || existing.syncStatus !== "failed") {
+    throw new Error("No se encontro un aviso fallido para cerrar.");
+  }
+
+  if (!existing.serverId) {
+    throw new Error("No se puede cerrar un aviso huerfano sin identidad remota.");
+  }
+
+  const operation = await db.getFirstAsync<PendingOperationRow>(
+    `
+      SELECT *
+      FROM pending_operations
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND local_record_id = ?
+        AND operation IN ('CREATE', 'UPDATE')
+      LIMIT 1
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+    existing.localId,
+  );
+
+  if (operation) {
+    throw new Error("El registro todavia tiene una operacion local pendiente.");
+  }
+
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = 'synced',
+          sync_error_code = NULL,
+          sync_error_message = NULL
+      WHERE owner_key = ?
+        AND contract_id = ?
+        AND entity_type_id = ?
+        AND local_id = ?
+        AND server_id IS NOT NULL
+    `,
+    ownerKey,
+    contractId,
+    entityTypeId,
+    existing.localId,
+  );
+
+  const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
+
+  if (!record) {
+    throw new Error("No fue posible leer el aviso cerrado.");
+  }
+
+  return record;
 }
 
 async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
