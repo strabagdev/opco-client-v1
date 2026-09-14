@@ -252,6 +252,51 @@ describe("records sync engine", () => {
     ]);
   });
 
+  it("preserves unique field conflict status and structured details", async () => {
+    const details = {
+      conflictingRecordId: "record_existing",
+      entityTypeId: "entity_1",
+      fieldId: "field_rut",
+      fieldName: "RUT",
+      fields: [{
+        expectedType: "UNIQUE_FIELD_VALUE",
+        fieldId: "field_rut",
+        fieldLabel: "RUT",
+        fieldType: "TEXT",
+        messages: ["RUT ya existe en otro registro."],
+        rejectedValue: "11111111-1",
+        source: "field",
+      }],
+      rejectedValue: "11111111-1",
+    };
+    store.operations = [
+      operation({
+        localRecordId: "local_1",
+        operation: "CREATE",
+        payload: { clientRequestId: "request_1", values: { rut: "11111111-1" } },
+      }),
+    ];
+    const api = {
+      createEntityRecord: vi.fn(async () => {
+        throw new OpcoApiError("RUT debe ser único dentro de este tipo de entidad.", "UNIQUE_FIELD_CONFLICT", 409, details);
+      }),
+      getEntityRecord: vi.fn(),
+      updateEntityRecord: vi.fn(),
+    };
+
+    await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
+
+    expect(store.failed).toEqual([
+      {
+        code: "UNIQUE_FIELD_CONFLICT",
+        details,
+        httpStatus: 409,
+        message: "RUT debe ser único dentro de este tipo de entidad.",
+        operation: store.operations[0],
+      },
+    ]);
+  });
+
   it("runs as a single-flight sync", async () => {
     store.operations = [operation({ localRecordId: "local_1", operation: "CREATE" })];
     const api = {

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   formatRecordsFailedOperationDiagnosticsCopyText,
   getRecordsFailedOperationDiagnosticsSections,
+  getRecordsFailedOperationAction,
+  isUniqueFieldConflictOperation,
 } from "./sync-diagnostics";
 import type { RecordsFailedOperationDiagnostics } from "@/lib/offline-records";
 
@@ -95,4 +97,61 @@ describe("records sync diagnostics", () => {
       "Este rechazo no contiene detalle técnico; reintenta para actualizarlo",
     );
   });
+
+  it("requires correction for structured and legacy unique field conflicts", () => {
+    const structured = operation({
+      lastErrorCode: "UNIQUE_FIELD_CONFLICT",
+      lastErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+    });
+    const legacy = operation({
+      lastErrorCode: "INVALID_RELATION",
+      lastErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+    });
+
+    expect(isUniqueFieldConflictOperation(structured)).toBe(true);
+    expect(isUniqueFieldConflictOperation(legacy)).toBe(true);
+    expect(getRecordsFailedOperationAction(structured)).toEqual({
+      kind: "correct-required",
+      message: "Corrige el valor antes de reintentar.",
+    });
+    expect(getRecordsFailedOperationDiagnosticsSections([structured])[0]).toMatchObject({
+      action: { kind: "correct-required" },
+      manualRetryToken: "records:local_record_full",
+    });
+  });
+
+  it("does not reclassify real relation errors as unique conflicts", () => {
+    const relation = operation({
+      lastErrorCode: "INVALID_RELATION",
+      lastErrorMessage: "Cargo contiene registros relacionados no validos.",
+    });
+
+    expect(isUniqueFieldConflictOperation(relation)).toBe(false);
+    expect(getRecordsFailedOperationAction(relation)).toEqual({
+      kind: "retry-available",
+      message: "Puedes reintentar cuando el problema sea transitorio.",
+    });
+  });
 });
+
+function operation(overrides: Partial<RecordsFailedOperationDiagnostics> = {}): RecordsFailedOperationDiagnostics {
+  return {
+    entityTypeId: "entity_people_full",
+    hasStructuredDetails: false,
+    lastErrorCode: "INVALID_RELATION",
+    lastErrorDetails: null,
+    lastErrorMessage: "Cargo contiene registros relacionados no validos.",
+    lastHttpStatus: 400,
+    localRecordId: "local_record_full",
+    manualRetryToken: "records:local_record_full",
+    manualRetryable: true,
+    operation: "CREATE",
+    retryCount: 1,
+    serverRecordId: null,
+    syncErrorCode: "INVALID_RELATION",
+    syncErrorMessage: "Cargo contiene registros relacionados no validos.",
+    syncStatus: "failed",
+    updatedAt: "2026-09-10T12:00:00.000Z",
+    ...overrides,
+  };
+}

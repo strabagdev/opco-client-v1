@@ -1,7 +1,7 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { AlertCircle, LogOut, WifiOff, X } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
 import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
@@ -30,6 +30,9 @@ import {
 import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
 
 const APP_SHELL_TOAST_DURATION_MS = 3500;
+const noTranslateProps = Platform.OS === "web"
+  ? ({ translate: "no" } as Record<string, string>)
+  : {};
 
 export default function AppLayout() {
   const {
@@ -474,7 +477,7 @@ export default function AppLayout() {
                 syncErrorTechnicalRows.map(([label, value]) => (
                   <View key={label} style={styles.diagnosticsRow}>
                     <Text style={styles.diagnosticsLabel}>{label}</Text>
-                    <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+                    <Text {...noTranslateProps} style={styles.diagnosticsValue}>{String(value)}</Text>
                   </View>
                 ))
               ) : null}
@@ -598,14 +601,14 @@ function PwaDiagnostics({
       {rows.map(([label, value]) => (
         <View key={label} style={styles.diagnosticsRow}>
           <Text style={styles.diagnosticsLabel}>{label}</Text>
-          <Text style={styles.diagnosticsValue}>{value}</Text>
+          <Text {...noTranslateProps} style={styles.diagnosticsValue}>{value}</Text>
         </View>
       ))}
       <Text style={styles.diagnosticsTitle}>Preparacion offline</Text>
       {preparationRows.map(([label, value]) => (
         <View key={label} style={styles.diagnosticsRow}>
           <Text style={styles.diagnosticsLabel}>{label}</Text>
-          <Text style={styles.diagnosticsValue}>{value}</Text>
+          <Text {...noTranslateProps} style={styles.diagnosticsValue}>{value}</Text>
         </View>
       ))}
     </View>
@@ -633,7 +636,7 @@ function RecordsGlobalDiagnostics({
       {rows.map(([label, value]) => (
         <View key={label} style={styles.diagnosticsRow}>
           <Text style={styles.diagnosticsLabel}>{label}</Text>
-          <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+          <Text {...noTranslateProps} style={styles.diagnosticsValue}>{String(value)}</Text>
         </View>
       ))}
       <RecordsFailedDiagnostics
@@ -732,7 +735,9 @@ function RecordsFailedDiagnostics({
           <View key={section.title} style={styles.diagnosticsSubsection}>
             <View style={styles.diagnosticsSectionHeader}>
               <Text style={styles.diagnosticsSectionTitle}>{section.title}</Text>
-              {section.manualRetryable && section.manualRetryToken ? (
+              {section.action.kind === "correct-required" ? (
+                <Text style={styles.diagnosticsNotice}>Resolver error</Text>
+              ) : section.manualRetryable && section.manualRetryToken ? (
                 <Pressable
                   accessibilityRole="button"
                   disabled={retryingToken === section.manualRetryToken}
@@ -752,7 +757,7 @@ function RecordsFailedDiagnostics({
             {section.rows.map(([label, value]) => (
               <View key={`${section.title}:${label}`} style={styles.diagnosticsRow}>
                 <Text style={styles.diagnosticsLabel}>{label}</Text>
-                <Text style={styles.diagnosticsValue}>{String(value)}</Text>
+                <Text {...noTranslateProps} style={styles.diagnosticsValue}>{String(value)}</Text>
               </View>
             ))}
           </View>

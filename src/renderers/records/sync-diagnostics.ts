@@ -38,12 +38,51 @@ export function getSyncDiagnosticsRows({
 }
 
 export type RecordsFailedOperationDiagnosticsSection = {
+  action: RecordsFailedOperationAction;
   copyRows: [string, string | number | boolean | null][];
+  fieldName: string | null;
   manualRetryToken: string | null;
   manualRetryable: boolean;
   rows: [string, string | number | boolean | null][];
   title: string;
 };
+
+export type RecordsFailedOperationAction =
+  | {
+      kind: "correct-required";
+      message: string;
+    }
+  | {
+      kind: "retry-available";
+      message: string;
+    };
+
+export function getRecordsFailedOperationAction(operation: RecordsFailedOperationDiagnostics): RecordsFailedOperationAction {
+  if (isUniqueFieldConflictOperation(operation)) {
+    return {
+      kind: "correct-required",
+      message: "Corrige el valor antes de reintentar.",
+    };
+  }
+
+  return {
+    kind: "retry-available",
+    message: "Puedes reintentar cuando el problema sea transitorio.",
+  };
+}
+
+export function isUniqueFieldConflictOperation(operation: RecordsFailedOperationDiagnostics) {
+  const code = operation.lastErrorCode ?? operation.syncErrorCode;
+  const message = operation.lastErrorMessage ?? operation.syncErrorMessage ?? "";
+
+  if (code === "UNIQUE_FIELD_CONFLICT") {
+    return true;
+  }
+
+  return code === "INVALID_RELATION" &&
+    /\bdebe ser [úu]nico\b/i.test(message) &&
+    /\bdentro de este tipo de entidad\b/i.test(message);
+}
 
 export function getRecordsFailedOperationDiagnosticsSections(
   operations: RecordsFailedOperationDiagnostics[],
@@ -53,6 +92,7 @@ export function getRecordsFailedOperationDiagnosticsSections(
     const message = operation.lastErrorMessage ?? operation.syncErrorMessage ?? "none";
     const firstField = operation.lastErrorDetails?.fields[0] ?? null;
     const firstIssue = firstField?.relationIssues?.[0] ?? null;
+    const action = getRecordsFailedOperationAction(operation);
     const relationDiagnosticsJson = operation.lastErrorDetails
       ? JSON.stringify(operation.lastErrorDetails)
       : "Este rechazo no contiene detalle técnico; reintenta para actualizarlo";
@@ -79,12 +119,15 @@ export function getRecordsFailedOperationDiagnosticsSections(
       ["relationActualEntityName", firstIssue?.actualEntityTypeName ?? "not exposed"],
       ["cause", formatRelationCause(firstIssue?.cause)],
       ["relationDiagnostics", relationDiagnosticsJson],
+      ["accion", action.message],
       ["manualRetryable", operation.manualRetryable],
     ];
 
     return {
+      action,
       title: `#${index + 1}`,
       copyRows: diagnosticRows,
+      fieldName: firstField?.fieldLabel ?? firstIssue?.fieldName ?? readDetailString(operation.lastErrorDetails, "fieldName"),
       manualRetryToken: operation.manualRetryToken,
       manualRetryable: operation.manualRetryable,
       rows: diagnosticRows.map(([label, value]) => {
@@ -96,6 +139,16 @@ export function getRecordsFailedOperationDiagnosticsSections(
       }),
     };
   });
+}
+
+function readDetailString(details: unknown, key: string) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const value = (details as Record<string, unknown>)[key];
+
+  return typeof value === "string" ? value : null;
 }
 
 export function formatRecordsFailedOperationDiagnosticsCopyText(

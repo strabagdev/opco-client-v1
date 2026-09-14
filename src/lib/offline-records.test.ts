@@ -881,6 +881,121 @@ describe("offline records cache", () => {
     expect((await store.getRecordsSyncSummary(scope)).pendingCount).toBe(1);
   });
 
+  it("discards failed RECORDS CREATE operations without touching remote data", async () => {
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "LOCAL" },
+    });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "local_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "UNIQUE_FIELD_CONFLICT",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    const discarded = await store.discardFailedRecord({
+      ...scope,
+      api: { getEntityRecord: async () => ({ record: record("remote_unused", "No usado", {}) }) },
+      recordId: "local_1",
+      token: "token_1",
+    });
+
+    expect(discarded).toBeNull();
+    expect(await store.getCachedRecord({ ...scope, recordId: "local_1" })).toBeNull();
+    expect(await store.listPendingOperations(scope.ownerKey)).toEqual([]);
+  });
+
+  it("refuses to discard a failed CREATE when the record already has remote identity", async () => {
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "LOCAL" },
+    });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "local_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      serverId: "record_unexpected",
+      syncErrorCode: "UNIQUE_FIELD_CONFLICT",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    await expect(store.discardFailedRecord({
+      ...scope,
+      api: { getEntityRecord: async () => ({ record: record("remote_unused", "No usado", {}) }) },
+      recordId: "local_1",
+      token: "token_1",
+    })).rejects.toThrow("identidad remota");
+    expect(await store.getCachedRecord({ ...scope, recordId: "local_1" })).toBeTruthy();
+    expect(await store.listPendingOperations(scope.ownerKey)).toHaveLength(1);
+  });
+
+  it("discards failed RECORDS UPDATE operations by restoring the server snapshot", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo remoto", { codigo: "REMOTE" })],
+    });
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { codigo: "LOCAL" } });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "UNIQUE_FIELD_CONFLICT",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    const restored = await store.discardFailedRecord({
+      ...scope,
+      api: {
+        getEntityRecord: async () => ({
+          record: { ...record("record_1", "Equipo remoto", { codigo: "REMOTE" }), updatedAt: "2026-08-20T13:00:00.000Z" },
+        }),
+      },
+      recordId: "record_1",
+      token: "token_1",
+    });
+
+    expect(restored?.syncStatus).toBe("synced");
+    expect(restored?.values).toEqual({ codigo: "REMOTE" });
+    expect(await store.listPendingOperations(scope.ownerKey)).toEqual([]);
+  });
+
+  it("keeps a failed UPDATE untouched when the remote fetch returns another record", async () => {
+    await store.upsertRemoteRecords({
+      ...scope,
+      records: [record("record_1", "Equipo remoto", { codigo: "REMOTE" })],
+    });
+    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { codigo: "LOCAL" } });
+    const existing = await store.getCachedRecord({ ...scope, recordId: "record_1" });
+
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, existing!.localId), {
+      ...existing!,
+      syncErrorCode: "UNIQUE_FIELD_CONFLICT",
+      syncErrorMessage: "RUT debe ser único dentro de este tipo de entidad.",
+      syncStatus: "failed",
+    });
+
+    await expect(store.discardFailedRecord({
+      ...scope,
+      api: {
+        getEntityRecord: async () => ({
+          record: record("record_other", "Otro remoto", { codigo: "OTHER" }),
+        }),
+      },
+      recordId: "record_1",
+      token: "token_1",
+    })).rejects.toThrow("no corresponde");
+    expect((await store.getCachedRecord({ ...scope, recordId: "record_1" }))?.syncStatus).toBe("failed");
+    expect(await store.listPendingOperations(scope.ownerKey)).toHaveLength(1);
+  });
+
   it("isolates records by owner key", async () => {
     await store.upsertRemoteRecords({
       ...scope,
@@ -985,6 +1100,57 @@ class MemoryRecordStore implements OfflineRecordStore {
       ) ??
       null
     );
+  }
+
+  async discardFailedRecord(input: Parameters<OfflineRecordStore["discardFailedRecord"]>[0]) {
+    const existing = await this.getCachedRecord(input);
+
+    if (!existing || existing.syncStatus !== "failed") {
+      throw new Error("missing");
+    }
+
+    const createOperation = this.operations.get(`CREATE:${existing.localId}`);
+    const updateOperation = this.operations.get(`UPDATE:${existing.localId}`);
+
+    if (createOperation) {
+      if (existing.serverId) {
+        throw new Error("No se puede descartar como CREATE un registro con identidad remota.");
+      }
+
+      this.operations.delete(createOperation.id);
+      this.records.delete(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId));
+      return null;
+    }
+
+    if (!updateOperation) {
+      throw new Error("missing operation");
+    }
+
+    const remote = await input.api.getEntityRecord(
+      input.token,
+      input.contractId,
+      input.entityTypeId,
+      updateOperation.serverRecordId ?? existing.serverId ?? existing.id,
+    );
+
+    if (remote.record.id !== (updateOperation.serverRecordId ?? existing.serverId ?? existing.id)) {
+      throw new Error("La respuesta remota no corresponde al registro que se intentaba restaurar.");
+    }
+
+    const cached = {
+      ...remote.record,
+      localId: existing.localId,
+      remoteUpdatedAt: remote.record.updatedAt,
+      serverId: remote.record.id,
+      syncErrorCode: null,
+      syncErrorMessage: null,
+      syncStatus: "synced" as const,
+    };
+
+    this.operations.delete(updateOperation.id);
+    this.records.set(key(input.ownerKey, input.contractId, input.entityTypeId, existing.localId), cached);
+
+    return cached;
   }
 
   async listCachedRecords(input: Parameters<OfflineRecordStore["listCachedRecords"]>[0]) {

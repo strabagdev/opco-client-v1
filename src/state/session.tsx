@@ -119,6 +119,7 @@ type SessionContextValue = {
     trigger: StateUpdateSyncTrigger;
   }): Promise<void>;
   refreshRecordsSyncSummary(): Promise<void>;
+  discardFailedRecordOperation(manualRetryToken: string): Promise<void>;
   retryFailedRecordOperation(manualRetryToken: string): Promise<void>;
   selectedContractId: string | null;
   setSelectedContractId(contractId: string | null): Promise<void>;
@@ -415,6 +416,28 @@ export function SessionProvider({ children }: PropsWithChildren) {
     await syncPendingRecords();
   }, [definitionCache, ownerKey, recordsFailedOperations, selectedContractIdState, syncPendingRecords]);
 
+  const discardFailedRecordOperation = useCallback(async (manualRetryToken: string) => {
+    if (!ownerKey || !selectedContractIdState || !token) {
+      return;
+    }
+
+    const operation = recordsFailedOperations.find((item) => item.manualRetryToken === manualRetryToken);
+
+    if (!operation || !operation.manualRetryable) {
+      return;
+    }
+
+    await definitionCache.discardFailedRecord({
+      api,
+      contractId: selectedContractIdState,
+      entityTypeId: operation.entityTypeId,
+      ownerKey,
+      recordId: operation.localRecordId,
+      token,
+    });
+    await refreshPendingRecordsCount();
+  }, [api, definitionCache, ownerKey, recordsFailedOperations, refreshPendingRecordsCount, selectedContractIdState, token]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -659,6 +682,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         recordsSyncSummary,
         recordOfflinePreparationDiagnostics,
         recordStateUpdateSyncRun,
+        discardFailedRecordOperation,
         refreshRecordsSyncSummary: refreshPendingRecordsCount,
         retryFailedRecordOperation,
         selectedContractId: selectedContractIdState,

@@ -149,6 +149,7 @@ export type RecordOutboxConsistency = {
 export type OfflineRecordStore = {
   countPendingOperations(ownerKey: string): Promise<number>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
+  discardFailedRecord(input: DiscardFailedRecordInput): Promise<CachedEntityRecord | null>;
   getCachedRecord(input: RecordIdentityInput): Promise<CachedEntityRecord | null>;
   getRecordCacheStatusCounts(input: BaseScopedInput): Promise<RecordCacheStatusCounts>;
   getRecordOutboxConsistency(input: BaseScopedInput): Promise<RecordOutboxConsistency>;
@@ -223,6 +224,11 @@ export type ResolveRecordConflictInput = RecordIdentityInput & {
 };
 
 export type RetryFailedRecordInput = RecordIdentityInput;
+
+export type DiscardFailedRecordInput = RecordIdentityInput & {
+  api: Pick<OpcoApi, "getEntityRecord">;
+  token: string;
+};
 
 export type UpsertRemoteRecordsInput = BaseScopedInput & {
   cachedAt?: string;

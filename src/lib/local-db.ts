@@ -165,6 +165,7 @@ export function getLocalDatabase(): LocalDatabase {
     completeStateUpdateOperation,
     countPendingOperations,
     createLocalRecord,
+    discardFailedRecord,
     failPendingOperation,
     failStateUpdateOperation,
     getAppViews,
@@ -3357,7 +3358,9 @@ async function retryFailedRecord({
     `
       SELECT *
       FROM pending_operations
-      WHERE owner_key = ? AND local_record_id = ?
+      WHERE owner_key = ?
+        AND local_record_id = ?
+        AND operation IN ('CREATE', 'UPDATE')
       LIMIT 1
     `,
     ownerKey,
@@ -3415,6 +3418,100 @@ async function retryFailedRecord({
   }
 
   return record;
+}
+
+async function discardFailedRecord({
+  api,
+  contractId,
+  entityTypeId,
+  ownerKey,
+  recordId,
+  token,
+}: {
+  api: Pick<OpcoApi, "getEntityRecord">;
+  contractId: string;
+  entityTypeId: string;
+  ownerKey: string;
+  recordId: string;
+  token: string;
+}) {
+  const db = await getDatabase();
+  const existing = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (!existing || existing.syncStatus !== "failed") {
+    throw new Error("No se encontro un registro fallido para descartar.");
+  }
+
+  const operation = await db.getFirstAsync<PendingOperationRow>(
+    `
+      SELECT *
+      FROM pending_operations
+      WHERE owner_key = ? AND local_record_id = ?
+      LIMIT 1
+    `,
+    ownerKey,
+    existing.localId,
+  );
+
+  if (!operation) {
+    throw new Error("No se encontro una operacion pendiente para descartar.");
+  }
+
+  if (operation.operation === "CREATE") {
+    if (existing.serverId || operation.server_record_id) {
+      throw new Error("No se puede descartar como CREATE un registro con identidad remota.");
+    }
+
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
+      await db.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
+    });
+
+    return null;
+  }
+
+  const remoteRecordId = operation.server_record_id ?? existing.serverId;
+
+  if (!remoteRecordId) {
+    throw new Error("No se puede restaurar un UPDATE sin registro remoto.");
+  }
+
+  const remote = await api.getEntityRecord(token, contractId, entityTypeId, remoteRecordId);
+
+  if (remote.record.id !== remoteRecordId) {
+    throw new Error("La respuesta remota no corresponde al registro que se intentaba restaurar.");
+  }
+
+  const now = new Date().toISOString();
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
+    await db.runAsync(
+      `
+        UPDATE entity_records
+        SET server_id = ?,
+            display_name = ?,
+            values_json = ?,
+            remote_updated_at = ?,
+            cached_at = ?,
+            sync_status = 'synced',
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
+      `,
+      remote.record.id,
+      remote.record.displayName,
+      JSON.stringify(remote.record.values),
+      remote.record.updatedAt,
+      now,
+      existing.localId,
+    );
+  });
+
+  return getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 }
 
 async function resolveRecordConflictWithLocal({
