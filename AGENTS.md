@@ -90,6 +90,7 @@
 - Do not commit or push unless explicitly requested.
 - Do not force push, rebase, or squash unless explicitly requested.
 - Do not invent offline support unless it is truly persisted.
+- Every behavior, contract, architecture, or operational-flow change must update documentation in the same commit. The delivery must identify the updated documents. If documentation does not apply, say so explicitly. A change is not done while documentation is pending.
 - Prefer unit/integration tests and manual verification when possible.
 
 ## Security

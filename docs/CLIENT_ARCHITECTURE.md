@@ -320,6 +320,12 @@ Recovery model:
 - A `synced` record with an active `CREATE` or `UPDATE` outbox row is `INCONSISTENT_COMPLETION`. The client must not perform a hidden mutation to reconcile it.
 - `getRecordOutboxConsistency()` reports these states with fingerprinted owner/contract/entity/local/operation identifiers for diagnostics and operator support.
 
+Retained RECORDS error recovery is local-intent recovery, not a new sync engine. Failed records are loaded directly from SQLite for the active `ownerKey + contractId + entityTypeId`, and problem actions are isolated to that context. Legacy `INVALID_RELATION` failures remain visible as relation problems. `UNIQUE_FIELD_CONFLICT` and legacy `UNIQUE_CONSTRAINT` are classified as unique failures; structured HTTP response details are preserved when Core sends them, while older envelopes fall back to a generic field/message without inventing a domain-specific explanation.
+
+Correction reuses the existing pending operation. For a failed `CREATE`, editing the local record updates the same local snapshot and pending operation payload, preserving `local_id` and `clientRequestId`. For a failed `UPDATE`, editing updates the existing pending update payload rather than creating a second operation. These updates are transactional with the visible local snapshot; partial failures must leave the previous pending state recoverable. Destructive discard is narrower: a failed `CREATE` can be discarded only while it has no remote identity, and a failed `UPDATE` must restore the remote snapshot before the pending local change is removed. Web and Native actions require explicit confirmation and guard against double execution while an action is in flight.
+
+A retained notice can close only when the scoped failed/conflict row and its pending operation are actually gone, or when a successful sync/recovery action has made that local intent no longer unresolved. Merely hiding a banner does not resolve the outbox. `translate="no"` is scoped to technical values such as ids, backend codes, and raw diagnostics; it is not a blanket marker for the whole RECORDS UI.
+
 ## STATE_UPDATE Engine
 
 This document does not repeat the full state-update audit. The canonical details are in `docs/STATE_UPDATE.md`.
@@ -585,6 +591,9 @@ Reset protections:
 - JSON envelope parsing.
 - Contract shape assertions for records, workflows, updatedAt, and idempotency results.
 - Request timing diagnostics for network failures.
+- Preventive unique validation through `/api/v1/contracts/:contractId/entities/:entityTypeId/records/validate-unique`.
+
+Preventive unique validation is advisory. It is run before local save when fields marked `unique` are present, first against scoped local cache/pending operations and, when online with auth, against Core. Supported fields are writable scalar values; `RELATION`, `FILE`, and `IMAGE` are excluded. Empty values are ignored, while `0` and `false` are real values. Network failures, timeouts, and 5xx responses do not prove a value is available or duplicated; the user can continue and the authoritative write path still validates. 400/401/403/404 are treated according to the real API error code. Late validation responses are ignored if the form value or request generation has changed. Offline devices can still collide with each other; those conflicts surface later through write/sync recovery.
 
 Error groups:
 
@@ -673,6 +682,14 @@ Operational Core can return structured validation details for `STATE_UPDATE` fai
 | `IDEMPOTENCY_RESULT_UNAVAILABLE` | STATE_UPDATE sync/API. | Exact reconcile only for safe update-current; otherwise manual. | Manual recovery/failure. |
 | `SQLITE_UNAVAILABLE` | Local DB. | Yes if storage recovers. | Recovery screen or queued retry. |
 | `OPEN_FAILED`, `MIGRATION_FAILED`, `STORAGE_UNAVAILABLE`, `CORRUPTION_SUSPECTED`, `ACCESS_HANDLE_BUSY`, `UNKNOWN` | Local DB recovery. | Retry; reset only explicit and not for busy handle. | Recovery guidance. |
+
+## Worktree Consolidation Note
+
+As of OPCO-DOCS-001, `/home/dannysilver/dev2026/opco-client` is the only active Client worktree and current Client work continues there. It is reconciled with `origin/main` through the published recovery, panel positioning, diagnostics, preventive uniqueness, and PANEL height repair work; the current consolidation baseline includes `7be60a0` (`fix: prevent panel modules from overlapping vertically`). The temporary recovery worktree `opco-client-sync-recovery` was removed after confirming its branch was fully contained in `origin/main` and had no exclusive tracked or untracked work. Local temporary branches `feat/offline-unique-validation` and `fix/records-sync-recovery` were deleted after integration. The branch `agent-icon-visual-stability` remains outside this consolidation scope.
+
+A local backup of both former worktrees was preserved outside the repositories and verified with SHA-256. Because that backup includes `.env` files, its exact filesystem path is operational/local evidence and must not be committed or uploaded. The historical existence of `opco-client-sync-recovery` should be referenced only as context; do not recreate or use that folder.
+
+The PANEL position/height repair was visually confirmed by the user in production after OPCL-PANEL-010D. That confirmation is distinct from automated visual testing: Chromium/Playwright was not used for this validation, and HTTP availability alone must not be described as proof of visual geometry.
 
 ## Sequence Diagrams
 
