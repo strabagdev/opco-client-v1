@@ -11,6 +11,7 @@ import {
   formatPanelMetricValue,
   normalizePanelFilters,
   panelDatasetQueryKey,
+  resolvePanelRendererRowHeight,
   panelTableColumnMinWidth,
   panelTableColumnWeight,
 } from "./panel-renderer-logic";
@@ -370,17 +371,11 @@ describe("panel KPI model", () => {
 
 describe("panel module layout plan", () => {
   it("positions x=9 under the fourth KPI and preserves the empty space to its left", () => {
-    const modules = [
-      { ...kpiModule("kpi-1", "records", "kpi_1"), title: "KPI 1", layout: { h: 2, w: 3, x: 0, y: 0 } },
-      { ...kpiModule("kpi-2", "records", "kpi_2"), title: "KPI 2", layout: { h: 2, w: 3, x: 3, y: 0 } },
-      { ...kpiModule("kpi-3", "records", "kpi_3"), title: "KPI 3", layout: { h: 2, w: 3, x: 6, y: 0 } },
-      { ...kpiModule("kpi-4", "records", "kpi_4"), title: "ERV GOM", layout: { h: 2, w: 3, x: 9, y: 0 } },
-      { ...kpiModule("total-documents", "records", "total_documents"), title: "Total Documentos", layout: { h: 2, w: 3, x: 9, y: 2 } },
-      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 4 } },
-    ];
+    const modules = panelRegressionModules();
 
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 92 });
 
+    expect(plan.rowHeight).toBe(92);
     expect(plan.moduleStyles.total_documents).toMatchObject({
       height: 184,
       left: "75%",
@@ -397,6 +392,35 @@ describe("panel module layout plan", () => {
       Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height) - 1,
     );
     expect(plan.containerStyle).toMatchObject({ height: 920, position: "relative", width: "100%" });
+  });
+
+  it("keeps saved positions without compressing content when rowHeight is 6", () => {
+    const modules = panelRegressionModules();
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 6 });
+
+    expect(plan.rowHeight).toBe(90);
+    expect(plan.moduleStyles.total_documents).toMatchObject({
+      height: 180,
+      left: "75%",
+      position: "absolute",
+      top: 180,
+      width: "25%",
+    });
+    expect(plan.moduleStyles.table).toMatchObject({
+      left: "0%",
+      top: 360,
+      width: "100%",
+    });
+    expect(Number(plan.moduleStyles.total_documents?.height)).toBeGreaterThanOrEqual(180);
+    expect(Number(plan.moduleStyles.table?.top)).toBe(
+      Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height),
+    );
+    expect(plan.containerStyle).toMatchObject({ height: 900, position: "relative", width: "100%" });
+  });
+
+  it("uses the default renderer row height when rowHeight is absent", () => {
+    expect(resolvePanelRendererRowHeight(panelRegressionModules(), 92)).toBe(92);
   });
 
   it("keeps six two-column KPIs in one desktop row", () => {
@@ -431,8 +455,9 @@ describe("panel module layout plan", () => {
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 50 });
 
     expect(plan.modules.map((module) => module.id)).toEqual(["left_kpi", "right_kpi", "lower_kpi", "late_table"]);
-    expect(plan.moduleStyles.lower_kpi).toMatchObject({ left: "33.33333333333333%", top: 250, height: 50 });
-    expect(plan.moduleStyles.late_table).toMatchObject({ top: 350, height: 200 });
+    expect(plan.rowHeight).toBe(180);
+    expect(plan.moduleStyles.lower_kpi).toMatchObject({ left: "33.33333333333333%", top: 900, height: 180 });
+    expect(plan.moduleStyles.late_table).toMatchObject({ top: 1260, height: 720 });
     expect(modules).toEqual(original);
   });
 
@@ -553,6 +578,17 @@ describe("panel dataset state helpers", () => {
     expect(displayPanelValue({ id: "json", name: "JSON", type: "TEXT" }, { nested: true } as never)).toBe("");
   });
 });
+
+function panelRegressionModules(): PanelModuleConfig[] {
+  return [
+    { ...kpiModule("kpi-1", "records", "kpi_1"), title: "KPI 1", layout: { h: 2, w: 3, x: 0, y: 0 } },
+    { ...kpiModule("kpi-2", "records", "kpi_2"), title: "KPI 2", layout: { h: 2, w: 3, x: 3, y: 0 } },
+    { ...kpiModule("kpi-3", "records", "kpi_3"), title: "KPI 3", layout: { h: 2, w: 3, x: 6, y: 0 } },
+    { ...kpiModule("kpi-4", "records", "kpi_4"), title: "ERV GOM", layout: { h: 2, w: 3, x: 9, y: 0 } },
+    { ...kpiModule("total-documents", "records", "total_documents"), title: "Total Documentos", layout: { h: 2, w: 3, x: 9, y: 2 } },
+    { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 4 } },
+  ];
+}
 
 function tableModule(
   columns: PanelTableConfig["columns"],

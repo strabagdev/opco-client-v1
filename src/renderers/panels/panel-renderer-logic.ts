@@ -45,12 +45,15 @@ export type PanelKpiModel = {
 
 type PanelLayoutStyleValue = number | string;
 
+const PANEL_MODULE_MIN_HEIGHT = 180;
+
 export type PanelModuleLayoutMode = "desktop" | "mobile";
 
 export type PanelModuleLayoutPlan = {
   containerStyle: Record<string, PanelLayoutStyleValue>;
   moduleStyles: Record<string, Record<string, PanelLayoutStyleValue>>;
   modules: PanelModuleConfig[];
+  rowHeight: number;
 };
 
 type ResolvedPanelColumn = {
@@ -307,8 +310,9 @@ export function buildPanelModuleLayoutPlan({
   rowHeight: number;
 }): PanelModuleLayoutPlan {
   const safeColumns = Math.max(1, Math.floor(columns));
-  const safeRowHeight = Math.max(1, rowHeight);
+  const configuredRowHeight = Math.max(1, rowHeight);
   const orderedModules = sortPanelModulesSpatially(modules);
+  const effectiveRowHeight = resolvePanelRendererRowHeight(orderedModules, configuredRowHeight);
 
   if (mode === "mobile") {
     return {
@@ -316,10 +320,11 @@ export function buildPanelModuleLayoutPlan({
       moduleStyles: Object.fromEntries(orderedModules.map((module) => [module.id, {
         flexBasis: "100%",
         maxWidth: "100%",
-        minHeight: Math.max(180, Math.max(1, module.layout.h) * safeRowHeight),
+        minHeight: Math.max(PANEL_MODULE_MIN_HEIGHT, Math.max(1, module.layout.h) * effectiveRowHeight),
         width: "100%",
       }])),
       modules: orderedModules,
+      rowHeight: effectiveRowHeight,
     };
   }
 
@@ -332,25 +337,33 @@ export function buildPanelModuleLayoutPlan({
     maxRows = Math.max(maxRows, layoutY + layoutHeight);
 
     return [module.id, {
-      height: layoutHeight * safeRowHeight,
+      height: Math.max(PANEL_MODULE_MIN_HEIGHT, layoutHeight * effectiveRowHeight),
       left: `${(layoutX / safeColumns) * 100}%`,
       position: "absolute",
-      top: layoutY * safeRowHeight,
+      top: layoutY * effectiveRowHeight,
       width: `${(layoutWidth / safeColumns) * 100}%`,
     }];
   }));
 
   return {
     containerStyle: {
-      height: maxRows * safeRowHeight,
+      height: maxRows * effectiveRowHeight,
       position: "relative",
       width: "100%",
     },
     moduleStyles,
     modules: orderedModules,
+    rowHeight: effectiveRowHeight,
   };
 }
 
+export function resolvePanelRendererRowHeight(modules: PanelModuleConfig[], configuredRowHeight: number) {
+  return modules.reduce((rowHeight, module) => {
+    const layoutHeight = Math.max(1, module.layout.h);
+
+    return Math.max(rowHeight, PANEL_MODULE_MIN_HEIGHT / layoutHeight);
+  }, Math.max(1, configuredRowHeight));
+}
 
 export function defaultPageSizeForDataset(panel: PanelResponse | null, datasetId: string, fallback = 25) {
   const configured = panel?.datasets.find((dataset) => dataset.id === datasetId)?.pagination.pageSize;
