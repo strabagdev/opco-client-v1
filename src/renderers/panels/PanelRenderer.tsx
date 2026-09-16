@@ -18,6 +18,7 @@ import { useSession } from "@/state/session";
 
 import {
   buildPanelKpiModel,
+  buildPanelModuleLayoutPlan,
   buildPanelTableModel,
   datasetIdsForPanelModules,
   defaultPageSizeForDataset,
@@ -219,8 +220,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     token,
   ]);
 
-  const renderedColumns = width < 760 ? 1 : configuredColumns;
-  const orderedModules = [...modules].sort((left, right) => left.layout.y - right.layout.y || left.layout.x - right.layout.x);
+  const moduleLayoutPlan = useMemo(() => buildPanelModuleLayoutPlan({
+    columns: configuredColumns,
+    mode: width < 760 ? "mobile" : "desktop",
+    modules,
+    rowHeight: configuredRowHeight,
+  }), [configuredColumns, configuredRowHeight, modules, width]);
   const isOffline = connectivityStatus === "offline" || Object.values(datasetStates).some((state) => state.fromCache);
 
   return (
@@ -241,16 +246,13 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
         />
       ) : null}
 
-      <View style={styles.grid}>
-        {orderedModules.map((module) => (
+      <View style={[styles.grid, moduleLayoutPlan.containerStyle]}>
+        {moduleLayoutPlan.modules.map((module) => (
           <View
             key={module.id}
             style={[
               styles.module,
-              {
-                flexBasis: `${Math.min(100, Math.max(1, (module.layout.w / renderedColumns) * 100))}%`,
-                minHeight: Math.max(180, module.layout.h * configuredRowHeight),
-              },
+              moduleLayoutPlan.moduleStyles[module.id],
             ]}
           >
             <PanelModule

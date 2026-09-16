@@ -43,6 +43,16 @@ export type PanelKpiModel = {
   value: string;
 };
 
+type PanelLayoutStyleValue = number | string;
+
+export type PanelModuleLayoutMode = "desktop" | "mobile";
+
+export type PanelModuleLayoutPlan = {
+  containerStyle: Record<string, PanelLayoutStyleValue>;
+  moduleStyles: Record<string, Record<string, PanelLayoutStyleValue>>;
+  modules: PanelModuleConfig[];
+};
+
 type ResolvedPanelColumn = {
   field: PanelField;
   fieldId: string;
@@ -276,6 +286,71 @@ export function formatPanelMetricValue(
 export function datasetIdsForPanelModules(modules: PanelModuleConfig[]) {
   return Array.from(new Set(modules.map((module) => module.datasetId).filter(Boolean)));
 }
+
+export function sortPanelModulesSpatially<T extends { id: string; layout: { x: number; y: number } }>(modules: T[]) {
+  return [...modules].sort((left, right) =>
+    left.layout.y - right.layout.y
+    || left.layout.x - right.layout.x
+    || left.id.localeCompare(right.id),
+  );
+}
+
+export function buildPanelModuleLayoutPlan({
+  columns,
+  mode,
+  modules,
+  rowHeight,
+}: {
+  columns: number;
+  mode: PanelModuleLayoutMode;
+  modules: PanelModuleConfig[];
+  rowHeight: number;
+}): PanelModuleLayoutPlan {
+  const safeColumns = Math.max(1, Math.floor(columns));
+  const safeRowHeight = Math.max(1, rowHeight);
+  const orderedModules = sortPanelModulesSpatially(modules);
+
+  if (mode === "mobile") {
+    return {
+      containerStyle: {},
+      moduleStyles: Object.fromEntries(orderedModules.map((module) => [module.id, {
+        flexBasis: "100%",
+        maxWidth: "100%",
+        minHeight: Math.max(180, Math.max(1, module.layout.h) * safeRowHeight),
+        width: "100%",
+      }])),
+      modules: orderedModules,
+    };
+  }
+
+  let maxRows = 0;
+  const moduleStyles = Object.fromEntries(orderedModules.map((module) => {
+    const layoutWidth = Math.min(Math.max(1, module.layout.w), safeColumns);
+    const layoutX = Math.min(Math.max(0, module.layout.x), Math.max(0, safeColumns - layoutWidth));
+    const layoutY = Math.max(0, module.layout.y);
+    const layoutHeight = Math.max(1, module.layout.h);
+    maxRows = Math.max(maxRows, layoutY + layoutHeight);
+
+    return [module.id, {
+      height: layoutHeight * safeRowHeight,
+      left: `${(layoutX / safeColumns) * 100}%`,
+      position: "absolute",
+      top: layoutY * safeRowHeight,
+      width: `${(layoutWidth / safeColumns) * 100}%`,
+    }];
+  }));
+
+  return {
+    containerStyle: {
+      height: maxRows * safeRowHeight,
+      position: "relative",
+      width: "100%",
+    },
+    moduleStyles,
+    modules: orderedModules,
+  };
+}
+
 
 export function defaultPageSizeForDataset(panel: PanelResponse | null, datasetId: string, fallback = 25) {
   const configured = panel?.datasets.find((dataset) => dataset.id === datasetId)?.pagination.pageSize;

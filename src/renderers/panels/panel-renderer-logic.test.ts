@@ -4,6 +4,7 @@ import { PanelDataset, PanelModuleConfig, PanelResponse, PanelTableConfig } from
 
 import {
   buildPanelKpiModel,
+  buildPanelModuleLayoutPlan,
   buildPanelTableModel,
   datasetIdsForPanelModules,
   displayPanelValue,
@@ -367,6 +368,109 @@ describe("panel KPI model", () => {
   });
 });
 
+describe("panel module layout plan", () => {
+  it("positions x=9 under the fourth KPI and preserves the empty space to its left", () => {
+    const modules = [
+      { ...kpiModule("kpi-1", "records", "kpi_1"), title: "KPI 1", layout: { h: 2, w: 3, x: 0, y: 0 } },
+      { ...kpiModule("kpi-2", "records", "kpi_2"), title: "KPI 2", layout: { h: 2, w: 3, x: 3, y: 0 } },
+      { ...kpiModule("kpi-3", "records", "kpi_3"), title: "KPI 3", layout: { h: 2, w: 3, x: 6, y: 0 } },
+      { ...kpiModule("kpi-4", "records", "kpi_4"), title: "ERV GOM", layout: { h: 2, w: 3, x: 9, y: 0 } },
+      { ...kpiModule("total-documents", "records", "total_documents"), title: "Total Documentos", layout: { h: 2, w: 3, x: 9, y: 2 } },
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 4 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 92 });
+
+    expect(plan.moduleStyles.total_documents).toMatchObject({
+      height: 184,
+      left: "75%",
+      position: "absolute",
+      top: 184,
+      width: "25%",
+    });
+    expect(plan.moduleStyles.table).toMatchObject({
+      left: "0%",
+      top: 368,
+      width: "100%",
+    });
+    expect(Number(plan.moduleStyles.table?.top)).toBeGreaterThan(
+      Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height) - 1,
+    );
+    expect(plan.containerStyle).toMatchObject({ height: 920, position: "relative", width: "100%" });
+  });
+
+  it("keeps six two-column KPIs in one desktop row", () => {
+    const modules = Array.from({ length: 6 }, (_, index) => ({
+      ...kpiModule(`kpi-${index}`, "records", `kpi_${index}`),
+      layout: { h: 2, w: 2, x: index * 2, y: 0 },
+    }));
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 80 });
+
+    expect(modules.map((module) => plan.moduleStyles[module.id]?.top)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(modules.map((module) => plan.moduleStyles[module.id]?.width)).toEqual([
+      "16.666666666666664%",
+      "16.666666666666664%",
+      "16.666666666666664%",
+      "16.666666666666664%",
+      "16.666666666666664%",
+      "16.666666666666664%",
+    ]);
+    expect(plan.moduleStyles.kpi_5?.left).toBe("83.33333333333334%");
+  });
+
+  it("preserves vertical gaps, distinct heights, and spatial order independent of array order", () => {
+    const modules = [
+      { ...tableModule([{ fieldId: "status_field" }], "late_table", "records"), layout: { h: 4, w: 12, x: 0, y: 7 } },
+      { ...kpiModule("right", "records", "right_kpi"), layout: { h: 3, w: 4, x: 8, y: 0 } },
+      { ...kpiModule("left", "records", "left_kpi"), layout: { h: 2, w: 4, x: 0, y: 0 } },
+      { ...kpiModule("lower", "records", "lower_kpi"), layout: { h: 1, w: 4, x: 4, y: 5 } },
+    ];
+
+    const original = JSON.parse(JSON.stringify(modules));
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 50 });
+
+    expect(plan.modules.map((module) => module.id)).toEqual(["left_kpi", "right_kpi", "lower_kpi", "late_table"]);
+    expect(plan.moduleStyles.lower_kpi).toMatchObject({ left: "33.33333333333333%", top: 250, height: 50 });
+    expect(plan.moduleStyles.late_table).toMatchObject({ top: 350, height: 200 });
+    expect(modules).toEqual(original);
+  });
+
+  it("renders legacy, AUTO, and MANUAL configs from the same persisted coordinates", () => {
+    const modules = [
+      { ...kpiModule("total-count", "records", "kpi_a"), layout: { h: 2, w: 4, x: 4, y: 3 } },
+    ];
+
+    const legacy = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 90 });
+    const auto = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 90 });
+    const manual = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 90 });
+
+    expect(legacy.moduleStyles.kpi_a).toEqual(auto.moduleStyles.kpi_a);
+    expect(manual.moduleStyles.kpi_a).toEqual({
+      height: 180,
+      left: "33.33333333333333%",
+      position: "absolute",
+      top: 270,
+      width: "33.33333333333333%",
+    });
+  });
+
+  it("stacks mobile modules by spatial order without global horizontal overflow", () => {
+    const modules = [
+      { ...kpiModule("right", "records", "right"), layout: { h: 2, w: 3, x: 9, y: 2 } },
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 4 } },
+      { ...kpiModule("top", "records", "top"), layout: { h: 2, w: 3, x: 0, y: 0 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "mobile", modules, rowHeight: 92 });
+
+    expect(plan.modules.map((module) => module.id)).toEqual(["top", "right", "table"]);
+    expect(plan.moduleStyles.right).toMatchObject({ flexBasis: "100%", maxWidth: "100%", width: "100%" });
+    expect(plan.moduleStyles.right).not.toHaveProperty("left");
+    expect(plan.containerStyle).toEqual({});
+  });
+});
+
 describe("panel TABLE renderer structure", () => {
   const { readFileSync } = require("fs");
   const source = readFileSync("src/renderers/panels/PanelRenderer.tsx", "utf8");
@@ -400,10 +504,10 @@ describe("panel TABLE renderer structure", () => {
     expect(source).toContain("error: error instanceof Error ? error.message");
   });
 
-  it("applies module layout to TABLE and KPI containers", () => {
-    expect(source).toContain("module.layout.w / renderedColumns");
-    expect(source).toContain("module.layout.h * configuredRowHeight");
-    expect(source).toContain("orderedModules");
+  it("applies computed module geometry to TABLE and KPI containers", () => {
+    expect(source).toContain("buildPanelModuleLayoutPlan");
+    expect(source).toContain("moduleLayoutPlan.containerStyle");
+    expect(source).toContain("moduleLayoutPlan.moduleStyles[module.id]");
   });
 });
 

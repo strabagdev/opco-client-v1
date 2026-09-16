@@ -204,6 +204,66 @@ describe("offline panel cache", () => {
     expect(cached.panel.metrics).toHaveLength(2);
   });
 
+
+  it("preserves PANEL module coordinates when reading from the offline cache", async () => {
+    const store = new MemoryPanelStore();
+    const panel: PanelResponse = {
+      ...panelResponse("revision_1"),
+      modules: [
+        {
+          datasetId: "records",
+          id: "total-documents",
+          layout: { h: 2, w: 3, x: 9, y: 2 },
+          title: "Total Documentos",
+          visualization: {
+            type: "KPI",
+            config: { format: "NUMBER", label: "Total Documentos", metricId: "total-records" },
+          },
+        },
+        {
+          datasetId: "records",
+          id: "table",
+          layout: { h: 6, w: 12, x: 0, y: 4 },
+          visualization: {
+            type: "TABLE",
+            config: { columns: [{ fieldId: "name" }], paginated: true, searchable: false },
+          },
+        },
+      ],
+    };
+    const api = {
+      getPanel: vi.fn()
+        .mockResolvedValueOnce(panel)
+        .mockRejectedValueOnce(new OpcoNetworkError()),
+    };
+
+    await loadPanelDatasetWithOfflineCache({
+      api,
+      appViewId: "panel_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: { datasetId: "records", page: 1, pageSize: 25 },
+      store,
+      token: "token_1",
+    });
+
+    const cached = await loadPanelDatasetWithOfflineCache({
+      api,
+      appViewId: "panel_1",
+      configRevision: "revision_1",
+      contractId: "contract_1",
+      ownerKey: "owner_1",
+      query: { datasetId: "records", page: 1, pageSize: 25 },
+      store,
+      token: "token_1",
+    });
+
+    expect(cached.panel.modules.map((module) => module.layout)).toEqual([
+      { h: 2, w: 3, x: 9, y: 2 },
+      { h: 6, w: 12, x: 0, y: 4 },
+    ]);
+  });
+
   it("loads discovery without datasetId and can recover the latest discovery snapshot offline", async () => {
     const store = new MemoryPanelStore();
     const panel = panelResponse("revision_1");
