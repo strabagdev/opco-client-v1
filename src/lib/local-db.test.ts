@@ -89,6 +89,78 @@ describe("local database singleton", () => {
     });
   });
 
+  it("persists and reloads RECORDS opening history in an isolated fingerprinted scope", async () => {
+    const store = getLocalDatabase();
+    let storedValue: string | undefined;
+    db.getFirstAsync.mockImplementation(async (sql: string) =>
+      sql.includes("FROM app_metadata") && storedValue ? { value: storedValue } : null);
+    db.runAsync.mockImplementation(async (sql: string, key?: string, value?: string) => {
+      if (sql.includes("INSERT OR REPLACE INTO app_metadata") && key?.startsWith("records_opening_history:")) {
+        storedValue = value;
+      }
+      return { changes: 1 };
+    });
+
+    await store.upsertRecordsOpeningMeasurement("org_secret:user_secret", "contract_secret", openingMeasurement());
+    await expect(store.getRecordsOpeningHistory("org_secret:user_secret", "contract_secret")).resolves.toMatchObject([
+      { appViewTitle: "Personas", id: "opening_1", result: "completed" },
+    ]);
+
+    const metadataWrite = db.runAsync.mock.calls.find((call) => String(call[1]).startsWith("records_opening_history:"));
+    expect(metadataWrite?.[1]).not.toContain("org_secret");
+    expect(metadataWrite?.[1]).not.toContain("contract_secret");
+  });
+
+  it("clears only the signed-out owner's RECORDS opening history", async () => {
+    const store = getLocalDatabase();
+
+    await store.clearRecordsOpeningHistory("org_secret:user_secret");
+
+    expect(db.runAsync).toHaveBeenCalledWith(
+      `DELETE FROM app_metadata WHERE key LIKE ?`,
+      expect.stringMatching(/^records_opening_history:[^:]+:%$/),
+    );
+    const pattern = db.runAsync.mock.calls.find((call) => String(call[0]).includes("key LIKE"))?.[1];
+    expect(pattern).not.toContain("org_secret");
+  });
+
+  it("isolates RECORDS opening histories by owner and contract", async () => {
+    const store = getLocalDatabase();
+    const metadata = new Map<string, string>();
+    db.getFirstAsync.mockImplementation(async (sql: string, key?: string) =>
+      sql.includes("FROM app_metadata") && key && metadata.has(key) ? { value: metadata.get(key) } : null);
+    db.runAsync.mockImplementation(async (sql: string, key?: string, value?: string) => {
+      if (sql.includes("INSERT OR REPLACE INTO app_metadata") && key && value) metadata.set(key, value);
+      return { changes: 1 };
+    });
+
+    await store.upsertRecordsOpeningMeasurement("owner_a", "contract_1", openingMeasurement());
+    await store.upsertRecordsOpeningMeasurement("owner_b", "contract_1", { ...openingMeasurement(), id: "opening_b" });
+    await store.upsertRecordsOpeningMeasurement("owner_a", "contract_2", { ...openingMeasurement(), id: "opening_c2" });
+
+    await expect(store.getRecordsOpeningHistory("owner_a", "contract_1")).resolves.toMatchObject([{ id: "opening_1" }]);
+    await expect(store.getRecordsOpeningHistory("owner_b", "contract_1")).resolves.toMatchObject([{ id: "opening_b" }]);
+    await expect(store.getRecordsOpeningHistory("owner_a", "contract_2")).resolves.toMatchObject([{ id: "opening_c2" }]);
+  });
+
+  it("does not restore RECORDS history when a queued write finishes after logout", async () => {
+    const store = getLocalDatabase();
+    const pendingRead = { resolve: null as ((value: null) => void) | null };
+    db.getFirstAsync.mockImplementation((sql: string) => sql.includes("FROM app_metadata")
+      ? new Promise<null>((resolve) => { pendingRead.resolve = resolve; })
+      : Promise.resolve(null));
+
+    const write = store.upsertRecordsOpeningMeasurement("org_1:user_1", "contract_1", openingMeasurement());
+    await Promise.resolve();
+    await store.clearRecordsOpeningHistory("org_1:user_1");
+    pendingRead.resolve?.(null);
+    await write;
+
+    const historyWrites = db.runAsync.mock.calls.filter((call) =>
+      String(call[0]).includes("INSERT OR REPLACE") && String(call[1]).startsWith("records_opening_history:"));
+    expect(historyWrites).toHaveLength(0);
+  });
+
   it("closes the web SQLite handle on pagehide so a later runtime can reopen it", async () => {
     const listeners = new Map<string, () => void>();
 
@@ -3521,5 +3593,24 @@ function stateUpdateMultiStateSaveInput(subjectRecordId: string) {
     subjectRecordId,
     targetEntityTypeId: "versioning",
     uniqueness: "subject" as const,
+  };
+}
+
+function openingMeasurement() {
+  return {
+    appViewId: "view_people",
+    appViewTitle: "Personas",
+    coverage: "complete" as const,
+    errorCode: null,
+    id: "opening_1",
+    localReadMs: 10,
+    preparationMs: 2,
+    processedCount: 25,
+    remoteRefreshMs: 400,
+    result: "completed" as const,
+    shownCount: 25,
+    source: "local" as const,
+    startedAt: "2026-09-17T12:00:00.000Z",
+    timeToFirstRowsMs: 14,
   };
 }

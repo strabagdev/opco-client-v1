@@ -34,6 +34,7 @@ import {
   LocalDatabaseStorageState,
 } from "@/lib/local-db-recovery";
 import { RecordsFailedOperationDiagnostics, RecordsSyncSummary } from "@/lib/offline-records";
+import { clearRecordsOpeningHistorySnapshot } from "@/renderers/records/records-opening";
 import {
   ContextResponse,
   createOpcoApi,
@@ -637,9 +638,16 @@ export function SessionProvider({ children }: PropsWithChildren) {
         source: "USER",
         timestamp: new Date().toISOString(),
       }, manualSignOutOwnerKey);
+
+      try {
+        await definitionCache.clearRecordsOpeningHistory(manualSignOutOwnerKey);
+      } catch {
+        // Diagnostic cleanup failure must not block local logout.
+      }
     }
 
     await tokenStorage.clearSession();
+    clearRecordsOpeningHistorySnapshot(manualSignOutOwnerKey);
     clearOfflinePreparationRuntime();
     void persistSelectedContractId(definitionCache, null);
     void definitionCache.clearNavigationCache();

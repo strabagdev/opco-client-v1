@@ -131,6 +131,10 @@ El modal mantiene encabezado y pestañas fuera de su unico scroll vertical de co
 
 ## CRUD Records
 
+La apertura de una experiencia `RECORDS` usa presentacion cache-first dentro del alcance autorizado `ownerKey + contractId + entityTypeId`. La AppView, definicion y primera pagina de un snapshot local con hidratacion completa pueden aparecer sin esperar el refresco remoto; la lista permanece visible mientras el cliente descarga todas las paginas y reconcilia el snapshot autoritativo en segundo plano. Sin hidratacion completa, solo se adelantan cambios locales no resueltos, nunca filas sincronizadas parciales como si fueran la lista completa. Un error remoto conserva la presentacion local valida, mientras errores de autenticacion siguen propagandose por el flujo normal.
+
+Antes de este cambio, la navegacion esperaba AppViews remotas, el renderer esperaba la definicion remota y la carga sin busqueda esperaba todas las paginas remotas mas la reconciliacion antes del primer `setRecords`. El fixture sintetico de 388 registros demuestra cuatro peticiones paginadas secuenciales en esa ruta. `Diagnostico > Rendimiento` conserva las ultimas 20 aperturas del usuario y contrato activos: fuente inicial, cobertura local, cantidades mostrada/procesada, lectura local, refresco remoto, preparacion y tiempo a primeras filas. La medicion comienza al montar el renderer, no al pulsar la experiencia. El historial se guarda en `app_metadata` con scope fingerprinted, marca como interrumpida una apertura inconclusa tras recarga y se elimina para el usuario al cerrar sesion. `Copiar diagnostico de rendimiento` permite capturar evidencia sin scopes, busquedas, payloads, valores, correos ni tokens. Estos tiempos permiten diagnosticar una demora futura, pero no reconstruyen el episodio original ni convierten fixtures sinteticos en mediciones del dispositivo.
+
 `RecordsRenderer` reutiliza la definicion dinamica de EntityType, busqueda, paginacion y cache de definiciones. El formulario se construye desde `EntityField` y soporta inicialmente:
 
 - `TEXT`

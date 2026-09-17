@@ -1,5 +1,5 @@
 import { Link } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -21,7 +21,8 @@ import {
   refreshEntityRecordsCache,
 } from "@/lib/offline-records";
 import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
-import { formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
+import type { RecordsOpeningMeasurement } from "@/lib/records-opening-history";
+import { classifySyncTelemetryError, formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   stableTextInputStyle,
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
@@ -33,6 +34,14 @@ import {
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
 } from "@/renderers/records/records-renderer-state";
+import {
+  activateRecordsOpeningHistoryOwner,
+  hydrateRecordsOpeningHistory,
+  loadRecordsCacheFirst,
+  recordRecordsOpeningMeasurement,
+  selectPresentableLocalRecords,
+  shouldStartRecordsOpeningMeasurement,
+} from "@/renderers/records/records-opening";
 import { AppViewRendererProps } from "@/renderers/types";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
@@ -46,12 +55,14 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [records, setRecords] = useState<CachedEntityRecord[]>([]);
+  const [listItems, setListItems] = useState<ReturnType<typeof buildRecordListItem>[]>([]);
   const [pagination, setPagination] = useState<EntityRecordPagination | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
   const [isOfflineData, setIsOfflineData] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [recordsSyncTelemetry, setRecordsSyncTelemetry] = useState<SyncTelemetry | null>(null);
@@ -59,11 +70,8 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
   const loadedScopeRef = useRef<string | null>(null);
+  const measuredOpeningScopeRef = useRef<string | null>(null);
 
-  const listItems = useMemo(
-    () => (definition ? records.map((record) => buildRecordListItem({ definition, record })) : []),
-    [definition, records],
-  );
   const canLoadMore = pagination ? pagination.page < pagination.totalPages : false;
   const hasSyncIssues = recordsSyncSummary.failedCount > 0 || recordsSyncSummary.conflictCount > 0;
   const hasSyncActivity =
@@ -72,7 +80,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.failedCount > 0 ||
     recordsSyncSummary.conflictCount > 0;
   const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
-  const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading });
+  const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading: isRefreshing });
 
   useEffect(() => {
     const nextScope = { appViewId: appView.id, entityTypeId };
@@ -120,6 +128,10 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
   useEffect(() => {
     let isMounted = true;
+    let measurement: RecordsOpeningMeasurement | null = null;
+    let measurementContractId: string | null = null;
+    let measurementOwnerKey: string | null = null;
+    let terminalResult = false;
 
     async function loadEntityRecords() {
       if (!token || !selectedContractId || !entityTypeId || !ownerKey) {
@@ -129,12 +141,96 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       }
 
       setIsLoading(true);
+      setIsRefreshing(true);
       setError(null);
-      const scopeKey = `${ownerKey}:${selectedContractId}:${entityTypeId}`;
+      const activeOwnerKey = ownerKey;
+      const activeContractId = selectedContractId;
+      measurementOwnerKey = activeOwnerKey;
+      measurementContractId = activeContractId;
+      const scopeKey = `${activeOwnerKey}:${activeContractId}:${entityTypeId}`;
+      const openingScopeKey = `${scopeKey}:${appView.id}`;
+      const shouldMeasureOpening = shouldStartRecordsOpeningMeasurement(measuredOpeningScopeRef.current, openingScopeKey);
+      if (shouldMeasureOpening) measuredOpeningScopeRef.current = openingScopeKey;
+      const openingStartedAt = monotonicNow();
+      const openingStartedAtIso = new Date().toISOString();
+      let localReadMs: number | null = null;
+      let localSnapshotComplete = false;
+      let hasPresentableLocalRecords = false;
+      let localDefinition: EntityDefinition | null = null;
+      let firstRowsAt: number | null = null;
+      let presentedCount = 0;
+      let presentedSource: "local" | "remote" | "none" = "none";
+      let remoteStartedAt: number | null = null;
+      measurement = shouldMeasureOpening ? {
+        appViewId: appView.id,
+        appViewTitle: appView.name,
+        coverage: "unknown",
+        errorCode: null,
+        id: createOpeningMeasurementId(),
+        localReadMs: null,
+        preparationMs: null,
+        processedCount: 0,
+        remoteRefreshMs: null,
+        result: "in_progress",
+        shownCount: 0,
+        source: "none",
+        startedAt: openingStartedAtIso,
+        timeToFirstRowsMs: null,
+      } : null;
+
+      function publishOpeningMeasurement(patch: Partial<RecordsOpeningMeasurement>) {
+        if (!isMounted || !measurement) return;
+        measurement = { ...measurement, ...patch, localReadMs };
+        recordRecordsOpeningMeasurement({
+          contractId: activeContractId,
+          measurement,
+          ownerKey: activeOwnerKey,
+          store: definitionCache,
+        });
+      }
+
+      function presentRecords(
+        nextDefinition: EntityDefinition,
+        result: Awaited<ReturnType<typeof definitionCache.listCachedRecords>>,
+        source: "local" | "remote",
+        remoteRefreshMs: number | null,
+      ) {
+        const preparationStartedAt = monotonicNow();
+        const nextItems = result.records.map((record) => buildRecordListItem({ definition: nextDefinition, record }));
+        const preparationMs = elapsedMs(preparationStartedAt);
+
+        if (!isMounted) return;
+        if (firstRowsAt === null && nextItems.length > 0) firstRowsAt = monotonicNow();
+        presentedCount = result.records.length;
+        presentedSource = source;
+        setDefinition(nextDefinition);
+        setRecords(result.records);
+        setListItems(nextItems);
+        setPagination(result.pagination);
+        setFromCache(source === "local" || result.fromCache);
+        setIsOfflineData(result.offline);
+        loadedScopeRef.current = scopeKey;
+        publishOpeningMeasurement({
+          coverage: source === "remote" && !result.fromCache ? "complete" : measurement?.coverage ?? "unknown",
+          preparationMs,
+          processedCount: source === "remote" ? result.pagination.total : result.records.length,
+          remoteRefreshMs,
+          shownCount: result.records.length,
+          source: !measurement || measurement.source === "none" ? source : measurement.source,
+          timeToFirstRowsMs: firstRowsAt === null ? null : elapsedMs(openingStartedAt, firstRowsAt),
+        });
+      }
+
+      if (shouldMeasureOpening) {
+        activateRecordsOpeningHistoryOwner(activeOwnerKey);
+        void hydrateRecordsOpeningHistory({ contractId: activeContractId, ownerKey: activeOwnerKey, store: definitionCache });
+        publishOpeningMeasurement({});
+      }
 
       if (loadedScopeRef.current !== scopeKey) {
         setDefinition(null);
         setRecords([]);
+        setListItems([]);
         setPagination(null);
         setFromCache(false);
         setIsOfflineData(false);
@@ -142,50 +238,96 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       }
 
       try {
-        const definitionResult = await getEntityDefinitionWithCache({
-          api,
-          cache: definitionCache,
-          contractId: selectedContractId,
-          entityTypeId,
-          token,
+        remoteStartedAt = monotonicNow();
+        const opening = await loadRecordsCacheFirst({
+          canPresentLocal: (local) => {
+            localSnapshotComplete = Boolean(local.definition && local.telemetry?.lastFullRefreshCompletedAt);
+            hasPresentableLocalRecords = localSnapshotComplete ||
+              local.records.records.some((record) => record.syncStatus !== "synced");
+            return hasPresentableLocalRecords && Boolean(local.definition);
+          },
+          isActive: () => isMounted,
+          onPresentLocal: (local) => {
+            if (local.definition) {
+              localDefinition = local.definition.definition;
+              const recordsToPresent = localSnapshotComplete
+                ? local.records
+                : selectPresentableLocalRecords(local.records, false);
+              if (measurement) {
+                measurement = { ...measurement, coverage: localSnapshotComplete ? "complete" : "partial" };
+              }
+              presentRecords(local.definition.definition, recordsToPresent, "local", null);
+              setSyncedAt(local.definition.syncedAt);
+              setIsLoading(false);
+            }
+          },
+          readLocal: async () => {
+            const localStartedAt = monotonicNow();
+            const [cachedDefinition, cachedRecords, telemetry] = await Promise.all([
+              definitionCache.getEntityDefinition(selectedContractId, entityTypeId),
+              definitionCache.listCachedRecords({
+                contractId: selectedContractId,
+                entityTypeId,
+                ownerKey,
+                page: 1,
+                pageSize: PAGE_SIZE,
+                search: debouncedSearch,
+              }),
+              definitionCache.getSyncTelemetry({ contractId: selectedContractId, entityTypeId, ownerKey }),
+            ]);
+            localReadMs = elapsedMs(localStartedAt);
+            return { definition: cachedDefinition, records: cachedRecords, telemetry };
+          },
+          refreshRemote: async () => {
+            const [definitionResult, recordsResult] = await Promise.all([
+              getEntityDefinitionWithCache({
+                api,
+                cache: definitionCache,
+                contractId: selectedContractId,
+                entityTypeId,
+                token,
+              }),
+              debouncedSearch
+                ? loadRecordsWithOfflineCache({
+                    api,
+                    contractId: selectedContractId,
+                    entityTypeId,
+                    ownerKey,
+                    page: 1,
+                    pageSize: PAGE_SIZE,
+                    search: debouncedSearch,
+                    store: definitionCache,
+                    token,
+                  })
+                : refreshEntityRecordsCache({
+                    api,
+                    contractId: selectedContractId,
+                    entityTypeId,
+                    ownerKey,
+                    resultPageSize: PAGE_SIZE,
+                    store: definitionCache,
+                    suppressNetworkTelemetry: status === "offline",
+                    token,
+                  }),
+            ]);
+            return { definitionResult, recordsResult };
+          },
         });
+        const remoteRefreshMs = elapsedMs(remoteStartedAt);
 
-        if (isMounted) {
-          setDefinition(definitionResult.definition);
-          setSyncedAt(definitionResult.syncedAt);
-          setFromCache(definitionResult.source === "cache");
+        if (opening.remote.recordsResult.fromCache && !localSnapshotComplete) {
+          throw new Error("No existe un snapshot local completo para esta experiencia.");
         }
 
-        const recordsResult = debouncedSearch
-          ? await loadRecordsWithOfflineCache({
-              api,
-              contractId: selectedContractId,
-              entityTypeId,
-              ownerKey,
-              page: 1,
-              pageSize: PAGE_SIZE,
-              search: debouncedSearch,
-              store: definitionCache,
-              token,
-            })
-          : await refreshEntityRecordsCache({
-              api,
-              contractId: selectedContractId,
-              entityTypeId,
-              ownerKey,
-              resultPageSize: PAGE_SIZE,
-              store: definitionCache,
-              suppressNetworkTelemetry: status === "offline",
-              token,
-            });
-
-        if (isMounted) {
-          setFromCache(definitionResult.source === "cache" || recordsResult.fromCache);
-          setIsOfflineData(recordsResult.offline);
-          setRecords(recordsResult.records);
-          setPagination(recordsResult.pagination);
-          loadedScopeRef.current = scopeKey;
-        }
+        presentRecords(
+          opening.remote.definitionResult.definition,
+          opening.remote.recordsResult,
+          opening.remote.recordsResult.fromCache ? "local" : "remote",
+          remoteRefreshMs,
+        );
+        if (isMounted) setSyncedAt(opening.remote.definitionResult.syncedAt);
+        terminalResult = true;
+        publishOpeningMeasurement({ errorCode: null, result: "completed" });
         await refreshRecordsSyncSummary();
         await refreshCurrentSyncTelemetry();
       } catch (nextError) {
@@ -202,18 +344,22 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               search: debouncedSearch,
             });
 
-            if (isMounted && cached.records.length > 0) {
-              setRecords(cached.records);
-              setPagination(cached.pagination);
-              setFromCache(true);
-              setIsOfflineData(true);
-              loadedScopeRef.current = scopeKey;
+            if (isMounted && localSnapshotComplete && localDefinition && cached.records.length > 0) {
+              presentRecords(localDefinition, { ...cached, offline: true }, "local", null);
             }
           } catch {
             // The original load error is more useful to the user and diagnostics.
           }
 
           setError(message);
+          terminalResult = true;
+          publishOpeningMeasurement({
+            errorCode: classifySyncTelemetryError(nextError),
+            processedCount: presentedCount,
+            remoteRefreshMs: remoteStartedAt === null ? null : elapsedMs(remoteStartedAt),
+            result: "error",
+            source: !measurement || measurement.source === "none" ? presentedSource : measurement.source,
+          });
         }
         try {
           await refreshRecordsSyncSummary();
@@ -224,6 +370,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       } finally {
         if (isMounted) {
           setIsLoading(false);
+          setIsRefreshing(false);
         }
       }
     }
@@ -231,6 +378,14 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     void loadEntityRecords();
 
     return () => {
+      if (!terminalResult && measurement && measurementContractId && measurementOwnerKey) {
+        recordRecordsOpeningMeasurement({
+          contractId: measurementContractId,
+          measurement: { ...measurement, result: "cancelled" },
+          ownerKey: measurementOwnerKey,
+          store: definitionCache,
+        });
+      }
       isMounted = false;
     };
   }, [
@@ -272,6 +427,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       });
 
       setRecords((current) => [...current, ...result.records]);
+      if (definition) {
+        setListItems((current) => [
+          ...current,
+          ...result.records.map((record) => buildRecordListItem({ definition, record })),
+        ]);
+      }
       setPagination(result.pagination);
       setFromCache((current) => current || result.fromCache);
       setIsOfflineData((current) => current || result.offline);
@@ -361,6 +522,21 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       />
     </ScrollView>
   );
+}
+
+let openingSequence = 0;
+
+function createOpeningMeasurementId() {
+  openingSequence += 1;
+  return `records-opening-${Date.now().toString(36)}-${openingSequence.toString(36)}`;
+}
+
+function monotonicNow() {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
+
+function elapsedMs(startedAt: number, completedAt = monotonicNow()) {
+  return Math.max(0, Math.round(completedAt - startedAt));
 }
 
 function RecordsListContent({

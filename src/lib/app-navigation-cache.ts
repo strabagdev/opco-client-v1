@@ -91,7 +91,7 @@ export function isNetworkLikeError(error: unknown) {
   return error instanceof OpcoNetworkError || !(error instanceof OpcoApiError);
 }
 
-async function readCachedAppViews(
+export async function readCachedAppViews(
   cache: Pick<AppNavigationCache, "getAppViews">,
   ownerKey: string,
   contractId: string,

@@ -78,6 +78,12 @@ import {
 } from "./sync-telemetry";
 import { RecordsSyncStore } from "../sync/records-sync";
 import { StateUpdateSyncStore } from "../sync/state-update-sync";
+import {
+  interruptUnfinishedRecordsOpenings,
+  type RecordsOpeningHistoryStore,
+  type RecordsOpeningMeasurement,
+  upsertRecordsOpeningHistory,
+} from "./records-opening-history";
 
 const DATABASE_NAME = "opco-client.db";
 const SCHEMA_VERSION = "10";
@@ -86,6 +92,7 @@ const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
 const ATTENDANCE_DAY_SNAPSHOT_HYDRATION_KEY = "attendance_day_snapshot_hydration";
 const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
+const RECORDS_OPENING_HISTORY_KEY = "records_opening_history";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 
@@ -125,7 +132,10 @@ export type LocalDatabase = AppNavigationCache &
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
   upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }): Promise<void>;
   upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
-};
+} & RecordsOpeningHistoryStore;
+
+const recordsOpeningHistoryWriteQueues = new Map<string, Promise<void>>();
+const recordsOpeningHistoryGenerations = new Map<string, number>();
 
 export type ReportSnapshotScope = {
   appViewId: string;
@@ -161,6 +171,7 @@ export type CachedPanelSnapshot = {
 export function getLocalDatabase(): LocalDatabase {
   return {
     clearNavigationCache,
+    clearRecordsOpeningHistory,
     clearOrphanedFailedRecordNotice,
     completePendingOperation,
     completeStateUpdateOperation,
@@ -174,6 +185,7 @@ export function getLocalDatabase(): LocalDatabase {
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
+    getRecordsOpeningHistory,
     getRecordCacheStatusCounts,
     getRecordOutboxConsistency,
     getStateUpdateSummary,
@@ -231,6 +243,7 @@ export function getLocalDatabase(): LocalDatabase {
     upsertContextSnapshot,
     upsertStateUpdateSnapshot,
     upsertRemoteRecords,
+    upsertRecordsOpeningMeasurement,
     upsertEntityDefinition,
   };
 }
@@ -4839,6 +4852,83 @@ async function setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetr
   );
 }
 
+async function getRecordsOpeningHistory(ownerKey: string, contractId: string) {
+  const db = await getDatabase();
+  const key = recordsOpeningHistoryKey(ownerKey, contractId);
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    key,
+  );
+  const history = parseRecordsOpeningHistory(row?.value);
+  const interrupted = interruptUnfinishedRecordsOpenings(history);
+
+  if (JSON.stringify(interrupted) !== JSON.stringify(history)) {
+    void db.runAsync(
+      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+      key,
+      JSON.stringify(interrupted),
+    ).catch(() => undefined);
+  }
+
+  return interrupted;
+}
+
+async function upsertRecordsOpeningMeasurement(
+  ownerKey: string,
+  contractId: string,
+  measurement: RecordsOpeningMeasurement,
+) {
+  const ownerScope = fingerprintDiagnosticValue(ownerKey);
+  const key = recordsOpeningHistoryKey(ownerKey, contractId);
+  const generation = recordsOpeningHistoryGenerations.get(ownerScope) ?? 0;
+  const previous = recordsOpeningHistoryWriteQueues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    if ((recordsOpeningHistoryGenerations.get(ownerScope) ?? 0) !== generation) return;
+
+    const db = await getDatabase();
+    const row = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+      key,
+    );
+    const history = upsertRecordsOpeningHistory(parseRecordsOpeningHistory(row?.value), measurement);
+
+    if ((recordsOpeningHistoryGenerations.get(ownerScope) ?? 0) !== generation) return;
+
+    await db.runAsync(
+      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+      key,
+      JSON.stringify(history),
+    );
+  });
+
+  recordsOpeningHistoryWriteQueues.set(key, next);
+  await next.finally(() => {
+    if (recordsOpeningHistoryWriteQueues.get(key) === next) recordsOpeningHistoryWriteQueues.delete(key);
+  });
+}
+
+async function clearRecordsOpeningHistory(ownerKey: string) {
+  const ownerScope = fingerprintDiagnosticValue(ownerKey);
+  recordsOpeningHistoryGenerations.set(ownerScope, (recordsOpeningHistoryGenerations.get(ownerScope) ?? 0) + 1);
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `DELETE FROM app_metadata WHERE key LIKE ?`,
+    `${RECORDS_OPENING_HISTORY_KEY}:${ownerScope}:%`,
+  );
+}
+
+function parseRecordsOpeningHistory(value: string | undefined) {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.slice(0, 20) as RecordsOpeningMeasurement[] : [];
+  } catch {
+    return [];
+  }
+}
+
 async function recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry) {
   const current = await getStateUpdateSyncDiagnosticsTelemetry(ownerKey);
 
@@ -4966,6 +5056,14 @@ async function setAttendanceContextSelection(
 
 function stateUpdateSyncDiagnosticsKey(ownerKey: string) {
   return `${STATE_UPDATE_SYNC_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
+}
+
+function recordsOpeningHistoryKey(ownerKey: string, contractId: string) {
+  return [
+    RECORDS_OPENING_HISTORY_KEY,
+    fingerprintDiagnosticValue(ownerKey),
+    fingerprintDiagnosticValue(contractId),
+  ].join(":");
 }
 
 function attendanceContextSelectionKey(ownerKey: string, contractId: string, appViewId: string, fieldId: string) {

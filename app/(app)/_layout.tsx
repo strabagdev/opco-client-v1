@@ -16,6 +16,7 @@ import {
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { formatRecordsOpeningPerformanceCopy, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
 import {
   formatPendingSyncErrorMessage,
   getPendingStateUpdateSyncErrors,
@@ -38,6 +39,7 @@ import {
   getRecordsFailedOperationsNotice,
   getSyncDiagnosticsRows,
 } from "@/renderers/records/sync-diagnostics";
+import { useRecordsOpeningHistory } from "@/renderers/records/records-opening";
 import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
 
 const APP_SHELL_TOAST_DURATION_MS = 3500;
@@ -79,6 +81,7 @@ export default function AppLayout() {
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
   const [statusPulseOpacity] = useState(() => new Animated.Value(1));
   const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
+  const recordsOpeningHistory = useRecordsOpeningHistory();
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
@@ -527,6 +530,9 @@ export default function AppLayout() {
               {selectedDiagnosticsTab === "pwa" ? (
                 <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
               ) : null}
+              {selectedDiagnosticsTab === "performance" ? (
+                <RecordsPerformanceDiagnostics history={recordsOpeningHistory.history} />
+              ) : null}
               {selectedDiagnosticsTab === "state-update" ? (
                 <StateUpdateDiagnosticsPanel
                   diagnostics={diagnosticsStateUpdate.diagnostics}
@@ -833,6 +839,83 @@ function syncStateIcon(state: SyncChecklistState) {
   if (state === "En curso") return <Clock3 color="#b7791f" size={18} />;
   if (state === "Error") return <AlertCircle color="#b42318" size={18} />;
   return <CircleDashed color="#64757b" size={18} />;
+}
+
+function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMeasurement[] }) {
+  const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
+  const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copyResetTimeout.current) clearTimeout(copyResetTimeout.current);
+  }, []);
+
+  async function handleCopy() {
+    try {
+      await copyTextToClipboard(formatRecordsOpeningPerformanceCopy(history));
+      setCopyState("success");
+      if (copyResetTimeout.current) clearTimeout(copyResetTimeout.current);
+      copyResetTimeout.current = setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  return (
+    <View style={styles.diagnostics}>
+      <View style={styles.diagnosticsSectionHeader}>
+        <View style={styles.performanceTitleBlock}>
+          <Text style={styles.diagnosticsTitle}>Rendimiento RECORDS</Text>
+          <Text style={styles.diagnosticsNotice}>Desde el montaje del renderer, no desde el clic en la experiencia.</Text>
+        </View>
+        <Pressable accessibilityRole="button" onPress={handleCopy} style={styles.secondaryModalButton}>
+          <Text style={styles.secondaryModalButtonText}>
+            {copyState === "success" ? "Copiado" : copyState === "error" ? "No se pudo copiar" : "Copiar diagnóstico de rendimiento"}
+          </Text>
+        </Pressable>
+      </View>
+      {history.length === 0 ? <Text style={styles.diagnosticsNotice}>Sin información</Text> : history.map((entry) => (
+        <View key={entry.id} style={styles.performanceEntry}>
+          <View style={styles.diagnosticsSectionHeader}>
+            <Text style={styles.performanceEntryTitle}>{entry.appViewTitle}</Text>
+            <Text style={styles.performanceResult}>{performanceResultLabel(entry.result)}</Text>
+          </View>
+          <Text style={styles.syncHistoryAt}>{entry.startedAt}</Text>
+          {performanceRows(entry).map(([label, value]) => (
+            <View key={`${entry.id}:${label}`} style={styles.diagnosticsRow}>
+              <Text style={styles.diagnosticsLabel}>{label}</Text>
+              <Text {...noTranslateProps} style={styles.diagnosticsValue}>{value}</Text>
+            </View>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function performanceRows(entry: RecordsOpeningMeasurement): [string, string][] {
+  return [
+    ["Medición", entry.id],
+    ["Fuente inicial", entry.source],
+    ["Cobertura local", entry.coverage],
+    ["Mostrados / procesados", `${entry.shownCount} / ${entry.processedCount}`],
+    ["Primeras filas", performanceDuration(entry.timeToFirstRowsMs)],
+    ["Lectura local", performanceDuration(entry.localReadMs)],
+    ["Actualización remota", performanceDuration(entry.remoteRefreshMs)],
+    ["Preparación", performanceDuration(entry.preparationMs)],
+    ["Error", entry.errorCode ?? "none"],
+  ];
+}
+
+function performanceDuration(value: number | null) {
+  return value === null ? "Sin información" : `${value} ms`;
+}
+
+function performanceResultLabel(result: RecordsOpeningMeasurement["result"]) {
+  if (result === "in_progress") return "En curso";
+  if (result === "completed") return "Completado";
+  if (result === "cancelled") return "Cancelado";
+  if (result === "interrupted") return "Interrumpido";
+  return "Error";
 }
 
 function RecordsGlobalDiagnostics({
@@ -1416,6 +1499,29 @@ const styles = StyleSheet.create({
   primaryModalButtonText: {
     color: "#ffffff",
     fontWeight: "800",
+  },
+  performanceEntry: {
+    borderBottomColor: "#d9e3e5",
+    borderBottomWidth: 1,
+    gap: 6,
+    paddingVertical: 12,
+  },
+  performanceEntryTitle: {
+    color: "#17363c",
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    minWidth: 180,
+  },
+  performanceResult: {
+    color: "#425d64",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  performanceTitleBlock: {
+    flex: 1,
+    gap: 4,
+    minWidth: 220,
   },
   secondaryModalButton: {
     alignItems: "center",

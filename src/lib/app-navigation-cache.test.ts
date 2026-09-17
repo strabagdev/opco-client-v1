@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { appViewsFixture } from "../test/fixtures";
-import { AppNavigationCache, loadAppViewsWithCache } from "./app-navigation-cache";
+import { AppNavigationCache, loadAppViewsWithCache, readCachedAppViews } from "./app-navigation-cache";
 import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitionInput } from "./app-view-definitions-cache";
 import { AppView, ContextResponse, MeResponse, OpcoApiError, OpcoNetworkError } from "./opco-api";
 
@@ -110,6 +110,17 @@ describe("app navigation cache", () => {
         token: "token_b",
       }),
     ).rejects.toBeInstanceOf(OpcoNetworkError);
+  });
+
+  it("reads an authorized owner and contract snapshot without waiting for a remote request", async () => {
+    const cache = new MemoryNavigationCache();
+    await cache.upsertAppViews("org_1:user_a", "contract_1", appViewsFixture, "2026-08-19T12:00:00.000Z");
+
+    await expect(readCachedAppViews(cache, "org_1:user_a", "contract_1")).resolves.toMatchObject({
+      syncedAt: "2026-08-19T12:00:00.000Z",
+    });
+    await expect(readCachedAppViews(cache, "org_1:user_b", "contract_1")).resolves.toBeNull();
+    await expect(readCachedAppViews(cache, "org_1:user_a", "contract_2")).resolves.toBeNull();
   });
 });
 

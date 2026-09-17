@@ -663,8 +663,8 @@ Error groups:
 | Event | Cache refresh | UI update |
 | --- | --- | --- |
 | Contract selected | Load `/views`, cache AppViews, start prewarm. | Home/routes receive selected contract state. |
-| RECORDS AppView load without search | Full refresh and reconcile. | Local state set from cached rows after reconcile. |
-| RECORDS search | Partial load/cache upsert only. | Search result UI; no destructive cleanup. |
+| RECORDS AppView load without search | Scoped AppView/definition plus complete local snapshot first; full refresh and reconcile continue concurrently. | Local rows remain visible during refresh, then the authoritative reconciled page replaces them. |
+| RECORDS search | Scoped complete local snapshot is filtered first; partial remote load/cache upsert follows. | Search result UI; no destructive cleanup. |
 | RECORDS sync completion | Pending count and telemetry refresh. | `recordsReconnectRefreshKey` can reload mounted records. |
 | STATE_UPDATE sync completion | Operation completion/conflict/failure. | `stateUpdateReconnectRefreshKey` tells mounted workflows to reload. |
 | Local cache/metadata readiness change | AppView definition, sync telemetry, or Attendance day hydration metadata changes in SQLite. | Home subscribes to cache-change notifications and recalculates availability without polling. |
@@ -674,11 +674,14 @@ Error groups:
 
 Parallel mechanisms exist: renderer-level manual refresh and SessionProvider reconnect refresh both reload data. The current architecture uses refresh keys to avoid requiring remounts.
 
+RECORDS opening performance is measured from renderer mount, not from the preceding navigation click. Local read and remote refresh start concurrently, so their durations are reported independently and are never added as a synthetic total. One measurement id is updated at presentation and terminal milestones; unmount produces `cancelled`, a storage reload converts unfinished persisted entries to `interrupted`, and safe error classification stores only codes. History writes are best-effort and serialized per fingerprinted owner/contract scope, so diagnostics cannot delay first rows or overwrite logout cleanup.
+
 ## Diagnostics
 
 | Diagnostic | Source | Persistence | Scope | UI | Observation passive |
 | --- | --- | --- | --- | --- | --- |
 | RECORDS sync diagnostics | `sync_telemetry`, refresh diagnostics. | SQLite `sync_telemetry`. | `ownerKey + contractId + entityTypeId`. | RECORDS renderer with diagnostics flag. | Yes. |
+| RECORDS opening diagnostics | Monotonic stage timings from the mounted renderer; wall clock only identifies the opening. | `app_metadata`, newest 20; unfinished reload entries become interrupted. | Fingerprinted owner + contract; cleared for the owner at logout. | Global `Diagnostico > Rendimiento`, including safe copy. | Yes. |
 | RECORDS outbox consistency | `pending_operations`, `entity_records`. | Query-derived. | `ownerKey + contractId + entityTypeId`. | RECORDS renderer with diagnostics flag. | Yes. |
 | STATE_UPDATE outbox diagnostics | `pending_operations`, `entity_records`, definitions. | Mostly query-derived; reconnect/activity/visible-error/request-history telemetry in `app_metadata`. | Fingerprinted `ownerKey`, workflow scopes. | Overlay and `/diagnostics/state-update`. | Yes. |
 | SQLite recovery diagnostics | Recovery summary over local statuses. | Query-derived. | Local DB. | Recovery screen with diagnostics flag/dev. | Yes. |
