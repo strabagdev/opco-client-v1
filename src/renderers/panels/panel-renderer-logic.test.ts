@@ -344,6 +344,19 @@ describe("panel KPI model", () => {
     expect(metrics[1]?.value).toBe(0.25);
   });
 
+  it("keeps compact KPI numeric values formatted without changing their magnitude", () => {
+    const values = [0, 3, 8, 9, -3, 12.5];
+
+    expect(values.map((value) => formatPanelMetricValue(value, "NUMBER").value)).toEqual([
+      "0",
+      "3",
+      "8",
+      "9",
+      "-3",
+      "12,5",
+    ]);
+  });
+
   it("keeps TABLE and KPI dataset discovery deduplicated for shared datasets", () => {
     expect(datasetIdsForPanelModules([
       tableModule([{ fieldId: "status_field" }], "table", "records"),
@@ -521,6 +534,19 @@ describe("panel TABLE renderer structure", () => {
     expect(source).toContain("Métrica no disponible.");
     expect(source).toContain("Datos guardados.");
     expect(source).not.toContain("pagination.total}");
+  });
+
+  it("gives the KPI value an explicit line box without hiding overflow", () => {
+    const kpiValueStyleStart = source.indexOf("kpiValue: {");
+    const kpiValueStyleEnd = source.indexOf("module: {", kpiValueStyleStart);
+    const kpiValueStyle = source.slice(kpiValueStyleStart, kpiValueStyleEnd);
+
+    expect(kpiValueStyle).toContain("fontSize: 34");
+    expect(kpiValueStyle).toContain("fontWeight: \"800\"");
+    expect(kpiValueStyle).toContain("lineHeight: 42");
+    expect(kpiValueStyle).not.toContain("overflow");
+    expect(source).toContain("<Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>");
+    expect(source).toContain("<Text style={styles.kpiMeta}>Actualizado {formatPanelKpiTimestamp(kpi.calculatedAt)}</Text>");
   });
 
   it("keeps late responses and dataset errors isolated", () => {

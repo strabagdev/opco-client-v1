@@ -609,6 +609,7 @@ const styles = StyleSheet.create({
     color: "#111827",
     fontSize: 34,
     fontWeight: "800",
+    lineHeight: 42,
   },
   module: {
     padding: 6,
