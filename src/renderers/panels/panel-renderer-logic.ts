@@ -46,6 +46,7 @@ export type PanelKpiModel = {
 type PanelLayoutStyleValue = number | string;
 
 const PANEL_MODULE_MIN_HEIGHT = 180;
+const PANEL_KPI_MODULE_MIN_HEIGHT = 240;
 
 export type PanelModuleLayoutMode = "desktop" | "mobile";
 
@@ -320,7 +321,7 @@ export function buildPanelModuleLayoutPlan({
       moduleStyles: Object.fromEntries(orderedModules.map((module) => [module.id, {
         flexBasis: "100%",
         maxWidth: "100%",
-        minHeight: Math.max(PANEL_MODULE_MIN_HEIGHT, Math.max(1, module.layout.h) * effectiveRowHeight),
+        minHeight: Math.max(panelModuleMinimumHeight(module), Math.max(1, module.layout.h) * effectiveRowHeight),
         width: "100%",
       }])),
       modules: orderedModules,
@@ -337,7 +338,7 @@ export function buildPanelModuleLayoutPlan({
     maxRows = Math.max(maxRows, layoutY + layoutHeight);
 
     return [module.id, {
-      height: Math.max(PANEL_MODULE_MIN_HEIGHT, layoutHeight * effectiveRowHeight),
+      height: Math.max(panelModuleMinimumHeight(module), layoutHeight * effectiveRowHeight),
       left: `${(layoutX / safeColumns) * 100}%`,
       position: "absolute",
       top: layoutY * effectiveRowHeight,
@@ -361,8 +362,16 @@ export function resolvePanelRendererRowHeight(modules: PanelModuleConfig[], conf
   return modules.reduce((rowHeight, module) => {
     const layoutHeight = Math.max(1, module.layout.h);
 
-    return Math.max(rowHeight, PANEL_MODULE_MIN_HEIGHT / layoutHeight);
+    return Math.max(rowHeight, panelModuleMinimumHeight(module) / layoutHeight);
   }, Math.max(1, configuredRowHeight));
+}
+
+function panelModuleMinimumHeight(module: PanelModuleConfig) {
+  if (module.visualization.type === "KPI") {
+    return PANEL_KPI_MODULE_MIN_HEIGHT;
+  }
+
+  return PANEL_MODULE_MIN_HEIGHT;
 }
 
 export function defaultPageSizeForDataset(panel: PanelResponse | null, datasetId: string, fallback = 25) {
