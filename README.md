@@ -125,6 +125,8 @@ Antes de esta separacion, cualquier diagnostico de preparacion offline con `stat
 
 El modal `Diagnostico` incluye una pestaña `Sincronizacion` basada en las mismas entradas que resuelven el punto del encabezado. Resume estado, motivo, animacion, inicio observado, actividades concurrentes y ultimo sync exitoso conocido; el checklist separa conectividad del navegador, sesion, readiness, pendientes, envio, recepcion local, problemas y preparacion offline. `Sin informacion` significa que no existe evidencia temporal suficiente y un `noop` no se presenta como sincronizacion completa. Su historial conserva en memoria hasta 50 transiciones reales para la sesion y contrato actuales, sin payloads ni valores de campos, y se limpia al salir o cambiar de alcance. `Copiar diagnostico de sincronizacion` exporta resumen, checklist e historial para capturar un episodio futuro; no reconstruye incidentes anteriores.
 
+El modal mantiene encabezado y pestañas fuera de su unico scroll vertical de contenido. Su altura se limita al viewport; en anchos compactos las pestañas se desplazan horizontalmente y muestran el indicador de desplazamiento. Todas las pestañas conservan sus detalles y acciones de copia, con confirmacion o error propios. El recorte observado se debia a que encabezado, navegacion y contenido podian encogerse dentro de un panel con altura maxima, mientras `STATE_UPDATE` agregaba un segundo scroll con altura propia.
+
 `BOARD`, `DASHBOARD`, modulos PANEL no soportados y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
 
 ## CRUD Records

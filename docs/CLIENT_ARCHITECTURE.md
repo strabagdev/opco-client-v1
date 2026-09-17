@@ -38,6 +38,8 @@ Before this separation, `offlinePreparationDiagnostics.status === "running"` ent
 
 The global diagnostics modal has a `Sincronización` tab derived from the same `resolveAppShellStatusIndicator()` result and source values used by the header. It does not own sync state or trigger work. Its checklist maps evidence as follows:
 
+The modal is a viewport-bounded three-region layout: a non-shrinking header, a non-shrinking horizontally scrollable tab bar, and one flexible vertical content viewport shared by `Sincronización`, PWA, STATE_UPDATE, and RECORDS. Compact widths expose horizontal tab scrolling; long values wrap inside the content width, and copy actions retain their own success/error feedback. Embedded STATE_UPDATE content does not create a second vertical scroll. The previous clipping came from allowing fixed navigation regions to shrink inside a max-height panel while the embedded STATE_UPDATE panel also imposed an independent `520px` scroll viewport.
+
 | Check | Source | Important limitation |
 | --- | --- | --- |
 | Browser connectivity | Canonical NetInfo classification plus persisted connectivity `updatedAt`. | `online` does not prove Operational Core is ready or authenticated. |

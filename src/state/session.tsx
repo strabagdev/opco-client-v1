@@ -1179,6 +1179,7 @@ export function StateUpdateDiagnosticsPanel({
   ]);
   const canCopy = copyText.trim().length > 0;
   const copyButtonText = getStateUpdateDiagnosticsCopyButtonText(copyState);
+  const DiagnosticsContent = variant === "embedded" ? View : ScrollView;
 
   async function handleCopyStateUpdate() {
     if (!copyText.trim()) {
@@ -1210,7 +1211,7 @@ export function StateUpdateDiagnosticsPanel({
 
   return (
     <View style={variant === "embedded" ? diagnosticsPanelStyles.embeddedShell : diagnosticsPanelStyles.shell}>
-      <ScrollView style={diagnosticsPanelStyles.scroll}>
+      <DiagnosticsContent style={variant === "embedded" ? diagnosticsPanelStyles.embeddedContent : diagnosticsPanelStyles.scroll}>
         <View style={diagnosticsPanelStyles.header}>
           <Text style={diagnosticsPanelStyles.title}>STATE_UPDATE diagnostics</Text>
           <View style={diagnosticsPanelStyles.actions}>
@@ -1287,7 +1288,7 @@ export function StateUpdateDiagnosticsPanel({
         ) : (
           <Text style={diagnosticsPanelStyles.empty}>No diagnostic run yet.</Text>
         )}
-      </ScrollView>
+      </DiagnosticsContent>
     </View>
   );
 }
@@ -1403,8 +1404,10 @@ const diagnosticsPanelStyles = StyleSheet.create({
     borderColor: "#9fb8b8",
     borderRadius: 8,
     borderWidth: 1,
-    flex: 1,
     padding: 12,
+  },
+  embeddedContent: {
+    gap: 0,
   },
   error: {
     color: "#b42318",

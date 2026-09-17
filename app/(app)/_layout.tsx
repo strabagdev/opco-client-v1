@@ -6,6 +6,7 @@ import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, Scroll
 import { AppIcon } from "@/components/app-icon";
 import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
 import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
+import { getDiagnosticsModalHeight, shouldShowDiagnosticsTabScrollIndicator } from "@/lib/app-diagnostics-layout";
 import {
   classifyAppShellVisibleErrorEvent,
   resolveAppShellPersistentFeedback,
@@ -70,7 +71,7 @@ export default function AppLayout() {
   } = useSession();
   const router = useRouter();
   const pathname = usePathname();
-  const { width } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isSyncErrorModalOpen, setIsSyncErrorModalOpen] = useState(false);
   const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("sync");
@@ -81,6 +82,7 @@ export default function AppLayout() {
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const diagnosticsModalHeight = getDiagnosticsModalHeight({ height, width });
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
@@ -469,8 +471,15 @@ export default function AppLayout() {
         visible={isDiagnosticsOpen}
       >
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalPanel, isWideLayout ? styles.diagnosticsModalPanelWide : styles.modalPanelCompact]}>
-            <View style={styles.modalHeader}>
+          <View
+            style={[
+              styles.modalPanel,
+              styles.diagnosticsModalPanel,
+              isWideLayout ? styles.diagnosticsModalPanelWide : styles.modalPanelCompact,
+              { height: diagnosticsModalHeight, maxHeight: diagnosticsModalHeight },
+            ]}
+          >
+            <View style={[styles.modalHeader, styles.diagnosticsModalHeader]}>
               <Text style={styles.modalTitle}>Diagnostico</Text>
               <Pressable
                 accessibilityLabel="Cerrar diagnostico"
@@ -481,14 +490,20 @@ export default function AppLayout() {
                 <Text style={styles.modalCloseText}>Cerrar</Text>
               </Pressable>
             </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.diagnosticsTabs}>
-              <View style={styles.diagnosticsTabList}>
+            <View style={styles.diagnosticsNavigation}>
+              <ScrollView
+                contentContainerStyle={styles.diagnosticsTabList}
+                horizontal
+                showsHorizontalScrollIndicator={shouldShowDiagnosticsTabScrollIndicator(width)}
+                style={styles.diagnosticsTabs}
+              >
                 {GLOBAL_DIAGNOSTIC_TABS.map((tab) => {
                   const isSelected = selectedDiagnosticsTab === tab.id;
 
                   return (
                     <Pressable
-                      accessibilityRole="button"
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: isSelected }}
                       key={tab.id}
                       onPress={() => setSelectedDiagnosticsTab(normalizeDiagnosticTabId(tab.id))}
                       style={[styles.diagnosticsTab, isSelected ? styles.diagnosticsTabSelected : null]}
@@ -499,9 +514,13 @@ export default function AppLayout() {
                     </Pressable>
                   );
                 })}
-              </View>
-            </ScrollView>
-            <ScrollView style={styles.modalScroll}>
+              </ScrollView>
+            </View>
+            <ScrollView
+              contentContainerStyle={styles.diagnosticsContent}
+              keyboardShouldPersistTaps="handled"
+              style={styles.diagnosticsContentScroll}
+            >
               {selectedDiagnosticsTab === "sync" ? (
                 <SyncStatusDiagnosticsPanel diagnostics={syncStatusDiagnostics} history={syncStatusHistory} />
               ) : null}
@@ -1092,6 +1111,29 @@ const styles = StyleSheet.create({
   diagnosticsModalPanelWide: {
     maxWidth: 920,
   },
+  diagnosticsModalHeader: {
+    flexShrink: 0,
+    padding: 16,
+  },
+  diagnosticsModalPanel: {
+    gap: 0,
+    padding: 0,
+  },
+  diagnosticsNavigation: {
+    borderBottomColor: "#d9e3e5",
+    borderBottomWidth: 1,
+    flexShrink: 0,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  diagnosticsContent: {
+    padding: 16,
+    paddingBottom: 20,
+  },
+  diagnosticsContentScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
   diagnosticsNotice: {
     color: "#587078",
     fontSize: 12,
@@ -1110,7 +1152,8 @@ const styles = StyleSheet.create({
   diagnosticsTabList: {
     flexDirection: "row",
     gap: 8,
-    paddingBottom: 2,
+    paddingBottom: 4,
+    paddingRight: 2,
   },
   diagnosticsTabSelected: {
     backgroundColor: "#135d66",
@@ -1118,6 +1161,7 @@ const styles = StyleSheet.create({
   },
   diagnosticsTabs: {
     flexGrow: 0,
+    flexShrink: 0,
   },
   diagnosticsTabText: {
     color: "#17363c",
@@ -1158,6 +1202,7 @@ const styles = StyleSheet.create({
     color: "#17363c",
     flex: 1,
     fontSize: 12,
+    minWidth: 0,
     textAlign: "right",
   },
   header: {
