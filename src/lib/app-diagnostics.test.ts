@@ -5,6 +5,7 @@ import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticT
 describe("global app diagnostics", () => {
   it("defines the global diagnostics modal tabs in one extensible list", () => {
     expect(GLOBAL_DIAGNOSTIC_TABS).toEqual([
+      { id: "sync", label: "Sincronización" },
       { id: "pwa", label: "PWA" },
       { id: "state-update", label: "STATE_UPDATE" },
       { id: "records", label: "RECORDS" },
@@ -13,6 +14,7 @@ describe("global app diagnostics", () => {
 
   it("keeps the modal on a valid selected tab and falls back to PWA", () => {
     expect(normalizeDiagnosticTabId("records")).toBe("records");
+    expect(normalizeDiagnosticTabId("sync")).toBe("sync");
     expect(normalizeDiagnosticTabId("state-update")).toBe("state-update");
     expect(normalizeDiagnosticTabId("missing")).toBe("pwa");
     expect(normalizeDiagnosticTabId(null)).toBe("pwa");

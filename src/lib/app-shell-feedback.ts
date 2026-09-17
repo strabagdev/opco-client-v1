@@ -12,7 +12,7 @@ export type AppShellFeedbackMessage = {
   visual: AppShellFeedbackVisual;
 };
 
-export type AppShellStatusIndicatorState = "online" | "working" | "offline" | "error";
+export type AppShellStatusIndicatorState = "online" | "working" | "pending" | "offline" | "error";
 
 export type AppShellStatusIndicator = {
   accessibilityLabel: string;
@@ -159,10 +159,10 @@ export function resolveAppShellStatusIndicator({
   hasConflict,
   hasError,
   isAuthSessionRestoring,
-  isOfflinePreparationRunning,
   isOperationalCoreReadinessChecking,
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
+  pendingCount,
 }: AppShellFeedbackInput): AppShellStatusIndicator {
   if (localStorageRecoveryNotice || hasError || hasConflict) {
     return {
@@ -171,15 +171,31 @@ export function resolveAppShellStatusIndicator({
     };
   }
 
-  if (
-    isAuthSessionRestoring ||
-    isOfflinePreparationRunning ||
-    isOperationalCoreReadinessChecking ||
-    isPendingWorkSyncing
-  ) {
+  if (isPendingWorkSyncing) {
     return {
-      accessibilityLabel: "Sincronizando",
+      accessibilityLabel: "Sincronizando cambios pendientes",
       state: "working",
+    };
+  }
+
+  if (isOperationalCoreReadinessChecking) {
+    return {
+      accessibilityLabel: "Comprobando disponibilidad de Opco",
+      state: "working",
+    };
+  }
+
+  if (isAuthSessionRestoring) {
+    return {
+      accessibilityLabel: "Restableciendo sesion con Opco",
+      state: "working",
+    };
+  }
+
+  if (pendingCount > 0) {
+    return {
+      accessibilityLabel: pendingCount === 1 ? "1 cambio pendiente" : `${pendingCount} cambios pendientes`,
+      state: "pending",
     };
   }
 

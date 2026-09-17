@@ -98,6 +98,7 @@ type SessionContextValue = {
   };
   isAuthSessionRestoring: boolean;
   isOperationalCoreReadinessChecking: boolean;
+  isOfflinePreparationRunning: boolean;
   isPendingWorkSyncing: boolean;
   me: MeResponse | null;
   offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
@@ -167,6 +168,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [pendingLoginSelection, setPendingLoginSelection] = useState<LoginSelectionRequiredResponse | null>(null);
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
   const [offlinePreparationDiagnostics, setOfflinePreparationDiagnostics] = useState<OfflinePreparationDiagnostics | null>(null);
+  const [activeOfflinePreparationRuns, setActiveOfflinePreparationRuns] = useState<Set<string>>(() => new Set());
   const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
   const [stateUpdateReconnectRefreshKey, setStateUpdateReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
@@ -175,6 +177,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const connectivityStatus = useConnectivityStatus();
   const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
   const ownerKey = me && context ? buildOwnerKey(me, context) : null;
+  const isOfflinePreparationRunning = activeOfflinePreparationRuns.size > 0;
+  const clearOfflinePreparationRuntime = useCallback(() => {
+    setActiveOfflinePreparationRuns(new Set());
+  }, []);
   const api = useMemo(
     () =>
       createOpcoApi({
@@ -183,6 +189,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         },
         onSessionInvalid(termination) {
           recordStateUpdateSessionTermination(termination);
+          clearOfflinePreparationRuntime();
           setToken(null);
           setMe(null);
           setContext(null);
@@ -194,7 +201,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         platformOS: Platform.OS,
         tokenStore: tokenStorage,
       }),
-    [],
+    [clearOfflinePreparationRuntime],
   );
 
   const {
@@ -280,6 +287,21 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const recordOfflinePreparationDiagnostics = useCallback((diagnostics: OfflinePreparationDiagnostics) => {
     setOfflinePreparationDiagnostics(diagnostics);
+    const runKey = diagnostics.prewarmStartedAt;
+
+    if (runKey) {
+      setActiveOfflinePreparationRuns((current) => {
+        const next = new Set(current);
+
+        if (diagnostics.status === "running") {
+          next.add(runKey);
+        } else {
+          next.delete(runKey);
+        }
+
+        return next.size === current.size && [...next].every((key) => current.has(key)) ? current : next;
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -381,6 +403,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     definitionCache,
     ownerKey,
     persistStateUpdateReconnectDiagnostics,
+    recordOfflinePreparationDiagnostics,
     refreshPendingRecordsCount,
     refreshStateUpdateDiagnostics,
     selectedContractIdState,
@@ -617,6 +640,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     await tokenStorage.clearSession();
+    clearOfflinePreparationRuntime();
     void persistSelectedContractId(definitionCache, null);
     void definitionCache.clearNavigationCache();
     setToken(null);
@@ -668,6 +692,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         definitionCache,
         diagnosticsStateUpdate,
         isAuthSessionRestoring,
+        isOfflinePreparationRunning,
         isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
         me,

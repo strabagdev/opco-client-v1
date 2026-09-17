@@ -25,6 +25,23 @@ const baseInput: AppShellFeedbackInput = {
   pendingCount: 0,
 };
 
+function resolvePreviousStatusIndicator(input: AppShellFeedbackInput) {
+  if (input.localStorageRecoveryNotice || input.hasError || input.hasConflict) {
+    return "error";
+  }
+
+  if (
+    input.isAuthSessionRestoring ||
+    input.isOfflinePreparationRunning ||
+    input.isOperationalCoreReadinessChecking ||
+    input.isPendingWorkSyncing
+  ) {
+    return "working";
+  }
+
+  return input.connectivityStatus === "online" ? "online" : "offline";
+}
+
 describe("app shell feedback", () => {
   it("occupies no global feedback space when there is no real message", () => {
     const feedback = resolveAppShellPersistentFeedback(baseInput);
@@ -254,23 +271,69 @@ describe("app shell feedback", () => {
     });
   });
 
-  it("resolves active preparation, reconnect, sync, and auth restore as working", () => {
-    expect(resolveAppShellStatusIndicator({
+  it("keeps offline preparation out of the global sync activity indicator", () => {
+    const observedCandidate = {
       ...baseInput,
       isOfflinePreparationRunning: true,
-    }).state).toBe("working");
+    };
+
+    expect(resolvePreviousStatusIndicator(observedCandidate)).toBe("working");
+    expect(resolveAppShellStatusIndicator(observedCandidate)).toEqual({
+      accessibilityLabel: "Online",
+      state: "online",
+    });
+  });
+
+  it("identifies each real active operation and stops animating when it finishes", () => {
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
       isOperationalCoreReadinessChecking: true,
-    }).state).toBe("working");
+    })).toEqual({
+      accessibilityLabel: "Comprobando disponibilidad de Opco",
+      state: "working",
+    });
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
       isPendingWorkSyncing: true,
-    }).state).toBe("working");
+    })).toEqual({
+      accessibilityLabel: "Sincronizando cambios pendientes",
+      state: "working",
+    });
+    expect(resolvePreviousStatusIndicator({
+      ...baseInput,
+      isPendingWorkSyncing: true,
+    })).toBe("working");
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
       isAuthSessionRestoring: true,
-    }).state).toBe("working");
+    })).toEqual({
+      accessibilityLabel: "Restableciendo sesion con Opco",
+      state: "working",
+    });
+    expect(resolveAppShellStatusIndicator(baseInput).state).toBe("online");
+  });
+
+  it("does not animate for periodic reads, retained errors, or durable pending work", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      hasReadConnectivityIssue: true,
+    }).state).toBe("online");
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      pendingCount: 2,
+    })).toEqual({
+      accessibilityLabel: "2 cambios pendientes",
+      state: "pending",
+    });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      hasError: true,
+    }).state).toBe("error");
+    expect(resolvePreviousStatusIndicator({
+      ...baseInput,
+      hasError: true,
+      isOfflinePreparationRunning: true,
+    })).toBe("error");
   });
 
   it("prioritizes working over offline when an active process is running", () => {
@@ -279,7 +342,7 @@ describe("app shell feedback", () => {
       connectivityStatus: "offline",
       isPendingWorkSyncing: true,
     })).toEqual({
-      accessibilityLabel: "Sincronizando",
+      accessibilityLabel: "Sincronizando cambios pendientes",
       state: "working",
     });
   });

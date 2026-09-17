@@ -1,5 +1,5 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { AlertCircle, LogOut, WifiOff, X } from "lucide-react-native";
+import { AlertCircle, CheckCircle2, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
@@ -22,6 +22,16 @@ import {
 } from "@/lib/pending-sync-errors";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import {
+  activeSince,
+  buildSyncStatusDiagnostics,
+  fingerprintSyncDiagnosticScope,
+  formatActiveDuration,
+  formatSyncStatusDiagnosticsCopy,
+  updateSyncStatusHistory,
+  type SyncChecklistState,
+  type SyncStatusHistory,
+} from "@/lib/sync-status-diagnostics";
+import {
   formatRecordsFailedOperationDiagnosticsCopyText,
   getRecordsFailedOperationDiagnosticsSections,
   getRecordsFailedOperationsNotice,
@@ -40,6 +50,7 @@ export default function AppLayout() {
     context,
     isAuthSessionRestoring,
     diagnosticsStateUpdate,
+    isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking,
     isPendingWorkSyncing,
     localDatabaseStorageState,
@@ -62,10 +73,11 @@ export default function AppLayout() {
   const { width } = useWindowDimensions();
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isSyncErrorModalOpen, setIsSyncErrorModalOpen] = useState(false);
-  const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("pwa");
+  const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("sync");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
   const [statusPulseOpacity] = useState(() => new Animated.Value(1));
+  const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
@@ -130,7 +142,81 @@ export default function AppLayout() {
     pendingCount: pendingRecordsCount,
   });
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
+  const lastActivity = stateUpdateReconnectDiagnostics.lastStateUpdateActivity;
+  const lastPreflight = stateUpdateReconnectDiagnostics.lastReconnectPreflight;
+  const lastSuccessfulSyncAt = lastSync && (lastSync.result === "success" || lastSync.result === "reconciled_success")
+    ? lastSync.completedAt
+    : null;
+  const syncStatusDiagnostics = useMemo(() => buildSyncStatusDiagnostics({
+    connectivity: {
+      checkedAt: stateUpdateReconnectDiagnostics.currentConnectivity.updatedAt,
+      status: stateUpdateReconnectDiagnostics.currentConnectivity.status,
+    },
+    conflicts: syncConflictCount,
+    errors: durableSyncErrorCount,
+    indicator: shellStatusIndicator,
+    offlinePreparation: {
+      activeInCurrentRuntime: isOfflinePreparationRunning,
+      completedAt: offlinePreparationDiagnostics?.prewarmCompletedAt ?? null,
+      startedAt: offlinePreparationDiagnostics?.prewarmStartedAt ?? null,
+      status: offlinePreparationDiagnostics?.status ?? null,
+    },
+    pendingCount: pendingRecordsCount,
+    readiness: {
+      active: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
+      checkedAt: lastPreflight?.readinessCompletedAt ?? lastPreflight?.readinessConfirmedAt ?? null,
+      failed: lastActivity?.type === "ready_check" && lastActivity.result === "ready_failed",
+      reason: lastActivity?.type === "ready_check" ? lastActivity.result : null,
+      runId: lastPreflight?.syncRunId ?? null,
+      startedAt: lastPreflight?.readinessStartedAt ?? null,
+    },
+    readIssue: visibleErrorKind === "read",
+    session: { restoring: isAuthSessionRestoring, status },
+    sync: {
+      active: isPendingWorkSyncing && isStateUpdateActivityActive,
+      completedAt: lastSync?.completedAt ?? null,
+      lastSuccessAt: lastSuccessfulSyncAt,
+      result: lastSync?.result ?? null,
+      runId: lastSync?.syncRunId ?? null,
+      startedAt: lastActivity?.type === "sync" && !lastActivity.completedAt ? lastActivity.startedAt : lastSync?.startedAt ?? null,
+    },
+  }), [
+    durableSyncErrorCount,
+    isAuthSessionRestoring,
+    isOfflinePreparationRunning,
+    isOperationalCoreReadinessChecking,
+    isPendingWorkSyncing,
+    isStateUpdateActivityActive,
+    lastActivity,
+    lastPreflight,
+    lastSuccessfulSyncAt,
+    lastSync,
+    offlinePreparationDiagnostics,
+    pendingRecordsCount,
+    shellStatusIndicator,
+    stateUpdateReconnectDiagnostics.currentConnectivity,
+    status,
+    syncConflictCount,
+    visibleErrorKind,
+  ]);
   const refreshStateUpdateDiagnostics = diagnosticsStateUpdate.onRefresh;
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setSyncStatusHistory((current) => updateSyncStatusHistory({
+        at: new Date().toISOString(),
+        current,
+        next: syncStatusDiagnostics,
+        runIds: {
+          "Disponibilidad del servicio": lastPreflight?.syncRunId ?? null,
+          "Envío de cambios": lastSync?.syncRunId ?? null,
+        },
+        scopeKey: ownerKey && selectedContractId ? fingerprintSyncDiagnosticScope(ownerKey, selectedContractId) : null,
+      }));
+    }, 0);
+
+    return () => clearTimeout(timeout);
+  }, [lastPreflight?.syncRunId, lastSync?.syncRunId, ownerKey, selectedContractId, syncStatusDiagnostics]);
 
   useEffect(() => {
     if (shellStatusIndicator.state !== "working") {
@@ -280,6 +366,7 @@ export default function AppLayout() {
                 styles.statusDot,
                 shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
                 shellStatusIndicator.state === "working" ? styles.statusDotWorking : null,
+                shellStatusIndicator.state === "pending" ? styles.statusDotWorking : null,
                 shellStatusIndicator.state === "offline" ? styles.statusDotOffline : null,
                 shellStatusIndicator.state === "error" ? styles.statusDotError : null,
                 shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null,
@@ -415,6 +502,9 @@ export default function AppLayout() {
               </View>
             </ScrollView>
             <ScrollView style={styles.modalScroll}>
+              {selectedDiagnosticsTab === "sync" ? (
+                <SyncStatusDiagnosticsPanel diagnostics={syncStatusDiagnostics} history={syncStatusHistory} />
+              ) : null}
               {selectedDiagnosticsTab === "pwa" ? (
                 <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
               ) : null}
@@ -613,6 +703,117 @@ function PwaDiagnostics({
       ))}
     </View>
   );
+}
+
+function SyncStatusDiagnosticsPanel({
+  diagnostics,
+  history,
+}: {
+  diagnostics: ReturnType<typeof buildSyncStatusDiagnostics>;
+  history: SyncStatusHistory;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
+  const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSince = [...history.events].reverse().find((event) => event.process === "Indicador")?.at ?? null;
+
+  async function handleCopy() {
+    if (copyResetTimeout.current) {
+      clearTimeout(copyResetTimeout.current);
+    }
+
+    try {
+      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history));
+      setCopyState("success");
+      copyResetTimeout.current = setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  useEffect(() => () => {
+    if (copyResetTimeout.current) clearTimeout(copyResetTimeout.current);
+  }, []);
+
+  return (
+    <View style={styles.syncDiagnostics}>
+      <View style={styles.syncDiagnosticsHeader}>
+        <View style={styles.syncDiagnosticsTitleBlock}>
+          <Text style={styles.diagnosticsTitle}>Sincronización</Text>
+          <Text style={styles.syncDiagnosticsReason}>{diagnostics.reason}</Text>
+        </View>
+        <Pressable accessibilityRole="button" onPress={handleCopy} style={styles.secondaryModalButton}>
+          <Text style={styles.secondaryModalButtonText}>
+            {copyState === "success" ? "Copiado" : copyState === "error" ? "No se pudo copiar" : "Copiar diagnóstico de sincronización"}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.syncSummaryGrid}>
+        <SyncSummaryValue label="Estado actual" value={syncStateLabel(diagnostics.indicator.state)} />
+        <SyncSummaryValue label="Anima" value={diagnostics.indicator.state === "working" ? "Sí" : "No"} />
+        <SyncSummaryValue label="Desde" value={currentSince ?? "Sin información"} />
+        <SyncSummaryValue label="Último éxito" value={diagnostics.lastSuccessfulSyncAt ?? "Sin información"} />
+      </View>
+      <Text style={styles.syncActivitiesText}>
+        Actividades concurrentes: {diagnostics.activities.join(", ") || "Ninguna"}
+      </Text>
+
+      <Text style={styles.diagnosticsTitle}>Checklist automático</Text>
+      <View style={styles.syncChecklist}>
+        {diagnostics.checklist.map((entry) => (
+          <View key={entry.id} style={styles.syncChecklistRow}>
+            <View style={styles.syncChecklistIcon}>{syncStateIcon(entry.state)}</View>
+            <View style={styles.syncChecklistContent}>
+              <View style={styles.syncChecklistHeading}>
+                <Text style={styles.syncChecklistLabel}>{entry.label}</Text>
+                <Text style={styles.syncChecklistState}>{entry.state}{entry.count !== null ? ` (${entry.count})` : ""}</Text>
+              </View>
+              <Text style={styles.syncChecklistDetail}>{entry.detail}</Text>
+              <Text style={styles.syncChecklistMeta}>
+                Comprobado: {entry.checkedAt ?? "Sin información"} · Inicio: {activeSince(entry, history)} · Duración: {formatActiveDuration(activeSince(entry, history))}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.diagnosticsTitle}>Historial breve</Text>
+      <Text style={styles.syncHistoryNotice}>En memoria, máximo 50 eventos; se limpia al cerrar o cambiar sesión/contrato.</Text>
+      {history.events.length ? [...history.events].reverse().map((event, index) => (
+        <View key={`${event.at}:${event.process}:${index}`} style={styles.syncHistoryRow}>
+          <Text style={styles.syncHistoryAt}>{event.at}</Text>
+          <Text style={styles.syncHistoryProcess}>{event.process}</Text>
+          <Text style={styles.syncHistoryTransition}>{event.from} → {event.to}</Text>
+          <Text style={styles.syncChecklistDetail}>{event.reason}</Text>
+          {event.runId ? <Text style={styles.syncChecklistMeta}>run: {event.runId}</Text> : null}
+        </View>
+      )) : <Text style={styles.syncHistoryNotice}>Sin información</Text>}
+    </View>
+  );
+}
+
+function SyncSummaryValue({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.syncSummaryValue}>
+      <Text style={styles.diagnosticsLabel}>{label}</Text>
+      <Text selectable style={styles.diagnosticsValue}>{value}</Text>
+    </View>
+  );
+}
+
+function syncStateLabel(state: ReturnType<typeof buildSyncStatusDiagnostics>["indicator"]["state"]) {
+  if (state === "working") return "En curso";
+  if (state === "pending") return "Pendiente";
+  if (state === "error") return "Error";
+  if (state === "offline") return "Offline";
+  return "Correcto";
+}
+
+function syncStateIcon(state: SyncChecklistState) {
+  if (state === "Correcto") return <CheckCircle2 color="#13795b" size={18} />;
+  if (state === "En curso") return <Clock3 color="#b7791f" size={18} />;
+  if (state === "Error") return <AlertCircle color="#b42318" size={18} />;
+  return <CircleDashed color="#64757b" size={18} />;
 }
 
 function RecordsGlobalDiagnostics({
@@ -1204,6 +1405,122 @@ const styles = StyleSheet.create({
   },
   statusDotWorking: {
     backgroundColor: "#b7791f",
+  },
+  syncActivitiesText: {
+    color: "#425d64",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  syncChecklist: {
+    borderColor: "#d9e3e5",
+    borderTopWidth: 1,
+  },
+  syncChecklistContent: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
+  },
+  syncChecklistDetail: {
+    color: "#425d64",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  syncChecklistHeading: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+  },
+  syncChecklistIcon: {
+    paddingTop: 1,
+    width: 22,
+  },
+  syncChecklistLabel: {
+    color: "#17363c",
+    flexGrow: 1,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  syncChecklistMeta: {
+    color: "#6b7f85",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  syncChecklistRow: {
+    alignItems: "flex-start",
+    borderBottomColor: "#e5ecee",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 9,
+  },
+  syncChecklistState: {
+    color: "#425d64",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  syncDiagnostics: {
+    backgroundColor: "#ffffff",
+    gap: 12,
+  },
+  syncDiagnosticsHeader: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "space-between",
+  },
+  syncDiagnosticsReason: {
+    color: "#425d64",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  syncDiagnosticsTitleBlock: {
+    flex: 1,
+    gap: 4,
+    minWidth: 220,
+  },
+  syncHistoryAt: {
+    color: "#6b7f85",
+    fontSize: 11,
+  },
+  syncHistoryNotice: {
+    color: "#6b7f85",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  syncHistoryProcess: {
+    color: "#17363c",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  syncHistoryRow: {
+    borderBottomColor: "#e5ecee",
+    borderBottomWidth: 1,
+    gap: 3,
+    paddingVertical: 8,
+  },
+  syncHistoryTransition: {
+    color: "#425d64",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  syncSummaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  syncSummaryValue: {
+    backgroundColor: "#f4f7f7",
+    borderColor: "#d9e3e5",
+    borderRadius: 6,
+    borderWidth: 1,
+    flexBasis: 180,
+    flexGrow: 1,
+    gap: 3,
+    minWidth: 0,
+    padding: 9,
   },
   syncErrorFooter: {
     borderColor: "#d8e2e4",

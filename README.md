@@ -119,6 +119,12 @@ PANEL     -> PanelRenderer
 
 Los snapshots offline de PANEL son read-only y se guardan separados de REPORT por `contractId`, `appViewId`, `datasetId`, filtros normalizados, busqueda, pagina, pageSize y `configRevision`. PANEL no crea `pending_operations`, no usa `STATE_UPDATE` y no reutiliza la cache de REPORT como fuente paralela.
 
+El indicador del encabezado es verde cuando la conectividad esta online y no hay pendientes, errores ni una operacion global activa. Pulsa naranja solo durante restauracion de sesion, comprobacion de readiness o sincronizacion real; los pendientes durables usan naranja estable. Su etiqueta accesible identifica la fase o cantidad pendiente. Las lecturas de PANEL y la preparacion offline de AppViews no representan envio de cambios y no activan ese pulso. La preparacion offline conserva su banner y detalle en `Diagnostico > PWA`; conflictos y errores permanecen visibles por sus mensajes y estados propios.
+
+Antes de esta separacion, cualquier diagnostico de preparacion offline con `status=running` activaba el mismo naranja pulsante de la sincronizacion. Esa condicion esta demostrada en la logica anterior, pero no identifica por si sola la causa de un episodio observado: para atribuirlo a un dispositivo se necesitan los valores y timestamps de sus diagnosticos PWA, STATE_UPDATE y RECORDS.
+
+El modal `Diagnostico` incluye una pestaña `Sincronizacion` basada en las mismas entradas que resuelven el punto del encabezado. Resume estado, motivo, animacion, inicio observado, actividades concurrentes y ultimo sync exitoso conocido; el checklist separa conectividad del navegador, sesion, readiness, pendientes, envio, recepcion local, problemas y preparacion offline. `Sin informacion` significa que no existe evidencia temporal suficiente y un `noop` no se presenta como sincronizacion completa. Su historial conserva en memoria hasta 50 transiciones reales para la sesion y contrato actuales, sin payloads ni valores de campos, y se limpia al salir o cambiar de alcance. `Copiar diagnostico de sincronizacion` exporta resumen, checklist e historial para capturar un episodio futuro; no reconstruye incidentes anteriores.
+
 `BOARD`, `DASHBOARD`, modulos PANEL no soportados y workflows desconocidos muestran UI controlada de unsupported con nombre, icono, tipo y mensaje temporal.
 
 ## CRUD Records

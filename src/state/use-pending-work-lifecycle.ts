@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import { buildOwnerKey, loadAppViewsWithCache } from "../lib/app-navigation-cache";
-import { prewarmAssignedAppViewsOnce } from "../lib/app-view-prewarm";
+import { OfflinePreparationDiagnostics, prewarmAssignedAppViewsOnce } from "../lib/app-view-prewarm";
 import { ConnectivityStatus } from "../lib/connectivity";
 import { selectContractId } from "../lib/contract-selection";
 import { LocalDatabase } from "../lib/local-db";
@@ -50,6 +50,7 @@ type UsePendingWorkLifecycleInput = {
   connectivityStatus: ConnectivityStatus;
   definitionCache: LocalDatabase;
   ownerKey: string | null;
+  recordOfflinePreparationDiagnostics(diagnostics: OfflinePreparationDiagnostics): void;
   persistStateUpdateReconnectDiagnostics(
     updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,
   ): Promise<void>;
@@ -73,6 +74,7 @@ export function usePendingWorkLifecycle({
   connectivityStatus,
   definitionCache,
   ownerKey,
+  recordOfflinePreparationDiagnostics,
   persistStateUpdateReconnectDiagnostics,
   refreshPendingRecordsCount,
   refreshStateUpdateDiagnostics,
@@ -767,6 +769,7 @@ export function usePendingWorkLifecycle({
           appViews: appViewsResult.views,
           contractId: nextContractId,
           ownerKey: nextOwnerKey,
+          onTelemetry: recordOfflinePreparationDiagnostics,
           store: definitionCache,
           token: nextToken,
         });
@@ -802,6 +805,7 @@ export function usePendingWorkLifecycle({
     api,
     definitionCache,
     ownerKey,
+    recordOfflinePreparationDiagnostics,
     refreshPendingRecordsCount,
     refreshStateUpdateDiagnostics,
     selectedContractIdState,

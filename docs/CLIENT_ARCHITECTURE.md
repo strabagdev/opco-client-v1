@@ -26,6 +26,33 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 | Service worker | Offline app shell, static assets, navigation fallback. | API data, SQLite, OPFS writes, sync. |
 | Operational Core `/api/v1` | Authenticated source of truth, AppViews, entity definitions/records, workflows, idempotency. | Client local queue, device storage recovery. |
 
+## App Shell Status
+
+The status dot is stable green only for online idle state with no pending work or errors. It pulses amber for an active auth restore, Operational Core readiness probe, or pending-work sync, with a phase-specific accessibility label. Durable pending work uses stable amber with an accessible count; it does not animate without an active operation.
+
+Durable pending work, retained errors, conflicts, and offline state remain explicit through their own static status/feedback and do not depend on animation alone. PANEL refreshes and AppView offline preparation are read/cache work, not pending-change sync, so they do not animate the global sync dot. Offline preparation remains observable in the existing PWA feedback and diagnostics, including its persisted status and current/last stage.
+
+A persisted offline-preparation `running` diagnostic may describe an interrupted prior runtime, so it is diagnostic evidence rather than proof of a currently active operation.
+
+Before this separation, `offlinePreparationDiagnostics.status === "running"` entered the same `working` branch as auth restoration, readiness, and pending-work sync, producing the same amber pulse. This code-level ambiguity is confirmed and covered by regression tests. It does not establish which branch caused a historical device episode: attribution requires the affected device's PWA preparation timestamps plus STATE_UPDATE and RECORDS activity captured for that episode. The current diagnostics do not persist one atomic snapshot of every header input.
+
+The global diagnostics modal has a `Sincronización` tab derived from the same `resolveAppShellStatusIndicator()` result and source values used by the header. It does not own sync state or trigger work. Its checklist maps evidence as follows:
+
+| Check | Source | Important limitation |
+| --- | --- | --- |
+| Browser connectivity | Canonical NetInfo classification plus persisted connectivity `updatedAt`. | `online` does not prove Operational Core is ready or authenticated. |
+| Session | SessionProvider status and active auth-restoration flag. | Runtime transition time is memory-only when no persisted request timestamp exists. |
+| Service availability | Active readiness flag, reconnect preflight, and current readiness activity/run id. | No check is reported as successful without a known completion/confirmation timestamp. |
+| Local pending changes | Scoped SQLite `pending_operations` count. | Pending is durable state, not evidence that an upload is currently running. |
+| Sending changes | Pending-work runtime flag plus last STATE_UPDATE run metadata. | `noop` means no selected work and is not called a complete sync. |
+| Receive/local update | Known completed activity and visible read-connectivity failure. | A completed refresh may be partial; the checklist says so and does not claim a complete snapshot. |
+| Errors/conflicts | Retained RECORDS and STATE_UPDATE summaries. | Counts remain visible without animation when no operation is active. |
+| Offline preparation | Persisted prewarm telemetry plus a separate in-memory active-run set. | Persisted `running` without a run observed in this runtime is pending diagnostic evidence, not active sync and not an upload. |
+
+The synchronization history is intentionally memory-only. It records derived process transitions, not renders or timer ticks, and keeps the newest 50 events. Each event contains timestamp, process, previous/new readable state, sanitized reason, and an existing safe run id when available. It is isolated by the current owner/contract scope and cleared when that scope disappears or changes. It never stores tokens, request/response payloads, field values, names, emails, or raw business records. Diagnostic failures must not affect the sync engines.
+
+To capture a future persistent amber pulse, open `Diagnóstico > Sincronización` while it is occurring and use `Copiar diagnóstico de sincronización`. The copy distinguishes current state from historical events and can be correlated with `PWA > Preparación offline`, `STATE_UPDATE`, and `RECORDS`. Because this history starts when the current app runtime mounts and is not persisted, it cannot confirm an earlier incident that was not captured.
+
 ## Web Security Boundary
 
 Web auth currently keeps the short-lived API access token in `localStorage` so the app can restore an offline-capable session after reload. The API refresh token is not readable by JavaScript on Web; Operational Core stores it in an `HttpOnly; Secure` cookie scoped to `/api/v1/auth` and rotates it server-side. Native keeps both access and refresh tokens in `expo-secure-store`.
