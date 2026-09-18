@@ -41,9 +41,9 @@ The header status is one non-interactive icon-and-text indicator. On wide layout
 | 7 | `Restaurando sesión` | Authentication restoration is active. |
 | 8 | `Actualizando <experience>…` | One or more visible-experience reads/updates are active; reliable pending work is appended. |
 | 9 | `N cambios pendientes` | Durable work exists without an active upload. |
-| 10 | `Al día` | Online with no relevant activity, pending work, or known problem. |
+| 10 | `Listo` | Online with no relevant activity, pending work, or known problem. |
 
-`Al día` does not assert that every experience is preloaded or that unqueried data is fresh. Offline preparation remains separate and does not activate the global indicator by itself.
+`Listo` does not assert that every experience is preloaded or that unqueried data is fresh. Offline preparation remains separate and does not activate the global indicator by itself.
 
 Durable pending work, retained errors, conflicts, and offline state remain explicit through their own static status/feedback and do not depend on animation alone. PANEL refreshes and AppView offline preparation are read/cache work, not pending-change sync, so they do not animate the global sync dot. Offline preparation remains observable in the existing PWA feedback and diagnostics, including its persisted status and current/last stage.
 

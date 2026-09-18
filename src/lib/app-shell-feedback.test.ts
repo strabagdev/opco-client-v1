@@ -256,8 +256,8 @@ describe("app shell feedback", () => {
 
   it("resolves the header status indicator for online idle state", () => {
     expect(resolveAppShellStatusIndicator(baseInput)).toEqual({
-      accessibilityLabel: "Online",
-      label: "Al día",
+      accessibilityLabel: "Listo",
+      label: "Listo",
       state: "online",
     });
   });
@@ -281,8 +281,8 @@ describe("app shell feedback", () => {
 
     expect(resolvePreviousStatusIndicator(observedCandidate)).toBe("working");
     expect(resolveAppShellStatusIndicator(observedCandidate)).toEqual({
-      accessibilityLabel: "Online",
-      label: "Al día",
+      accessibilityLabel: "Listo",
+      label: "Listo",
       state: "online",
     });
   });
@@ -400,7 +400,7 @@ describe("app shell feedback", () => {
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
       experienceActivity: { ...activeExperience, activeRuns: [], result: "success" },
-    })).toMatchObject({ label: "Al día", state: "online" });
+    })).toMatchObject({ label: "Listo", state: "online" });
   });
 
   it("keeps offline and retained experience failures above read activity", () => {

@@ -259,8 +259,8 @@ export function resolveAppShellStatusIndicator({
   }
 
   return {
-    accessibilityLabel: "Online",
-    label: "Al día",
+    accessibilityLabel: "Listo",
+    label: "Listo",
     state: "online",
   };
 }

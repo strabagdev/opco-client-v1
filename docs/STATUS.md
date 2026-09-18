@@ -9,6 +9,7 @@ This is the short handoff for the current repository state. Verify the code and 
 - Local persistence and Opco-confirmed writes remain distinct. Errors and conflicts keep priority.
 - Generic RECORDS cache/save banners and general workflow local-save notices were removed only where the header provides equivalent feedback. Contextual validation, conflicts, offline coverage, pending badges, retries, and recovery remain local.
 - The wide header uses equal left/center/right zones. Compact layouts move status to a centered second row.
+- The idle online label is `Listo`; its conditions, priority, icon, color, and behavior are unchanged.
 
 Detailed behavior and priority rules: [CLIENT_ARCHITECTURE.md](CLIENT_ARCHITECTURE.md#app-shell-status).
 

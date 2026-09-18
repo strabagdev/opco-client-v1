@@ -16,7 +16,7 @@ const baseInput: SyncStatusDiagnosticsInput = {
     scopeKey: null,
     updatedAt: null,
   },
-  indicator: { accessibilityLabel: "Online", label: "Al día", state: "online" },
+  indicator: { accessibilityLabel: "Listo", label: "Listo", state: "online" },
   offlinePreparation: { activeInCurrentRuntime: false, completedAt: null, startedAt: null, status: null },
   pendingCount: 0,
   readiness: { active: false, checkedAt: null, failed: false, reason: null, runId: null, startedAt: null },
@@ -142,7 +142,7 @@ describe("sync status diagnostics", () => {
       history = updateSyncStatusHistory({
         at: `2026-09-17T12:${String(index).padStart(2, "0")}:00.000Z`,
         current: history,
-        next: buildSyncStatusDiagnostics({ ...baseInput, pendingCount: index % 2, indicator: { accessibilityLabel: "state", label: index % 2 ? "Cambios pendientes" : "Al día", state: index % 2 ? "pending" : "online" } }),
+        next: buildSyncStatusDiagnostics({ ...baseInput, pendingCount: index % 2, indicator: { accessibilityLabel: "state", label: index % 2 ? "Cambios pendientes" : "Listo", state: index % 2 ? "pending" : "online" } }),
         runIds: { Indicador: "run-safe" },
         scopeKey: "user-a:contract-a",
       });
