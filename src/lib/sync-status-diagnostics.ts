@@ -1,5 +1,6 @@
 import type { AppShellStatusIndicator } from "./app-shell-feedback";
 import type { ConnectivityStatus } from "./connectivity";
+import type { ExperienceActivitySnapshot } from "./experience-activity";
 
 export type SyncChecklistState = "Sin comprobar" | "En curso" | "Correcto" | "Pendiente" | "Error" | "No aplica";
 
@@ -31,6 +32,7 @@ export type SyncStatusDiagnosticsInput = {
   connectivity: { checkedAt: string | null; status: ConnectivityStatus };
   conflicts: number;
   errors: number;
+  experience: ExperienceActivitySnapshot;
   indicator: AppShellStatusIndicator;
   offlinePreparation: {
     activeInCurrentRuntime: boolean;
@@ -72,6 +74,7 @@ export function buildSyncStatusDiagnostics(input: SyncStatusDiagnosticsInput): S
     input.session.restoring ? "Restauración de sesión" : null,
     input.readiness.active ? "Comprobación de disponibilidad" : null,
     input.sync.active ? "Envío de cambios" : null,
+    input.experience.activeRuns.length > 0 ? `Actualización de ${input.experience.appViewTitle ?? "experiencia"}` : null,
     input.offlinePreparation.activeInCurrentRuntime ? "Preparación offline" : null,
   ].filter((value): value is string => Boolean(value));
 
@@ -90,6 +93,8 @@ export function buildSyncStatusDiagnostics(input: SyncStatusDiagnosticsInput): S
         input.sync.active ? "Motor de pendientes activo." : syncDetail(input.sync.result)),
       item("receive", "Recepción / actualización local", input.readIssue ? "Error" : input.sync.result === "noop" ? "No aplica" : input.sync.completedAt ? "Correcto" : "Sin comprobar", null, input.sync.completedAt, null,
         input.readIssue ? "Una lectura reciente informó un problema de conectividad." : input.sync.result === "noop" ? "La última ejecución no encontró cambios que enviar o recibir." : input.sync.completedAt ? "Última actualización conocida; puede ser parcial." : "Sin información de actualización completa."),
+      item("experience", "Experiencia visible", experienceState(input), input.experience.activeRuns.length || null, input.experience.updatedAt,
+        input.experience.activeRuns[0]?.startedAt ?? null, experienceDetail(input.experience)),
       item("problems", "Errores y conflictos", input.errors + input.conflicts > 0 ? "Error" : "Correcto", input.errors + input.conflicts, null, null,
         input.errors || input.conflicts ? `${input.errors} errores; ${input.conflicts} conflictos.` : "Sin errores ni conflictos retenidos."),
       item("offline-preparation", "Preparación offline", offlinePreparationState(input), null, input.offlinePreparation.completedAt,
@@ -231,13 +236,26 @@ function offlinePreparationState(input: SyncStatusDiagnosticsInput): SyncCheckli
   return "Sin comprobar";
 }
 
+function experienceState(input: SyncStatusDiagnosticsInput): SyncChecklistState {
+  if (!input.experience.scopeKey) return "No aplica";
+  if (input.experience.errorCode) return "Error";
+  if (input.experience.activeRuns.length > 0) return "En curso";
+  if (input.experience.result === "success") return "Correcto";
+  if (input.experience.result === "partial") return "Pendiente";
+  if (input.experience.result === "cancelled") return "Pendiente";
+  return "Sin comprobar";
+}
+
 function indicatorReason(input: SyncStatusDiagnosticsInput) {
   if (input.indicator.state === "error") return "Error, conflicto o recuperación local retenida.";
+  if (input.connectivity.status !== "online") return input.pendingCount > 0
+    ? `Sin conexión; ${input.pendingCount} cambios locales permanecen pendientes.`
+    : "Conectividad del navegador offline o desconocida.";
   if (input.sync.active) return "Sincronización real de cambios pendiente en curso.";
   if (input.readiness.active) return "Comprobación activa de disponibilidad de Operational Core.";
   if (input.session.restoring) return "Restauración activa de sesión.";
+  if (input.experience.activeRuns.length > 0) return `Actualización activa de ${input.experience.appViewTitle ?? "la experiencia visible"}.`;
   if (input.indicator.state === "pending") return `${input.pendingCount} cambios locales pendientes; sin envío activo.`;
-  if (input.indicator.state === "offline") return "Conectividad del navegador offline o desconocida.";
   return "Online, sin pendientes, errores ni operación global activa.";
 }
 
@@ -266,6 +284,15 @@ function offlinePreparationDetail(input: SyncStatusDiagnosticsInput) {
   if (input.offlinePreparation.status === "running") return "Estado running persistido sin actividad confirmada en este runtime.";
   if (!input.offlinePreparation.status) return "Sin información.";
   return `Último estado: ${input.offlinePreparation.status}; no representa envío de cambios.`;
+}
+
+function experienceDetail(experience: ExperienceActivitySnapshot) {
+  if (!experience.scopeKey) return "No hay una experiencia instrumentada visible.";
+  const title = sanitizeDiagnosticText(experience.appViewTitle ?? "Experiencia");
+  const runs = experience.activeRuns.map((run) => run.id).join(", ");
+  if (experience.activeRuns.length > 0) return `${title}: ${experience.activeRuns.length} lectura(s) activa(s); ejecuciones=${runs}.`;
+  if (experience.errorCode) return `${title}: fallo retenido (${sanitizeDiagnosticText(experience.errorCode)}).`;
+  return `${title}: último resultado ${experience.result}; sin lectura activa.`;
 }
 
 function sanitizeRunId(value: string | null | undefined) {

@@ -38,7 +38,6 @@ export function resolveRecordsSearchForScopeChange({
 export function getRecordsCacheBannerMessage({
   connectivityStatus,
   fromCache,
-  isLoading,
 }: {
   connectivityStatus: ConnectivityStatus;
   fromCache: boolean;
@@ -52,7 +51,7 @@ export function getRecordsCacheBannerMessage({
     return null;
   }
 
-  return isLoading ? "Actualizando datos..." : "Datos guardados localmente.";
+  return "Datos guardados localmente.";
 }
 
 export function shouldShowRecordsSyncProblem({

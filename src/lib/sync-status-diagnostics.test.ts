@@ -6,6 +6,16 @@ const baseInput: SyncStatusDiagnosticsInput = {
   connectivity: { checkedAt: "2026-09-17T12:00:00.000Z", status: "online" },
   conflicts: 0,
   errors: 0,
+  experience: {
+    activeRuns: [],
+    appViewId: null,
+    appViewTitle: null,
+    appViewType: null,
+    errorCode: null,
+    result: "idle",
+    scopeKey: null,
+    updatedAt: null,
+  },
   indicator: { accessibilityLabel: "Online", label: "Al día", state: "online" },
   offlinePreparation: { activeInCurrentRuntime: false, completedAt: null, startedAt: null, status: null },
   pendingCount: 0,
@@ -73,6 +83,31 @@ describe("sync status diagnostics", () => {
       activeSince: null,
       state: "Pendiente",
     });
+  });
+
+  it("keeps header reason, experience checklist, and copied diagnostics coherent", () => {
+    const experience = {
+      activeRuns: [
+        { id: "experience-run-1", startedAt: "2026-09-18T00:00:00.000Z" },
+        { id: "experience-run-2", startedAt: "2026-09-18T00:00:01.000Z" },
+      ],
+      appViewId: "view-panel",
+      appViewTitle: "Panel operativo",
+      appViewType: "PANEL" as const,
+      errorCode: null,
+      result: "running" as const,
+      scopeKey: "safe-scope",
+      updatedAt: "2026-09-18T00:00:01.000Z",
+    };
+    const indicator = { accessibilityLabel: "Actualizando Panel operativo", label: "Actualizando Panel operativo…", state: "working" as const };
+    const diagnostics = buildSyncStatusDiagnostics({ ...baseInput, experience, indicator });
+    const copied = formatSyncStatusDiagnosticsCopy(diagnostics, { events: [], scopeKey: "safe-scope" });
+
+    expect(diagnostics.reason).toContain("Panel operativo");
+    expect(diagnostics.checklist.find((item) => item.id === "experience")).toMatchObject({ count: 2, state: "En curso" });
+    expect(copied).toContain("Experiencia visible: En curso");
+    expect(copied).toContain("experience-run-1");
+    expect(copied).not.toMatch(/token|payload|field value/i);
   });
 
   it("records transitions once, caps history, isolates scopes, and sanitizes copied reasons", () => {

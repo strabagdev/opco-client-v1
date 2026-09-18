@@ -61,6 +61,7 @@ import {
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import {
@@ -154,6 +155,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     pendingCount,
     successMessage,
     visibleError,
+  });
+  const experienceErrorCode = refreshError
+    ? "ATTENDANCE_REFRESH_FAILED"
+    : error && statuses.length === 0
+      ? "ATTENDANCE_ACTIVITY_FAILED"
+      : null;
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isLoading) + Number(isSearching) + Number(isSaving),
+    errorCode: experienceErrorCode,
+    result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isSaving ? "success" : null,
   });
 
   const applyAttendanceResponse = useCallback((response: {

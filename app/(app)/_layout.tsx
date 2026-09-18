@@ -5,7 +5,7 @@ import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, Scroll
 
 import { AppIcon } from "@/components/app-icon";
 import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
-import { diagnosticTabForStatusIndicator, GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
+import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import { getDiagnosticsModalHeight, shouldShowDiagnosticsTabScrollIndicator } from "@/lib/app-diagnostics-layout";
 import {
   classifyAppShellVisibleErrorEvent,
@@ -15,6 +15,7 @@ import {
   shouldShowAppShellFeedbackSpinner,
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
+import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
 import {
@@ -82,6 +83,7 @@ export default function AppLayout() {
   const [statusPulseOpacity] = useState(() => new Animated.Value(1));
   const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
   const recordsOpeningHistory = useRecordsOpeningHistory();
+  const experienceActivity = useExperienceActivitySnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
@@ -135,6 +137,7 @@ export default function AppLayout() {
   });
   const shellStatusIndicator = resolveAppShellStatusIndicator({
     connectivityStatus,
+    experienceActivity,
     hasConflict: syncConflictCount > 0,
     hasError: hasSyncError,
     hasReadConnectivityIssue: visibleErrorKind === "read",
@@ -159,6 +162,7 @@ export default function AppLayout() {
     },
     conflicts: syncConflictCount,
     errors: durableSyncErrorCount,
+    experience: experienceActivity,
     indicator: shellStatusIndicator,
     offlinePreparation: {
       activeInCurrentRuntime: isOfflinePreparationRunning,
@@ -187,6 +191,7 @@ export default function AppLayout() {
     },
   }), [
     durableSyncErrorCount,
+    experienceActivity,
     isAuthSessionRestoring,
     isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking,
@@ -367,31 +372,21 @@ export default function AppLayout() {
           <View style={styles.titleBlock}>
             <View style={styles.titleRow}>
               <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
-              <Pressable
-                accessibilityHint="Abre el diagnóstico de sincronización"
-                accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
-                accessibilityRole="button"
-                onPress={() => {
-                  setSelectedDiagnosticsTab(diagnosticTabForStatusIndicator(selectedDiagnosticsTab));
-                  setIsDiagnosticsOpen(true);
-                }}
-                style={({ pressed }) => [styles.statusControl, pressed ? styles.statusControlPressed : null]}
-              >
-                <Animated.View style={[
-                  styles.statusDot,
-                  shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
-                  shellStatusIndicator.state === "working" ? styles.statusDotWorking : null,
-                  shellStatusIndicator.state === "pending" ? styles.statusDotWorking : null,
-                  shellStatusIndicator.state === "offline" ? styles.statusDotOffline : null,
-                  shellStatusIndicator.state === "error" ? styles.statusDotError : null,
-                  shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null,
-                ]} />
-                <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
-              </Pressable>
             </View>
           </View>
         </View>
         <View style={styles.headerActions}>
+          <View
+            accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
+            accessibilityLiveRegion="polite"
+            accessible
+            style={styles.statusIndicator}
+          >
+            <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
+              {statusIndicatorIcon(shellStatusIndicator.state)}
+            </Animated.View>
+            <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+          </View>
           <Pressable
             accessibilityLabel={GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel}
             accessibilityRole="button"
@@ -851,6 +846,14 @@ function syncStateIcon(state: SyncChecklistState) {
   if (state === "En curso") return <Clock3 color="#b7791f" size={18} />;
   if (state === "Error") return <AlertCircle color="#b42318" size={18} />;
   return <CircleDashed color="#64757b" size={18} />;
+}
+
+function statusIndicatorIcon(state: ReturnType<typeof resolveAppShellStatusIndicator>["state"]) {
+  if (state === "online") return <CheckCircle2 color="#13795b" size={17} />;
+  if (state === "working") return <Clock3 color="#b7791f" size={17} />;
+  if (state === "offline") return <WifiOff color="#64757b" size={17} />;
+  if (state === "error") return <AlertCircle color="#b42318" size={17} />;
+  return <CircleDashed color="#b7791f" size={17} />;
 }
 
 function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMeasurement[] }) {
@@ -1651,39 +1654,12 @@ const styles = StyleSheet.create({
     flex: 1,
     overflow: "hidden",
   },
-  statusDot: {
-    borderRadius: 5,
-    height: 10,
-    width: 10,
-  },
-  statusControl: {
+  statusIndicator: {
     alignItems: "center",
-    borderColor: "transparent",
-    borderRadius: 6,
-    borderWidth: 1,
     flexDirection: "row",
     flexShrink: 1,
     gap: 6,
-    minHeight: 32,
     minWidth: 0,
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-  },
-  statusControlPressed: {
-    backgroundColor: "#e4eeee",
-    borderColor: "#9fb8bd",
-  },
-  statusDotError: {
-    backgroundColor: "#b42318",
-  },
-  statusDotOffline: {
-    backgroundColor: "#8a9aa0",
-  },
-  statusDotOnline: {
-    backgroundColor: "#13795b",
-  },
-  statusDotWorking: {
-    backgroundColor: "#b7791f",
   },
   statusLabel: {
     color: "#425d64",

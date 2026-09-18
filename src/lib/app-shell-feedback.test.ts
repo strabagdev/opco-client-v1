@@ -301,7 +301,7 @@ describe("app shell feedback", () => {
       isPendingWorkSyncing: true,
     })).toEqual({
       accessibilityLabel: "Sincronizando cambios pendientes",
-      label: "Sincronizando",
+      label: "Sincronizando cambios…",
       state: "working",
     });
     expect(resolvePreviousStatusIndicator({
@@ -329,7 +329,7 @@ describe("app shell feedback", () => {
       pendingCount: 2,
     })).toEqual({
       accessibilityLabel: "2 cambios pendientes",
-      label: "Cambios pendientes",
+      label: "2 cambios pendientes",
       state: "pending",
     });
     expect(resolveAppShellStatusIndicator({
@@ -343,15 +343,15 @@ describe("app shell feedback", () => {
     })).toBe("error");
   });
 
-  it("prioritizes working over offline when an active process is running", () => {
+  it("keeps offline visible when a previously active process is reported", () => {
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
       connectivityStatus: "offline",
       isPendingWorkSyncing: true,
     })).toEqual({
-      accessibilityLabel: "Sincronizando cambios pendientes",
-      label: "Sincronizando",
-      state: "working",
+      accessibilityLabel: "Sin conexion",
+      label: "Sin conexión",
+      state: "offline",
     });
   });
 
@@ -371,8 +371,56 @@ describe("app shell feedback", () => {
   it.each([
     ["sync conflict", { hasConflict: true }, "Requiere atención"],
     ["local recovery", { localStorageRecoveryNotice: "Recuperación necesaria" }, "Requiere atención"],
-    ["one pending change", { pendingCount: 1 }, "Cambios pendientes"],
+    ["one pending change", { pendingCount: 1 }, "1 cambio pendiente"],
   ])("maps %s to the visible label without changing indicator priority", (_case, input, label) => {
     expect(resolveAppShellStatusIndicator({ ...baseInput, ...input }).label).toBe(label);
+  });
+
+  it("shows visible experience refreshes, combines pending work, and returns idle after success", () => {
+    const activeExperience = {
+      activeRuns: [{ id: "experience-run-1", startedAt: "2026-09-18T00:00:00.000Z" }],
+      appViewId: "view-protocols",
+      appViewTitle: "Protocolos",
+      appViewType: "RECORDS" as const,
+      errorCode: null,
+      result: "running" as const,
+      scopeKey: "safe-scope",
+      updatedAt: "2026-09-18T00:00:00.000Z",
+    };
+
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      experienceActivity: activeExperience,
+    })).toMatchObject({ label: "Actualizando Protocolos…", state: "working" });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      experienceActivity: activeExperience,
+      pendingCount: 2,
+    })).toMatchObject({ label: "Actualizando Protocolos… · 2 cambios pendientes", state: "working" });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      experienceActivity: { ...activeExperience, activeRuns: [], result: "success" },
+    })).toMatchObject({ label: "Al día", state: "online" });
+  });
+
+  it("keeps offline and retained experience failures above read activity", () => {
+    const failedExperience = {
+      activeRuns: [],
+      appViewId: "view-panel",
+      appViewTitle: "Resumen",
+      appViewType: "PANEL" as const,
+      errorCode: "PANEL_PARTIAL_LOAD_FAILED",
+      result: "partial" as const,
+      scopeKey: "safe-scope",
+      updatedAt: "2026-09-18T00:00:00.000Z",
+    };
+    expect(resolveAppShellStatusIndicator({ ...baseInput, experienceActivity: failedExperience })).toMatchObject({
+      label: "Requiere atención",
+      state: "error",
+    });
+    expect(resolveAppShellStatusIndicator({ ...baseInput, connectivityStatus: "offline", pendingCount: 2 })).toMatchObject({
+      label: "Sin conexión · 2 cambios pendientes",
+      state: "offline",
+    });
   });
 });

@@ -57,6 +57,7 @@ import {
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
@@ -64,6 +65,7 @@ import {
   createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
+  shouldRenderStateUpdateInlineFeedback,
   shouldShowStateUpdateVisibleErrorDiagnostics,
   stateUpdateLoadErrorMessage,
   stateUpdateRefreshErrorMessage,
@@ -150,6 +152,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     pendingCount: unresolvedCount,
     successMessage,
     visibleError,
+  });
+  const experienceErrorCode = refreshError
+    ? "STATE_UPDATE_REFRESH_FAILED"
+    : error && !response
+      ? "STATE_UPDATE_ACTIVITY_FAILED"
+      : null;
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isLoading) + Number(isSearching) + Number(isLoadingMore) + Number(isSaving),
+    errorCode: experienceErrorCode,
+    result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isLoadingMore && !isSaving ? "success" : null,
   });
   const extraDefinition = useMemo<EntityDefinition | null>(() => {
     if (!response) {
@@ -720,7 +732,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       </View>
 
-      {operationFeedback.message ? (
+      {operationFeedback.message && shouldRenderStateUpdateInlineFeedback(operationFeedback.phase) ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}
         </Text>

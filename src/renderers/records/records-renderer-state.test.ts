@@ -71,7 +71,7 @@ describe("records renderer state", () => {
       connectivityStatus: "online",
       fromCache: true,
       isLoading: true,
-    })).toBe("Actualizando datos...");
+    })).toBe("Datos guardados localmente.");
     expect(getRecordsCacheBannerMessage({
       connectivityStatus: "online",
       fromCache: false,

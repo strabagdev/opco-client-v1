@@ -15,6 +15,7 @@ import { PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, Pane
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 
 import {
@@ -228,6 +229,14 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     rowHeight: configuredRowHeight,
   }), [configuredColumns, configuredRowHeight, modules, width]);
   const isOffline = connectivityStatus === "offline" || Object.values(datasetStates).some((state) => state.fromCache);
+  const liveDatasetStates = Object.values(datasetStates);
+  const liveFailedCount = liveDatasetStates.filter((state) => state.error).length;
+  const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
+  useExperienceActivityReporter(appView, {
+    activeCount: liveDatasetStates.filter((state) => state.isLoading).length,
+    errorCode: liveFailedCount > 0 ? "PANEL_PARTIAL_LOAD_FAILED" : null,
+    result: liveFailedCount > 0 && liveLoadedCount > 0 ? "partial" : liveFailedCount > 0 ? "error" : liveDatasetStates.length > 0 ? "success" : null,
+  });
   const openingStatus = useMemo(() => {
     const states = Object.values(datasetStates);
     const settled = states.length > 0 && states.every((state) => !state.isLoading);

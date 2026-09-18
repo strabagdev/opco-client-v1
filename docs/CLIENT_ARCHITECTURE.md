@@ -28,7 +28,20 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 
 ## App Shell Status
 
-The status dot is stable green only for online idle state with no pending work or errors. It pulses amber for an active auth restore, Operational Core readiness probe, or pending-work sync, with a phase-specific accessibility label. Durable pending work uses stable amber with an accessible count; it does not animate without an active operation.
+The header status is one non-interactive icon-and-text indicator next to the existing Diagnostics button. It has no press handler or button role. Its polite live-region announcement changes only when the resolved status changes, not for elapsed-time ticks. The same `resolveAppShellStatusIndicator()` result feeds the header and synchronization diagnostics.
+
+| Priority | Header label | Source |
+| --- | --- | --- |
+| 1 | `Requiere atención` | Retained storage recovery, error, conflict, or visible-experience failure. |
+| 2 | `Sin conexión` | Browser connectivity is not online; a reliable pending count is appended when present. |
+| 3 | `Sincronizando cambios…` | A real pending-operation upload is active. |
+| 4 | `Comprobando disponibilidad` | Operational Core readiness is active. |
+| 5 | `Restaurando sesión` | Authentication restoration is active. |
+| 6 | `Actualizando <experience>…` | One or more visible-experience reads/updates are active; reliable pending work is appended. |
+| 7 | `N cambios pendientes` | Durable work exists without an active upload. |
+| 8 | `Al día` | Online with no relevant activity, pending work, or known problem. |
+
+`Al día` does not assert that every experience is preloaded or that unqueried data is fresh. Offline preparation remains separate and does not activate the global indicator by itself.
 
 Durable pending work, retained errors, conflicts, and offline state remain explicit through their own static status/feedback and do not depend on animation alone. PANEL refreshes and AppView offline preparation are read/cache work, not pending-change sync, so they do not animate the global sync dot. Offline preparation remains observable in the existing PWA feedback and diagnostics, including its persisted status and current/last stage.
 
@@ -38,7 +51,9 @@ Before this separation, `offlinePreparationDiagnostics.status === "running"` ent
 
 The global diagnostics modal has a `Sincronización` tab derived from the same `resolveAppShellStatusIndicator()` result and source values used by the header. It does not own sync state or trigger work. Its checklist maps evidence as follows:
 
-The header renders that resolver result as one keyboard-operable point-and-label control. Labels are `Al día` for online idle, `Sincronizando` for active pending-work sync, `Comprobando disponibilidad` for readiness, `Restaurando sesión` for auth restoration, `Cambios pendientes` for durable idle work, `Sin conexión` for offline, and `Requiere atención` for errors, conflicts, or local-storage recovery. The control always selects the existing `Sincronización` tab before opening diagnostics, regardless of the previously selected tab. The general diagnostics button remains separate. `Al día` is deliberately limited to global connection/work state and does not assert cache completeness or freshness; offline preparation remains outside the global animated indicator.
+Visible-experience activity is an in-memory observation layer, distinct from persisted performance history. RECORDS, PANEL, REPORT, attendance, and state-update report their existing active counts and safe outcomes without creating requests, polling, delays, or cache transitions. Runs are scoped by owner, contract, and AppView; concurrent work remains active until every reported operation finishes, and stale reports from an old route cannot overwrite the current scope. PANEL reports concurrent module/dataset work and retained partial failures. A failed refresh remains visible until a later successful refresh or scope exit; cancellation is never rewritten as success.
+
+The synchronization checklist includes this visible-experience activity, its safe result/error code, count, timestamp, and generated run references. The synchronization copy includes the same information but never record values, payloads, searches, tokens, or personal data. Generic duplicate RECORDS refresh wording and generic state-update sync phases are suppressed only where the header provides an equivalent global status. Initial loading, empty states, offline/partial-coverage warnings, contextual field errors, conflicts, confirmations, retries, and recovery actions remain local to their experiences.
 
 The modal is a viewport-bounded three-region layout: a non-shrinking header, a non-shrinking horizontally scrollable tab bar, and one flexible vertical content viewport shared by `Sincronización`, PWA, STATE_UPDATE, and RECORDS. Compact widths expose horizontal tab scrolling; long values wrap inside the content width, and copy actions retain their own success/error feedback. Embedded STATE_UPDATE content does not create a second vertical scroll. The previous clipping came from allowing fixed navigation regions to shrink inside a max-height panel while the embedded STATE_UPDATE panel also imposed an independent `520px` scroll viewport.
 
@@ -50,6 +65,7 @@ The modal is a viewport-bounded three-region layout: a non-shrinking header, a n
 | Local pending changes | Scoped SQLite `pending_operations` count. | Pending is durable state, not evidence that an upload is currently running. |
 | Sending changes | Pending-work runtime flag plus last STATE_UPDATE run metadata. | `noop` means no selected work and is not called a complete sync. |
 | Receive/local update | Known completed activity and visible read-connectivity failure. | A completed refresh may be partial; the checklist says so and does not claim a complete snapshot. |
+| Visible experience | In-memory scoped activity reported by the mounted RECORDS, PANEL, REPORT, attendance, or state-update renderer. | It describes current reads/updates, not performance history or cache completeness. |
 | Errors/conflicts | Retained RECORDS and STATE_UPDATE summaries. | Counts remain visible without animation when no operation is active. |
 | Offline preparation | Persisted prewarm telemetry plus a separate in-memory active-run set. | Persisted `running` without a run observed in this runtime is pending diagnostic evidence, not active sync and not an upload. |
 

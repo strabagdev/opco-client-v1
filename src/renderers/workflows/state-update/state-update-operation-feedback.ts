@@ -128,6 +128,13 @@ export function resolveStateUpdateOperationFeedback({
   return { message: null, phase: "IDLE" };
 }
 
+export function shouldRenderStateUpdateInlineFeedback(phase: StateUpdateOperationFeedbackPhase) {
+  return phase !== "SYNCING" &&
+    phase !== "RECONNECTING" &&
+    phase !== "RESTORING_SESSION" &&
+    phase !== "PENDING";
+}
+
 export function hideStateUpdateTimeoutAfterConfirmedSync({
   error,
   lastSync,

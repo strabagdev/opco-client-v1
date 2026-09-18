@@ -14,6 +14,7 @@ import { loadReportWithOfflineCache } from "@/lib/offline-reports";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 
 import {
@@ -44,6 +45,11 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const [isLoading, setIsLoading] = useState(true);
   const [refreshCount, setRefreshCount] = useState(0);
   const isCurrentStatus = isCurrentStatusReport(appView.config);
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isLoading),
+    errorCode: error ? "REPORT_READ_FAILED" : null,
+    result: error ? "error" : !isLoading && report ? "success" : null,
+  });
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {

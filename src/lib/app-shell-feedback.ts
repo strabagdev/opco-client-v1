@@ -1,4 +1,5 @@
 import type { ConnectivityStatus } from "./connectivity";
+import type { ExperienceActivitySnapshot } from "./experience-activity";
 import type { OfflineReadiness } from "./pwa";
 import { formatPendingSyncErrorNotice } from "./pending-sync-errors";
 
@@ -16,12 +17,13 @@ export type AppShellStatusIndicatorState = "online" | "working" | "pending" | "o
 
 export type AppShellStatusIndicator = {
   accessibilityLabel: string;
-  label: "Al día" | "Sincronizando" | "Comprobando disponibilidad" | "Restaurando sesión" | "Cambios pendientes" | "Sin conexión" | "Requiere atención";
+  label: string;
   state: AppShellStatusIndicatorState;
 };
 
 export type AppShellFeedbackInput = {
   connectivityStatus: ConnectivityStatus;
+  experienceActivity?: ExperienceActivitySnapshot | null;
   hasConflict: boolean;
   hasError: boolean;
   hasReadConnectivityIssue?: boolean;
@@ -157,6 +159,7 @@ export function resolveAppShellPersistentFeedback({
 
 export function resolveAppShellStatusIndicator({
   connectivityStatus,
+  experienceActivity,
   hasConflict,
   hasError,
   isAuthSessionRestoring,
@@ -165,18 +168,30 @@ export function resolveAppShellStatusIndicator({
   localStorageRecoveryNotice,
   pendingCount,
 }: AppShellFeedbackInput): AppShellStatusIndicator {
-  if (localStorageRecoveryNotice || hasError || hasConflict) {
+  if (localStorageRecoveryNotice || hasError || hasConflict || experienceActivity?.errorCode) {
     return {
-      accessibilityLabel: "Problema de conexion o sincronizacion",
+      accessibilityLabel: experienceActivity?.errorCode
+        ? `La actualización de ${experienceActivity.appViewTitle ?? "la experiencia"} requiere atención`
+        : "Problema de conexion o sincronizacion",
       label: "Requiere atención",
       state: "error",
+    };
+  }
+
+  if (connectivityStatus !== "online") {
+    return {
+      accessibilityLabel: pendingCount > 0
+        ? `Sin conexion. ${formatPendingCount(pendingCount)}`
+        : "Sin conexion",
+      label: pendingCount > 0 ? `Sin conexión · ${formatPendingCount(pendingCount)}` : "Sin conexión",
+      state: "offline",
     };
   }
 
   if (isPendingWorkSyncing) {
     return {
       accessibilityLabel: "Sincronizando cambios pendientes",
-      label: "Sincronizando",
+      label: "Sincronizando cambios…",
       state: "working",
     };
   }
@@ -197,19 +212,21 @@ export function resolveAppShellStatusIndicator({
     };
   }
 
-  if (pendingCount > 0) {
+  if ((experienceActivity?.activeRuns.length ?? 0) > 0) {
+    const title = experienceActivity?.appViewTitle;
+    const activity = title ? `Actualizando ${title}…` : "Actualizando experiencia…";
     return {
-      accessibilityLabel: pendingCount === 1 ? "1 cambio pendiente" : `${pendingCount} cambios pendientes`,
-      label: "Cambios pendientes",
-      state: "pending",
+      accessibilityLabel: pendingCount > 0 ? `${activity} ${formatPendingCount(pendingCount)}` : activity,
+      label: pendingCount > 0 ? `${activity} · ${formatPendingCount(pendingCount)}` : activity,
+      state: "working",
     };
   }
 
-  if (connectivityStatus !== "online") {
+  if (pendingCount > 0) {
     return {
-      accessibilityLabel: "Sin conexion",
-      label: "Sin conexión",
-      state: "offline",
+      accessibilityLabel: pendingCount === 1 ? "1 cambio pendiente" : `${pendingCount} cambios pendientes`,
+      label: formatPendingCount(pendingCount),
+      state: "pending",
     };
   }
 
@@ -218,6 +235,10 @@ export function resolveAppShellStatusIndicator({
     label: "Al día",
     state: "online",
   };
+}
+
+function formatPendingCount(count: number) {
+  return count === 1 ? "1 cambio pendiente" : `${count} cambios pendientes`;
 }
 
 export function resolveAppShellSuccessToast({

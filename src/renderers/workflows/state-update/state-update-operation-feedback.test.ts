@@ -4,6 +4,7 @@ import {
   createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
   resolveStateUpdateOperationFeedback,
+  shouldRenderStateUpdateInlineFeedback,
   stateUpdateLoadErrorMessage,
   stateUpdateRefreshErrorMessage,
   stateUpdateStaleCacheMessage,
@@ -12,6 +13,17 @@ import { OpcoNetworkError } from "../../../lib/opco-api";
 import type { StateUpdateLastSyncTelemetry } from "../../../lib/state-update-offline";
 
 describe("state update operation feedback", () => {
+  it("centralizes general lifecycle notices while preserving actionable inline feedback", () => {
+    expect(shouldRenderStateUpdateInlineFeedback("SYNCING")).toBe(false);
+    expect(shouldRenderStateUpdateInlineFeedback("RECONNECTING")).toBe(false);
+    expect(shouldRenderStateUpdateInlineFeedback("RESTORING_SESSION")).toBe(false);
+    expect(shouldRenderStateUpdateInlineFeedback("PENDING")).toBe(false);
+    expect(shouldRenderStateUpdateInlineFeedback("FAILED")).toBe(true);
+    expect(shouldRenderStateUpdateInlineFeedback("CONFLICT")).toBe(true);
+    expect(shouldRenderStateUpdateInlineFeedback("CONFIRMING")).toBe(true);
+    expect(shouldRenderStateUpdateInlineFeedback("OFFLINE_SAVED")).toBe(true);
+  });
+
   it("shows offline saved feedback for unresolved local intent while offline", () => {
     expect(resolveStateUpdateOperationFeedback({
       connectivityStatus: "offline",

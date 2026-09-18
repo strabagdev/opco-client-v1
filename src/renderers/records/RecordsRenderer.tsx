@@ -44,6 +44,7 @@ import {
 } from "@/renderers/records/records-opening";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningSession } from "@/renderers/experience-opening";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
 
@@ -83,6 +84,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.conflictCount > 0;
   const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
   const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading: isRefreshing });
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isRefreshing) + Number(isLoadingMore),
+    errorCode: error ? "RECORDS_READ_FAILED" : null,
+    result: error ? "error" : !isRefreshing && !isLoading ? "success" : null,
+  });
 
   useEffect(() => {
     const nextScope = { appViewId: appView.id, entityTypeId };
