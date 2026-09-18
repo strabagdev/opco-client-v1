@@ -52,7 +52,6 @@ import {
   STATE_UPDATE_SEARCH_DEBOUNCE_MS,
   StateUpdateFormValues,
   stateFieldType,
-  stateUpdateSuccessLabel,
   stateUpdateLatestMatchesSearch,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
@@ -61,6 +60,7 @@ import { useExperienceActivityReporter } from "@/renderers/use-experience-activi
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
+import { reportWriteFeedback } from "@/lib/write-feedback";
 import {
   createStateUpdateVisibleErrorDiagnostics,
   hideStateUpdateTimeoutAfterConfirmedSync,
@@ -574,7 +574,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           targetEntityTypeId: response.targetEntityType.id,
           uniqueness: response.uniqueness,
         });
-        setSuccessMessage("Guardado en este dispositivo.");
+        reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         insertSavedLatestItem({
           recordId: localRecord.localRecordId,
           stateValues: stateSnapshot.stateValues,
@@ -609,7 +609,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
 
       if (hasSuccessfulStateUpdateResult(result.results)) {
-        setSuccessMessage(stateUpdateSuccessLabel(result.results[0], "Estado actualizado.", "Cambio registrado."));
+        if (ownerKey) {
+          reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "server-confirmed", ownerKey });
+        }
         const successfulResult = result.results.find((item): item is Extract<StateUpdateBatchResult, { result: "CREATED" | "UPDATED" | "UNCHANGED" }> =>
           item.result === "CREATED" || item.result === "UPDATED" || item.result === "UNCHANGED"
         );

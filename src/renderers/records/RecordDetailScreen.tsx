@@ -20,7 +20,6 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
   const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
-  const [fromCache, setFromCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
@@ -44,7 +43,6 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
       setError(null);
       setDefinition(null);
       setRecord(null);
-      setFromCache(false);
 
       try {
         const [definitionResult, recordResult] = await Promise.all([
@@ -69,7 +67,6 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
         if (isMounted) {
           setDefinition(definitionResult.definition);
           setRecord(recordResult.record);
-          setFromCache(recordResult.fromCache);
           if (!recordResult.record) {
             setError("No hay una copia local de este registro.");
           }
@@ -133,7 +130,6 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
             <SyncBadge record={record} />
           </View>
           {definition ? <Text style={styles.meta}>{definition.name}</Text> : null}
-          {fromCache ? <Text style={styles.meta}>Datos guardados localmente.</Text> : null}
           {record.syncErrorMessage ? <Text style={styles.error}>{record.syncErrorMessage}</Text> : null}
         </View>
       ) : null}

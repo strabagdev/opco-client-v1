@@ -35,25 +35,6 @@ export function resolveRecordsSearchForScopeChange({
   };
 }
 
-export function getRecordsCacheBannerMessage({
-  connectivityStatus,
-  fromCache,
-}: {
-  connectivityStatus: ConnectivityStatus;
-  fromCache: boolean;
-  isLoading: boolean;
-}) {
-  if (!fromCache) {
-    return null;
-  }
-
-  if (connectivityStatus !== "online") {
-    return null;
-  }
-
-  return "Datos guardados localmente.";
-}
-
 export function shouldShowRecordsSyncProblem({
   connectivityStatus,
   telemetry,

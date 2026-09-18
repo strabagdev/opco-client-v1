@@ -423,4 +423,51 @@ describe("app shell feedback", () => {
       state: "offline",
     });
   });
+
+  it("keeps a confirmed local save visible over a concurrent read and includes pending work", () => {
+    const writeFeedback = {
+      appViewId: "view-people",
+      appViewTitle: "Personas",
+      id: "write-feedback-1",
+      kind: "local-saved" as const,
+      recordedAt: "2026-09-18T10:00:00.000Z",
+      scopeKey: "safe-scope",
+    };
+    const experienceActivity = {
+      activeRuns: [{ id: "experience-run-1", startedAt: "2026-09-18T10:00:01.000Z" }],
+      appViewId: "view-people",
+      appViewTitle: "Personas",
+      appViewType: "RECORDS" as const,
+      errorCode: null,
+      result: "running" as const,
+      scopeKey: "safe-scope",
+      updatedAt: "2026-09-18T10:00:01.000Z",
+    };
+
+    expect(resolveAppShellStatusIndicator({ ...baseInput, experienceActivity, pendingCount: 2, writeFeedback })).toMatchObject({
+      label: "Guardado localmente · 2 cambios pendientes",
+      state: "pending",
+    });
+  });
+
+  it("distinguishes local save, active send, server confirmation, and failed sync", () => {
+    const writeFeedback = {
+      appViewId: "view-people",
+      appViewTitle: "Personas",
+      id: "write-feedback-1",
+      kind: "local-saved" as const,
+      recordedAt: "2026-09-18T10:00:00.000Z",
+      scopeKey: "safe-scope",
+    };
+    expect(resolveAppShellStatusIndicator({ ...baseInput, isPendingWorkSyncing: true, pendingCount: 1, writeFeedback }).label)
+      .toBe("Guardado localmente · Sincronizando cambios… · 1 cambio pendiente");
+    expect(resolveAppShellStatusIndicator({ ...baseInput, syncConfirmationVisible: true })).toMatchObject({
+      label: "Sincronización confirmada",
+      state: "online",
+    });
+    expect(resolveAppShellStatusIndicator({ ...baseInput, hasError: true, syncConfirmationVisible: true, writeFeedback }).label)
+      .toBe("Requiere atención");
+    expect(resolveAppShellStatusIndicator({ ...baseInput, hasConflict: true, writeFeedback }).label)
+      .toBe("Requiere atención");
+  });
 });

@@ -23,6 +23,7 @@ const baseInput: SyncStatusDiagnosticsInput = {
   readIssue: false,
   session: { restoring: false, status: "authenticated" },
   sync: { active: false, completedAt: null, lastSuccessAt: null, result: null, runId: null, startedAt: null },
+  writeFeedback: null,
 };
 
 describe("sync status diagnostics", () => {
@@ -108,6 +109,26 @@ describe("sync status diagnostics", () => {
     expect(copied).toContain("Experiencia visible: En curso");
     expect(copied).toContain("experience-run-1");
     expect(copied).not.toMatch(/token|payload|field value/i);
+  });
+
+  it("includes the scoped write result without calling a local save a completed sync", () => {
+    const diagnostics = buildSyncStatusDiagnostics({
+      ...baseInput,
+      indicator: { accessibilityLabel: "Guardado localmente", label: "Guardado localmente · 1 cambio pendiente", state: "pending" },
+      pendingCount: 1,
+      writeFeedback: {
+        appViewId: "view-people",
+        appViewTitle: "Personas",
+        id: "write-feedback-1",
+        kind: "local-saved",
+        recordedAt: "2026-09-18T10:00:00.000Z",
+        scopeKey: "safe-scope",
+      },
+    });
+    const writeResult = diagnostics.checklist.find((item) => item.id === "write-result");
+    expect(writeResult).toMatchObject({ state: "Pendiente" });
+    expect(writeResult?.detail).toContain("no implica sincronización");
+    expect(formatSyncStatusDiagnosticsCopy(diagnostics, { events: [], scopeKey: "scope" })).toContain("Resultado de escritura: Pendiente");
   });
 
   it("records transitions once, caps history, isolates scopes, and sanitizes copied reasons", () => {

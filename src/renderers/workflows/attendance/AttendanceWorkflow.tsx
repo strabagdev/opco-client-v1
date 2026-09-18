@@ -74,6 +74,7 @@ import {
   StateUpdateVisibleErrorOperation,
 } from "../state-update/state-update-operation-feedback";
 import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
+import { reportWriteFeedback } from "@/lib/write-feedback";
 
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   personName: string;
@@ -871,7 +872,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         await refreshLocalDayState();
         await refreshRecordsSyncSummary();
         clearVisibleError();
-        setSuccessMessage("Guardado en este dispositivo.");
+        reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         return;
       }
 
@@ -900,13 +901,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
 
       if (hasSuccessfulAttendanceResult(attendanceResults)) {
-        const message = successLabel(attendanceResults[0]);
-
         clearPersonFlow();
         await loadDay({ operation: "refresh" });
         await refreshRecordsSyncSummary();
         clearVisibleError();
-        setSuccessMessage(message);
+        reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "server-confirmed", ownerKey });
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.");
@@ -966,7 +965,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       await refreshLocalDayState();
       await refreshRecordsSyncSummary();
       clearVisibleError();
-      setSuccessMessage(isOnline ? "Cambio enviado a Opco." : "Guardado en este dispositivo.");
+      reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: isOnline ? "server-confirmed" : "local-saved", ownerKey });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
       recordVisibleError({
@@ -1332,22 +1331,6 @@ function ConflictModal({
       </View>
     </Modal>
   );
-}
-
-function successLabel(result: AttendanceBatchResult | undefined) {
-  if (!result) {
-    return "Asistencia registrada.";
-  }
-
-  if (result.result === "UNCHANGED") {
-    return "Asistencia ya estaba registrada.";
-  }
-
-  if (result.result === "UPDATED") {
-    return "Asistencia actualizada.";
-  }
-
-  return "Asistencia registrada.";
 }
 
 function stateUpdateResultToAttendanceResult(

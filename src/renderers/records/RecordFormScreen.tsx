@@ -20,6 +20,7 @@ import {
 } from "@/lib/offline-unique-validation";
 import { EntityDefinition, EntityRecordValue, RecordsAppView } from "@/lib/opco-api";
 import { stableSubmitButtonStyle } from "@/lib/visual-stability";
+import { reportWriteFeedback } from "@/lib/write-feedback";
 import {
   buildChangedSubmitValues,
   buildInitialFormValues,
@@ -369,6 +370,14 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         recordId,
         store: definitionCache,
         values: submitValues,
+      });
+
+      reportWriteFeedback({
+        appViewId: appView.id,
+        appViewTitle: appView.name,
+        contractId: selectedContractId,
+        kind: "local-saved",
+        ownerKey,
       });
 
       void syncPendingRecords();

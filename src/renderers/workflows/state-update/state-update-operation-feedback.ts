@@ -132,7 +132,8 @@ export function shouldRenderStateUpdateInlineFeedback(phase: StateUpdateOperatio
   return phase !== "SYNCING" &&
     phase !== "RECONNECTING" &&
     phase !== "RESTORING_SESSION" &&
-    phase !== "PENDING";
+    phase !== "PENDING" &&
+    phase !== "OFFLINE_SAVED";
 }
 
 export function hideStateUpdateTimeoutAfterConfirmedSync({

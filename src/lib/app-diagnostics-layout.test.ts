@@ -29,6 +29,22 @@ describe("diagnostics modal layout", () => {
     expect(source).not.toContain("diagnosticTabForStatusIndicator");
     expect(source).toContain("GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel");
     expect(source).toContain("onPress={() => setIsDiagnosticsOpen(true)}");
+    expect(source).toContain("styles.headerStatusZone");
+    expect(source).toContain("styles.headerStatusRow");
+    expect(source).toContain("const statusIndicator = (");
+    expect(source).not.toContain("cacheBannerMessage");
+  });
+  it("replaces generic RECORDS save/cache banners without removing contextual recovery UI", () => {
+    const listSource = require("fs").readFileSync("src/renderers/records/RecordsRenderer.tsx", "utf8");
+    const detailSource = require("fs").readFileSync("src/renderers/records/RecordDetailScreen.tsx", "utf8");
+    const formSource = require("fs").readFileSync("src/renderers/records/RecordFormScreen.tsx", "utf8");
+
+    expect(listSource).not.toContain("Datos guardados localmente.");
+    expect(detailSource).not.toContain("Datos guardados localmente.");
+    expect(formSource).toContain("reportWriteFeedback");
+    expect(detailSource).toContain("record.syncErrorMessage");
+    expect(detailSource).toContain("Revisar conflicto");
+    expect(detailSource).toContain("Reintentar");
   });
   it.each([
     { height: 900, name: "desktop", width: 1280 },

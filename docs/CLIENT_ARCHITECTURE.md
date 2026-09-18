@@ -28,18 +28,20 @@ Operational Core is the source of truth while online. SQLite is not a second aut
 
 ## App Shell Status
 
-The header status is one non-interactive icon-and-text indicator next to the existing Diagnostics button. It has no press handler or button role. Its polite live-region announcement changes only when the resolved status changes, not for elapsed-time ticks. The same `resolveAppShellStatusIndicator()` result feeds the header and synchronization diagnostics.
+The header status is one non-interactive icon-and-text indicator. On wide layouts, equal flexible left, center, and right zones center it against the complete header: back/logo on the left and Diagnostics/user on the right. Compact layouts place status in a centered full-width second row. No absolute positioning is used, and long labels can wrap. It has no press handler or button role. Its polite live-region announcement changes only when the resolved status changes, not for elapsed-time ticks. The same `resolveAppShellStatusIndicator()` result feeds the header and synchronization diagnostics.
 
 | Priority | Header label | Source |
 | --- | --- | --- |
 | 1 | `Requiere atención` | Retained storage recovery, error, conflict, or visible-experience failure. |
-| 2 | `Sin conexión` | Browser connectivity is not online; a reliable pending count is appended when present. |
-| 3 | `Sincronizando cambios…` | A real pending-operation upload is active. |
-| 4 | `Comprobando disponibilidad` | Operational Core readiness is active. |
-| 5 | `Restaurando sesión` | Authentication restoration is active. |
-| 6 | `Actualizando <experience>…` | One or more visible-experience reads/updates are active; reliable pending work is appended. |
-| 7 | `N cambios pendientes` | Durable work exists without an active upload. |
-| 8 | `Al día` | Online with no relevant activity, pending work, or known problem. |
+| 2 | `Guardado localmente` / `Guardado en Opco` | Latest scoped write result, combined with active upload, offline state, and reliable pending count. |
+| 3 | `Sin conexión` | Browser connectivity is not online; a reliable pending count is appended when present. |
+| 4 | `Sincronizando cambios…` | A real pending-operation upload is active. |
+| 5 | `Sincronización confirmada` | A sync run completed server-confirmed operations. |
+| 6 | `Comprobando disponibilidad` | Operational Core readiness is active. |
+| 7 | `Restaurando sesión` | Authentication restoration is active. |
+| 8 | `Actualizando <experience>…` | One or more visible-experience reads/updates are active; reliable pending work is appended. |
+| 9 | `N cambios pendientes` | Durable work exists without an active upload. |
+| 10 | `Al día` | Online with no relevant activity, pending work, or known problem. |
 
 `Al día` does not assert that every experience is preloaded or that unqueried data is fresh. Offline preparation remains separate and does not activate the global indicator by itself.
 
@@ -53,7 +55,9 @@ The global diagnostics modal has a `Sincronización` tab derived from the same `
 
 Visible-experience activity is an in-memory observation layer, distinct from persisted performance history. RECORDS, PANEL, REPORT, attendance, and state-update report their existing active counts and safe outcomes without creating requests, polling, delays, or cache transitions. Runs are scoped by owner, contract, and AppView; concurrent work remains active until every reported operation finishes, and stale reports from an old route cannot overwrite the current scope. PANEL reports concurrent module/dataset work and retained partial failures. A failed refresh remains visible until a later successful refresh or scope exit; cancellation is never rewritten as success.
 
-The synchronization checklist includes this visible-experience activity, its safe result/error code, count, timestamp, and generated run references. The synchronization copy includes the same information but never record values, payloads, searches, tokens, or personal data. Generic duplicate RECORDS refresh wording and generic state-update sync phases are suppressed only where the header provides an equivalent global status. Initial loading, empty states, offline/partial-coverage warnings, contextual field errors, conflicts, confirmations, retries, and recovery actions remain local to their experiences.
+Write feedback is a separate transient input to the same resolver, not a second notification or synchronization engine. RECORDS reports `local-saved` only after its atomic SQLite snapshot/outbox transaction commits. Offline workflow adapters do the same after their shared STATE_UPDATE transaction; direct online workflow writes report `server-confirmed` only after a successful Opco response. The snapshot is scoped by owner, contract, and AppView and carries a monotonic presentation id, so a stale timeout or a callback from another route cannot clear a newer result. It remains visible for `3,500 ms`; that timeout controls presentation only and never infers completion, changes outbox state, or drives requests. A local save remains explicitly distinct from pending work, active sending, and server-confirmed sync, and it outranks concurrent read activity so a refresh cannot hide a write result.
+
+The synchronization checklist includes visible-experience activity and the latest scoped write result, with safe result/error code, count, timestamp, and generated run references. The existing synchronization history captures their state transitions; there is no parallel write history. The synchronization copy includes the same information but never record values, payloads, searches, tokens, or personal data. Generic duplicate RECORDS cache wording and workflow local-save confirmations are suppressed only where the header provides an equivalent status. Initial loading, empty states, pending badges, offline/partial-coverage warnings, contextual field errors, conflicts, destructive confirmations, retries, and recovery actions remain local to their experiences. PANEL's `Datos guardados` text remains because it describes read provenance rather than write success.
 
 The modal is a viewport-bounded three-region layout: a non-shrinking header, a non-shrinking horizontally scrollable tab bar, and one flexible vertical content viewport shared by `Sincronización`, PWA, STATE_UPDATE, and RECORDS. Compact widths expose horizontal tab scrolling; long values wrap inside the content width, and copy actions retain their own success/error feedback. Embedded STATE_UPDATE content does not create a second vertical scroll. The previous clipping came from allowing fixed navigation regions to shrink inside a max-height panel while the embedded STATE_UPDATE panel also imposed an independent `520px` scroll viewport.
 
@@ -66,6 +70,7 @@ The modal is a viewport-bounded three-region layout: a non-shrinking header, a n
 | Sending changes | Pending-work runtime flag plus last STATE_UPDATE run metadata. | `noop` means no selected work and is not called a complete sync. |
 | Receive/local update | Known completed activity and visible read-connectivity failure. | A completed refresh may be partial; the checklist says so and does not claim a complete snapshot. |
 | Visible experience | In-memory scoped activity reported by the mounted RECORDS, PANEL, REPORT, attendance, or state-update renderer. | It describes current reads/updates, not performance history or cache completeness. |
+| Write result | In-memory scoped confirmation emitted after an atomic local commit or successful direct server response. | Local commit does not mean server synchronization; expiration affects presentation only. |
 | Errors/conflicts | Retained RECORDS and STATE_UPDATE summaries. | Counts remain visible without animation when no operation is active. |
 | Offline preparation | Persisted prewarm telemetry plus a separate in-memory active-run set. | Persisted `running` without a run observed in this runtime is pending diagnostic evidence, not active sync and not an upload. |
 

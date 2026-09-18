@@ -85,6 +85,7 @@
 
 ## Development
 
+- Start with `docs/STATUS.md` for the current handoff, then read only the documentation and code relevant to the task; documentation never replaces verifying the current implementation and Git diff.
 - Read `docs/STATE_UPDATE.md` before changing the `STATE_UPDATE` runtime, offline persistence, synchronization, reconciliation, conflicts, workflow adapters, or diagnostics.
 - Do not use Playwright unless explicitly requested.
 - Do not commit or push unless explicitly requested.

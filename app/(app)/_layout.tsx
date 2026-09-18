@@ -42,6 +42,8 @@ import {
 } from "@/renderers/records/sync-diagnostics";
 import { useRecordsOpeningHistory } from "@/renderers/records/records-opening";
 import { StateUpdateDiagnosticsPanel, useSession } from "@/state/session";
+import { useWriteFeedbackSnapshot } from "@/state/use-write-feedback";
+import { appViewIdFromPathname, clearWriteFeedback, writeFeedbackScopeKey } from "@/lib/write-feedback";
 
 const APP_SHELL_TOAST_DURATION_MS = 3500;
 const noTranslateProps = Platform.OS === "web"
@@ -84,9 +86,15 @@ export default function AppLayout() {
   const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
   const recordsOpeningHistory = useRecordsOpeningHistory();
   const experienceActivity = useExperienceActivitySnapshot();
+  const writeFeedbackSnapshot = useWriteFeedbackSnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const visibleAppViewId = appViewIdFromPathname(pathname);
+  const visibleWriteScope = ownerKey && selectedContractId && visibleAppViewId
+    ? writeFeedbackScopeKey(ownerKey, selectedContractId, visibleAppViewId)
+    : null;
+  const writeFeedback = writeFeedbackSnapshot.scopeKey === visibleWriteScope ? writeFeedbackSnapshot : null;
   const diagnosticsModalHeight = getDiagnosticsModalHeight({ height, width });
   const offlineReadiness = useOfflineReadiness({
     navigationCachePresent: Boolean(selectedContractId),
@@ -132,6 +140,8 @@ export default function AppLayout() {
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     pendingCount: pendingRecordsCount,
+    syncConfirmationVisible: toast?.id === "sync-success",
+    writeFeedback,
     syncConflictCount,
     syncErrorCount: durableSyncErrorCount,
   });
@@ -189,6 +199,7 @@ export default function AppLayout() {
       runId: lastSync?.syncRunId ?? null,
       startedAt: lastActivity?.type === "sync" && !lastActivity.completedAt ? lastActivity.startedAt : lastSync?.startedAt ?? null,
     },
+    writeFeedback,
   }), [
     durableSyncErrorCount,
     experienceActivity,
@@ -208,6 +219,7 @@ export default function AppLayout() {
     status,
     syncConflictCount,
     visibleErrorKind,
+    writeFeedback,
   ]);
   const refreshStateUpdateDiagnostics = diagnosticsStateUpdate.onRefresh;
 
@@ -298,6 +310,13 @@ export default function AppLayout() {
   }, [toast]);
 
   useEffect(() => {
+    if (!writeFeedbackSnapshot.id || !writeFeedbackSnapshot.scopeKey) return;
+    const { id, scopeKey } = writeFeedbackSnapshot;
+    const timeout = setTimeout(() => clearWriteFeedback(id, scopeKey), APP_SHELL_TOAST_DURATION_MS);
+    return () => clearTimeout(timeout);
+  }, [writeFeedbackSnapshot]);
+
+  useEffect(() => {
     if (isDiagnosticsOpen && selectedDiagnosticsTab === "state-update") {
       void refreshStateUpdateDiagnostics();
     }
@@ -313,7 +332,7 @@ export default function AppLayout() {
     void refreshStateUpdateDiagnostics();
   }, [refreshStateUpdateDiagnostics, stateUpdateReconnectRefreshKey]);
 
-  const feedback = persistentFeedback ?? toast;
+  const feedback = persistentFeedback;
   const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
   const recordsDiagnosticsRows = getSyncDiagnosticsRows({
@@ -337,6 +356,19 @@ export default function AppLayout() {
     : (pendingSyncErrorCount > 1 ? `${pendingSyncErrorCount} cambios no pudieron sincronizarse` : "1 cambio no pudo sincronizarse");
   const canRetryFirstPendingSyncError = Boolean(
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
+  );
+  const statusIndicator = (
+    <View
+      accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
+      accessibilityLiveRegion="polite"
+      accessible
+      style={styles.statusIndicator}
+    >
+      <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
+        {statusIndicatorIcon(shellStatusIndicator.state)}
+      </Animated.View>
+      <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+    </View>
   );
 
   function goBack() {
@@ -363,7 +395,8 @@ export default function AppLayout() {
   return (
     <View style={styles.shell}>
       <View style={[styles.header, isWideLayout ? styles.headerWide : styles.headerCompact]}>
-        <View style={styles.headerIdentity}>
+        <View style={styles.headerMainRow}>
+          <View style={styles.headerIdentity}>
           {!isHome ? (
             <Pressable accessibilityRole="button" onPress={goBack} style={styles.backButton}>
               <Text style={styles.backText}>←</Text>
@@ -374,19 +407,9 @@ export default function AppLayout() {
               <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
             </View>
           </View>
-        </View>
-        <View style={styles.headerActions}>
-          <View
-            accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
-            accessibilityLiveRegion="polite"
-            accessible
-            style={styles.statusIndicator}
-          >
-            <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
-              {statusIndicatorIcon(shellStatusIndicator.state)}
-            </Animated.View>
-            <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
           </View>
+          {isWideLayout ? <View style={styles.headerStatusZone}>{statusIndicator}</View> : null}
+          <View style={styles.headerActions}>
           <Pressable
             accessibilityLabel={GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel}
             accessibilityRole="button"
@@ -406,7 +429,9 @@ export default function AppLayout() {
             </View>
             <Text numberOfLines={1} style={styles.userButtonText}>{userDisplayName}</Text>
           </Pressable>
+          </View>
         </View>
+        {!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null}
       </View>
 
       {feedback ? (
@@ -1349,18 +1374,33 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "stretch",
     minHeight: 56,
-    flexWrap: "wrap",
     width: "100%",
   },
   headerActions: {
     alignItems: "center",
+    flex: 1,
     flexDirection: "row",
     gap: 8,
-    maxWidth: "56%",
+    justifyContent: "flex-end",
+    minWidth: 0,
+  },
+  headerMainRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    width: "100%",
+  },
+  headerStatusRow: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 8,
+    width: "100%",
+  },
+  headerStatusZone: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
     minWidth: 0,
   },
   headerCompact: {
@@ -1660,6 +1700,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     gap: 6,
     minWidth: 0,
+    justifyContent: "center",
   },
   statusLabel: {
     color: "#425d64",
@@ -1667,6 +1708,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     lineHeight: 16,
+    textAlign: "center",
   },
   syncActivitiesText: {
     color: "#425d64",

@@ -21,7 +21,7 @@ describe("state update operation feedback", () => {
     expect(shouldRenderStateUpdateInlineFeedback("FAILED")).toBe(true);
     expect(shouldRenderStateUpdateInlineFeedback("CONFLICT")).toBe(true);
     expect(shouldRenderStateUpdateInlineFeedback("CONFIRMING")).toBe(true);
-    expect(shouldRenderStateUpdateInlineFeedback("OFFLINE_SAVED")).toBe(true);
+    expect(shouldRenderStateUpdateInlineFeedback("OFFLINE_SAVED")).toBe(false);
   });
 
   it("shows offline saved feedback for unresolved local intent while offline", () => {

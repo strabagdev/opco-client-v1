@@ -30,7 +30,6 @@ import {
 import {
   getRecordsInlineSyncSummary,
   getRecordsListErrorMessage,
-  getRecordsCacheBannerMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
 } from "@/renderers/records/records-renderer-state";
@@ -61,7 +60,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [listItems, setListItems] = useState<ReturnType<typeof buildRecordListItem>[]>([]);
   const [pagination, setPagination] = useState<EntityRecordPagination | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
-  const [fromCache, setFromCache] = useState(false);
   const [isOfflineData, setIsOfflineData] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -83,7 +81,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.failedCount > 0 ||
     recordsSyncSummary.conflictCount > 0;
   const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
-  const cacheBannerMessage = getRecordsCacheBannerMessage({ connectivityStatus, fromCache, isLoading: isRefreshing });
   useExperienceActivityReporter(appView, {
     activeCount: Number(isRefreshing) + Number(isLoadingMore),
     errorCode: error ? "RECORDS_READ_FAILED" : null,
@@ -220,7 +217,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         setRecords(result.records);
         setListItems(nextItems);
         setPagination(result.pagination);
-        setFromCache(source === "local" || result.fromCache);
         setIsOfflineData(result.offline);
         loadedScopeRef.current = scopeKey;
         publishOpeningMeasurement({
@@ -246,7 +242,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         setRecords([]);
         setListItems([]);
         setPagination(null);
-        setFromCache(false);
         setIsOfflineData(false);
         setSyncedAt(null);
       }
@@ -450,7 +445,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         ]);
       }
       setPagination(result.pagination);
-      setFromCache((current) => current || result.fromCache);
       setIsOfflineData((current) => current || result.offline);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No fue posible cargar mas registros.");
@@ -479,12 +473,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           <SyncTelemetrySummary connectivityStatus={connectivityStatus} fallbackSyncedAt={syncedAt} telemetry={recordsSyncTelemetry} />
         </View>
       </View>
-
-      {cacheBannerMessage ? (
-        <View style={styles.cacheBanner}>
-          <Text style={styles.cacheText}>{cacheBannerMessage}</Text>
-        </View>
-      ) : null}
 
       {hasSyncActivity ? (
         <View style={styles.syncBar}>
@@ -699,20 +687,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
   },
-  cacheBanner: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 12,
-  },
   cacheMeta: {
     color: "#9a3412",
     marginTop: 4,
-  },
-  cacheText: {
-    color: "#9a3412",
-    fontWeight: "700",
   },
   content: {
     gap: 16,

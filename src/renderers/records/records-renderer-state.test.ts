@@ -5,7 +5,6 @@ import { SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   getRecordsInlineSyncSummary,
   getRecordsListErrorMessage,
-  getRecordsCacheBannerMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
 } from "./records-renderer-state";
@@ -48,37 +47,6 @@ describe("records renderer state", () => {
     });
   });
 
-  it("leaves offline cache status to global shell feedback", () => {
-    expect(getRecordsCacheBannerMessage({
-      connectivityStatus: "offline",
-      fromCache: true,
-      isLoading: false,
-    })).toBeNull();
-    expect(getRecordsCacheBannerMessage({
-      connectivityStatus: "unknown",
-      fromCache: true,
-      isLoading: false,
-    })).toBeNull();
-  });
-
-  it("shows online cache refresh status without duplicating offline feedback", () => {
-    expect(getRecordsCacheBannerMessage({
-      connectivityStatus: "online",
-      fromCache: true,
-      isLoading: false,
-    })).toBe("Datos guardados localmente.");
-    expect(getRecordsCacheBannerMessage({
-      connectivityStatus: "online",
-      fromCache: true,
-      isLoading: true,
-    })).toBe("Datos guardados localmente.");
-    expect(getRecordsCacheBannerMessage({
-      connectivityStatus: "online",
-      fromCache: false,
-      isLoading: false,
-    })).toBeNull();
-  });
-
   it("does not keep a sync problem visible after telemetry returns to idle", () => {
     expect(shouldShowRecordsSyncProblem({
       connectivityStatus: "online",
@@ -117,11 +85,6 @@ describe("records renderer state", () => {
   });
 
   it("keeps offline cache and pending status primary even when records telemetry has an error", () => {
-    const offlineBanner = getRecordsCacheBannerMessage({
-      connectivityStatus: "offline",
-      fromCache: true,
-      isLoading: false,
-    });
     const syncProblem = shouldShowRecordsSyncProblem({
       connectivityStatus: "offline",
       telemetry: {
@@ -133,21 +96,10 @@ describe("records renderer state", () => {
       },
     });
 
-    expect(offlineBanner).toBeNull();
     expect(syncProblem).toBe(false);
   });
 
   it("converges after reconnect success without requiring a remount", () => {
-    const offlineBanner = getRecordsCacheBannerMessage({
-      connectivityStatus: "offline",
-      fromCache: true,
-      isLoading: false,
-    });
-    const onlineBanner = getRecordsCacheBannerMessage({
-      connectivityStatus: "online",
-      fromCache: false,
-      isLoading: false,
-    });
     const staleHistoricalError = shouldShowRecordsSyncProblem({
       connectivityStatus: "online",
       telemetry: {
@@ -160,8 +112,6 @@ describe("records renderer state", () => {
       },
     });
 
-    expect(offlineBanner).toBeNull();
-    expect(onlineBanner).toBeNull();
     expect(staleHistoricalError).toBe(false);
   });
 

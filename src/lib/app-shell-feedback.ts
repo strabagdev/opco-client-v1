@@ -2,6 +2,7 @@ import type { ConnectivityStatus } from "./connectivity";
 import type { ExperienceActivitySnapshot } from "./experience-activity";
 import type { OfflineReadiness } from "./pwa";
 import { formatPendingSyncErrorNotice } from "./pending-sync-errors";
+import type { WriteFeedbackSnapshot } from "./write-feedback";
 
 export type AppShellFeedbackTone = "error" | "warning" | "info" | "success";
 export type AppShellFeedbackVisual = "error" | "warning" | "info" | "success" | "loading";
@@ -34,9 +35,11 @@ export type AppShellFeedbackInput = {
   localStorageRecoveryNotice?: string | null;
   offlineReadiness: OfflineReadiness;
   pendingCount: number;
+  syncConfirmationVisible?: boolean;
   syncConflictCount?: number;
   syncErrorCount?: number;
   pendingSyncErrorCount?: number;
+  writeFeedback?: WriteFeedbackSnapshot | null;
 };
 
 export type AppShellVisibleErrorKind = "read" | "write" | "sync" | "unknown";
@@ -167,6 +170,8 @@ export function resolveAppShellStatusIndicator({
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
   pendingCount,
+  syncConfirmationVisible = false,
+  writeFeedback,
 }: AppShellFeedbackInput): AppShellStatusIndicator {
   if (localStorageRecoveryNotice || hasError || hasConflict || experienceActivity?.errorCode) {
     return {
@@ -175,6 +180,21 @@ export function resolveAppShellStatusIndicator({
         : "Problema de conexion o sincronizacion",
       label: "Requiere atención",
       state: "error",
+    };
+  }
+
+  if (writeFeedback?.kind) {
+    const label = writeFeedback.kind === "server-confirmed" ? "Guardado en Opco" : "Guardado localmente";
+    const context = isPendingWorkSyncing
+      ? " · Sincronizando cambios…"
+      : connectivityStatus !== "online"
+        ? " · Sin conexión"
+        : "";
+    const pending = pendingCount > 0 ? ` · ${formatPendingCount(pendingCount)}` : "";
+    return {
+      accessibilityLabel: `${label}${context}${pending}`,
+      label: `${label}${context}${pending}`,
+      state: isPendingWorkSyncing ? "working" : pendingCount > 0 ? "pending" : "online",
     };
   }
 
@@ -193,6 +213,14 @@ export function resolveAppShellStatusIndicator({
       accessibilityLabel: "Sincronizando cambios pendientes",
       label: "Sincronizando cambios…",
       state: "working",
+    };
+  }
+
+  if (syncConfirmationVisible) {
+    return {
+      accessibilityLabel: "Sincronización confirmada por Opco",
+      label: "Sincronización confirmada",
+      state: "online",
     };
   }
 

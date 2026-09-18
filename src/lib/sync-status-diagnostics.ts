@@ -1,6 +1,7 @@
 import type { AppShellStatusIndicator } from "./app-shell-feedback";
 import type { ConnectivityStatus } from "./connectivity";
 import type { ExperienceActivitySnapshot } from "./experience-activity";
+import type { WriteFeedbackSnapshot } from "./write-feedback";
 
 export type SyncChecklistState = "Sin comprobar" | "En curso" | "Correcto" | "Pendiente" | "Error" | "No aplica";
 
@@ -59,6 +60,7 @@ export type SyncStatusDiagnosticsInput = {
     runId: string | null;
     startedAt: string | null;
   };
+  writeFeedback: WriteFeedbackSnapshot | null;
 };
 
 export type SyncStatusDiagnostics = {
@@ -95,6 +97,8 @@ export function buildSyncStatusDiagnostics(input: SyncStatusDiagnosticsInput): S
         input.readIssue ? "Una lectura reciente informó un problema de conectividad." : input.sync.result === "noop" ? "La última ejecución no encontró cambios que enviar o recibir." : input.sync.completedAt ? "Última actualización conocida; puede ser parcial." : "Sin información de actualización completa."),
       item("experience", "Experiencia visible", experienceState(input), input.experience.activeRuns.length || null, input.experience.updatedAt,
         input.experience.activeRuns[0]?.startedAt ?? null, experienceDetail(input.experience)),
+      item("write-result", "Resultado de escritura", writeFeedbackState(input.writeFeedback), null, input.writeFeedback?.recordedAt ?? null, null,
+        writeFeedbackDetail(input.writeFeedback)),
       item("problems", "Errores y conflictos", input.errors + input.conflicts > 0 ? "Error" : "Correcto", input.errors + input.conflicts, null, null,
         input.errors || input.conflicts ? `${input.errors} errores; ${input.conflicts} conflictos.` : "Sin errores ni conflictos retenidos."),
       item("offline-preparation", "Preparación offline", offlinePreparationState(input), null, input.offlinePreparation.completedAt,
@@ -246,8 +250,17 @@ function experienceState(input: SyncStatusDiagnosticsInput): SyncChecklistState 
   return "Sin comprobar";
 }
 
+function writeFeedbackState(feedback: WriteFeedbackSnapshot | null): SyncChecklistState {
+  if (!feedback?.kind) return "Sin comprobar";
+  return feedback.kind === "server-confirmed" ? "Correcto" : "Pendiente";
+}
+
 function indicatorReason(input: SyncStatusDiagnosticsInput) {
   if (input.indicator.state === "error") return "Error, conflicto o recuperación local retenida.";
+  if (input.writeFeedback?.kind === "server-confirmed") return "La experiencia visible confirmó una escritura con Opco.";
+  if (input.writeFeedback?.kind === "local-saved") return input.pendingCount > 0
+    ? `Guardado local confirmado; ${input.pendingCount} cambios permanecen pendientes de envío.`
+    : "Guardado local confirmado; no se presenta como sincronización completada.";
   if (input.connectivity.status !== "online") return input.pendingCount > 0
     ? `Sin conexión; ${input.pendingCount} cambios locales permanecen pendientes.`
     : "Conectividad del navegador offline o desconocida.";
@@ -293,6 +306,14 @@ function experienceDetail(experience: ExperienceActivitySnapshot) {
   if (experience.activeRuns.length > 0) return `${title}: ${experience.activeRuns.length} lectura(s) activa(s); ejecuciones=${runs}.`;
   if (experience.errorCode) return `${title}: fallo retenido (${sanitizeDiagnosticText(experience.errorCode)}).`;
   return `${title}: último resultado ${experience.result}; sin lectura activa.`;
+}
+
+function writeFeedbackDetail(feedback: WriteFeedbackSnapshot | null) {
+  if (!feedback?.kind) return "Sin confirmación de escritura reciente en el alcance visible.";
+  const title = sanitizeDiagnosticText(feedback.appViewTitle ?? "Experiencia");
+  return feedback.kind === "server-confirmed"
+    ? `${title}: escritura confirmada por Opco.`
+    : `${title}: guardado local confirmado; no implica sincronización con Opco.`;
 }
 
 function sanitizeRunId(value: string | null | undefined) {
