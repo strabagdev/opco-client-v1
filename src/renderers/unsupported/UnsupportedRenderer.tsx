@@ -3,8 +3,16 @@ import { StyleSheet, Text, View } from "react-native";
 import { AppIcon } from "@/components/app-icon";
 import { getAppViewTypeLabel } from "@/lib/app-views";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 
 export function UnsupportedRenderer({ appView }: AppViewRendererProps) {
+  useExperienceOpeningTelemetry(appView, {
+    errorCode: "UNSUPPORTED_APP_VIEW",
+    firstUseful: false,
+    ready: true,
+    result: "error",
+    source: "none",
+  });
   return (
     <View style={styles.content}>
       <View style={styles.header}>

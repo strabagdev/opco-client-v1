@@ -3,8 +3,16 @@ import { StyleSheet, Text, View } from "react-native";
 import { AppIcon } from "@/components/app-icon";
 import { WorkflowAppView } from "@/lib/opco-api";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 
 export function UnsupportedWorkflow({ appView }: AppViewRendererProps<WorkflowAppView>) {
+  useExperienceOpeningTelemetry(appView, {
+    errorCode: "UNSUPPORTED_WORKFLOW",
+    firstUseful: false,
+    ready: true,
+    result: "error",
+    source: "none",
+  });
   const workflowKey = typeof appView.config.workflowKey === "string" ? appView.config.workflowKey : null;
 
   return (

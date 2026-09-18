@@ -1,6 +1,6 @@
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { AlertCircle, CheckCircle2, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -16,7 +16,7 @@ import {
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
-import { formatRecordsOpeningPerformanceCopy, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
+import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
 import {
   formatPendingSyncErrorMessage,
   getPendingStateUpdateSyncErrors,
@@ -525,13 +525,13 @@ export default function AppLayout() {
               style={styles.diagnosticsContentScroll}
             >
               {selectedDiagnosticsTab === "sync" ? (
-                <SyncStatusDiagnosticsPanel diagnostics={syncStatusDiagnostics} history={syncStatusHistory} />
+                <SyncStatusDiagnosticsPanel key={`${ownerKey ?? "none"}:${selectedContractId ?? "none"}`} diagnostics={syncStatusDiagnostics} history={syncStatusHistory} />
               ) : null}
               {selectedDiagnosticsTab === "pwa" ? (
                 <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
               ) : null}
               {selectedDiagnosticsTab === "performance" ? (
-                <RecordsPerformanceDiagnostics history={recordsOpeningHistory.history} />
+                <RecordsPerformanceDiagnostics key={`${ownerKey ?? "none"}:${selectedContractId ?? "none"}`} history={recordsOpeningHistory.history} />
               ) : null}
               {selectedDiagnosticsTab === "state-update" ? (
                 <StateUpdateDiagnosticsPanel
@@ -786,32 +786,32 @@ function SyncStatusDiagnosticsPanel({
       <Text style={styles.diagnosticsTitle}>Checklist automático</Text>
       <View style={styles.syncChecklist}>
         {diagnostics.checklist.map((entry) => (
-          <View key={entry.id} style={styles.syncChecklistRow}>
-            <View style={styles.syncChecklistIcon}>{syncStateIcon(entry.state)}</View>
-            <View style={styles.syncChecklistContent}>
-              <View style={styles.syncChecklistHeading}>
-                <Text style={styles.syncChecklistLabel}>{entry.label}</Text>
-                <Text style={styles.syncChecklistState}>{entry.state}{entry.count !== null ? ` (${entry.count})` : ""}</Text>
-              </View>
+          <DiagnosticDisclosureRow
+            key={entry.id}
+            icon={syncStateIcon(entry.state)}
+            primary={entry.label}
+            secondary={`${entry.state}${entry.count !== null ? ` (${entry.count})` : ""}`}
+          >
               <Text style={styles.syncChecklistDetail}>{entry.detail}</Text>
               <Text style={styles.syncChecklistMeta}>
                 Comprobado: {entry.checkedAt ?? "Sin información"} · Inicio: {activeSince(entry, history)} · Duración: {formatActiveDuration(activeSince(entry, history))}
               </Text>
-            </View>
-          </View>
+          </DiagnosticDisclosureRow>
         ))}
       </View>
 
       <Text style={styles.diagnosticsTitle}>Historial breve</Text>
       <Text style={styles.syncHistoryNotice}>En memoria, máximo 50 eventos; se limpia al cerrar o cambiar sesión/contrato.</Text>
       {history.events.length ? [...history.events].reverse().map((event, index) => (
-        <View key={`${event.at}:${event.process}:${index}`} style={styles.syncHistoryRow}>
-          <Text style={styles.syncHistoryAt}>{event.at}</Text>
-          <Text style={styles.syncHistoryProcess}>{event.process}</Text>
+        <DiagnosticDisclosureRow
+          key={`${event.at}:${event.process}:${event.runId ?? index}`}
+          primary={event.process}
+          secondary={`${event.at} · ${event.to}`}
+        >
           <Text style={styles.syncHistoryTransition}>{event.from} → {event.to}</Text>
           <Text style={styles.syncChecklistDetail}>{event.reason}</Text>
           {event.runId ? <Text style={styles.syncChecklistMeta}>run: {event.runId}</Text> : null}
-        </View>
+        </DiagnosticDisclosureRow>
       )) : <Text style={styles.syncHistoryNotice}>Sin información</Text>}
     </View>
   );
@@ -864,8 +864,8 @@ function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMea
     <View style={styles.diagnostics}>
       <View style={styles.diagnosticsSectionHeader}>
         <View style={styles.performanceTitleBlock}>
-          <Text style={styles.diagnosticsTitle}>Rendimiento RECORDS</Text>
-          <Text style={styles.diagnosticsNotice}>Desde el montaje del renderer, no desde el clic en la experiencia.</Text>
+          <Text style={styles.diagnosticsTitle}>Rendimiento de experiencias</Text>
+          <Text style={styles.diagnosticsNotice}>El detalle indica si cada medición comenzó en la ruta o en el renderer.</Text>
         </View>
         <Pressable accessibilityRole="button" onPress={handleCopy} style={styles.secondaryModalButton}>
           <Text style={styles.secondaryModalButtonText}>
@@ -874,19 +874,19 @@ function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMea
         </Pressable>
       </View>
       {history.length === 0 ? <Text style={styles.diagnosticsNotice}>Sin información</Text> : history.map((entry) => (
-        <View key={entry.id} style={styles.performanceEntry}>
-          <View style={styles.diagnosticsSectionHeader}>
-            <Text style={styles.performanceEntryTitle}>{entry.appViewTitle}</Text>
-            <Text style={styles.performanceResult}>{performanceResultLabel(entry.result)}</Text>
-          </View>
-          <Text style={styles.syncHistoryAt}>{entry.startedAt}</Text>
+        <DiagnosticDisclosureRow
+          key={entry.id}
+          primary={entry.appViewTitle}
+          secondary={`${getOpeningPrimaryTimingLabel(entry)} · ${performanceResultLabel(entry.result)}`}
+        >
+          <Text style={styles.syncHistoryAt}>{entry.startedAt} · {entry.appViewType ?? "RECORDS"}{entry.variant ? ` / ${entry.variant}` : ""}</Text>
           {performanceRows(entry).map(([label, value]) => (
             <View key={`${entry.id}:${label}`} style={styles.diagnosticsRow}>
               <Text style={styles.diagnosticsLabel}>{label}</Text>
               <Text {...noTranslateProps} style={styles.diagnosticsValue}>{value}</Text>
             </View>
           ))}
-        </View>
+        </DiagnosticDisclosureRow>
       ))}
     </View>
   );
@@ -896,13 +896,19 @@ function performanceRows(entry: RecordsOpeningMeasurement): [string, string][] {
   return [
     ["Medición", entry.id],
     ["Fuente inicial", entry.source],
+    ["Origen de medición", entry.origin ?? "renderer (historial anterior)"],
+    ["Tipo / variante", `${entry.appViewType ?? "RECORDS"} / ${entry.variant ?? "No aplica"}`],
     ["Cobertura local", entry.coverage],
     ["Mostrados / procesados", `${entry.shownCount} / ${entry.processedCount}`],
     ["Primeras filas", performanceDuration(entry.timeToFirstRowsMs)],
+    ["Primera presentación útil", performanceDuration(entry.firstUsefulContentMs ?? entry.timeToFirstRowsMs)],
+    ["Lista para operar", performanceDuration(entry.readyMs ?? null)],
+    ["Resolución de experiencia", performanceDuration(entry.appViewResolutionMs ?? null)],
     ["Lectura local", performanceDuration(entry.localReadMs)],
     ["Actualización remota", performanceDuration(entry.remoteRefreshMs)],
     ["Preparación", performanceDuration(entry.preparationMs)],
     ["Error", entry.errorCode ?? "none"],
+    ["Módulos PANEL", entry.moduleSummary ? `${entry.moduleSummary.loaded} cargados, ${entry.moduleSummary.empty} vacíos, ${entry.moduleSummary.failed} fallidos, ${entry.moduleSummary.total} total` : "No aplica"],
   ];
 }
 
@@ -1034,11 +1040,9 @@ function RecordsFailedDiagnostics({
       </View>
       {notice ? <Text style={styles.diagnosticsNotice}>{notice}</Text> : null}
       {failedSections.length > 0 ? (
-        failedSections.map((section) => (
-          <View key={section.title} style={styles.diagnosticsSubsection}>
-            <View style={styles.diagnosticsSectionHeader}>
-              <Text style={styles.diagnosticsSectionTitle}>{section.title}</Text>
-              {section.action.kind === "correct-required" ? (
+          failedSections.map((section) => (
+          <DiagnosticDisclosureRow
+            action={section.action.kind === "correct-required" ? (
                 <Text style={styles.diagnosticsNotice}>Resolver error</Text>
               ) : section.manualRetryable && section.manualRetryToken ? (
                 <Pressable
@@ -1056,20 +1060,61 @@ function RecordsFailedDiagnostics({
                   </Text>
                 </Pressable>
               ) : null}
-            </View>
+            key={section.title}
+            primary={section.title}
+            secondary={String(section.rows.find(([label]) => label.toLowerCase().includes("estado"))?.[1] ?? "Error")}
+          >
             {section.rows.map(([label, value]) => (
               <View key={`${section.title}:${label}`} style={styles.diagnosticsRow}>
                 <Text style={styles.diagnosticsLabel}>{label}</Text>
                 <Text {...noTranslateProps} style={styles.diagnosticsValue}>{String(value)}</Text>
               </View>
             ))}
-          </View>
+          </DiagnosticDisclosureRow>
         ))
       ) : (
         <Text style={styles.diagnosticsNotice}>
           Hay errores durables de RECORDS, pero no se pudo resolver la operacion asociada.
         </Text>
       )}
+    </View>
+  );
+}
+
+function DiagnosticDisclosureRow({
+  action,
+  children,
+  icon,
+  primary,
+  secondary,
+}: {
+  action?: ReactNode;
+  children: ReactNode;
+  icon?: ReactNode;
+  primary: string;
+  secondary: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={styles.disclosureRow}>
+      <View style={styles.disclosureSummaryLine}>
+        <Pressable
+          accessibilityHint="Muestra u oculta el detalle"
+          accessibilityLabel={`${primary}. ${secondary}`}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((value) => !value)}
+          style={styles.disclosureToggle}
+        >
+          <View style={styles.disclosureIndicator}>{expanded ? <ChevronDown color="#135d66" size={18} /> : <ChevronRight color="#135d66" size={18} />}</View>
+          {icon ? <View style={styles.syncChecklistIcon}>{icon}</View> : null}
+          <Text style={styles.disclosurePrimary}>{primary}</Text>
+          <Text style={styles.disclosureSecondary}>{secondary}</Text>
+        </Pressable>
+        {action ? <View style={styles.disclosureAction}>{action}</View> : null}
+      </View>
+      {expanded ? <View style={styles.disclosureDetail}>{children}</View> : null}
     </View>
   );
 }
@@ -1499,6 +1544,60 @@ const styles = StyleSheet.create({
   primaryModalButtonText: {
     color: "#ffffff",
     fontWeight: "800",
+  },
+  disclosureAction: {
+    flexShrink: 0,
+  },
+  disclosureDetail: {
+    gap: 6,
+    paddingBottom: 12,
+    paddingHorizontal: 12,
+  },
+  disclosureIndicator: {
+    alignItems: "center",
+    flexShrink: 0,
+    justifyContent: "center",
+    width: 20,
+  },
+  disclosurePrimary: {
+    color: "#17363c",
+    flexGrow: 1,
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    minWidth: 120,
+  },
+  disclosureRow: {
+    borderBottomColor: "#d9e3e5",
+    borderBottomWidth: 1,
+  },
+  disclosureSecondary: {
+    color: "#425d64",
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+  },
+  disclosureSummaryLine: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingVertical: 4,
+  },
+  disclosureToggle: {
+    alignItems: "center",
+    borderColor: "transparent",
+    borderRadius: 6,
+    borderWidth: 2,
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    minHeight: 44,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingVertical: 6,
   },
   performanceEntry: {
     borderBottomColor: "#d9e3e5",

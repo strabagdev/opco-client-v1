@@ -43,6 +43,7 @@ import {
   shouldStartRecordsOpeningMeasurement,
 } from "@/renderers/records/records-opening";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningSession } from "@/renderers/experience-opening";
 import { getRecordSyncLabel } from "@/sync/records-sync";
 import { useSession } from "@/state/session";
 
@@ -50,6 +51,7 @@ const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
+  const sharedOpening = useExperienceOpeningSession();
   const entityTypeId = appView.config.entityTypeId;
   const { api, connectivityStatus, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
     useSession();
@@ -151,8 +153,8 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       const openingScopeKey = `${scopeKey}:${appView.id}`;
       const shouldMeasureOpening = shouldStartRecordsOpeningMeasurement(measuredOpeningScopeRef.current, openingScopeKey);
       if (shouldMeasureOpening) measuredOpeningScopeRef.current = openingScopeKey;
-      const openingStartedAt = monotonicNow();
-      const openingStartedAtIso = new Date().toISOString();
+      const openingStartedAt = sharedOpening?.monotonicStartedAt ?? monotonicNow();
+      const openingStartedAtIso = sharedOpening?.startedAt ?? new Date().toISOString();
       let localReadMs: number | null = null;
       let localSnapshotComplete = false;
       let hasPresentableLocalRecords = false;
@@ -166,7 +168,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         appViewTitle: appView.name,
         coverage: "unknown",
         errorCode: null,
-        id: createOpeningMeasurementId(),
+        appViewResolutionMs: sharedOpening?.resolutionMs ?? null,
+        appViewType: "RECORDS",
+        firstUsefulContentMs: null,
+        id: sharedOpening?.id ?? createOpeningMeasurementId(),
+        origin: sharedOpening?.origin ?? "renderer",
         localReadMs: null,
         preparationMs: null,
         processedCount: 0,
@@ -176,6 +182,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         source: "none",
         startedAt: openingStartedAtIso,
         timeToFirstRowsMs: null,
+        variant: null,
       } : null;
 
       function publishOpeningMeasurement(patch: Partial<RecordsOpeningMeasurement>) {
@@ -218,6 +225,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           shownCount: result.records.length,
           source: !measurement || measurement.source === "none" ? source : measurement.source,
           timeToFirstRowsMs: firstRowsAt === null ? null : elapsedMs(openingStartedAt, firstRowsAt),
+          firstUsefulContentMs: firstRowsAt === null ? null : elapsedMs(openingStartedAt, firstRowsAt),
         });
       }
 
@@ -391,6 +399,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   }, [
     api,
     appView.id,
+    appView.name,
     debouncedSearch,
     definitionCache,
     entityTypeId,
@@ -402,6 +411,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     retryCount,
     selectedContractId,
     status,
+    sharedOpening,
     token,
   ]);
 

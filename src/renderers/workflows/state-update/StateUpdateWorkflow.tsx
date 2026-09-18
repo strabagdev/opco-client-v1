@@ -56,6 +56,7 @@ import {
   stateUpdateLatestMatchesSearch,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
@@ -696,6 +697,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       search: shouldSearchStateUpdateSubjects(searchText) ? normalizeStateUpdateSearch(searchText) : undefined,
     });
   }
+
+  useExperienceOpeningTelemetry(appView, useMemo(() => ({
+    errorCode: error && !isLoading ? "STATE_UPDATE_LOAD_FAILED" : null,
+    firstUseful: Boolean(response) && !isLoading,
+    processedCount: (response?.items.length ?? 0) + (response?.latest?.length ?? 0),
+    ready: !isLoading,
+    result: isLoading ? "in_progress" as const : error && !response ? "error" as const : "completed" as const,
+    shownCount: (response?.items.length ?? 0) + (response?.latest?.length ?? 0),
+    source: connectivityStatus === "offline" ? "local" as const : "remote" as const,
+  }), [connectivityStatus, error, isLoading, response]));
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>

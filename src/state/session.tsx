@@ -1,6 +1,7 @@
 import {
   createContext,
   PropsWithChildren,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -8,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react-native";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import {
@@ -1263,40 +1265,79 @@ export function StateUpdateDiagnosticsPanel({
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading operations...</Text>
         ) : diagnostics.operations.length ? diagnostics.operations.map((operation, index) => (
-          <View key={operationSections[index]?.key ?? `${operation.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
-            <Text selectable style={diagnosticsPanelStyles.operationTitle}>{operationSections[index]?.title ?? `#${index + 1}`}</Text>
-            {onRetryFailed && operationSections[index]?.retryable && operationSections[index]?.retryToken ? (
+          <StateUpdateDisclosureRow
+            action={onRetryFailed && operationSections[index]?.retryable && operationSections[index]?.retryToken ? (
               <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operationSections[index]?.retryToken ?? null)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
                 <Text style={diagnosticsPanelStyles.buttonText}>Reintentar</Text>
               </Pressable>
             ) : null}
+            key={operationSections[index]?.key ?? `${operation.clientRequestId}:${index}`}
+            primary={operationSections[index]?.title ?? `#${index + 1}`}
+            secondary={`${operation.operationType} · ${operation.syncStatus}`}
+          >
             <DiagnosticsRows rows={operationSections[index]?.rows ?? []} />
-          </View>
+          </StateUpdateDisclosureRow>
         )) : <Text style={diagnosticsPanelStyles.empty}>No local STATE_UPDATE operations.</Text>}
         <Text style={diagnosticsPanelStyles.sectionTitle}>Workflow Local Records</Text>
         {!diagnostics ? (
           <Text style={diagnosticsPanelStyles.empty}>Loading local records...</Text>
         ) : diagnostics.localRecords.length ? diagnostics.localRecords.map((record, index) => (
-          <View key={localRecordSections[index]?.key ?? `${record.localRecordFingerprint}:${index}`} style={diagnosticsPanelStyles.operation}>
-            <Text selectable style={diagnosticsPanelStyles.operationTitle}>{localRecordSections[index]?.title ?? `local #${index + 1}`}</Text>
+          <StateUpdateDisclosureRow
+            key={localRecordSections[index]?.key ?? `${record.localRecordFingerprint}:${index}`}
+            primary={localRecordSections[index]?.title ?? `local #${index + 1}`}
+            secondary={`${record.syncStatus} · ${record.recoveryState}`}
+          >
             <DiagnosticsRows rows={localRecordSections[index]?.rows ?? []} />
-          </View>
+          </StateUpdateDisclosureRow>
         )) : <Text style={diagnosticsPanelStyles.empty}>No workflow local records.</Text>}
         <Text style={diagnosticsPanelStyles.sectionTitle}>Diagnostic Run</Text>
         {run ? (
           <>
             <DiagnosticsRows rows={runSummaryRows} />
             {run.rows.map((row, index) => (
-              <View key={runSections[index]?.key ?? `${row.clientRequestId}:${index}`} style={diagnosticsPanelStyles.operation}>
-                <Text selectable style={diagnosticsPanelStyles.operationTitle}>{runSections[index]?.title ?? `run #${index + 1}`}</Text>
+              <StateUpdateDisclosureRow
+                key={runSections[index]?.key ?? `${row.clientRequestId}:${index}`}
+                primary={runSections[index]?.title ?? `run #${index + 1}`}
+                secondary={row.result}
+              >
                 <DiagnosticsRows rows={runSections[index]?.rows ?? []} />
-              </View>
+              </StateUpdateDisclosureRow>
             ))}
           </>
         ) : (
           <Text style={diagnosticsPanelStyles.empty}>No diagnostic run yet.</Text>
         )}
       </DiagnosticsContent>
+    </View>
+  );
+}
+
+function StateUpdateDisclosureRow({
+  action,
+  children,
+  primary,
+  secondary,
+}: PropsWithChildren<{ action?: ReactNode; primary: string; secondary: string }>) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={diagnosticsPanelStyles.operation}>
+      <View style={diagnosticsPanelStyles.operationSummary}>
+        <Pressable
+          accessibilityHint="Muestra u oculta el detalle"
+          accessibilityLabel={`${primary}. ${secondary}`}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((value) => !value)}
+          style={diagnosticsPanelStyles.operationToggle}
+        >
+          {expanded ? <ChevronDown color="#135d66" size={17} /> : <ChevronRight color="#135d66" size={17} />}
+          <Text selectable style={diagnosticsPanelStyles.operationTitle}>{primary}</Text>
+          <Text selectable style={diagnosticsPanelStyles.operationSecondary}>{secondary}</Text>
+        </Pressable>
+        {action}
+      </View>
+      {expanded ? <View style={diagnosticsPanelStyles.operationDetail}>{children}</View> : null}
     </View>
   );
 }
@@ -1431,11 +1472,34 @@ const diagnosticsPanelStyles = StyleSheet.create({
     fontWeight: "800",
   },
   operation: {
-    borderColor: "#d0dede",
-    borderRadius: 6,
-    borderWidth: 1,
-    gap: 6,
-    padding: 8,
+    borderBottomColor: "#d0dede",
+    borderBottomWidth: 1,
+  },
+  operationDetail: {
+    paddingBottom: 10,
+    paddingHorizontal: 8,
+  },
+  operationSecondary: {
+    color: "#466068",
+    flexShrink: 1,
+    fontSize: 11,
+  },
+  operationSummary: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  operationToggle: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    minHeight: 44,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingVertical: 6,
   },
   operationTitle: {
     color: "#0f3036",

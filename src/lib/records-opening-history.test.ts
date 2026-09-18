@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatRecordsOpeningPerformanceCopy,
+  getOpeningPrimaryTimingLabel,
   interruptUnfinishedRecordsOpenings,
   type RecordsOpeningMeasurement,
   upsertRecordsOpeningHistory,
@@ -60,6 +61,37 @@ describe("RECORDS opening performance history", () => {
     expect(copied).not.toContain("token");
     expect(copied).not.toContain("payload");
     expect(copied).not.toContain("record values");
+  });
+
+  it("labels first useful presentation without confusing it with remote completion", () => {
+    expect(getOpeningPrimaryTimingLabel(measurement(1, {
+      firstUsefulContentMs: 13,
+      remoteRefreshMs: 900,
+    }))).toBe("13 ms · primeras filas");
+    expect(getOpeningPrimaryTimingLabel(measurement(2, {
+      firstUsefulContentMs: null,
+      result: "in_progress",
+      timeToFirstRowsMs: null,
+    }))).toBe("En curso");
+    expect(getOpeningPrimaryTimingLabel(measurement(3, {
+      firstUsefulContentMs: null,
+      result: "completed",
+      timeToFirstRowsMs: null,
+    }))).toBe("Sin información");
+  });
+
+  it("copies expanded fields even though diagnostic rows start collapsed", () => {
+    const copied = formatRecordsOpeningPerformanceCopy([measurement(1, {
+      appViewType: "PANEL",
+      firstUsefulContentMs: 18,
+      moduleSummary: { empty: 1, failed: 1, loaded: 2, total: 4 },
+      origin: "route",
+      readyMs: 45,
+    })]);
+
+    expect(copied).toContain("Primera presentación útil: 18 ms");
+    expect(copied).toContain("Lista para operar: 45 ms");
+    expect(copied).toContain("Módulos: 2 cargados | 1 vacíos | 1 fallidos | 4 total");
   });
 });
 

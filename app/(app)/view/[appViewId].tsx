@@ -1,10 +1,13 @@
 import { useLocalSearchParams } from "expo-router";
+import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from "react-native";
 
+import { ExperienceOpeningProvider, monotonicNow } from "@/renderers/experience-opening";
 import { renderAppView } from "@/renderers/registry";
 import { useAppView } from "@/renderers/use-app-view";
 
 export default function AppViewScreen() {
+  const [routeStartedAt] = useState(monotonicNow);
   const { appViewId } = useLocalSearchParams<{ appViewId: string }>();
   const { appView, error, isLoading, retry } = useAppView(appViewId);
 
@@ -27,7 +30,7 @@ export default function AppViewScreen() {
     );
   }
 
-  return renderAppView(appView);
+  return <ExperienceOpeningProvider routeStartedAt={routeStartedAt}>{renderAppView(appView)}</ExperienceOpeningProvider>;
 }
 
 const styles = StyleSheet.create({

@@ -5,7 +5,21 @@ import {
   shouldShowDiagnosticsTabScrollIndicator,
 } from "./app-diagnostics-layout";
 
+declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
+
 describe("diagnostics modal layout", () => {
+  it("uses collapsed accessible disclosure rows without nested detail scrolling", () => {
+    const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
+    const stateUpdateSource = require("fs").readFileSync("src/state/session.tsx", "utf8");
+
+    expect(source).toContain("function DiagnosticDisclosureRow");
+    expect(source).toContain("const [expanded, setExpanded] = useState(false)");
+    expect(source).toContain("accessibilityState={{ expanded }}");
+    expect(source).not.toMatch(/disclosureDetail:[\s\S]{0,180}overflow/);
+    expect(stateUpdateSource).toContain("function StateUpdateDisclosureRow");
+    expect(stateUpdateSource).toContain("accessibilityState={{ expanded }}");
+    expect(stateUpdateSource).toContain("{action}");
+  });
   it.each([
     { height: 900, name: "desktop", width: 1280 },
     { height: 768, name: "tablet", width: 1000 },

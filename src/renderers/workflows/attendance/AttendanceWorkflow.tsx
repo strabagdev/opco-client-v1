@@ -60,6 +60,7 @@ import {
   splitStatusButtons,
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
 import {
@@ -1021,6 +1022,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     void definitionCache.setAttendanceContextSelection(ownerKey, selectedContractId, appView.id, fieldId, sanitized[fieldId] ?? null)
       .catch(() => undefined);
   }
+
+  useExperienceOpeningTelemetry(appView, useMemo(() => ({
+    errorCode: error && !isLoading ? "ATTENDANCE_LOAD_FAILED" : null,
+    firstUseful: !isLoading && statuses.length > 0,
+    processedCount: latest.length,
+    ready: !isLoading,
+    result: isLoading ? "in_progress" as const : error && statuses.length === 0 ? "error" as const : "completed" as const,
+    shownCount: latest.length,
+    source: connectivityStatus === "offline" ? "local" as const : "remote" as const,
+  }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>

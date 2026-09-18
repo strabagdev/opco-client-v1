@@ -14,6 +14,7 @@ import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID }
 import { PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useSession } from "@/state/session";
 
 import {
@@ -227,6 +228,22 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     rowHeight: configuredRowHeight,
   }), [configuredColumns, configuredRowHeight, modules, width]);
   const isOffline = connectivityStatus === "offline" || Object.values(datasetStates).some((state) => state.fromCache);
+  const openingStatus = useMemo(() => {
+    const states = Object.values(datasetStates);
+    const settled = states.length > 0 && states.every((state) => !state.isLoading);
+    const failed = states.filter((state) => state.error).length;
+    const loaded = states.filter((state) => state.panel && !state.error).length;
+    const empty = states.filter((state) => state.panel && state.panel.modules.length === 0 && !state.error).length;
+    return {
+      firstUseful: loaded > 0 || (settled && failed === 0),
+      initialUpdateComplete: settled,
+      moduleSummary: { empty, failed, loaded, total: states.length },
+      ready: settled,
+      result: settled ? (failed > 0 && loaded > 0 ? "partial" as const : failed > 0 ? "error" as const : "completed" as const) : "in_progress" as const,
+      source: states.some((state) => state.fromCache) ? "local" as const : loaded > 0 ? "remote" as const : "unknown" as const,
+    };
+  }, [datasetStates]);
+  useExperienceOpeningTelemetry(appView, openingStatus);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>

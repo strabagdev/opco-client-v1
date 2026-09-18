@@ -13,6 +13,7 @@ import { ReportAppView, ReportResponse } from "@/lib/opco-api";
 import { loadReportWithOfflineCache } from "@/lib/offline-reports";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
+import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useSession } from "@/state/session";
 
 import {
@@ -107,6 +108,15 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const table = useMemo(() => report ? buildReportTableModel(report) : null, [report]);
   const matrix = useMemo(() => report ? buildReportMatrixModel(report) : null, [report]);
   const currentStatus = useMemo(() => report ? buildReportCurrentStatusModel(report) : null, [report]);
+  useExperienceOpeningTelemetry(appView, useMemo(() => ({
+    errorCode: error ? "REPORT_LOAD_FAILED" : null,
+    firstUseful: Boolean(report) && !error,
+    processedCount: report?.records.length ?? 0,
+    ready: !isLoading,
+    result: isLoading ? "in_progress" as const : error ? "error" as const : "completed" as const,
+    shownCount: report?.records.length ?? 0,
+    source: report ? (fromCache ? "local" as const : "remote" as const) : "unknown" as const,
+  }), [error, fromCache, isLoading, report]));
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
