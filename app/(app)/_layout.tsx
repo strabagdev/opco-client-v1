@@ -5,7 +5,7 @@ import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, Scroll
 
 import { AppIcon } from "@/components/app-icon";
 import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
-import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
+import { diagnosticTabForStatusIndicator, GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId, type DiagnosticTabId } from "@/lib/app-diagnostics";
 import { getDiagnosticsModalHeight, shouldShowDiagnosticsTabScrollIndicator } from "@/lib/app-diagnostics-layout";
 import {
   classifyAppShellVisibleErrorEvent,
@@ -367,15 +367,27 @@ export default function AppLayout() {
           <View style={styles.titleBlock}>
             <View style={styles.titleRow}>
               <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
-              <Animated.View accessible accessibilityLabel={shellStatusIndicator.accessibilityLabel} style={[
-                styles.statusDot,
-                shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
-                shellStatusIndicator.state === "working" ? styles.statusDotWorking : null,
-                shellStatusIndicator.state === "pending" ? styles.statusDotWorking : null,
-                shellStatusIndicator.state === "offline" ? styles.statusDotOffline : null,
-                shellStatusIndicator.state === "error" ? styles.statusDotError : null,
-                shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null,
-              ]} />
+              <Pressable
+                accessibilityHint="Abre el diagnóstico de sincronización"
+                accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
+                accessibilityRole="button"
+                onPress={() => {
+                  setSelectedDiagnosticsTab(diagnosticTabForStatusIndicator(selectedDiagnosticsTab));
+                  setIsDiagnosticsOpen(true);
+                }}
+                style={({ pressed }) => [styles.statusControl, pressed ? styles.statusControlPressed : null]}
+              >
+                <Animated.View style={[
+                  styles.statusDot,
+                  shellStatusIndicator.state === "online" ? styles.statusDotOnline : null,
+                  shellStatusIndicator.state === "working" ? styles.statusDotWorking : null,
+                  shellStatusIndicator.state === "pending" ? styles.statusDotWorking : null,
+                  shellStatusIndicator.state === "offline" ? styles.statusDotOffline : null,
+                  shellStatusIndicator.state === "error" ? styles.statusDotError : null,
+                  shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null,
+                ]} />
+                <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1338,7 +1350,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     minHeight: 56,
-    overflow: "hidden",
+    flexWrap: "wrap",
     width: "100%",
   },
   headerActions: {
@@ -1644,6 +1656,23 @@ const styles = StyleSheet.create({
     height: 10,
     width: 10,
   },
+  statusControl: {
+    alignItems: "center",
+    borderColor: "transparent",
+    borderRadius: 6,
+    borderWidth: 1,
+    flexDirection: "row",
+    flexShrink: 1,
+    gap: 6,
+    minHeight: 32,
+    minWidth: 0,
+    paddingHorizontal: 5,
+    paddingVertical: 3,
+  },
+  statusControlPressed: {
+    backgroundColor: "#e4eeee",
+    borderColor: "#9fb8bd",
+  },
   statusDotError: {
     backgroundColor: "#b42318",
   },
@@ -1655,6 +1684,13 @@ const styles = StyleSheet.create({
   },
   statusDotWorking: {
     backgroundColor: "#b7791f",
+  },
+  statusLabel: {
+    color: "#425d64",
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
   },
   syncActivitiesText: {
     color: "#425d64",
@@ -1819,6 +1855,7 @@ const styles = StyleSheet.create({
   titleRow: {
     alignItems: "center",
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     minWidth: 0,
   },

@@ -257,6 +257,7 @@ describe("app shell feedback", () => {
   it("resolves the header status indicator for online idle state", () => {
     expect(resolveAppShellStatusIndicator(baseInput)).toEqual({
       accessibilityLabel: "Online",
+      label: "Al día",
       state: "online",
     });
   });
@@ -267,6 +268,7 @@ describe("app shell feedback", () => {
       connectivityStatus: "offline",
     })).toEqual({
       accessibilityLabel: "Sin conexion",
+      label: "Sin conexión",
       state: "offline",
     });
   });
@@ -280,6 +282,7 @@ describe("app shell feedback", () => {
     expect(resolvePreviousStatusIndicator(observedCandidate)).toBe("working");
     expect(resolveAppShellStatusIndicator(observedCandidate)).toEqual({
       accessibilityLabel: "Online",
+      label: "Al día",
       state: "online",
     });
   });
@@ -290,6 +293,7 @@ describe("app shell feedback", () => {
       isOperationalCoreReadinessChecking: true,
     })).toEqual({
       accessibilityLabel: "Comprobando disponibilidad de Opco",
+      label: "Comprobando disponibilidad",
       state: "working",
     });
     expect(resolveAppShellStatusIndicator({
@@ -297,6 +301,7 @@ describe("app shell feedback", () => {
       isPendingWorkSyncing: true,
     })).toEqual({
       accessibilityLabel: "Sincronizando cambios pendientes",
+      label: "Sincronizando",
       state: "working",
     });
     expect(resolvePreviousStatusIndicator({
@@ -308,6 +313,7 @@ describe("app shell feedback", () => {
       isAuthSessionRestoring: true,
     })).toEqual({
       accessibilityLabel: "Restableciendo sesion con Opco",
+      label: "Restaurando sesión",
       state: "working",
     });
     expect(resolveAppShellStatusIndicator(baseInput).state).toBe("online");
@@ -323,6 +329,7 @@ describe("app shell feedback", () => {
       pendingCount: 2,
     })).toEqual({
       accessibilityLabel: "2 cambios pendientes",
+      label: "Cambios pendientes",
       state: "pending",
     });
     expect(resolveAppShellStatusIndicator({
@@ -343,6 +350,7 @@ describe("app shell feedback", () => {
       isPendingWorkSyncing: true,
     })).toEqual({
       accessibilityLabel: "Sincronizando cambios pendientes",
+      label: "Sincronizando",
       state: "working",
     });
   });
@@ -355,7 +363,16 @@ describe("app shell feedback", () => {
       isPendingWorkSyncing: true,
     })).toEqual({
       accessibilityLabel: "Problema de conexion o sincronizacion",
+      label: "Requiere atención",
       state: "error",
     });
+  });
+
+  it.each([
+    ["sync conflict", { hasConflict: true }, "Requiere atención"],
+    ["local recovery", { localStorageRecoveryNotice: "Recuperación necesaria" }, "Requiere atención"],
+    ["one pending change", { pendingCount: 1 }, "Cambios pendientes"],
+  ])("maps %s to the visible label without changing indicator priority", (_case, input, label) => {
+    expect(resolveAppShellStatusIndicator({ ...baseInput, ...input }).label).toBe(label);
   });
 });

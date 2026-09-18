@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId } from "./app-diagnostics";
+import { diagnosticTabForStatusIndicator, GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticTabId } from "./app-diagnostics";
 
 describe("global app diagnostics", () => {
   it("defines the global diagnostics modal tabs in one extensible list", () => {
@@ -27,5 +27,11 @@ describe("global app diagnostics", () => {
       accessibilityLabel: "Diagnostico",
       icon: "chart-no-axes-column",
     });
+  });
+
+  it("opens Synchronization from the status control regardless of the previously selected tab", () => {
+    expect(diagnosticTabForStatusIndicator("performance")).toBe("sync");
+    expect(diagnosticTabForStatusIndicator("pwa")).toBe("sync");
+    expect(diagnosticTabForStatusIndicator("records")).toBe("sync");
   });
 });

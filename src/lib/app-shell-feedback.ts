@@ -16,6 +16,7 @@ export type AppShellStatusIndicatorState = "online" | "working" | "pending" | "o
 
 export type AppShellStatusIndicator = {
   accessibilityLabel: string;
+  label: "Al día" | "Sincronizando" | "Comprobando disponibilidad" | "Restaurando sesión" | "Cambios pendientes" | "Sin conexión" | "Requiere atención";
   state: AppShellStatusIndicatorState;
 };
 
@@ -167,6 +168,7 @@ export function resolveAppShellStatusIndicator({
   if (localStorageRecoveryNotice || hasError || hasConflict) {
     return {
       accessibilityLabel: "Problema de conexion o sincronizacion",
+      label: "Requiere atención",
       state: "error",
     };
   }
@@ -174,6 +176,7 @@ export function resolveAppShellStatusIndicator({
   if (isPendingWorkSyncing) {
     return {
       accessibilityLabel: "Sincronizando cambios pendientes",
+      label: "Sincronizando",
       state: "working",
     };
   }
@@ -181,6 +184,7 @@ export function resolveAppShellStatusIndicator({
   if (isOperationalCoreReadinessChecking) {
     return {
       accessibilityLabel: "Comprobando disponibilidad de Opco",
+      label: "Comprobando disponibilidad",
       state: "working",
     };
   }
@@ -188,6 +192,7 @@ export function resolveAppShellStatusIndicator({
   if (isAuthSessionRestoring) {
     return {
       accessibilityLabel: "Restableciendo sesion con Opco",
+      label: "Restaurando sesión",
       state: "working",
     };
   }
@@ -195,6 +200,7 @@ export function resolveAppShellStatusIndicator({
   if (pendingCount > 0) {
     return {
       accessibilityLabel: pendingCount === 1 ? "1 cambio pendiente" : `${pendingCount} cambios pendientes`,
+      label: "Cambios pendientes",
       state: "pending",
     };
   }
@@ -202,12 +208,14 @@ export function resolveAppShellStatusIndicator({
   if (connectivityStatus !== "online") {
     return {
       accessibilityLabel: "Sin conexion",
+      label: "Sin conexión",
       state: "offline",
     };
   }
 
   return {
     accessibilityLabel: "Online",
+    label: "Al día",
     state: "online",
   };
 }

@@ -21,3 +21,7 @@ export const GLOBAL_DIAGNOSTICS_BUTTON = {
 export function normalizeDiagnosticTabId(value: string | null | undefined): DiagnosticTabId {
   return GLOBAL_DIAGNOSTIC_TABS.some((tab) => tab.id === value) ? value as DiagnosticTabId : "pwa";
 }
+
+export function diagnosticTabForStatusIndicator(_currentTab: DiagnosticTabId): DiagnosticTabId {
+  return "sync";
+}

@@ -20,6 +20,18 @@ describe("diagnostics modal layout", () => {
     expect(stateUpdateSource).toContain("accessibilityState={{ expanded }}");
     expect(stateUpdateSource).toContain("{action}");
   });
+  it("keeps the status point and label in one accessible control that selects sync", () => {
+    const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
+    const controlStart = source.indexOf('accessibilityHint="Abre el diagnóstico de sincronización"');
+    const controlEnd = source.indexOf("</Pressable>", controlStart);
+    const control = source.slice(controlStart, controlEnd);
+
+    expect(controlStart).toBeGreaterThan(-1);
+    expect(control).toContain("shellStatusIndicator.label");
+    expect(control).toContain("shellStatusIndicator.accessibilityLabel");
+    expect(control).toContain("diagnosticTabForStatusIndicator(selectedDiagnosticsTab)");
+    expect(control).toContain("setIsDiagnosticsOpen(true)");
+  });
   it.each([
     { height: 900, name: "desktop", width: 1280 },
     { height: 768, name: "tablet", width: 1000 },
