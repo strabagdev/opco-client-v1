@@ -96,10 +96,49 @@ const RECORDS_OPENING_HISTORY_KEY = "records_opening_history";
 const SCHEMA_VERSION_KEY = "schema_version";
 const GLOBAL_DATABASE_STATE_KEY = "__opcoClientLocalDatabaseState";
 
+type CoordinatedDatabase = Omit<SQLite.SQLiteDatabase, "withTransactionAsync"> & {
+  withTransactionAsync(
+    task: (transaction: SQLite.SQLiteDatabase) => Promise<void>,
+    diagnosticName?: SQLiteCoordinatorOperationName,
+  ): Promise<void>;
+};
+
+export type SQLiteCoordinatorOperationName =
+  | `transaction:${string}`
+  | `${"exec" | "read" | "write"}:${string}`;
+
+export type SQLiteCoordinatorOperationDiagnostics = {
+  completedAt: string | null;
+  durationMs: number;
+  enqueuedAt: string;
+  id: string;
+  name: SQLiteCoordinatorOperationName;
+  startedAt: string | null;
+  status: "waiting" | "running" | "completed" | "error";
+};
+
+export type SQLiteCoordinatorDiagnostics = {
+  active: SQLiteCoordinatorOperationDiagnostics | null;
+  hasDatabasePromise: boolean;
+  hasMigrationPromise: boolean;
+  recent: SQLiteCoordinatorOperationDiagnostics[];
+  storageStatus: LocalDatabaseStorageState["status"];
+  waiting: SQLiteCoordinatorOperationDiagnostics[];
+  waitingByName: Partial<Record<SQLiteCoordinatorOperationName, number>>;
+  waitingOmitted: number;
+  waitingTotal: number;
+};
+
 type LocalDatabaseGlobalState = {
   cacheChangeListeners: Set<() => void>;
+  coordinatedDatabase: CoordinatedDatabase | null;
+  coordinatorActive: SQLiteCoordinatorOperationDiagnostics | null;
+  coordinatorRecent: SQLiteCoordinatorOperationDiagnostics[];
+  coordinatorSequence: number;
+  coordinatorWaiting: SQLiteCoordinatorOperationDiagnostics[];
+  connectionOperationPromise: Promise<void> | null;
   database: SQLite.SQLiteDatabase | null;
-  databasePromise: Promise<SQLite.SQLiteDatabase> | null;
+  databasePromise: Promise<CoordinatedDatabase> | null;
   lifecycleCloseRegistered: boolean;
   lastUnavailableError: LocalDatabaseUnavailableError | null;
   listeners: Set<() => void>;
@@ -130,6 +169,7 @@ export type LocalDatabase = AppNavigationCache &
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
+  getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics;
   upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }): Promise<void>;
   upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
 } & RecordsOpeningHistoryStore;
@@ -199,6 +239,7 @@ export function getLocalDatabase(): LocalDatabase {
     listStateUpdateConflicts,
     listAppViewDefinitions,
     getSelectedContractId,
+    getSQLiteCoordinatorDiagnostics,
     getPanelSnapshot,
     getReportSnapshot,
     listCachedRecords,
@@ -312,7 +353,8 @@ async function openAndMigrate() {
     status: "ready",
   });
 
-  return db;
+  state.coordinatedDatabase ??= createCoordinatedDatabase(db, state);
+  return state.coordinatedDatabase;
 }
 
 async function migrateDatabaseOnce(db: SQLite.SQLiteDatabase, state = getLocalDatabaseGlobalState()) {
@@ -479,6 +521,12 @@ function getLocalDatabaseGlobalState() {
       database: null,
       databasePromise: null,
       cacheChangeListeners: new Set(),
+      coordinatedDatabase: null,
+      coordinatorActive: null,
+      coordinatorRecent: [],
+      coordinatorSequence: 0,
+      coordinatorWaiting: [],
+      connectionOperationPromise: null,
       lifecycleCloseRegistered: false,
       lastUnavailableError: null,
       listeners: new Set(),
@@ -503,6 +551,144 @@ function setLocalDatabaseStorageState(state: LocalDatabaseGlobalState, storageSt
 
   state.storageState = storageState;
   notifyLocalDatabaseStorageListeners(state);
+}
+
+function createCoordinatedDatabase(
+  database: SQLite.SQLiteDatabase,
+  state: LocalDatabaseGlobalState,
+): CoordinatedDatabase {
+  const coordinatedMethods = new Set(["execAsync", "getAllAsync", "getFirstAsync", "runAsync"]);
+
+  return new Proxy(database, {
+    get(target, property) {
+      if (property === "withTransactionAsync") {
+        return (
+          task: (transaction: SQLite.SQLiteDatabase) => Promise<void>,
+          diagnosticName: SQLiteCoordinatorOperationName = "transaction:unlabeled",
+        ) => enqueueDatabaseOperation(
+          state,
+          diagnosticName,
+          () => target.withTransactionAsync(() => task(target)),
+        );
+      }
+
+      const value = Reflect.get(target, property, target);
+
+      if (typeof property === "string" && coordinatedMethods.has(property) && typeof value === "function") {
+        return (...args: unknown[]) => enqueueDatabaseOperation(
+          state,
+          sqliteOperationName(property, args[0]),
+          () => Promise.resolve(Reflect.apply(value, target, args)),
+        );
+      }
+
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as CoordinatedDatabase;
+}
+
+function enqueueDatabaseOperation<T>(
+  state: LocalDatabaseGlobalState,
+  name: SQLiteCoordinatorOperationName,
+  operation: () => Promise<T>,
+) {
+  state.coordinatorSequence += 1;
+  const queuedAtMs = Date.now();
+  const diagnostic: SQLiteCoordinatorOperationDiagnostics = {
+    completedAt: null,
+    durationMs: 0,
+    enqueuedAt: new Date(queuedAtMs).toISOString(),
+    id: `sqlite-${state.coordinatorSequence}`,
+    name,
+    startedAt: null,
+    status: "waiting",
+  };
+
+  state.coordinatorWaiting.push(diagnostic);
+  const previous = state.connectionOperationPromise ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(async () => {
+    const startedAtMs = Date.now();
+
+    diagnostic.startedAt = new Date(startedAtMs).toISOString();
+    diagnostic.status = "running";
+    state.coordinatorWaiting = state.coordinatorWaiting.filter((item) => item.id !== diagnostic.id);
+    state.coordinatorActive = diagnostic;
+
+    try {
+      const value = await operation();
+
+      completeSQLiteCoordinatorOperation(state, diagnostic, startedAtMs, "completed");
+      return value;
+    } catch (error) {
+      completeSQLiteCoordinatorOperation(state, diagnostic, startedAtMs, "error");
+      throw error;
+    }
+  });
+  const tail = result.then(() => undefined, () => undefined);
+
+  state.connectionOperationPromise = tail;
+
+  return result.finally(() => {
+    if (state.connectionOperationPromise === tail) {
+      state.connectionOperationPromise = null;
+    }
+  });
+}
+
+function completeSQLiteCoordinatorOperation(
+  state: LocalDatabaseGlobalState,
+  diagnostic: SQLiteCoordinatorOperationDiagnostics,
+  startedAtMs: number,
+  status: "completed" | "error",
+) {
+  const completedAtMs = Date.now();
+
+  diagnostic.completedAt = new Date(completedAtMs).toISOString();
+  diagnostic.durationMs = Math.max(0, completedAtMs - startedAtMs);
+  diagnostic.status = status;
+  if (state.coordinatorActive?.id === diagnostic.id) state.coordinatorActive = null;
+  state.coordinatorRecent = [...state.coordinatorRecent, { ...diagnostic }].slice(-20);
+}
+
+function sqliteOperationName(method: string, sql: unknown): SQLiteCoordinatorOperationName {
+  const verb = method === "execAsync" ? "exec" : method.startsWith("get") ? "read" : "write";
+
+  return `${verb}:${sqliteStatementTarget(sql)}`;
+}
+
+function sqliteStatementTarget(sql: unknown) {
+  if (typeof sql !== "string") return "unknown";
+  const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+  const match = normalized.match(/(?:from|into|update|table(?: if not exists)?)\s+([a-z_]+)/);
+
+  if (match?.[1]) return match[1];
+  if (normalized.startsWith("pragma ")) return "pragma";
+  return "schema";
+}
+
+function getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics {
+  const state = getLocalDatabaseGlobalState();
+  const now = Date.now();
+  const waitingSampleSize = 10;
+  const current = (item: SQLiteCoordinatorOperationDiagnostics) => ({
+    ...item,
+    durationMs: item.startedAt ? Math.max(0, now - Date.parse(item.startedAt)) : Math.max(0, now - Date.parse(item.enqueuedAt)),
+  });
+
+  return {
+    active: state.coordinatorActive ? current(state.coordinatorActive) : null,
+    hasDatabasePromise: Boolean(state.databasePromise),
+    hasMigrationPromise: Boolean(state.migrationPromise),
+    recent: state.coordinatorRecent.map((item) => ({ ...item })),
+    storageStatus: state.storageState.status,
+    waiting: state.coordinatorWaiting.slice(0, waitingSampleSize).map(current),
+    waitingByName: state.coordinatorWaiting.reduce<Partial<Record<SQLiteCoordinatorOperationName, number>>>((counts, item) => {
+      counts[item.name] = (counts[item.name] ?? 0) + 1;
+      return counts;
+    }, {}),
+    waitingOmitted: Math.max(0, state.coordinatorWaiting.length - waitingSampleSize),
+    waitingTotal: state.coordinatorWaiting.length,
+  };
 }
 
 function isSameLocalDatabaseStorageState(current: LocalDatabaseStorageState, next: LocalDatabaseStorageState) {
@@ -597,6 +783,8 @@ function registerWebDatabaseLifecycleClose(state: LocalDatabaseGlobalState) {
 
     state.database = null;
     state.databasePromise = null;
+    state.coordinatedDatabase = null;
+    state.connectionOperationPromise = null;
     state.migrationPromise = null;
     state.migratedSchemaVersion = null;
     void closeDatabaseQuietly(currentDatabase);
@@ -654,6 +842,8 @@ export async function retryLocalDatabaseInitialization() {
   const state = getLocalDatabaseGlobalState();
 
   state.databasePromise = null;
+  state.coordinatedDatabase = null;
+  state.connectionOperationPromise = null;
   state.migrationPromise = null;
   state.migratedSchemaVersion = null;
   state.lastUnavailableError = null;
@@ -664,7 +854,8 @@ export async function retryLocalDatabaseInitialization() {
     status: "initializing",
   });
 
-  return getDatabase();
+  await getDatabase();
+  return state.database!;
 }
 
 export async function getLocalDatabaseRecoverySummary(): Promise<LocalDatabaseRecoverySummary> {
@@ -674,7 +865,7 @@ export async function getLocalDatabaseRecoverySummary(): Promise<LocalDatabaseRe
   try {
     const state = getLocalDatabaseGlobalState();
 
-    db = state.database;
+    db = state.coordinatedDatabase ?? state.database;
     if (!db) {
       db = await SQLite.openDatabaseAsync(DATABASE_NAME);
       shouldClose = true;
@@ -725,6 +916,8 @@ export async function resetLocalDatabaseAfterConfirmation({ confirmed }: { confi
 
   state.database = null;
   state.databasePromise = null;
+  state.coordinatedDatabase = null;
+  state.connectionOperationPromise = null;
   state.migrationPromise = null;
   state.migratedSchemaVersion = null;
   state.lastUnavailableError = null;
@@ -1709,6 +1902,23 @@ async function getCachedRecord({
   recordId: string;
 }) {
   const db = await getDatabase();
+  return getCachedRecordFromDatabase(db, { contractId, entityTypeId, ownerKey, recordId });
+}
+
+async function getCachedRecordFromDatabase(
+  db: SQLite.SQLiteDatabase,
+  {
+    contractId,
+    entityTypeId,
+    ownerKey,
+    recordId,
+  }: {
+    contractId: string;
+    entityTypeId: string;
+    ownerKey: string;
+    recordId: string;
+  },
+) {
   const row = await db.getFirstAsync<EntityRecordRow>(
     `
       SELECT *
@@ -1751,8 +1961,8 @@ async function createLocalRecord({
   const displayName = buildLocalDisplayName(values);
   const payloadValues = normalizeRecordValuesForPersistence(fields, values);
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         INSERT INTO entity_records (
           local_id,
@@ -1776,7 +1986,7 @@ async function createLocalRecord({
       now,
     );
 
-    await upsertPendingOperationInTransaction(db, {
+    await upsertPendingOperationInTransaction(transaction, {
       clientRequestId,
       contractId,
       entityTypeId,
@@ -1790,7 +2000,7 @@ async function createLocalRecord({
       serverRecordId: null,
       timestamp: now,
     });
-  });
+  }, "transaction:records-create");
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: localId });
 
@@ -1841,8 +2051,8 @@ async function updateLocalRecord({
   );
   const nextStatus: RecordSyncStatus = createOperation ? "pending_create" : "pending_update";
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET display_name = ?,
@@ -1864,7 +2074,7 @@ async function updateLocalRecord({
     );
 
     if (createOperation) {
-      await db.runAsync(
+      await transaction.runAsync(
         `
           UPDATE pending_operations
           SET payload_json = ?,
@@ -1887,7 +2097,7 @@ async function updateLocalRecord({
       throw new Error("No se puede sincronizar UPDATE sin server_id.");
     }
 
-    await upsertPendingOperationInTransaction(db, {
+    await upsertPendingOperationInTransaction(transaction, {
       clientRequestId: createLocalRecordId(),
       contractId,
       entityTypeId,
@@ -1900,7 +2110,7 @@ async function updateLocalRecord({
       serverRecordId: existing.serverId,
       timestamp: now,
     });
-  });
+  }, "transaction:records-update");
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -2478,8 +2688,8 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
   };
   const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         INSERT INTO entity_records (
           local_id,
@@ -2524,7 +2734,7 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
       syncStatus,
     );
 
-    await upsertStateUpdatePendingOperation({
+    await upsertStateUpdatePendingOperation(transaction, {
       clientRequestId,
       input,
       localRecordId,
@@ -2532,7 +2742,7 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
       serverRecordId: existingRecord?.serverId ?? null,
       timestamp: now,
     });
-  });
+  }, "transaction:state-update-save");
 
   const saved = await getCachedRecord({
     contractId: input.contractId,
@@ -2595,8 +2805,9 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
   let staleSyncedRemoved = 0;
+  let reconciledFromSnapshot = false;
 
-  await db.withTransactionAsync(async () => {
+  await db.withTransactionAsync(async (transaction) => {
     const latestItems = latest.map((item) => ({
       current: {
         extraValues: item.extraValues,
@@ -2624,7 +2835,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         subjectRecordId: item.subject.id,
         uniqueness: item.date ? "subject-date" : "subject",
       });
-      const existing = await getCachedRecord({
+      const existing = await getCachedRecordFromDatabase(transaction, {
         contractId,
         entityTypeId: targetEntityTypeId,
         ownerKey,
@@ -2632,7 +2843,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
       });
 
       if (existing && existing.syncStatus !== "synced") {
-        const pendingOperation = await getStateUpdatePendingOperation(db, ownerKey, existing.localId);
+        const pendingOperation = await getStateUpdatePendingOperation(transaction, ownerKey, existing.localId);
 
         if (pendingOperation) {
           const payload = pendingOperation.payload as OfflineStateUpdatePayload;
@@ -2641,16 +2852,13 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
             continue;
           }
 
-          await completeStateUpdateOperationInTransaction(db, pendingOperation, {
+          await completeStateUpdateOperationInTransaction(transaction, pendingOperation, {
             recordId: item.current.recordId,
             result: "UNCHANGED",
             subjectRecordId: payload.subjectRecordId,
             updatedAt: item.current.updatedAt,
           });
-          await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
-            completedAt: cachedAt,
-            ownerKey,
-          });
+          reconciledFromSnapshot = true;
           continue;
         }
       }
@@ -2665,7 +2873,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         subjectRecordId: item.subject.id,
       };
 
-      await db.runAsync(
+      await transaction.runAsync(
         `
           INSERT INTO entity_records (
             local_id,
@@ -2716,13 +2924,20 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         appViewId,
         contractId,
         date,
-        db,
+        db: transaction,
         items: currentItems,
         ownerKey,
         targetEntityTypeId,
       });
     }
-  });
+  }, "transaction:attendance-snapshot");
+
+  if (reconciledFromSnapshot) {
+    await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({
+      completedAt: cachedAt,
+      ownerKey,
+    });
+  }
 
   return { staleSyncedRemoved };
 }
@@ -2757,7 +2972,7 @@ async function deleteStaleSyncedStateUpdateRecords({
         AND entity_type_id = ?
         AND sync_status = 'synced'
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND json_extract(values_json, '$.date') IS NOT NULL
         ${keepLocalClause}
         ${keepRemoteClause}
     `,
@@ -2791,8 +3006,6 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
-    input.date ?? null,
-    input.date ?? null,
   );
   const count = (statuses: RecordSyncStatus[]) =>
     rows
@@ -2830,6 +3043,8 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
+    input.date ?? null,
+    input.date ?? null,
     searchPattern,
     searchPattern,
   );
@@ -2841,7 +3056,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND json_extract(values_json, '$.date') IS NOT NULL
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
       ORDER BY json_extract(values_json, '$.date') DESC, local_id ASC
       LIMIT ? OFFSET ?
@@ -2911,8 +3126,8 @@ async function markPendingOperationSyncing(operationId: string) {
   const db = await getDatabase();
   const now = new Date().toISOString();
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE pending_operations
         SET attempts = attempts + 1,
@@ -2925,7 +3140,7 @@ async function markPendingOperationSyncing(operationId: string) {
       operationId,
     );
 
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET sync_status = 'syncing',
@@ -2939,7 +3154,7 @@ async function markPendingOperationSyncing(operationId: string) {
       `,
       operationId,
     );
-  });
+  }, "transaction:records-mark-syncing");
 }
 
 async function listPendingStateUpdateOperations(ownerKey: string) {
@@ -3107,8 +3322,8 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
   const db = await getDatabase();
   const now = new Date().toISOString();
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         DELETE FROM entity_records
         WHERE owner_key = ?
@@ -3124,15 +3339,15 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
       operation.localRecordId,
     );
 
-    await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
+    await transaction.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
 
-    const remaining = await db.getFirstAsync<{ total: number }>(
+    const remaining = await transaction.getFirstAsync<{ total: number }>(
       `SELECT COUNT(*) AS total FROM pending_operations WHERE local_record_id = ?`,
       operation.localRecordId,
     );
     const nextStatus: RecordSyncStatus = remaining?.total ? "pending_update" : "synced";
 
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET server_id = ?,
@@ -3156,7 +3371,7 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
       nextStatus,
       operation.localRecordId,
     );
-  });
+  }, "transaction:records-complete");
 }
 
 async function completeStateUpdateOperation(
@@ -3165,9 +3380,9 @@ async function completeStateUpdateOperation(
 ) {
   const db = await getDatabase();
 
-  await db.withTransactionAsync(async () => {
-    await completeStateUpdateOperationInTransaction(db, operation, result);
-  });
+  await db.withTransactionAsync(async (transaction) => {
+    await completeStateUpdateOperationInTransaction(transaction, operation, result);
+  }, "transaction:state-update-complete");
 }
 
 async function completeStateUpdateOperationInTransaction(
@@ -3221,9 +3436,9 @@ async function completeStateUpdateOperationInTransaction(
 async function retryPendingOperation(operation: PendingOperation, code: string, message: string) {
   const db = await getDatabase();
 
-  await db.withTransactionAsync(async () => {
-    await setOperationError(db, operation, code, message, operation.operation === "CREATE" ? "pending_create" : "pending_update");
-  });
+  await db.withTransactionAsync(async (transaction) => {
+    await setOperationError(transaction, operation, code, message, operation.operation === "CREATE" ? "pending_create" : "pending_update");
+  }, "transaction:records-retry");
 }
 
 async function retryStateUpdateOperation(operation: PendingOperation, code: string, message: string) {
@@ -3298,9 +3513,9 @@ async function retryFailedStateUpdateOperations({
 async function failPendingOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
   const db = await getDatabase();
 
-  await db.withTransactionAsync(async () => {
-    await setOperationError(db, operation, code, message, "failed", details, httpStatus);
-  });
+  await db.withTransactionAsync(async (transaction) => {
+    await setOperationError(transaction, operation, code, message, "failed", details, httpStatus);
+  }, "transaction:records-fail");
 }
 
 async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
@@ -3328,8 +3543,8 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
   const db = await getDatabase();
   const now = new Date().toISOString();
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE pending_operations
         SET updated_at = ?,
@@ -3342,13 +3557,13 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
       message,
       operation.id,
     );
-    await markRecordConflict(db, {
+    await markRecordConflict(transaction, {
       localRecordId: operation.localRecordId,
       remoteRecord,
       syncErrorCode: code,
       syncErrorMessage: message,
     });
-  });
+  }, "transaction:records-conflict");
 }
 
 async function markStateUpdateOperationConflict(
@@ -3368,8 +3583,8 @@ async function markStateUpdateOperationConflict(
     subjectRecordId: result.subjectRecordId,
   };
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE pending_operations
         SET updated_at = ?,
@@ -3382,7 +3597,7 @@ async function markStateUpdateOperationConflict(
       "Opco tiene un estado distinto para este registro.",
       operation.id,
     );
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET sync_status = 'conflict',
@@ -3400,7 +3615,7 @@ async function markStateUpdateOperationConflict(
       result.existing.updatedAt,
       operation.localRecordId,
     );
-  });
+  }, "transaction:state-update-conflict");
 }
 
 async function discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }) {
@@ -3497,8 +3712,8 @@ async function retryFailedRecord({
     ? { clientRequestId: operation.client_request_id, values: payloadValues }
     : { values: payloadValues };
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE pending_operations
         SET payload_json = ?,
@@ -3511,7 +3726,7 @@ async function retryFailedRecord({
       now,
       operation.id,
     );
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET sync_status = ?,
@@ -3522,7 +3737,7 @@ async function retryFailedRecord({
       nextStatus,
       existing.localId,
     );
-  });
+  }, "transaction:records-retry-failed");
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -3575,10 +3790,10 @@ async function discardFailedRecord({
       throw new Error("No se puede descartar como CREATE un registro con identidad remota.");
     }
 
-    await db.withTransactionAsync(async () => {
-      await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
-      await db.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
-    });
+    await db.withTransactionAsync(async (transaction) => {
+      await transaction.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
+      await transaction.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
+    }, "transaction:records-discard-create");
 
     return null;
   }
@@ -3597,9 +3812,9 @@ async function discardFailedRecord({
 
   const now = new Date().toISOString();
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET server_id = ?,
@@ -3622,7 +3837,7 @@ async function discardFailedRecord({
       now,
       existing.localId,
     );
-  });
+  }, "transaction:records-discard-update");
 
   return getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 }
@@ -3664,8 +3879,8 @@ async function resolveRecordConflictWithLocal({
     values: existing.values,
   });
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET remote_updated_at = ?,
@@ -3680,7 +3895,7 @@ async function resolveRecordConflictWithLocal({
       remote.record.updatedAt,
       existing.localId,
     );
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE pending_operations
         SET payload_json = ?,
@@ -3694,7 +3909,7 @@ async function resolveRecordConflictWithLocal({
       ownerKey,
       existing.localId,
     );
-  });
+  }, "transaction:records-resolve-local");
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -3900,8 +4115,8 @@ async function resolveRecordConflictWithRemote({
   const remote = await api.getEntityRecord(token, contractId, entityTypeId, existing.serverId);
   const now = new Date().toISOString();
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
       `
         DELETE FROM pending_operations
         WHERE owner_key = ? AND local_record_id = ? AND operation = 'UPDATE'
@@ -3909,7 +4124,7 @@ async function resolveRecordConflictWithRemote({
       ownerKey,
       existing.localId,
     );
-    await db.runAsync(
+    await transaction.runAsync(
       `
         UPDATE entity_records
         SET display_name = ?,
@@ -3930,7 +4145,7 @@ async function resolveRecordConflictWithRemote({
       now,
       existing.localId,
     );
-  });
+  }, "transaction:records-resolve-remote");
 
   const record = await getCachedRecord({ contractId, entityTypeId, ownerKey, recordId: existing.localId });
 
@@ -4007,7 +4222,7 @@ async function upsertPendingOperationInTransaction(
   );
 }
 
-async function upsertStateUpdatePendingOperation({
+async function upsertStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, {
   clientRequestId,
   input,
   localRecordId,
@@ -4022,7 +4237,6 @@ async function upsertStateUpdatePendingOperation({
   serverRecordId: string | null;
   timestamp: string;
 }) {
-  const db = await getDatabase();
   const id = `state_update_${localRecordId}`;
 
   await db.runAsync(

@@ -138,6 +138,13 @@ Offline `STATE_UPDATE` save is atomic: the local `entity_records` snapshot and t
 
 Conflict persistence is also atomic: `markStateUpdateOperationConflict()` writes the pending operation error metadata and the associated local `entity_records` conflict snapshot in one SQLite transaction. The successful final shape is unchanged: pending operation has `last_error_code = CONFLICT`, and the local record has `sync_status = conflict` plus remote conflict metadata.
 
+STATE_UPDATE uses the common per-connection SQLite coordinator described in
+`CLIENT_ARCHITECTURE.md#sqlite`; it does not own a separate queue. Offline saves, remote snapshot
+hydration, outbox completion/conflict, concurrent RECORDS work, prewarm metadata, and direct
+telemetry/cache statements therefore cannot enter one another's transaction. Each transaction keeps
+its original atomic boundary and propagates failures after SQLite rollback. The coordinator does not
+retry or suppress operations, and a rejected operation does not prevent the next queued operation.
+
 `local_id` is scoped. For `update-current` with `subject` or `subject-date` uniqueness, it is derived from `appViewId`, optional date, and `subjectRecordId`. For append/no-uniqueness records it is generated from the AppView plus time/randomness.
 
 ## Sync Statuses

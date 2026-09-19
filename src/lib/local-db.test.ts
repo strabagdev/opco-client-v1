@@ -1392,6 +1392,224 @@ describe("local database singleton", () => {
     );
   });
 
+  it("serializes concurrent attendance snapshot transactions on the shared web connection", async () => {
+    let activeTransactions = 0;
+    let maximumActiveTransactions = 0;
+
+    db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
+      if (activeTransactions > 0) {
+        throw new Error("Error code 1: cannot start a transaction within a transaction");
+      }
+
+      activeTransactions += 1;
+      maximumActiveTransactions = Math.max(maximumActiveTransactions, activeTransactions);
+
+      try {
+        await Promise.resolve();
+        await task();
+      } finally {
+        activeTransactions -= 1;
+      }
+    });
+    const store = getLocalDatabase();
+    const snapshot = (date: string) => store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date,
+      items: [],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    await expect(Promise.all([
+      snapshot("2026-08-26"),
+      snapshot("2026-08-27"),
+      snapshot("2026-08-28"),
+    ])).resolves.toEqual([
+      { staleSyncedRemoved: 0 },
+      { staleSyncedRemoved: 0 },
+      { staleSyncedRemoved: 0 },
+    ]);
+    expect(db.withTransactionAsync).toHaveBeenCalledTimes(3);
+    expect(maximumActiveTransactions).toBe(1);
+  });
+
+  it("serializes a RECORDS sync transaction with an attendance snapshot transaction", async () => {
+    let releaseFirstTransaction: () => void = () => undefined;
+    const firstTransactionBlocked = new Promise<void>((resolve) => {
+      releaseFirstTransaction = resolve;
+    });
+    let transactionNumber = 0;
+
+    db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
+      transactionNumber += 1;
+      await task();
+      if (transactionNumber === 1) await firstTransactionBlocked;
+    });
+    const store = getLocalDatabase();
+    const recordsSync = store.markPendingOperationSyncing("records_operation_1");
+
+    await vi.waitFor(() => expect(db.withTransactionAsync).toHaveBeenCalledOnce());
+    const attendanceSnapshot = store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-29",
+      items: [],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    await Promise.resolve();
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    releaseFirstTransaction();
+    await Promise.all([recordsSync, attendanceSnapshot]);
+    expect(db.withTransactionAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes local STATE_UPDATE outbox save with sync completion", async () => {
+    let activeTransactions = 0;
+    let maximumActiveTransactions = 0;
+
+    db.getFirstAsync.mockImplementation(async (sql: string) =>
+      sql.includes("FROM entity_records")
+        ? stateUpdateEntityRecordRow({ local_id: "state_update_attendance_2026_08_26_person_a" })
+        : null);
+    db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
+      if (activeTransactions > 0) throw new Error("cannot start a transaction within a transaction");
+      activeTransactions += 1;
+      maximumActiveTransactions = Math.max(maximumActiveTransactions, activeTransactions);
+      try {
+        await Promise.resolve();
+        await task();
+      } finally {
+        activeTransactions -= 1;
+      }
+    });
+    const store = getLocalDatabase();
+
+    await Promise.all([
+      store.saveStateUpdateLocally(stateUpdateSaveInput("person_a")),
+      store.completeStateUpdateOperation(stateUpdatePendingOperation(), {
+        recordId: "attendance_remote_1",
+        result: "UPDATED",
+        subjectRecordId: "person_real_1",
+        updatedAt: "2026-08-26T12:00:00.000Z",
+      }),
+    ]);
+
+    expect(db.withTransactionAsync).toHaveBeenCalledTimes(2);
+    expect(maximumActiveTransactions).toBe(1);
+  });
+
+  it("continues the connection queue after rollback while another operation waits", async () => {
+    let transactionNumber = 0;
+
+    db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
+      transactionNumber += 1;
+      await task();
+      if (transactionNumber === 1) throw new Error("forced rollback");
+    });
+    const store = getLocalDatabase();
+    const failedRecordsSync = store.markPendingOperationSyncing("records_operation_rollback");
+    const waitingSnapshot = store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-30",
+      items: [],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+    const [failedResult, waitingResult] = await Promise.allSettled([failedRecordsSync, waitingSnapshot]);
+
+    expect(failedResult).toMatchObject({ reason: expect.objectContaining({ message: "forced rollback" }), status: "rejected" });
+    expect(waitingResult).toEqual({ status: "fulfilled", value: { staleSyncedRemoved: 0 } });
+    expect(db.withTransactionAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the explicit transaction context for nested outbox helpers", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) =>
+      sql.includes("FROM entity_records")
+        ? stateUpdateEntityRecordRow({ local_id: "state_update_attendance_2026_08_26_person_nested" })
+        : null);
+    const store = getLocalDatabase();
+
+    await store.saveStateUpdateLocally(stateUpdateSaveInput("person_nested"));
+
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    expect(db.runAsync.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO entity_records"))).toBe(true);
+    expect(db.runAsync.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO pending_operations"))).toBe(true);
+  });
+
+  it("keeps an unrelated direct write outside an active transaction", async () => {
+    let releaseTransaction: () => void = () => undefined;
+    const transactionBlocked = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+    const events: string[] = [];
+
+    db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
+      events.push("begin");
+      await task();
+      await transactionBlocked;
+      events.push("commit");
+    });
+    db.runAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("entity_definitions")) events.push("definition-write");
+      return undefined;
+    });
+    const store = getLocalDatabase();
+    const snapshot = store.upsertStateUpdateSnapshot({
+      appViewId: "attendance_view_real_1",
+      contractId: "contract_real_1",
+      date: "2026-08-31",
+      items: [],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    await vi.waitFor(() => expect(events).toContain("begin"));
+    const definitionWrite = store.upsertEntityDefinition("contract_real_1", "people", {
+      active: true,
+      fields: [],
+      icon: null,
+      id: "people",
+      name: "Personas",
+      slug: "personas",
+    }, "2026-08-31T12:00:00.000Z");
+
+    await vi.waitFor(() => expect(store.getSQLiteCoordinatorDiagnostics().waiting).toEqual([
+      expect.objectContaining({ name: "write:entity_definitions", status: "waiting" }),
+    ]));
+    expect(events).toEqual(["begin"]);
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({
+      active: {
+        name: "transaction:attendance-snapshot",
+        status: "running",
+      },
+      waiting: [{
+        name: "write:entity_definitions",
+        status: "waiting",
+      }],
+      waitingByName: { "write:entity_definitions": 1 },
+      waitingOmitted: 0,
+      waitingTotal: 1,
+    });
+    releaseTransaction();
+    await Promise.all([snapshot, definitionWrite]);
+    expect(events).toEqual(["begin", "commit", "definition-write"]);
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({
+      active: null,
+      waiting: [],
+      waitingByName: {},
+      waitingOmitted: 0,
+      waitingTotal: 0,
+      recent: expect.arrayContaining([
+        expect.objectContaining({ name: "transaction:attendance-snapshot", status: "completed" }),
+        expect.objectContaining({ name: "write:entity_definitions", status: "completed" }),
+      ]),
+    });
+  });
+
   it("removes stale synced STATE_UPDATE cache rows only after a complete remote snapshot", async () => {
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records") || sql.includes("FROM pending_operations")) {
