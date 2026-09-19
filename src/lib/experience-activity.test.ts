@@ -25,6 +25,22 @@ describe("visible experience activity", () => {
     expect(getExperienceActivitySnapshot()).toMatchObject({ activeRuns: [], result: "success" });
   });
 
+  it("tracks route bootstrap before the AppView renderer type is known", () => {
+    activateExperienceActivityScope({
+      appViewId: "view-attendance",
+      appViewTitle: "Experiencia",
+      appViewType: null,
+      scopeKey: "scope-bootstrap",
+    });
+    report("scope-bootstrap", 1, null, null);
+
+    expect(getExperienceActivitySnapshot()).toMatchObject({
+      appViewId: "view-attendance",
+      appViewType: null,
+      result: "running",
+    });
+  });
+
   it("retains a failed refresh until a later successful refresh recovers it", () => {
     activate("scope-a", "Protocolos");
     report("scope-a", 0, "RECORDS_READ_FAILED", "error");

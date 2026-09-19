@@ -43,6 +43,46 @@ export function useExperienceActivityReporter(appView: AppView, {
   }, [activeCount, errorCode, result, scopeKey]);
 }
 
+export function useExperienceBootstrapActivity(
+  appViewId: string | undefined,
+  {
+    enabled,
+    errorCode,
+    isLoading,
+  }: {
+    enabled: boolean;
+    errorCode: string | null;
+    isLoading: boolean;
+  },
+) {
+  const { ownerKey, selectedContractId } = useSession();
+  const scopeKey = useMemo(
+    () => enabled && appViewId && ownerKey && selectedContractId
+      ? `${ownerKey}\u0000${selectedContractId}\u0000${appViewId}`
+      : null,
+    [appViewId, enabled, ownerKey, selectedContractId],
+  );
+
+  useEffect(() => {
+    if (!scopeKey || !appViewId) return;
+
+    activateExperienceActivityScope({
+      appViewId,
+      appViewTitle: "Experiencia",
+      appViewType: null,
+      scopeKey,
+    });
+    reportExperienceActivity({
+      activeCount: Number(isLoading),
+      errorCode,
+      result: errorCode ? "error" : isLoading ? null : "success",
+      scopeKey,
+    });
+
+    return () => leaveExperienceActivityScope(scopeKey);
+  }, [appViewId, errorCode, isLoading, scopeKey]);
+}
+
 export function useExperienceActivitySnapshot() {
   return useSyncExternalStore(subscribeExperienceActivity, getExperienceActivitySnapshot, getExperienceActivitySnapshot);
 }

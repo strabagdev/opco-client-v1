@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { loadAppViewsWithCache, readCachedAppViews } from "@/lib/app-navigation-cache";
+import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { selectContractId } from "@/lib/contract-selection";
 import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
@@ -54,17 +54,16 @@ export function useAppView(appViewId: string | undefined) {
       setError(null);
 
       try {
-        const cached = await readCachedAppViews(definitionCache, ownerKey, effectiveContractId);
-
-        if (isMounted && cached?.views.some((view) => view.id === appViewId)) {
-          setViews(cached.views);
-          setIsLoading(false);
-        }
-
         const data = await loadAppViewsWithCache({
           api,
           cache: definitionCache,
           contractId: effectiveContractId,
+          onCached(cached) {
+            if (isMounted && cached.views.some((view) => view.id === appViewId)) {
+              setViews(cached.views);
+              setIsLoading(false);
+            }
+          },
           ownerKey,
           token,
         });

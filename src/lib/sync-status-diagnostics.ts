@@ -1,6 +1,7 @@
 import type { AppShellStatusIndicator } from "./app-shell-feedback";
 import type { ConnectivityStatus } from "./connectivity";
 import type { ExperienceActivitySnapshot } from "./experience-activity";
+import type { SQLiteCoordinatorDiagnostics } from "./local-db";
 import type { WriteFeedbackSnapshot } from "./write-feedback";
 
 export type SyncChecklistState = "Sin comprobar" | "En curso" | "Correcto" | "Pendiente" | "Error" | "No aplica";
@@ -166,6 +167,7 @@ export function updateSyncStatusHistory({
 export function formatSyncStatusDiagnosticsCopy(
   diagnostics: SyncStatusDiagnostics,
   history: SyncStatusHistory,
+  sqlite?: SQLiteCoordinatorDiagnostics,
 ) {
   const currentSince = [...history.events].reverse().find((event) => event.process === "Indicador")?.at ?? "Sin información";
   const lines = [
@@ -176,6 +178,9 @@ export function formatSyncStatusDiagnosticsCopy(
     `Anima: ${diagnostics.indicator.state === "working" ? "sí" : "no"}`,
     `Actividades concurrentes: ${diagnostics.activities.join(", ") || "Ninguna"}`,
     `Última sincronización exitosa: ${diagnostics.lastSuccessfulSyncAt ?? "Sin información"}`,
+    "",
+    "Coordinador SQLite",
+    ...sqliteCoordinatorCopyLines(sqlite),
     "",
     "Checklist",
     ...diagnostics.checklist.map((entry) =>
@@ -189,6 +194,21 @@ export function formatSyncStatusDiagnosticsCopy(
   ];
 
   return lines.join("\n");
+}
+
+function sqliteCoordinatorCopyLines(diagnostics?: SQLiteCoordinatorDiagnostics) {
+  if (!diagnostics) return ["Sin información"];
+  const operation = (item: SQLiteCoordinatorDiagnostics["active"]) => item
+    ? `${item.id}; nombre=${item.name}; estado=${item.status}; encolada=${item.enqueuedAt}; inicio=${item.startedAt ?? "Sin información"}; duración=${item.durationMs}ms`
+    : "Ninguna";
+
+  return [
+    `Storage: ${diagnostics.storageStatus}; apertura=${diagnostics.hasDatabasePromise ? "presente" : "ausente"}; migración=${diagnostics.hasMigrationPromise ? "activa" : "inactiva"}`,
+    `Activa: ${operation(diagnostics.active)}`,
+    `En espera (${diagnostics.waitingTotal}): ${Object.entries(diagnostics.waitingByName).map(([name, count]) => `${name}=${count}`).join(", ") || "Ninguna"}`,
+    `Muestra pendientes (${diagnostics.waiting.length}; omitidas=${diagnostics.waitingOmitted}): ${diagnostics.waiting.length ? diagnostics.waiting.map((item) => operation(item)).join(" | ") : "Ninguna"}`,
+    `Últimas (${diagnostics.recent.length}): ${diagnostics.recent.length ? diagnostics.recent.map((item) => operation(item)).join(" | ") : "Sin información"}`,
+  ];
 }
 
 export function fingerprintSyncDiagnosticScope(ownerKey: string, contractId: string) {

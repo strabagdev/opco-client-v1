@@ -40,6 +40,7 @@ export async function loadAppViewsWithCache({
   cache,
   contractId,
   now = () => new Date(),
+  onCached,
   token,
   ownerKey,
 }: {
@@ -47,19 +48,24 @@ export async function loadAppViewsWithCache({
   cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">;
   contractId: string;
   now?: () => Date;
+  onCached?: (snapshot: CachedAppViewsSnapshot) => void;
   ownerKey: string;
   token: string;
 }): Promise<AppViewsResult> {
+  const cachedPromise = readCachedAppViews(cache, ownerKey, contractId);
+
+  if (onCached) {
+    void cachedPromise.then((cached) => {
+      if (cached) onCached(cached);
+    }).catch(() => undefined);
+  }
+
   try {
     const remote = await api.getAppViews(token, contractId);
     const syncedAt = now().toISOString();
     const views = sortAppViews(remote.views);
 
-    try {
-      await cache.upsertAppViews(ownerKey, contractId, views, syncedAt);
-    } catch {
-      // Navigation cache writes must not block online rendering.
-    }
+    void cache.upsertAppViews(ownerKey, contractId, views, syncedAt).catch(() => undefined);
 
     return {
       fromCache: false,
@@ -72,7 +78,7 @@ export async function loadAppViewsWithCache({
       throw error;
     }
 
-    const cached = await readCachedAppViews(cache, ownerKey, contractId);
+    const cached = await cachedPromise;
 
     if (!cached) {
       throw error;

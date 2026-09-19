@@ -86,6 +86,22 @@ describe("sync status diagnostics", () => {
     });
   });
 
+  it("distinguishes completed and failed offline preparation without runtime activity", () => {
+    const completed = buildSyncStatusDiagnostics({
+      ...baseInput,
+      offlinePreparation: { activeInCurrentRuntime: false, completedAt: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T09:59:00.000Z", status: "completed" },
+    });
+    const failed = buildSyncStatusDiagnostics({
+      ...baseInput,
+      offlinePreparation: { activeInCurrentRuntime: false, completedAt: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T09:59:00.000Z", status: "failed" },
+    });
+
+    expect(completed.checklist.find((item) => item.id === "offline-preparation")?.state).toBe("Correcto");
+    expect(failed.checklist.find((item) => item.id === "offline-preparation")?.state).toBe("Error");
+    expect(completed.activities).not.toContain("Preparación offline");
+    expect(failed.activities).not.toContain("Preparación offline");
+  });
+
   it("keeps header reason, experience checklist, and copied diagnostics coherent", () => {
     const experience = {
       activeRuns: [
@@ -109,6 +125,51 @@ describe("sync status diagnostics", () => {
     expect(copied).toContain("Experiencia visible: En curso");
     expect(copied).toContain("experience-run-1");
     expect(copied).not.toMatch(/token|payload|field value/i);
+  });
+
+  it("copies the live SQLite operation and waiters without SQL or values", () => {
+    const diagnostics = buildSyncStatusDiagnostics(baseInput);
+    const copied = formatSyncStatusDiagnosticsCopy(diagnostics, { events: [], scopeKey: "safe-scope" }, {
+      active: {
+        completedAt: null,
+        durationMs: 56_000,
+        enqueuedAt: "2026-09-19T12:00:00.000Z",
+        id: "sqlite-7",
+        name: "transaction:attendance-snapshot",
+        startedAt: "2026-09-19T12:00:00.001Z",
+        status: "running",
+      },
+      hasDatabasePromise: true,
+      hasMigrationPromise: false,
+      recent: [],
+      storageStatus: "ready",
+      waiting: Array.from({ length: 10 }, (_, index) => ({
+        completedAt: null,
+        durationMs: 55_999,
+        enqueuedAt: "2026-09-19T12:00:00.002Z",
+        id: `sqlite-${index + 8}`,
+        name: "read:app_metadata" as const,
+        startedAt: null,
+        status: "waiting" as const,
+      })),
+      waitingByName: {
+        "read:app_metadata": 1747,
+        "read:pending_operations": 2,
+        "write:app_metadata": 859,
+        "write:sync_telemetry": 4,
+      },
+      waitingOmitted: 2602,
+      waitingTotal: 2612,
+    });
+
+    expect(copied).toContain("Activa: sqlite-7; nombre=transaction:attendance-snapshot");
+    expect(copied).toContain("nombre=read:app_metadata");
+    expect(copied).toContain("duración=56000ms");
+    expect(copied).toContain("En espera (2612): read:app_metadata=1747");
+    expect(copied).toContain("write:app_metadata=859");
+    expect(copied).toContain("Muestra pendientes (10; omitidas=2602)");
+    expect(copied.match(/nombre=read:app_metadata/g)).toHaveLength(10);
+    expect(copied).not.toMatch(/SELECT|INSERT|payload|token/i);
   });
 
   it("includes the scoped write result without calling a local save a completed sync", () => {

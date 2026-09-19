@@ -15,6 +15,7 @@ import {
   shouldShowAppShellFeedbackSpinner,
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
+import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
 import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
 import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
@@ -54,6 +55,7 @@ export default function AppLayout() {
   const {
     connectivityStatus,
     context,
+    definitionCache,
     isAuthSessionRestoring,
     diagnosticsStateUpdate,
     isOfflinePreparationRunning,
@@ -134,11 +136,12 @@ export default function AppLayout() {
     hasError: hasSyncError,
     hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
-    isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
+    isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
     isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
+    offlinePreparationStatus: offlinePreparationDiagnostics?.status ?? null,
     pendingCount: pendingRecordsCount,
     syncConfirmationVisible: toast?.id === "sync-success",
     writeFeedback,
@@ -152,7 +155,7 @@ export default function AppLayout() {
     hasError: hasSyncError,
     hasReadConnectivityIssue: visibleErrorKind === "read",
     isAuthSessionRestoring,
-    isOfflinePreparationRunning: offlinePreparationDiagnostics?.status === "running",
+    isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
     isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
     localStorageRecoveryNotice,
@@ -557,7 +560,12 @@ export default function AppLayout() {
               style={styles.diagnosticsContentScroll}
             >
               {selectedDiagnosticsTab === "sync" ? (
-                <SyncStatusDiagnosticsPanel key={`${ownerKey ?? "none"}:${selectedContractId ?? "none"}`} diagnostics={syncStatusDiagnostics} history={syncStatusHistory} />
+                <SyncStatusDiagnosticsPanel
+                  getSQLiteDiagnostics={definitionCache.getSQLiteCoordinatorDiagnostics}
+                  key={`${ownerKey ?? "none"}:${selectedContractId ?? "none"}`}
+                  diagnostics={syncStatusDiagnostics}
+                  history={syncStatusHistory}
+                />
               ) : null}
               {selectedDiagnosticsTab === "pwa" ? (
                 <PwaDiagnostics diagnostics={offlineReadiness} offlinePreparationDiagnostics={offlinePreparationDiagnostics} showTitle={false} />
@@ -764,14 +772,17 @@ function PwaDiagnostics({
 
 function SyncStatusDiagnosticsPanel({
   diagnostics,
+  getSQLiteDiagnostics,
   history,
 }: {
   diagnostics: ReturnType<typeof buildSyncStatusDiagnostics>;
+  getSQLiteDiagnostics: () => SQLiteCoordinatorDiagnostics;
   history: SyncStatusHistory;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
   const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSince = [...history.events].reverse().find((event) => event.process === "Indicador")?.at ?? null;
+  const sqliteDiagnostics = getSQLiteDiagnostics();
 
   async function handleCopy() {
     if (copyResetTimeout.current) {
@@ -779,7 +790,7 @@ function SyncStatusDiagnosticsPanel({
     }
 
     try {
-      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history));
+      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history, getSQLiteDiagnostics()));
       setCopyState("success");
       copyResetTimeout.current = setTimeout(() => setCopyState("idle"), 2000);
     } catch {
@@ -813,6 +824,9 @@ function SyncStatusDiagnosticsPanel({
       </View>
       <Text style={styles.syncActivitiesText}>
         Actividades concurrentes: {diagnostics.activities.join(", ") || "Ninguna"}
+      </Text>
+      <Text style={styles.syncActivitiesText}>
+        SQLite activa: {sqliteDiagnostics.active?.name ?? "Ninguna"} · En espera: {sqliteDiagnostics.waitingTotal}
       </Text>
 
       <Text style={styles.diagnosticsTitle}>Checklist automático</Text>

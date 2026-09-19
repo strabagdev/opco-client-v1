@@ -47,13 +47,17 @@ The header status is one non-interactive icon-and-text indicator. On wide layout
 
 Durable pending work, retained errors, conflicts, and offline state remain explicit through their own static status/feedback and do not depend on animation alone. PANEL refreshes and AppView offline preparation are read/cache work, not pending-change sync, so they do not animate the global sync dot. Offline preparation remains observable in the existing PWA feedback and diagnostics, including its persisted status and current/last stage.
 
-A persisted offline-preparation `running` diagnostic may describe an interrupted prior runtime, so it is diagnostic evidence rather than proof of a currently active operation.
+A persisted offline-preparation `running` diagnostic may describe an interrupted prior runtime, so
+it is diagnostic evidence rather than proof of a currently active operation. Only the in-memory
+active-run set produces the loading message and spinner. Persisted `running` without an active run
+is shown as `Preparacion anterior interrumpida.` without animation; persisted `failed` is shown as
+the static `Preparacion sin conexion incompleta.` warning; `completed` produces no banner.
 
 Before this separation, `offlinePreparationDiagnostics.status === "running"` entered the same `working` branch as auth restoration, readiness, and pending-work sync, producing the same amber pulse. This code-level ambiguity is confirmed and covered by regression tests. It does not establish which branch caused a historical device episode: attribution requires the affected device's PWA preparation timestamps plus STATE_UPDATE and RECORDS activity captured for that episode. The current diagnostics do not persist one atomic snapshot of every header input.
 
 The global diagnostics modal has a `Sincronización` tab derived from the same `resolveAppShellStatusIndicator()` result and source values used by the header. It does not own sync state or trigger work. Its checklist maps evidence as follows:
 
-Visible-experience activity is an in-memory observation layer, distinct from persisted performance history. RECORDS, PANEL, REPORT, attendance, and state-update report their existing active counts and safe outcomes without creating requests, polling, delays, or cache transitions. Runs are scoped by owner, contract, and AppView; concurrent work remains active until every reported operation finishes, and stale reports from an old route cannot overwrite the current scope. PANEL reports concurrent module/dataset work and retained partial failures. A failed refresh remains visible until a later successful refresh or scope exit; cancellation is never rewritten as success.
+Visible-experience activity is an in-memory observation layer, distinct from persisted performance history. The generic AppView route reports its bootstrap before a renderer exists; RECORDS, PANEL, REPORT, attendance, and state-update then report their existing active counts and safe outcomes without creating requests, polling, delays, or cache transitions. Runs are scoped by owner, contract, and AppView; concurrent work remains active until every reported operation finishes, and stale reports from an old route cannot overwrite the current scope. PANEL reports concurrent module/dataset work and retained partial failures. A failed refresh remains visible until a later successful refresh or scope exit; cancellation is never rewritten as success.
 
 Write feedback is a separate transient input to the same resolver, not a second notification or synchronization engine. RECORDS reports `local-saved` only after its atomic SQLite snapshot/outbox transaction commits. Offline workflow adapters do the same after their shared STATE_UPDATE transaction; direct online workflow writes report `server-confirmed` only after a successful Opco response. The snapshot is scoped by owner, contract, and AppView and carries a monotonic presentation id, so a stale timeout or a callback from another route cannot clear a newer result. It remains visible for `3,500 ms`; that timeout controls presentation only and never infers completion, changes outbox state, or drives requests. A local save remains explicitly distinct from pending work, active sending, and server-confirmed sync, and it outranks concurrent read activity so a refresh cannot hide a write result.
 
@@ -289,6 +293,12 @@ Flow:
 contract -> GET /views -> app_views cache -> AppView definition prewarm -> registry -> renderer
 ```
 
+On an online route opening, the owner-scoped `app_views` read and `GET /views` start together.
+A useful cached assignment may render first, but a busy SQLite queue cannot prevent a successful
+remote assignment from mounting its renderer. Persisting that remote navigation snapshot remains
+best-effort and does not hold the online response. On a network failure, the same authorized cache
+promise is still awaited as the offline fallback; no empty assignment is fabricated.
+
 Known `AppView.type` values:
 
 | Type | Client implementation |
@@ -394,7 +404,29 @@ STATE_UPDATE conflicts preserve `stateValues` and `extraValues` when Operational
 
 ## SQLite
 
-Local database: `opco-client.db`. Current schema version in code: `8`.
+Local database: `opco-client.db`. Current schema version in code: `10`.
+
+All normal runtime consumers share the one `openDatabaseAsync("opco-client.db")` singleton: session
+and navigation caches, RECORDS, attendance/STATE_UPDATE, prewarm, synchronization, telemetry, and
+diagnostics. A per-connection coordinator serializes every SQLite statement and treats each
+`withTransactionAsync()` callback as one indivisible queue operation. Transaction callbacks receive
+the physical connection explicitly; nested helpers must use that context instead of reopening or
+re-entering the coordinated facade. This prevents a second `BEGIN` and prevents unrelated direct
+writes or reads from entering an active transaction and sharing its commit/rollback. Network calls
+occur before or after these database operations and are not queued.
+
+Schema creation/migration is single-flight and finishes before the coordinated facade is published.
+The recovery summary uses the same coordinator when the singleton is open. Only recovery from an
+unavailable singleton may open a temporary read connection, which is closed immediately and is not
+used concurrently with a healthy runtime connection. The concurrency tests use a deterministic
+SQLite API mock to model one connection, transaction rejection, rollback, and ordering; they do not
+execute Expo's browser OPFS/WASM engine, so manual browser validation remains required.
+
+Coordinator diagnostics are in-memory and do not subscribe to or access SQLite. They expose one
+active operation, totals grouped by safe operation name, at most ten waiting samples, at most twenty
+recent completions, and an omitted-waiter count. Reconnect telemetry persistence keeps a stable
+callback identity and reads its latest React state through a ref, preventing its own metadata write
+from retriggering connectivity effects.
 
 | Table | Category | Purpose | Ownership | Authority | Scope | Lifecycle |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -634,6 +666,10 @@ Reset protections:
 `src/lib/opco-api.ts` owns:
 
 - Base URL from `EXPO_PUBLIC_OPCO_API_URL`.
+- `EXPO_PUBLIC_OPCO_ENV=local` (and the Expo development runtime) validates that the base URL is
+  exactly loopback Core on port 3000. Hosted APIs and alternate ports fail before requests begin;
+  production builds retain their provider-supplied target. This guard reduces accidental local
+  access to production but does not replace server authorization or database permissions.
 - Neutral login from email/password, followed by server-revalidated organization selection when needed.
 - Bearer auth headers.
 - Web refresh through HttpOnly cookie.

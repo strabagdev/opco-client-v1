@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { appViewsFixture } from "../test/fixtures";
 import { AppNavigationCache, loadAppViewsWithCache, readCachedAppViews } from "./app-navigation-cache";
@@ -33,6 +33,35 @@ describe("app navigation cache", () => {
     ]);
     await expect(cache.getAppViews("org_1:user_1", "contract_1")).resolves.toMatchObject({
       syncedAt: "2026-08-19T12:00:00.000Z",
+    });
+  });
+
+  it("finishes the route load from remote data while coordinated SQLite cache work is waiting", async () => {
+    const never = new Promise<never>(() => undefined);
+    const getAppViews = vi.fn(async () => ({ views: appViewsFixture }));
+    const cache = {
+      getAppViews: vi.fn(() => never),
+      upsertAppViews: vi.fn(() => never),
+    };
+
+    const result = await loadAppViewsWithCache({
+      api: { getAppViews },
+      cache,
+      contractId: "contract_1",
+      onCached: vi.fn(),
+      ownerKey: "org_1:user_1",
+      token: "token_1",
+    });
+
+    expect(getAppViews).toHaveBeenCalledOnce();
+    expect(cache.getAppViews).toHaveBeenCalledOnce();
+    expect(cache.upsertAppViews).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      fromCache: false,
+      offline: false,
+      views: expect.arrayContaining([
+        expect.objectContaining({ id: "view_workflow" }),
+      ]),
     });
   });
 

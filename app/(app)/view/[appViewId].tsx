@@ -5,11 +5,17 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from "reac
 import { ExperienceOpeningProvider, monotonicNow } from "@/renderers/experience-opening";
 import { renderAppView } from "@/renderers/registry";
 import { useAppView } from "@/renderers/use-app-view";
+import { useExperienceBootstrapActivity } from "@/renderers/use-experience-activity";
 
 export default function AppViewScreen() {
   const [routeStartedAt] = useState(monotonicNow);
   const { appViewId } = useLocalSearchParams<{ appViewId: string }>();
   const { appView, error, isLoading, retry } = useAppView(appViewId);
+  useExperienceBootstrapActivity(appViewId, {
+    enabled: !appView,
+    errorCode: error ? "APP_VIEW_LOAD_FAILED" : null,
+    isLoading,
+  });
 
   if (isLoading) {
     return (

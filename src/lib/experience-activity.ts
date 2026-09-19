@@ -41,7 +41,7 @@ export function activateExperienceActivityScope({
 }: {
   appViewId: string;
   appViewTitle: string;
-  appViewType: AppViewType;
+  appViewType: AppViewType | null;
   scopeKey: string;
 }) {
   if (snapshot.scopeKey === scopeKey) return;

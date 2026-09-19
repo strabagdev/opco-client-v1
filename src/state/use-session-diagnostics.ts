@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   createStateUpdateDiagnosticApi,
@@ -194,6 +194,12 @@ export function useSessionDiagnostics({
   const [isStateUpdateDiagnosticSyncing, setIsStateUpdateDiagnosticSyncing] = useState(false);
   const [stateUpdateReconnectDiagnostics, setStateUpdateReconnectDiagnostics] =
     useState<StateUpdateReconnectDiagnostics>(emptyStateUpdateReconnectDiagnostics);
+  const stateUpdateReconnectDiagnosticsRef = useRef(stateUpdateReconnectDiagnostics);
+
+  const commitStateUpdateReconnectDiagnostics = useCallback((next: StateUpdateReconnectDiagnostics) => {
+    stateUpdateReconnectDiagnosticsRef.current = next;
+    setStateUpdateReconnectDiagnostics(next);
+  }, []);
 
   const refreshStateUpdateDiagnostics = useCallback(async () => {
     if (!ownerKey) {
@@ -223,17 +229,17 @@ export function useSessionDiagnostics({
     try {
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey).catch(() => null);
       const next = mergeStateUpdateReconnectDiagnosticsForPersistence({
-        current: stateUpdateReconnectDiagnostics,
+        current: stateUpdateReconnectDiagnosticsRef.current,
         persisted,
         updater,
       });
 
-      setStateUpdateReconnectDiagnostics(next);
+      commitStateUpdateReconnectDiagnostics(next);
       await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next);
     } catch {
       return;
     }
-  }, [definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
 
   const recordStateUpdateSyncRun = useCallback(async ({
     completedAt = new Date().toISOString(),
@@ -262,7 +268,7 @@ export function useSessionDiagnostics({
     const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey);
     const next = mergeStateUpdateSyncDiagnosticsTelemetry({
       completedAt,
-      current: persisted ?? stateUpdateReconnectDiagnostics,
+      current: persisted ?? stateUpdateReconnectDiagnosticsRef.current,
       currentConnectivityStatus: connectivityStatus,
       lastRequestDiagnostics: result.lastRequestDiagnostics,
       operationsAttempted: result.operationsAttempted,
@@ -276,9 +282,9 @@ export function useSessionDiagnostics({
       trigger,
     });
 
-    setStateUpdateReconnectDiagnostics(next);
+    commitStateUpdateReconnectDiagnostics(next);
     await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next);
-  }, [connectivityStatus, definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+  }, [commitStateUpdateReconnectDiagnostics, connectivityStatus, definitionCache, ownerKey]);
 
   const recordStateUpdateRequestDiagnostics = useCallback(async (
     diagnostics: OpcoNetworkDiagnostics,
@@ -296,19 +302,19 @@ export function useSessionDiagnostics({
       }
 
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
-      const current = persisted ?? stateUpdateReconnectDiagnostics;
+      const current = persisted ?? stateUpdateReconnectDiagnosticsRef.current;
       const next = appendStateUpdateRequestHistory(current, event);
 
       if (next === current) {
         return;
       }
 
-      setStateUpdateReconnectDiagnostics(next);
+      commitStateUpdateReconnectDiagnostics(next);
       await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(runOwnerKey, next);
     } catch {
       return;
     }
-  }, [definitionCache, ownerKey, stateUpdateReconnectDiagnostics]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
 
   const recordStateUpdateSessionTerminationDiagnostics = useCallback(async (
     event: StateUpdateSessionTerminationTelemetry,
@@ -323,12 +329,12 @@ export function useSessionDiagnostics({
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
 
       if (persisted) {
-        setStateUpdateReconnectDiagnostics(persisted);
+        commitStateUpdateReconnectDiagnostics(persisted);
       }
     } catch {
       return;
     }
-  }, [definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
 
   const syncPendingStateUpdatesWithTelemetry = useCallback(async ({
     api: stateUpdateApi = api,
@@ -458,7 +464,7 @@ export function useSessionDiagnostics({
   useEffect(() => {
     if (!ownerKey) {
       const timer = setTimeout(() => {
-        setStateUpdateReconnectDiagnostics(emptyStateUpdateReconnectDiagnostics);
+        commitStateUpdateReconnectDiagnostics(emptyStateUpdateReconnectDiagnostics);
       }, 0);
 
       return () => {
@@ -473,7 +479,7 @@ export function useSessionDiagnostics({
         if (isMounted && telemetry) {
           const next = markInterruptedReadinessActivity(telemetry);
 
-          setStateUpdateReconnectDiagnostics(next);
+          commitStateUpdateReconnectDiagnostics(next);
           if (next !== telemetry) {
             void definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next);
           }
@@ -484,7 +490,7 @@ export function useSessionDiagnostics({
     return () => {
       isMounted = false;
     };
-  }, [definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
 
   useEffect(() => {
     if (!showStateUpdateDiagnostics) {

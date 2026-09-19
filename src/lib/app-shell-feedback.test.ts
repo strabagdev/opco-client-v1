@@ -206,6 +206,50 @@ describe("app shell feedback", () => {
     })).toBeNull();
   });
 
+  it("keeps offline preparation feedback aligned with runtime activity", () => {
+    const running = resolveAppShellPersistentFeedback({
+      ...baseInput,
+      isOfflinePreparationRunning: true,
+      offlinePreparationStatus: "running",
+      offlineReadiness: "preparing",
+    });
+    const interrupted = resolveAppShellPersistentFeedback({
+      ...baseInput,
+      isOfflinePreparationRunning: false,
+      offlinePreparationStatus: "running",
+      offlineReadiness: "preparing",
+    });
+    const failed = resolveAppShellPersistentFeedback({
+      ...baseInput,
+      isOfflinePreparationRunning: false,
+      offlinePreparationStatus: "failed",
+      offlineReadiness: "data-missing",
+    });
+    const completed = resolveAppShellPersistentFeedback({
+      ...baseInput,
+      isOfflinePreparationRunning: false,
+      offlinePreparationStatus: "completed",
+      offlineReadiness: "ready",
+    });
+
+    expect(running).toMatchObject({ id: "offline-preparing", visual: "loading" });
+    expect(interrupted).toEqual({
+      id: "offline-preparation-interrupted",
+      message: "Preparacion anterior interrumpida.",
+      tone: "info",
+      visual: "info",
+    });
+    expect(failed).toEqual({
+      id: "offline-preparation-failed",
+      message: "Preparacion sin conexion incompleta.",
+      tone: "warning",
+      visual: "warning",
+    });
+    expect(completed).toBeNull();
+    expect(shouldShowAppShellFeedbackSpinner(interrupted)).toBe(false);
+    expect(shouldShowAppShellFeedbackSpinner(failed)).toBe(false);
+  });
+
   it("does not show a spinner for success, warning, error, or static info feedback", () => {
     expect(shouldShowAppShellFeedbackSpinner({
       id: "success",

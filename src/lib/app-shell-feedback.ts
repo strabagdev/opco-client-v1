@@ -30,6 +30,7 @@ export type AppShellFeedbackInput = {
   hasReadConnectivityIssue?: boolean;
   isAuthSessionRestoring: boolean;
   isOfflinePreparationRunning: boolean;
+  offlinePreparationStatus?: "idle" | "running" | "completed" | "failed" | null;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   localStorageRecoveryNotice?: string | null;
@@ -62,6 +63,7 @@ export function resolveAppShellPersistentFeedback({
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
   offlineReadiness,
+  offlinePreparationStatus = null,
   pendingCount,
   syncConflictCount = 1,
   syncErrorCount,
@@ -154,6 +156,24 @@ export function resolveAppShellPersistentFeedback({
       message: "Preparando uso sin conexion...",
       tone: "info",
       visual: "loading",
+    };
+  }
+
+  if (offlinePreparationStatus === "failed") {
+    return {
+      id: "offline-preparation-failed",
+      message: "Preparacion sin conexion incompleta.",
+      tone: "warning",
+      visual: "warning",
+    };
+  }
+
+  if (offlinePreparationStatus === "running" && !isOfflinePreparationRunning) {
+    return {
+      id: "offline-preparation-interrupted",
+      message: "Preparacion anterior interrumpida.",
+      tone: "info",
+      visual: "info",
     };
   }
 
