@@ -666,10 +666,6 @@ Reset protections:
 `src/lib/opco-api.ts` owns:
 
 - Base URL from `EXPO_PUBLIC_OPCO_API_URL`.
-- `EXPO_PUBLIC_OPCO_ENV=local` (and the Expo development runtime) validates that the base URL is
-  exactly loopback Core on port 3000. Hosted APIs and alternate ports fail before requests begin;
-  production builds retain their provider-supplied target. This guard reduces accidental local
-  access to production but does not replace server authorization or database permissions.
 - Neutral login from email/password, followed by server-revalidated organization selection when needed.
 - Bearer auth headers.
 - Web refresh through HttpOnly cookie.

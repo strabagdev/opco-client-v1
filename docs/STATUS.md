@@ -21,7 +21,9 @@ database tooling, credentials, data, and production configuration. Existing manu
 Attendance loading/date behavior and the offline banner was performed on the complete local
 stabilization branch and is not repeated here.
 
-Automated validation and remaining limitations are recorded in the final integration commit. Tests
-using deterministic SQLite mocks do not validate the browser OPFS/WASM driver.
+Integrated validation passed: complete suite (68 files and 779 tests), TypeScript, lint,
+`git diff --check`, and web export plus service-worker generation. The first export inherited a
+Metro cache entry from another worktree; rebuilding with an empty bundler cache passed. Tests using
+deterministic SQLite mocks do not validate the browser OPFS/WASM driver.
 
 Publication is not authorized. Do not push, merge, or deploy this branch without explicit approval.
