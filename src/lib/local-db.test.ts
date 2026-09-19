@@ -2264,13 +2264,15 @@ describe("local database singleton", () => {
       },
     ]);
     const selectCall = db.getAllAsync.mock.calls.find(([sql]) => String(sql).includes("ORDER BY"));
-    expect(selectCall?.[0]).toContain("json_extract(values_json, '$.date') DESC, local_id ASC");
+    expect(selectCall?.[0]).toContain("ORDER BY cached_at DESC, local_id ASC");
     expect(selectCall).toEqual([
       expect.any(String),
       "org_1:user_1",
       "contract_real_1",
       "attendance",
       "view_versioning",
+      null,
+      null,
       "%procedimiento%",
       "%procedimiento%",
       20,
@@ -2318,10 +2320,59 @@ describe("local database singleton", () => {
       "view_versioning",
       null,
       null,
+      null,
+      null,
       20,
       20,
     ]);
   });
+
+  it("scopes cached Attendance latest records by attendance date rather than cache date", async () => {
+    db.getFirstAsync.mockResolvedValue({ total: 1 });
+    db.getAllAsync.mockResolvedValue([
+      stateUpdateEntityRecordRow({
+        cached_at: "2026-09-02T08:00:00.000Z",
+        local_id: "state_update_attendance_2026-09-01_person_a",
+        values_json: JSON.stringify({
+          appViewId: "attendance_view",
+          date: "2026-09-01",
+          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present" }],
+          subjectDisplayName: "Persona A",
+          subjectRecordId: "person_a",
+        }),
+      }),
+    ]);
+    const store = getLocalDatabase();
+
+    await store.listStateUpdateLatest({
+      appViewId: "attendance_view",
+      contractId: "contract_real_1",
+      date: "2026-09-01",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+    await store.listStateUpdateLatest({
+      appViewId: "attendance_view",
+      contractId: "contract_real_1",
+      date: "2026-09-02",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "attendance",
+    });
+
+    const datedCalls = db.getAllAsync.mock.calls.slice(-2);
+    expect(datedCalls[0]?.[0]).toContain("json_extract(values_json, '$.date') = ?");
+    expect(datedCalls[0]?.slice(1, 7)).toEqual([
+      "org_1:user_1",
+      "contract_real_1",
+      "attendance",
+      "attendance_view",
+      "2026-09-01",
+      "2026-09-01",
+    ]);
+    expect(datedCalls[1]?.slice(5, 7)).toEqual(["2026-09-02", "2026-09-02"]);
+    expect(datedCalls[0]?.[0]).toContain("ORDER BY cached_at DESC, local_id ASC");
+  });
+
 
   it("returns an empty cached STATE_UPDATE latest page", async () => {
     db.getFirstAsync.mockResolvedValue({ total: 0 });

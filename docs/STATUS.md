@@ -1,21 +1,27 @@
 # Current Status
 
-## Review Candidate: SQLite Coordination
+## Selective Stabilization Candidate
 
-This branch contains only the shared SQLite connection coordinator from stabilization commit
-`831a9ba`, based on `origin/main`. It serializes connection access across RECORDS, workflows,
-cache, sync and diagnostics; nested transaction helpers receive an explicit transaction context.
-Rollback propagates, queued work continues after failure, and no retry policy was added.
+This local release candidate is based on `origin/main` and contains only the reviewed functional
+changes selected from `local/opco-stabilization-2026-09-19`:
 
-The regression harness uses a deterministic SQLite API mock. It does not validate Expo Web's real
-OPFS/WASM driver, multi-tab behavior, or browser rendering.
+- Shared SQLite connection coordination from `831a9ba`, plus the selected-date snapshot
+  reconciliation correction extracted as `aafd629`.
+- AppView loading, stable diagnostics persistence, bounded SQLite diagnostics, runtime activity
+  feedback, and interrupted offline-preparation presentation from `ce47349`.
+- Attendance recent records and count scoped to the selected logical date, with stale-response
+  protection, from `40e32d3` and its isolated extraction follow-up `a296690`.
+
+Diagnostics depends functionally on the SQLite coordinator because it consumes the coordinator's
+typed in-memory snapshot. Attendance is functionally independent; its local-database changes merge
+with the coordinator without changing transaction ownership, outbox behavior, or rollback.
+
+The candidate excludes ENV-024, local API destinations, development-only guards, seeds, local
+database tooling, credentials, data, and production configuration. Existing manual confirmation of
+Attendance loading/date behavior and the offline banner was performed on the complete local
+stabilization branch and is not repeated here.
+
+Automated validation and remaining limitations are recorded in the final integration commit. Tests
+using deterministic SQLite mocks do not validate the browser OPFS/WASM driver.
 
 Publication is not authorized. Do not push, merge, or deploy this branch without explicit approval.
-While extracting the candidate, its focused regression exposed that snapshot reconciliation had
-changed the pre-existing date predicate to `date IS NOT NULL` while still binding the selected date.
-The candidate restores the exact selected-date predicate, preventing a complete snapshot for one
-day from deleting synced rows from other days.
-
-Validated with 89 local-database tests, TypeScript, lint and a web build. The complete Client suite
-was run on the stacked diagnostics candidate. Browser OPFS remains unverified for this isolated
-branch; the user previously confirmed the full stabilization branch manually.

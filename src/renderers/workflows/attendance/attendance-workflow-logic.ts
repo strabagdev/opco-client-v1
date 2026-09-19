@@ -70,6 +70,10 @@ export function shouldFinishAttendanceVisualRequest({
   return activeRequestId === requestId;
 }
 
+export function isAttendanceRequestCurrent(currentRequestId: number, requestId: number) {
+  return currentRequestId === requestId;
+}
+
 export function shouldRefreshAttendanceLatestAfterSync(
   lastSync: { completedAt?: string | null; result?: string | null } | null | undefined,
 ) {

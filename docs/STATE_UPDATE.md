@@ -10,6 +10,13 @@ Opco / Operational Core is the online source of truth. SQLite is a local cache p
 
 Attendance is an adapter/preset over `STATE_UPDATE`. It has workflow-specific UX, labels, status mapping, and legacy GET adaptation, but it does not own a separate sync engine, outbox, retry loop, conflict engine, or persistence engine.
 
+Attendance day summaries and recent records are scoped by owner, contract, target entity, AppView,
+and the selected attendance `date`. Local filtering uses the persisted logical attendance date in
+`values_json`, never `cached_at`, creation time, or modification time. The remote Attendance endpoint
+receives the same selected date. Recent results are limited (remote latest: 10; local page: 20) and
+ordered newest-known first. A request that finishes after the user selects another date may finish
+hydrating its own cache scope, but cannot update the visible day.
+
 ## Flow Diagrams
 
 Online:

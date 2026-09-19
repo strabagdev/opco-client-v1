@@ -3036,7 +3036,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND json_extract(values_json, '$.date') IS NOT NULL
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
     `,
     input.ownerKey,
@@ -3058,13 +3058,15 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND json_extract(values_json, '$.appViewId') = ?
         AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
-      ORDER BY json_extract(values_json, '$.date') DESC, local_id ASC
+      ORDER BY cached_at DESC, local_id ASC
       LIMIT ? OFFSET ?
     `,
     input.ownerKey,
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
+    input.date ?? null,
+    input.date ?? null,
     searchPattern,
     searchPattern,
     pageSize,

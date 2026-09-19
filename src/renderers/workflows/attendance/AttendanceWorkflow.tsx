@@ -46,6 +46,7 @@ import {
   formatDisplayDate,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  isAttendanceRequestCurrent,
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
@@ -254,7 +255,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const refreshLocalDayState = useCallback(async (remoteSnapshot?: {
     latest: AttendanceLatestItem[];
     totalRegistered: number;
-  }) => {
+  }, requestId?: number) => {
     if (!ownerKey || !selectedContractId) {
       return;
     }
@@ -289,6 +290,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         targetEntityTypeId: appView.config.targetEntityTypeId,
       }),
     ]);
+
+    if (requestId !== undefined && !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+      return;
+    }
 
     const localVisibleLatest = localLatest.items.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
     const visibleLatest = mergeAttendanceLatestWithLocalOverlay(remoteSnapshot?.latest ?? [], localVisibleLatest);
@@ -428,16 +433,19 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     try {
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
 
-      if (requestId !== requestSequenceRef.current) {
+      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
 
-      applyAttendanceResponse(response, { updateLatest: false });
       await cacheAttendanceOnlineResponse(response);
+      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+        return;
+      }
+      applyAttendanceResponse(response, { updateLatest: false });
       await refreshLocalDayState({
         latest: response.latest,
         totalRegistered: response.summary.totalRegistered,
-      });
+      }, requestId);
       setRefreshError(null);
       clearVisibleError();
       setItems([]);
@@ -475,16 +483,19 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setRefreshError(null);
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
 
-      if (requestId !== requestSequenceRef.current) {
+      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
 
-      applyAttendanceResponse(response, { updateLatest: false });
       await cacheAttendanceOnlineResponse(response);
+      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+        return;
+      }
+      applyAttendanceResponse(response, { updateLatest: false });
       await refreshLocalDayState({
         latest: response.latest,
         totalRegistered: response.summary.totalRegistered,
-      });
+      }, requestId);
       setError(null);
       setRefreshError(null);
       clearVisibleError();
@@ -684,16 +695,19 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       try {
         const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
 
-        if (!isMounted || requestId !== requestSequenceRef.current) {
+        if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
           return;
         }
 
-        applyAttendanceResponse(response, { updateLatest: false });
         await cacheAttendanceOnlineResponse(response);
+        if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+          return;
+        }
+        applyAttendanceResponse(response, { updateLatest: false });
         await refreshLocalDayState({
           latest: response.latest,
           totalRegistered: response.summary.totalRegistered,
-        });
+        }, requestId);
         clearVisibleError();
         setItems([]);
       } catch (nextError) {
@@ -1067,7 +1081,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       <View style={styles.summaryBar}>
-        <Text style={styles.summaryLabel}>Registrados hoy</Text>
+        <Text style={styles.summaryLabel}>Registrados en esta fecha</Text>
         <Text style={styles.summaryValue}>{totalRegistered}</Text>
       </View>
 
@@ -1283,7 +1297,8 @@ function AttendanceContextSelectors({
 function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
   return (
     <View style={styles.latestBlock}>
-      <Text style={styles.sectionTitle}>Ultimos registros</Text>
+      <Text style={styles.sectionTitle}>Registros del día</Text>
+      {latest.length > 0 ? <Text style={styles.statusMeta}>Los más recientes de esta fecha.</Text> : null}
       {latest.length === 0 ? <Text style={styles.empty}>Sin registros para esta fecha.</Text> : null}
       {latest.map((item) => (
         <View key={item.attendanceRecordId} style={styles.latestRow}>

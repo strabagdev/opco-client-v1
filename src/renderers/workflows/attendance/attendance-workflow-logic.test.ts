@@ -13,6 +13,7 @@ import {
   formatAttendancePendingText,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
+  isAttendanceRequestCurrent,
   isAttendanceRemoteSnapshotComplete,
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
@@ -157,6 +158,14 @@ describe("attendance workflow logic", () => {
       activeRequestId: 2,
       requestId: 1,
     })).toBe(false);
+  });
+
+  it("rejects a completed response after a rapid change to another attendance date", () => {
+    const firstDateRequest = 41;
+    const secondDateRequest = 42;
+
+    expect(isAttendanceRequestCurrent(secondDateRequest, firstDateRequest)).toBe(false);
+    expect(isAttendanceRequestCurrent(secondDateRequest, secondDateRequest)).toBe(true);
   });
 
   it("does not orphan Attendance loading when search, person, or refresh requests advance data freshness", () => {
