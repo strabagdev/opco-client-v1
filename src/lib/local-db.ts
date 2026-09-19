@@ -2972,7 +2972,7 @@ async function deleteStaleSyncedStateUpdateRecords({
         AND entity_type_id = ?
         AND sync_status = 'synced'
         AND json_extract(values_json, '$.appViewId') = ?
-        AND json_extract(values_json, '$.date') IS NOT NULL
+        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
         ${keepLocalClause}
         ${keepRemoteClause}
     `,
