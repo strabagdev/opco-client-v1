@@ -8,10 +8,13 @@ search, and that Attendance shows the list and counter for the selected date. Th
 remains separated; ENV-024, local destinations, development tooling, seeds, credentials, and guards
 were not published.
 
+The responsive header follow-up was published at
+`351005db9ee8e3b7fb31011a12f3e986d58b5e24`.
+
 The absence of an automated test against Expo Web's real OPFS/WASM engine remains a coverage
 limitation, not an open incident.
 
-## Header And Save Feedback Review
+## Header And Save Feedback Closed
 
 - Visual review at 390 px with "Daniel Esteban Silva Cruz" demonstrated that placing the user and
   Diagnostics in the same compact actions zone allowed Diagnostics to overlap the brand. Compact now
@@ -20,7 +23,7 @@ limitation, not an open incident.
   Diagnostics remain separate, the complete user name is visible, and status is centered.
 - Widths 1024 and 1280 retain three equal flexible desktop zones, which centers status against the
   complete header. The status indicator remains informational and separate from the Diagnostics
-  button. Visual confirmation at 1024 px also remains pending.
+  button. The user confirmed the desktop header at 1024 px.
 - RECORDS reports local success only after its atomic SQLite record/outbox save resolves. Attendance
   and STATE_UPDATE do the same for offline saves and report remote success only after a successful
   write response.
@@ -29,8 +32,8 @@ limitation, not an open incident.
   monotonic presentation id, so an older timer cannot clear a newer result. Once cleared, the resolver
   presents the current connectivity, sync, pending-work, or read state.
 
-No synchronization, outbox, configuration, or data behavior changed in this review. Visual
-confirmation of the preserved desktop layout at 1024 px remains pending.
+No synchronization, outbox, configuration, or data behavior changed in this review. The requested
+compact and 1024 px visual checks are complete.
 
 Validation passed: complete suite (68 files and 784 tests), TypeScript, lint, `git diff --check`, and
 web export plus service-worker generation. The habitual export first inherited a Metro cache entry
