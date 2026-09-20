@@ -373,6 +373,19 @@ export default function AppLayout() {
       <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
     </View>
   );
+  const userMenuButton = (
+    <Pressable
+      accessibilityLabel="Menu de usuario"
+      accessibilityRole="button"
+      onPress={() => setIsUserMenuOpen(true)}
+      style={[styles.userButton, !isWideLayout ? styles.userButtonCompact : null]}
+    >
+      <View style={styles.userAvatar}>
+        <Text style={styles.userAvatarText}>{userInitials}</Text>
+      </View>
+      <Text style={[styles.userButtonText, !isWideLayout ? styles.userButtonTextCompact : null]}>{userDisplayName}</Text>
+    </Pressable>
+  );
 
   function goBack() {
     if (router.canGoBack()) {
@@ -421,19 +434,10 @@ export default function AppLayout() {
           >
             <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} />
           </Pressable>
-          <Pressable
-            accessibilityLabel="Menu de usuario"
-            accessibilityRole="button"
-            onPress={() => setIsUserMenuOpen(true)}
-            style={styles.userButton}
-          >
-            <View style={styles.userAvatar}>
-              <Text style={styles.userAvatarText}>{userInitials}</Text>
-            </View>
-            <Text numberOfLines={1} style={styles.userButtonText}>{userDisplayName}</Text>
-          </Pressable>
+          {isWideLayout ? userMenuButton : null}
           </View>
         </View>
+        {!isWideLayout ? <View style={styles.headerUserRow}>{userMenuButton}</View> : null}
         {!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null}
       </View>
 
@@ -1417,6 +1421,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minWidth: 0,
   },
+  headerUserRow: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 4,
+    width: "100%",
+  },
   headerCompact: {
     paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
     paddingVertical: 10,
@@ -1897,6 +1907,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     height: 32,
     justifyContent: "center",
+    flexShrink: 0,
     width: 32,
   },
   userAvatarLarge: {
@@ -1930,6 +1941,16 @@ const styles = StyleSheet.create({
     color: "#17363c",
     flexShrink: 1,
     fontWeight: "800",
+    lineHeight: 18,
+    textAlign: "right",
+  },
+  userButtonCompact: {
+    justifyContent: "center",
+    maxWidth: "100%",
+    width: "100%",
+  },
+  userButtonTextCompact: {
+    textAlign: "left",
   },
   userMenuBody: {
     minHeight: 20,

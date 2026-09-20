@@ -4,6 +4,7 @@ import {
   getDiagnosticsModalHeight,
   shouldShowDiagnosticsTabScrollIndicator,
 } from "./app-diagnostics-layout";
+import { APP_SHELL_WIDE_BREAKPOINT } from "./app-shell-layout";
 
 declare const require: (id: string) => { readFileSync: (path: string, encoding: string) => string };
 
@@ -33,6 +34,33 @@ describe("diagnostics modal layout", () => {
     expect(source).toContain("styles.headerStatusRow");
     expect(source).toContain("const statusIndicator = (");
     expect(source).not.toContain("cacheBannerMessage");
+  });
+  it.each([
+    { layout: "compact", width: 390 },
+    { layout: "compact", width: 768 },
+    { layout: "wide", width: 1024 },
+    { layout: "wide", width: 1280 },
+  ])("uses the $layout header arrangement at $width px", ({ layout, width }) => {
+    expect(width >= APP_SHELL_WIDE_BREAKPOINT).toBe(layout === "wide");
+  });
+  it("keeps equal wide zones and separates the three compact header rows", () => {
+    const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
+
+    expect(source).toContain("styles.headerIdentity");
+    expect(source).toContain("styles.headerStatusZone");
+    expect(source).toContain("styles.headerActions");
+    expect(source).toMatch(/headerIdentity:[\s\S]{0,180}flex: 1/);
+    expect(source).toMatch(/headerStatusZone:[\s\S]{0,180}flex: 1/);
+    expect(source).toMatch(/headerActions:[\s\S]{0,180}flex: 1/);
+    expect(source).toContain("{isWideLayout ? userMenuButton : null}");
+    expect(source).toContain("!isWideLayout ? <View style={styles.headerUserRow}>{userMenuButton}</View> : null");
+    expect(source).toContain("!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null");
+    expect(source).toMatch(/headerUserRow:[\s\S]{0,180}justifyContent: "center"[\s\S]{0,100}width: "100%"/);
+    expect(source).toMatch(/headerStatusRow:[\s\S]{0,180}justifyContent: "center"[\s\S]{0,80}width: "100%"/);
+    expect(source).toContain("styles.userButtonTextCompact");
+    expect(source).not.toMatch(/userDisplayName[^\n]*numberOfLines/);
+    expect(source).toMatch(/statusLabel:[\s\S]{0,180}flexShrink: 1/);
+    expect(source).toMatch(/userButtonText:[\s\S]{0,180}flexShrink: 1/);
   });
   it("replaces generic RECORDS save/cache banners without removing contextual recovery UI", () => {
     const listSource = require("fs").readFileSync("src/renderers/records/RecordsRenderer.tsx", "utf8");
