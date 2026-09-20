@@ -15,13 +15,40 @@ Cliente generico multiplataforma para la API externa de Opco. La implementacion 
 
 ## Configuracion
 
-Copia `.env.example` a `.env` y ajusta:
+Copia `.env.example` a `.env.local` para desarrollo local:
 
 ```bash
+EXPO_PUBLIC_OPCO_ENV=local
 EXPO_PUBLIC_OPCO_API_URL=http://localhost:3000
 ```
 
+El guardrail exige Core por loopback en el puerto 3000 cuando el modo es `local` o
+`NODE_ENV=development`; no existe fallback productivo. Una configuración productiva explícita se
+conserva sin cambios fuera del modo local.
+
+El procedimiento canónico para instalar e inicializar PostgreSQL, crear secretos locales nuevos,
+aplicar migraciones, cargar el seed sintético, iniciar Core/Client y verificar CORS está en
+[Operational Core `docs/DEVELOPMENT.md`](https://github.com/strabagdev/operational-core/blob/dev/local-environment/docs/DEVELOPMENT.md).
+Actualmente requiere WSL/Linux y ambos repositorios en `dev/local-environment`.
+
+Después de preparar Core, inicia Client desde este repositorio:
+
+```bash
+npm install
+npm start -- --clear
+```
+
+Expo Web normalmente queda en `http://localhost:8081`. Reinícialo manualmente después de cambiar
+`.env.local`; esta configuración no inicia ni reemplaza servidores.
+
 No agregues secretos server-side de Opco a este repositorio: no `API_AUTH_SECRET`, no `AUTH_SECRET`, no `DATABASE_URL`.
+
+SQLite/OPFS, cookies, SecureStore y operaciones pendientes viven en el perfil del navegador o
+dispositivo. Git y los respaldos PostgreSQL no los incluyen; necesitan preservación independiente.
+
+Para actualizar esta rama, integra `origin/main`, resuelve y valida aquí. No mezcles
+`dev/local-environment` completo a `main`: cualquier publicación funcional debe seleccionar cambios
+revisados y excluir destinos locales, ejemplos y herramientas de desarrollo.
 
 En deployments multiempresa, todos los usuarios ingresan por el dominio neutral:
 

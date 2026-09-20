@@ -1,5 +1,12 @@
 # Opco Client
 
+- Read `docs/STATUS.md` first for the current handoff, then inspect only relevant docs and code.
+- For the isolated WSL/Linux environment, follow Operational Core's `docs/DEVELOPMENT.md` on the
+  corresponding `dev/local-environment` branch before starting Client.
+- `dev/local-environment` contains local-only configuration and guards. Review changes selectively
+  against `main`; do not merge or deploy the branch as an application release.
+- Documentation never replaces verification of the current code and Git diff.
+
 ## Project
 
 - Opco Client is an Expo SDK 57 / React Native / Expo Web app.

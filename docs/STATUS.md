@@ -41,3 +41,11 @@ from another worktree; rebuilding with an empty bundler cache passed.
 
 Offline/outbox behavior remains documented in [`STATE_UPDATE.md`](STATE_UPDATE.md); broader client
 architecture and future scope remain in [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md).
+
+## Local Development Branch
+
+`dev/local-environment` is based on this published `main` and carries only the local API example,
+loopback target guard, tests, and documentation. ENV-024 remains excluded from production. The
+complete WSL/Linux procedure is maintained in Operational Core's `docs/DEVELOPMENT.md` on its
+matching branch. Never merge or deploy this branch wholesale; review future functional changes
+independently.
