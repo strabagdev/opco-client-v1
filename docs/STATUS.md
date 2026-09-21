@@ -49,3 +49,8 @@ loopback target guard, tests, and documentation. ENV-024 remains excluded from p
 complete WSL/Linux procedure is maintained in Operational Core's `docs/DEVELOPMENT.md` on its
 matching branch. Never merge or deploy this branch wholesale; review future functional changes
 independently.
+
+Remote backup of this branch is authorized only as `origin/dev/local-environment`. The user
+confirmed Client Railway is configured to deploy from `main`, matching Core, and that no other
+deployment integrations exist. Do not change Railway configuration, open a PR, merge, deploy, or
+publish any other ref as part of this backup.
