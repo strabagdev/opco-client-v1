@@ -1,13 +1,20 @@
 # Current Status
 
-## PANEL Release Gate 2026-09-22
+## PANEL Release 2026-09-22
 
-- This Client candidate is not published and has no release SHA. Typecheck, lint, full Vitest suite
-  (789 passed), web export, and service-worker generation pass. Core's habitual build remains
-  blocked by Turbopack's internal port bind, so the Core-first publication gate is not met.
-- Manual verification of the Core editor's newest save feedback remains pending. Once release checks
-  pass, publish Core before Client; roll back Client before Core if the pair must be reverted. An
-  older Client shows composed KPI as unavailable rather than calculating it locally.
+- Client moved by fast-forward from `d6142589656d5282be0c6f62f36019d0da5aafe0` to
+  `4e401a017f82dee46d50b17b1c6a34070d55538c`, after Core
+  `a8e08724d62792e29397ca2d0356070167290abe` was active and ready. Railway reported
+  `success` for the Client service on that exact commit. The public site serves
+  `entry-609278ef5c01c25ef0698d10c18f7ca2.js`, matching the validated local web export;
+  that bundle contains typed-filter and `moduleResults` markers.
+- The same Client tree passed typecheck, lint, full Vitest (789 passed), web export, and service
+  worker generation. No AppViews, records, local storage, or environment configuration changed.
+- Compatible rollback order: revert Client code to the prior SHA above, then Core to
+  `aae812b97907f5b8e8b9754dcfa16b892404d0ab` if needed, using forward commits/redeploys
+  rather than force push. Older Client shows composed KPI as unavailable (`-`), not recalculated.
+- Manual verification of Core save feedback, Client filter controls, offline selections, and KPI
+  presentation is still pending; no manual validation is claimed.
 
 ## PANEL Metric Composition 2026-09-21
 
