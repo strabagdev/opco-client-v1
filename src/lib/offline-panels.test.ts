@@ -103,6 +103,30 @@ describe("offline panel cache", () => {
     })).rejects.toBeInstanceOf(OpcoNetworkError);
   });
 
+  it("keeps a composed result inside one matching filter snapshot", async () => {
+    const store = new MemoryPanelStore();
+    const panel = { ...panelResponse("revision_1"), moduleResults: [{ moduleId: "combined", value: 0.75, reason: null }] };
+    const api = { getPanel: vi.fn().mockResolvedValueOnce(panel).mockRejectedValue(new OpcoNetworkError()) };
+    const base = { api, appViewId: "panel_1", contractId: "contract_1", ownerKey: "owner_1", token: "token_1", store };
+    await loadPanelDatasetWithOfflineCache({ ...base, query: { datasetId: "records", filters: { status: "a" }, page: 1, pageSize: 25 } });
+    const cached = await loadPanelDatasetWithOfflineCache({ ...base, configRevision: "revision_1",
+      query: { datasetId: "records", filters: { status: "a" }, page: 1, pageSize: 25 } });
+    expect(cached.panel.moduleResults).toEqual([{ moduleId: "combined", value: 0.75, reason: null }]);
+    await expect(loadPanelDatasetWithOfflineCache({ ...base, configRevision: "revision_1",
+      query: { datasetId: "records", filters: { status: "b" }, page: 1, pageSize: 25 } }))
+      .rejects.toBeInstanceOf(OpcoNetworkError);
+  });
+
+  it("requires a known config revision before using a composed snapshot offline", async () => {
+    const store = new MemoryPanelStore();
+    const api = { getPanel: vi.fn().mockResolvedValueOnce(panelResponse("revision_1")).mockRejectedValue(new OpcoNetworkError()) };
+    const base = { api, appViewId: "panel_1", contractId: "contract_1", ownerKey: "owner_1", token: "token_1", store,
+      query: { datasetId: "records", page: 1, pageSize: 25 } };
+    await loadPanelDatasetWithOfflineCache(base);
+    await expect(loadPanelDatasetWithOfflineCache({ ...base, requireConfigRevision: true }))
+      .rejects.toBeInstanceOf(OpcoNetworkError);
+  });
+
   it("preserves KPI currencyCode and percentScale in offline PANEL snapshots", async () => {
     const store = new MemoryPanelStore();
     const panel: PanelResponse = {

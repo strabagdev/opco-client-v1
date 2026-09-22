@@ -14,6 +14,7 @@ export async function loadPanelDatasetWithOfflineCache({
   api,
   appViewId,
   configRevision,
+  requireConfigRevision = false,
   contractId,
   ownerKey,
   query,
@@ -24,6 +25,7 @@ export async function loadPanelDatasetWithOfflineCache({
   api: Pick<OpcoApi, "getPanel">;
   appViewId: string;
   configRevision?: string | null;
+  requireConfigRevision?: boolean;
   contractId: string;
   ownerKey: string;
   query: PanelQuery & { page: number; pageSize: number };
@@ -52,6 +54,7 @@ export async function loadPanelDatasetWithOfflineCache({
 
     return { fromCache: false, offline: false, panel, syncedAt };
   } catch (error) {
+    if (requireConfigRevision && !configRevision) throw error;
     const cached = await store.getPanelSnapshot(scope);
 
     if (cached && error instanceof OpcoNetworkError) {

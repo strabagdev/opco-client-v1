@@ -1,6 +1,7 @@
 import {
   EntityRecordValue,
   PanelDataset,
+  PanelDatasetConfig,
   PanelField,
   PanelFilterConfig,
   PanelKpiFormat,
@@ -105,11 +106,16 @@ export function buildPanelTableModel(module: PanelModuleConfig, dataset: PanelDa
   };
 }
 
-export function buildPanelKpiModel(module: PanelModuleConfig, metrics: PanelMetricResult[] | undefined): PanelKpiModel | null {
+export function buildPanelKpiModel(
+  module: PanelModuleConfig,
+  metrics: PanelMetricResult[] | undefined,
+  moduleResults?: { moduleId: string; value: number | null; reason: string | null }[],
+): PanelKpiModel | null {
   if (module.visualization.type !== "KPI") {
     return null;
   }
 
+  const composition = module.visualization.config.composition;
   const metricId = typeof module.visualization.config.metricId === "string"
     ? module.visualization.config.metricId
     : "";
@@ -117,15 +123,16 @@ export function buildPanelKpiModel(module: PanelModuleConfig, metrics: PanelMetr
     ? module.visualization.config.label.trim()
     : module.title ?? "Indicador";
   const metric = metrics?.find((item) => item.id === metricId && item.datasetId === module.datasetId);
-  const formatted = formatPanelMetricValue(metric?.value, module.visualization.config);
+  const moduleResult = composition ? moduleResults?.find((item) => item.moduleId === module.id) : undefined;
+  const formatted = formatPanelMetricValue(composition ? moduleResult?.value : metric?.value, module.visualization.config);
 
   return {
-    calculatedAt: metric?.calculatedAt ?? null,
-    configurationIssue: formatted.configurationIssue,
+    calculatedAt: composition ? (moduleResult ? metrics?.find((item) => item.id === composition.metricAId)?.calculatedAt ?? null : null) : metric?.calculatedAt ?? null,
+    configurationIssue: moduleResult?.reason ?? formatted.configurationIssue,
     fullValue: formatted.value,
     label,
     metricId,
-    missing: !metric,
+    missing: composition ? !moduleResult : !metric,
     value: formatted.value,
   };
 }
@@ -392,7 +399,7 @@ export function normalizePanelFilters(filters: PanelFilterConfig[], values: Reco
 
     if (filter.valueType === "NUMBER") {
       const parsed = Number(rawValue);
-      if (!Number.isNaN(parsed)) {
+      if (Number.isFinite(parsed)) {
         normalized[filter.id] = parsed;
       }
       continue;
@@ -409,6 +416,16 @@ export function normalizePanelFilters(filters: PanelFilterConfig[], values: Reco
   return normalized;
 }
 
+export function missingRequiredPanelFilters(
+  filters: PanelFilterConfig[],
+  dataset: PanelDatasetConfig | undefined,
+  values: Record<string, unknown>,
+) {
+  return filters.filter((filter) => filter.required && dataset?.filters?.some((binding) =>
+    binding.type === "PANEL_FILTER" && binding.filterId === filter.id) &&
+    (values[filter.id] === undefined || values[filter.id] === null || values[filter.id] === ""));
+}
+
 export function panelDatasetQueryKey(input: PanelDatasetQueryState) {
   return JSON.stringify({
     filters: stableValue(input.filters),
@@ -416,6 +433,10 @@ export function panelDatasetQueryKey(input: PanelDatasetQueryState) {
     pageSize: input.pageSize,
     search: input.search.trim(),
   });
+}
+
+export function isPanelDatasetStateCurrent(state: { queryKey: string | null } | undefined, queryKey: string) {
+  return state?.queryKey === queryKey;
 }
 
 function relationLabel(value: unknown) {

@@ -11,8 +11,12 @@ import {
 } from "react-native";
 
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "@/lib/offline-panels";
-import { PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
+import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
+import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
+import { EntityField, PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
+import { getRelationTargetEntityTypeId } from "@/lib/record-form";
 import { stableTextInputStyle } from "@/lib/visual-stability";
+import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
@@ -24,6 +28,8 @@ import {
   buildPanelTableModel,
   datasetIdsForPanelModules,
   defaultPageSizeForDataset,
+  isPanelDatasetStateCurrent,
+  missingRequiredPanelFilters,
   normalizePanelFilters,
   panelDatasetQueryKey,
 } from "./panel-renderer-logic";
@@ -50,6 +56,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, token } = useSession();
   const { width } = useWindowDimensions();
   const configuredModules = useMemo(() => appView.config.modules ?? [], [appView.config.modules]);
+  const appViewConfigKey = JSON.stringify(appView.config);
+  const hasComposedKpi = configuredModules.some((module) => module.visualization.type === "KPI" && Boolean(module.visualization.config.composition));
   const configuredFilters = useMemo(() => appView.config.filters ?? [], [appView.config.filters]);
   const configuredColumns = appView.config.layout?.columns ?? 12;
   const configuredRowHeight = appView.config.layout?.rowHeight ?? 92;
@@ -60,6 +68,10 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const [retryVersion, setRetryVersion] = useState(0);
   const [searchByDataset, setSearchByDataset] = useState<Record<string, string>>({});
   const [filterInputs, setFilterInputs] = useState<Record<string, string>>({});
+  const [filterFields, setFilterFields] = useState<Record<string, EntityField>>({});
+  const [relationOptions, setRelationOptions] = useState<Record<string, { id: string; displayName: string }[]>>({});
+  const [relationSearch, setRelationSearch] = useState<Record<string, string>>({});
+  const [filterMetadataError, setFilterMetadataError] = useState<string | null>(null);
   const requestSeq = useRef(0);
 
   const latestPanel = useMemo(
@@ -69,7 +81,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const modules = latestPanel?.modules.length ? latestPanel.modules : configuredModules;
   const filters = latestPanel?.filters.length ? latestPanel.filters : configuredFilters;
   const datasetIds = useMemo(() => datasetIdsForPanelModules(modules), [modules]);
-  const activeDatasetIds = latestPanel ? datasetIds : [PANEL_DISCOVERY_SNAPSHOT_DATASET_ID];
+  const activeDatasetIds = datasetIds.length ? datasetIds : [PANEL_DISCOVERY_SNAPSHOT_DATASET_ID];
   const normalizedFilters = useMemo(() => normalizePanelFilters(filters, filterInputs), [filterInputs, filters]);
   const datasetIdsKey = activeDatasetIds.join(DATASET_KEY_SEPARATOR);
   const normalizedFiltersKey = JSON.stringify(normalizedFilters);
@@ -85,7 +97,72 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     setRetryVersion(0);
     setSearchByDataset({});
     setFilterInputs({});
-  }, [appView.id, initialDatasetIds, selectedContractId]);
+    setFilterFields({});
+    setRelationOptions({});
+    setRelationSearch({});
+    setFilterMetadataError(null);
+  }, [appView.id, appViewConfigKey, initialDatasetIds, selectedContractId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFilterMetadata() {
+      if (!token || !selectedContractId || !ownerKey || configuredFilters.length === 0) return;
+      const datasets = appView.config.datasets ?? [];
+      const entityIds = Array.from(new Set(datasets.filter((dataset) => dataset.filters?.some((binding) =>
+        binding.type === "PANEL_FILTER")).map((dataset) => dataset.source.entityTypeId)));
+      try {
+        const definitions = await Promise.all(entityIds.map(async (entityTypeId) => ({
+          entityTypeId,
+          definition: (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId,
+            entityTypeId, token })).definition,
+        })));
+        const fields: Record<string, EntityField> = {};
+        for (const filter of configuredFilters) {
+          const dataset = datasets.find((item) => item.filters?.some((binding) =>
+            binding.type === "PANEL_FILTER" && binding.filterId === filter.id));
+          const binding = dataset?.filters?.find((item) => item.type === "PANEL_FILTER" && item.filterId === filter.id);
+          const definition = definitions.find((item) => item.entityTypeId === dataset?.source.entityTypeId)?.definition;
+          const field = definition?.fields.find((item) => item.id === binding?.fieldId);
+          if (field) fields[filter.id] = { ...field, name: filter.label || field.name };
+        }
+        if (!cancelled) {
+          setFilterFields(fields);
+          setFilterMetadataError(null);
+        }
+      } catch {
+        if (!cancelled) setFilterMetadataError("No se pudieron cargar las opciones de filtros.");
+      }
+    }
+    void loadFilterMetadata();
+    return () => { cancelled = true; };
+  }, [api, appViewConfigKey, appView.config.datasets, configuredFilters, definitionCache, ownerKey, selectedContractId, token]);
+
+  useEffect(() => {
+    if (!token || !selectedContractId || !ownerKey) return;
+    let cancelled = false;
+    const targets = Array.from(new Set(Object.values(filterFields).map(getRelationTargetEntityTypeId)
+      .filter((id): id is string => Boolean(id))));
+    const timer = setTimeout(() => {
+      void Promise.all(targets.map(async (entityTypeId) => {
+        try {
+          const result = await loadRecordsWithOfflineCache({ api, contractId: selectedContractId, entityTypeId,
+            ownerKey, page: 1, pageSize: 100, search: relationSearch[entityTypeId] || undefined,
+            sort: "displayName", direction: "asc", store: definitionCache, token });
+          if (!cancelled) setRelationOptions((current) => {
+            const selectedIds = new Set(Object.entries(filterFields).filter(([, field]) =>
+              getRelationTargetEntityTypeId(field) === entityTypeId).map(([id]) => filterInputs[id]).filter(Boolean));
+            const options = result.records.map((record) => ({ id: record.id, displayName: record.displayName || record.id }));
+            const previousSelected = (current[entityTypeId] ?? []).filter((item) => selectedIds.has(item.id) &&
+              !options.some((option) => option.id === item.id));
+            return { ...current, [entityTypeId]: [...previousSelected, ...options] };
+          });
+        } catch {
+          if (!cancelled) setFilterMetadataError("No se pudo cargar el catálogo relacionado.");
+        }
+      }));
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [api, definitionCache, filterFields, filterInputs, ownerKey, relationSearch, selectedContractId, token]);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
@@ -109,6 +186,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
 
       for (const datasetId of activeDatasetIds) {
         const isDiscovery = datasetId === PANEL_DISCOVERY_SNAPSHOT_DATASET_ID;
+        const datasetConfig = (appView.config.datasets ?? []).find((item) => item.id === datasetId);
         const page = pages[datasetId] ?? 1;
         const pageSize = configuredPageSize(appView, null, datasetId);
         const search = searchByDataset[datasetId]?.trim() ?? "";
@@ -119,6 +197,14 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
           pageSize,
           search,
         });
+        const missingFilters = missingRequiredPanelFilters(configuredFilters, datasetConfig, activeFilters);
+        if (missingFilters.length > 0) {
+          setDatasetStates((current) => ({ ...current, [datasetId]: {
+            error: `Selecciona ${missingFilters.map((filter) => filter.label || filter.id).join(", ")}.`,
+            fromCache: false, isLoading: false, panel: null, queryKey, syncedAt: null,
+          } }));
+          continue;
+        }
 
         if (previous?.panel && previous.queryKey === queryKey && !previous.error) {
           continue;
@@ -140,7 +226,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
           const result = await loadPanelDatasetWithOfflineCache({
             api,
             appViewId: appView.id,
-            configRevision: previous?.panel?.configRevision,
+            configRevision: appView.configRevision ?? previous?.panel?.configRevision,
+            requireConfigRevision: hasComposedKpi,
             contractId: selectedContractId,
             ownerKey,
             query: {
@@ -213,6 +300,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     appView,
     datasetIdsKey,
     definitionCache,
+    configuredFilters,
+    hasComposedKpi,
     normalizedFiltersKey,
     ownerKey,
     pages,
@@ -264,6 +353,10 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
       {filters.length > 0 ? (
         <PanelFilters
           filters={filters}
+          fields={filterFields}
+          metadataError={filterMetadataError}
+          relationOptions={relationOptions}
+          onRelationSearch={(target, search) => setRelationSearch((current) => ({ ...current, [target]: search }))}
           onChange={(filterId, value) => {
             setFilterInputs((current) => ({ ...current, [filterId]: value }));
             setPages(Object.fromEntries(datasetIds.map((datasetId) => [datasetId, 1])));
@@ -293,6 +386,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
               page={pages[module.datasetId] ?? 1}
               search={searchByDataset[module.datasetId] ?? ""}
               state={datasetStates[module.datasetId]}
+              currentQueryKey={panelDatasetQueryKey({
+                filters: normalizedFilters,
+                page: pages[module.datasetId] ?? 1,
+                pageSize: configuredPageSize(appView, null, module.datasetId),
+                search: searchByDataset[module.datasetId] ?? "",
+              })}
             />
           </View>
         ))}
@@ -303,30 +402,60 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
 
 function PanelFilters({
   filters,
+  fields,
+  metadataError,
   onChange,
+  onRelationSearch,
+  relationOptions,
   values,
 }: {
   filters: PanelFilterConfig[];
+  fields: Record<string, EntityField>;
+  metadataError: string | null;
   onChange(filterId: string, value: string): void;
+  onRelationSearch(targetEntityTypeId: string, search: string): void;
+  relationOptions: Record<string, { id: string; displayName: string }[]>;
   values: Record<string, string>;
 }) {
   return (
     <View style={styles.filters}>
-      {filters.map((filter) => (
-        <TextInput
-          autoCapitalize="none"
-          key={filter.id}
-          onChangeText={(value) => onChange(filter.id, value)}
-          placeholder={filter.label ?? "Filtro"}
-          style={[stableTextInputStyle, styles.filterInput]}
-          value={values[filter.id] ?? ""}
-        />
-      ))}
+      {metadataError ? <Text style={styles.stateText}>{metadataError}</Text> : null}
+      {filters.map((filter) => {
+        const field = fields[filter.id];
+        const value = values[filter.id] ?? "";
+        if (!field) return <Text key={filter.id} style={styles.stateText}>{filter.label || filter.id}: campo no disponible.</Text>;
+        const target = getRelationTargetEntityTypeId(field);
+        return <View key={filter.id} style={styles.filterControl}>
+          {field.type === "BOOLEAN" ? (
+            <View style={styles.booleanFilter}>
+              <Text style={styles.filterLabel}>{filter.label || field.name}</Text>
+              {([{ label: "Todos", value: "" }, { label: "Sí", value: "true" }, { label: "No", value: "false" }] as const).map((option) => (
+                <Pressable accessibilityRole="button" key={option.value} onPress={() => onChange(filter.id, option.value)}
+                  style={[styles.filterChoice, value === option.value && styles.filterChoiceSelected]}>
+                  <Text>{option.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : <RecordFieldInput
+            field={field}
+            onChange={(next) => onChange(filter.id, typeof next === "string" ? next : "")}
+            onRelationSearch={target ? (search) => onRelationSearch(target, search) : undefined}
+            relationOptions={target ? relationOptions[target] ?? [] : []}
+            relationTargetEntityTypeId={target}
+            value={value}
+          />}
+          {value && field.type !== "BOOLEAN" ? <Pressable accessibilityRole="button" onPress={() => onChange(filter.id, "")}>
+            <Text style={styles.filterClear}>Limpiar</Text>
+          </Pressable> : null}
+          {filter.required && !value ? <Text style={styles.filterRequired}>Selección requerida</Text> : null}
+        </View>;
+      })}
     </View>
   );
 }
 
 function PanelModule({
+  currentQueryKey,
   module,
   onNextPage,
   onPreviousPage,
@@ -336,6 +465,7 @@ function PanelModule({
   search,
   state,
 }: {
+  currentQueryKey: string;
   module: PanelModuleConfig;
   onNextPage(): void;
   onPreviousPage(): void;
@@ -345,9 +475,10 @@ function PanelModule({
   search: string;
   state: DatasetState | undefined;
 }) {
-  const dataset = state?.panel?.datasets.find((item) => item.id === module.datasetId);
+  const currentState = isPanelDatasetStateCurrent(state, currentQueryKey) ? state : undefined;
+  const dataset = currentState?.panel?.datasets.find((item) => item.id === module.datasetId);
   const table = buildPanelTableModel(module, dataset);
-  const kpi = buildPanelKpiModel(module, state?.panel?.metrics);
+  const kpi = buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults);
   const isTable = module.visualization.type === "TABLE";
   const isKpi = module.visualization.type === "KPI";
   const tableConfig = isPanelTableModule(module) ? module.visualization.config : null;
@@ -356,7 +487,7 @@ function PanelModule({
     <View style={styles.moduleContent}>
       <View style={styles.moduleHeader}>
         <Text style={styles.moduleTitle}>{module.title ?? module.id}</Text>
-        {state?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
+        {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
       </View>
 
       {tableConfig?.searchable ? (
@@ -375,20 +506,20 @@ function PanelModule({
         <PanelState message="Este módulo todavía no está soportado." />
       ) : isKpi ? (
         <PanelKpi
-          error={state?.error ?? null}
-          isLoading={Boolean(state?.isLoading && !kpi?.calculatedAt)}
+          error={currentState?.error ?? null}
+          isLoading={!currentState || Boolean(currentState.isLoading)}
           kpi={kpi}
-          offline={Boolean(state?.fromCache)}
+          offline={Boolean(currentState?.fromCache)}
           onRetry={onRetry}
         />
-      ) : state?.isLoading && !dataset ? (
+      ) : (!currentState || currentState.isLoading) && !dataset ? (
         <View style={styles.stateBox}>
           <ActivityIndicator />
           <Text style={styles.stateText}>Cargando módulo...</Text>
         </View>
-      ) : state?.error ? (
+      ) : currentState?.error ? (
         <View style={styles.stateBox}>
-          <Text style={styles.stateText}>{state.error}</Text>
+          <Text style={styles.stateText}>{currentState.error}</Text>
           <Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}>
             <Text style={styles.actionButtonText}>Reintentar</Text>
           </Pressable>
@@ -587,16 +718,19 @@ const styles = StyleSheet.create({
   disabledButton: {
     opacity: 0.5,
   },
-  filterInput: {
-    flexBasis: 220,
-    flexGrow: 1,
-  },
   filters: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
     marginBottom: 12,
   },
+  filterControl: { flexBasis: 220, flexGrow: 1, minWidth: 200 },
+  filterLabel: { color: "#374151", fontSize: 14, fontWeight: "600" },
+  filterClear: { color: "#047857", fontSize: 13, paddingVertical: 6 },
+  filterRequired: { color: "#b45309", fontSize: 12 },
+  booleanFilter: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  filterChoice: { borderColor: "#d1d5db", borderRadius: 4, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8 },
+  filterChoiceSelected: { backgroundColor: "#d1fae5", borderColor: "#047857" },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",

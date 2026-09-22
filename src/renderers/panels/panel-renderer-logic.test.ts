@@ -9,6 +9,8 @@ import {
   datasetIdsForPanelModules,
   displayPanelValue,
   formatPanelMetricValue,
+  isPanelDatasetStateCurrent,
+  missingRequiredPanelFilters,
   normalizePanelFilters,
   panelDatasetQueryKey,
   resolvePanelRendererRowHeight,
@@ -344,6 +346,31 @@ describe("panel KPI model", () => {
     expect(metrics[1]?.value).toBe(0.25);
   });
 
+  it("uses Core's composed result and formats a ratio once", () => {
+    const module: PanelModuleConfig = {
+      datasetId: "records", id: "ratio", layout: { x: 0, y: 0, w: 2, h: 2 },
+      visualization: { type: "KPI", config: {
+        composition: { metricAId: "a", metricBId: "b", operation: "DIVIDE" },
+        label: "Razón", format: "PERCENT", percentScale: "RATIO",
+      } },
+    };
+    const metrics = [
+      { calculatedAt: "2026-09-10T12:00:00.000Z", datasetId: "records", id: "a", value: 3, valueType: "NUMBER" as const },
+      { calculatedAt: "2026-09-10T12:00:00.000Z", datasetId: "other", id: "b", value: 4, valueType: "NUMBER" as const },
+    ];
+    expect(buildPanelKpiModel(module, metrics, [{ moduleId: "ratio", value: 0.75, reason: null }])?.value).toBe("75%");
+    expect(buildPanelKpiModel(module, metrics, [{ moduleId: "ratio", value: null, reason: "No se puede dividir por cero." }]))
+      .toMatchObject({ value: "-", configurationIssue: "No se puede dividir por cero." });
+    expect(buildPanelKpiModel(module, metrics)?.missing).toBe(true);
+  });
+
+  it("does not reuse a result from the preceding filter selection", () => {
+    const before = panelDatasetQueryKey({ filters: { status: "a" }, page: 1, pageSize: 25, search: "" });
+    const after = panelDatasetQueryKey({ filters: { status: "b" }, page: 1, pageSize: 25, search: "" });
+    expect(isPanelDatasetStateCurrent({ queryKey: before }, after)).toBe(false);
+    expect(isPanelDatasetStateCurrent({ queryKey: after }, after)).toBe(true);
+  });
+
   it("keeps compact KPI numeric values formatted without changing their magnitude", () => {
     const values = [0, 3, 8, 9, -3, 12.5];
 
@@ -548,7 +575,7 @@ describe("panel TABLE renderer structure", () => {
   });
 
   it("renders KPI modules from server metrics with loading, error, and offline states", () => {
-    expect(source).toContain("buildPanelKpiModel(module, state?.panel?.metrics)");
+    expect(source).toContain("buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults)");
     expect(source).toContain("<PanelKpi");
     expect(source).toContain("Cargando indicador...");
     expect(source).toContain("Métrica no disponible.");
@@ -622,6 +649,21 @@ describe("panel dataset state helpers", () => {
       pageSize: 25,
       search: "PET",
     }));
+  });
+
+  it("keeps false and zero, clears optional values, and blocks only a bound required dataset", () => {
+    const filters = [{ id: "status", label: "Estado", valueType: "OPTION" as const, required: true },
+      { id: "active", valueType: "BOOLEAN" as const }, { id: "amount", valueType: "NUMBER" as const }];
+    const dependent = { id: "dependent", source: { type: "ENTITY" as const, entityTypeId: "entity" },
+      transformation: { type: "RECORDS" as const, fieldIds: [] },
+      filters: [{ type: "PANEL_FILTER" as const, filterId: "status", fieldId: "status_field", operator: "EQ" as const }] };
+    const independent = { ...dependent, id: "independent", filters: [] };
+    expect(missingRequiredPanelFilters(filters, dependent, {})).toEqual([filters[0]]);
+    expect(missingRequiredPanelFilters(filters, independent, {})).toEqual([]);
+    expect(normalizePanelFilters(filters, { status: "", active: "false", amount: "0" }))
+      .toEqual({ active: false, amount: 0 });
+    expect(normalizePanelFilters(filters, { status: "option_value", active: "", amount: "Infinity" }))
+      .toEqual({ status: "option_value" });
   });
 
   it("does not expose object values as [object Object]", () => {

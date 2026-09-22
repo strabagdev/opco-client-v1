@@ -12,6 +12,7 @@ type FieldInputProps = {
   field: EntityField;
   onBlur?(): void;
   onChange(value: string | boolean | string[]): void;
+  onRelationSearch?(search: string): void;
   relationOptions?: RecordRelationOption[];
   relationOptionsError?: string | null;
   relationOptionsLoading?: boolean;
@@ -24,6 +25,7 @@ export function RecordFieldInput({
   field,
   onBlur,
   onChange,
+  onRelationSearch,
   relationOptions = [],
   relationOptionsError = null,
   relationOptionsLoading = false,
@@ -104,6 +106,7 @@ export function RecordFieldInput({
         error={error}
         field={field}
         onChange={onChange}
+        onSearch={onRelationSearch}
         options={relationOptions}
         optionsError={relationOptionsError}
         optionsLoading={relationOptionsLoading}
@@ -159,6 +162,7 @@ function RelationFieldInput({
   error,
   field,
   onChange,
+  onSearch,
   options,
   optionsError,
   optionsLoading,
@@ -168,6 +172,7 @@ function RelationFieldInput({
   error?: string;
   field: EntityField;
   onChange(value: string | boolean | string[]): void;
+  onSearch?(search: string): void;
   options: RecordRelationOption[];
   optionsError: string | null;
   optionsLoading: boolean;
@@ -198,7 +203,7 @@ function RelationFieldInput({
         <>
           <TextInput
             autoCapitalize="none"
-            onChangeText={setSearch}
+            onChangeText={(value) => { setSearch(value); onSearch?.(value); }}
             placeholder="Buscar en catalogo"
             style={styles.input}
             value={search}

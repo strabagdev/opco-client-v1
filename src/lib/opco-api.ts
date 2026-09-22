@@ -204,28 +204,29 @@ export type PanelKpiFormat =
 
 export type PanelPercentScale = "RATIO" | "WHOLE";
 
-export type PanelKpiConfig =
-  | {
-      metricId: string;
-      label: string;
-      format: Exclude<PanelKpiFormat, "MONEY" | "PERCENT">;
-      currencyCode?: never;
-      percentScale?: never;
-    }
-  | {
-      metricId: string;
-      label: string;
-      format: "MONEY";
-      currencyCode: string;
-      percentScale?: never;
-    }
-  | {
-      metricId: string;
-      label: string;
-      format: "PERCENT";
-      percentScale: PanelPercentScale;
-      currencyCode?: never;
+export type PanelKpiConfig = {
+  metricId?: string;
+  composition?: {
+      metricAId: string;
+      metricBId: string;
+      operation: "ADD" | "SUBTRACT" | "MULTIPLY" | "DIVIDE";
     };
+} & ({
+  label: string;
+  format: Exclude<PanelKpiFormat, "MONEY" | "PERCENT">;
+  currencyCode?: never;
+  percentScale?: never;
+} | {
+  label: string;
+  format: "MONEY";
+  currencyCode: string;
+  percentScale?: never;
+} | {
+  label: string;
+  format: "PERCENT";
+  percentScale: PanelPercentScale;
+  currencyCode?: never;
+});
 
 export type PanelRuntimeKpiConfig = {
   currencyCode?: string;
@@ -246,6 +247,8 @@ export type PanelMetricResult = {
 export type PanelDatasetConfig = {
   id: string;
   name?: string;
+  filters?: ({ type: "PANEL_FILTER"; filterId: string; fieldId: string; operator: "EQ" | "IN" } |
+    { type: "FIELD_VALUE"; fieldId: string; operator: "EQ" | "IN" | "HAS_VALUE" })[];
   source: {
     entityTypeId: string;
     type: "ENTITY";
@@ -368,6 +371,7 @@ export type DashboardAppView = {
 };
 export type PanelAppView = {
   config: PanelAppViewConfig;
+  configRevision?: string;
   icon: string | null;
   id: string;
   name: string;
@@ -507,6 +511,7 @@ export type PanelResponse = {
   datasets: PanelDataset[];
   filters: PanelFilterConfig[];
   metrics?: PanelMetricResult[];
+  moduleResults?: { moduleId: string; value: number | null; reason: string | null }[];
   modules: PanelModuleConfig[];
   schemaVersion: 1;
 };
