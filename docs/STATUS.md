@@ -1,8 +1,10 @@
 # Current Status
 
-## PANEL Related Fields (local, unpublished)
+## PANEL Related Fields Release 2026-09-22
 
-- Client recognizes the optional `relatedFields` dataset contract, resolves filter metadata through the selected source relation and target definition, and formats MANY target values in TABLE without duplicating rows. Existing PANEL configs remain compatible. Typecheck, lint, full Vitest (790 passed), and Web build pass; manual UI/offline validation remains pending. No publication yet.
+- Client moved by fast-forward from `8805de170aff78ae191e71e6f94a970c67fc3f89` to functional SHA `fff8aaf9125d8f30a16906feb11606a796d7d1d9` after Core `90dd4b909a7a0d83553cf518ec7488d121d00a1b` was active and ready. Railway reported `success` for that exact Client SHA. The public HTML serves `entry-81e6d5a243671168fa2d1a0581e6d736.js`, matching the validated local Web export; the bundle contains `relatedFields` and `related:` markers.
+- Client resolves filter metadata through the selected direct source relation and cached target definition, and formats MANY target values in one TABLE row. Existing PANEL configs remain compatible. Typecheck, lint, full Vitest (790 passed), and Web build passed. No production AppView, entity, record, environment, or storage change was made for this release.
+- Compatible rollback: revert Client to the prior SHA above, then Core to `8882cd4d9eabcc7d47c9aeb02c2c53583d2f8c1b` with forward commits/redeploys. If related fields are configured later, remove them while new Core is active before its rollback. The local screenshot confirms related Categoria selection only; production columns, filters, and offline behavior remain manually unverified.
 
 ## PANEL Release 2026-09-22
 
