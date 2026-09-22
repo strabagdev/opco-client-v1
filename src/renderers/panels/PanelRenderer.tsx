@@ -51,6 +51,7 @@ type PanelTableModuleConfig = PanelModuleConfig & {
 };
 
 const DATASET_KEY_SEPARATOR = "\u0000";
+const relatedFieldId = (relationFieldId: string, fieldId: string) => `related:${relationFieldId}:${fieldId}`;
 
 export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, token } = useSession();
@@ -116,13 +117,37 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
           definition: (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId,
             entityTypeId, token })).definition,
         })));
+        const definitionsById = new Map(definitions.map((item) => [item.entityTypeId, item.definition]));
+        const relatedTargets = new Set<string>();
+        for (const dataset of datasets) {
+          const source = definitionsById.get(dataset.source.entityTypeId);
+          const filterFieldIds = new Set((dataset.filters ?? []).filter((binding) => binding.type === "PANEL_FILTER")
+            .map((binding) => binding.fieldId));
+          for (const selected of (dataset.relatedFields ?? []).filter((item) =>
+            filterFieldIds.has(relatedFieldId(item.relationFieldId, item.fieldId)))) {
+            const relation = source?.fields.find((field) => field.id === selected.relationFieldId);
+            const targetId = relation?.type === "RELATION" ? getRelationTargetEntityTypeId(relation) : null;
+            if (targetId) relatedTargets.add(targetId);
+          }
+        }
+        const targetDefinitions = await Promise.all([...relatedTargets].map(async (entityTypeId) => ({
+          entityTypeId,
+          definition: (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId,
+            entityTypeId, token })).definition,
+        })));
+        for (const item of targetDefinitions) definitionsById.set(item.entityTypeId, item.definition);
         const fields: Record<string, EntityField> = {};
         for (const filter of configuredFilters) {
           const dataset = datasets.find((item) => item.filters?.some((binding) =>
             binding.type === "PANEL_FILTER" && binding.filterId === filter.id));
           const binding = dataset?.filters?.find((item) => item.type === "PANEL_FILTER" && item.filterId === filter.id);
-          const definition = definitions.find((item) => item.entityTypeId === dataset?.source.entityTypeId)?.definition;
-          const field = definition?.fields.find((item) => item.id === binding?.fieldId);
+          const definition = dataset ? definitionsById.get(dataset.source.entityTypeId) : undefined;
+          const selected = dataset?.relatedFields?.find((item) => relatedFieldId(item.relationFieldId, item.fieldId) === binding?.fieldId);
+          const relation = selected ? definition?.fields.find((item) => item.id === selected.relationFieldId) : undefined;
+          const targetId = relation?.type === "RELATION" ? getRelationTargetEntityTypeId(relation) : null;
+          const field = selected && targetId
+            ? definitionsById.get(targetId)?.fields.find((item) => item.id === selected.fieldId)
+            : definition?.fields.find((item) => item.id === binding?.fieldId);
           if (field) fields[filter.id] = { ...field, name: filter.label || field.name };
         }
         if (!cancelled) {

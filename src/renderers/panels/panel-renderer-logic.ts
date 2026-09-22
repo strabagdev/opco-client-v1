@@ -186,6 +186,11 @@ export function displayPanelValue(
     return relationLabel(value);
   }
 
+  if (Array.isArray(value) && field.type !== "MULTISELECT") {
+    return value.map((item) => displayPanelValue(field, item as EntityRecordValue, selectValueDisplay))
+      .filter(Boolean).join(", ");
+  }
+
   if (field.type === "DATE") {
     return formatPanelDateOnly(String(value));
   }

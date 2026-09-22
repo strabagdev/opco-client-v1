@@ -247,6 +247,7 @@ export type PanelMetricResult = {
 export type PanelDatasetConfig = {
   id: string;
   name?: string;
+  relatedFields?: { relationFieldId: string; fieldId: string }[];
   filters?: ({ type: "PANEL_FILTER"; filterId: string; fieldId: string; operator: "EQ" | "IN" } |
     { type: "FIELD_VALUE"; fieldId: string; operator: "EQ" | "IN" | "HAS_VALUE" })[];
   source: {

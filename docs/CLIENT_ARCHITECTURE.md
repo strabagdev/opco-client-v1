@@ -336,6 +336,8 @@ Successful PANEL dataset responses are cached as read-only `panel_snapshots` key
 
 PANEL filter controls read the bound field's existing entity definition, including cached definitions offline. Option labels are presentation only and their internal values are sent; relation selectors use record ids and a searchable existing record catalog. Boolean filters distinguish an omitted selection from `false`. A missing required filter blocks only datasets that bind it and tells the user what to select; independent datasets continue. Clearing an optional control removes its key from the normalized query and snapshot scope. Fixed metric conditions remain configured in Core and are not interactive Client controls.
 
+For a PANEL dataset with `relatedFields`, Client resolves filter metadata by the selected source RELATION field and its target entity definition (one hop; multiple direct relations are independent). Core supplies virtual `related:<relationFieldId>:<fieldId>` schema and row values for TABLE; a MANY relation is shown as a list inside one source row, with SELECT options rendered by label. Client does not join or multiply rows. The existing `configRevision` and normalized filter key make snapshots for different related-field selections or filter values incompatible. Target definition caching follows the existing entity-definition cache; no separate related-record snapshot is assembled into a PANEL result.
+
 ## RECORDS Engine
 
 ```mermaid

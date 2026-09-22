@@ -1,5 +1,9 @@
 # Current Status
 
+## PANEL Related Fields (local, unpublished)
+
+- Client recognizes the optional `relatedFields` dataset contract, resolves filter metadata through the selected source relation and target definition, and formats MANY target values in TABLE without duplicating rows. Existing PANEL configs remain compatible. Typecheck, lint, full Vitest (790 passed), and Web build pass; manual UI/offline validation remains pending. No publication yet.
+
 ## PANEL Release 2026-09-22
 
 - Client moved by fast-forward from `d6142589656d5282be0c6f62f36019d0da5aafe0` to

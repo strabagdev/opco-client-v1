@@ -669,6 +669,14 @@ describe("panel dataset state helpers", () => {
   it("does not expose object values as [object Object]", () => {
     expect(displayPanelValue({ id: "json", name: "JSON", type: "TEXT" }, { nested: true } as never)).toBe("");
   });
+
+  it("formats related multi-target SELECT values with their option labels", () => {
+    const field = { id: "related:tags:status", name: "Tags / Estado", type: "SELECT" as const,
+      options: [{ id: "active-id", value: "active", label: "Activo" },
+        { id: "inactive-id", value: "inactive", label: "Inactivo" }] };
+    expect(displayPanelValue(field, ["active", "inactive"])).toBe("Activo, Inactivo");
+    expect(displayPanelValue(field, ["active", "inactive"], "INTERNAL_VALUE")).toBe("active, inactive");
+  });
 });
 
 function panelRegressionModules(): PanelModuleConfig[] {
