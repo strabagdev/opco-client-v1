@@ -9,10 +9,9 @@ import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticT
 import { getDiagnosticsModalHeight, shouldShowDiagnosticsTabScrollIndicator } from "@/lib/app-diagnostics-layout";
 import {
   classifyAppShellVisibleErrorEvent,
-  resolveAppShellPersistentFeedback,
   resolveAppShellSuccessToast,
   resolveAppShellStatusIndicator,
-  shouldShowAppShellFeedbackSpinner,
+  type AppShellFeedbackInput,
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
@@ -130,8 +129,9 @@ export default function AppLayout() {
   const isStateUpdateActivityActive = hasStateUpdateSummary
     ? isActiveStateUpdateActivity(stateUpdateCurrentActivity)
     : isPendingWorkSyncing || isOperationalCoreReadinessChecking;
-  const persistentFeedback = resolveAppShellPersistentFeedback({
+  const appShellFeedbackInput = {
     connectivityStatus,
+    experienceActivity,
     hasConflict: syncConflictCount > 0,
     hasError: hasSyncError,
     hasReadConnectivityIssue: visibleErrorKind === "read",
@@ -147,21 +147,8 @@ export default function AppLayout() {
     writeFeedback,
     syncConflictCount,
     syncErrorCount: durableSyncErrorCount,
-  });
-  const shellStatusIndicator = resolveAppShellStatusIndicator({
-    connectivityStatus,
-    experienceActivity,
-    hasConflict: syncConflictCount > 0,
-    hasError: hasSyncError,
-    hasReadConnectivityIssue: visibleErrorKind === "read",
-    isAuthSessionRestoring,
-    isOfflinePreparationRunning,
-    isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
-    isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
-    localStorageRecoveryNotice,
-    offlineReadiness: offlineReadiness.offlineReadiness,
-    pendingCount: pendingRecordsCount,
-  });
+  } satisfies AppShellFeedbackInput;
+  const shellStatusIndicator = resolveAppShellStatusIndicator(appShellFeedbackInput);
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const lastActivity = stateUpdateReconnectDiagnostics.lastStateUpdateActivity;
   const lastPreflight = stateUpdateReconnectDiagnostics.lastReconnectPreflight;
@@ -326,17 +313,15 @@ export default function AppLayout() {
   }, [isDiagnosticsOpen, refreshStateUpdateDiagnostics, selectedDiagnosticsTab]);
 
   useEffect(() => {
-    if (persistentFeedback?.id === "sync-error") {
+    if (hasSyncError) {
       void refreshStateUpdateDiagnostics();
     }
-  }, [persistentFeedback?.id, refreshStateUpdateDiagnostics]);
+  }, [hasSyncError, refreshStateUpdateDiagnostics]);
 
   useEffect(() => {
     void refreshStateUpdateDiagnostics();
   }, [refreshStateUpdateDiagnostics, stateUpdateReconnectRefreshKey]);
 
-  const feedback = persistentFeedback;
-  const showFeedbackSpinner = shouldShowAppShellFeedbackSpinner(feedback);
   const userInitials = useMemo(() => getUserInitials(userDisplayName), [userDisplayName]);
   const recordsDiagnosticsRows = getSyncDiagnosticsRows({
     summary: recordsSyncSummary,
@@ -440,67 +425,6 @@ export default function AppLayout() {
         {!isWideLayout ? <View style={styles.headerUserRow}>{userMenuButton}</View> : null}
         {!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null}
       </View>
-
-      {feedback ? (
-        <View style={[styles.feedbackRow, isWideLayout ? styles.feedbackRowWide : styles.feedbackRowCompact]}>
-          <View style={[
-            styles.feedbackBanner,
-            feedback.tone === "error" ? styles.feedbackBannerError : null,
-            feedback.tone === "success" ? styles.feedbackBannerSuccess : null,
-            feedback.tone === "warning" ? styles.feedbackBannerWarning : null,
-            feedback.tone === "info" ? styles.feedbackBannerInfo : null,
-          ]}>
-            {showFeedbackSpinner ? <ActivityIndicator color="#135d66" size="small" /> : null}
-            {feedback.visual === "info" ? (
-              <View style={styles.feedbackInfoIcon}>
-                <WifiOff color="#2f5e66" size={15} strokeWidth={2.2} />
-              </View>
-            ) : null}
-            {feedback.visual === "error" ? (
-              <View style={styles.feedbackErrorIcon}>
-                <AlertCircle color="#b42318" size={16} strokeWidth={2.2} />
-              </View>
-            ) : null}
-            {feedback.visual === "success" ? (
-              <View style={styles.feedbackSuccessIcon}>
-                <AppIcon color="#13795b" icon="clipboard-check" size={16} />
-              </View>
-            ) : null}
-            <Text style={[
-              styles.feedbackText,
-              feedback.tone === "error" ? styles.feedbackTextError : null,
-              feedback.tone === "success" ? styles.feedbackTextSuccess : null,
-              feedback.tone === "warning" ? styles.feedbackTextWarning : null,
-              feedback.tone === "info" ? styles.feedbackTextInfo : null,
-            ]} numberOfLines={feedback.id === "offline" ? 1 : undefined}>
-              {feedback.message}
-            </Text>
-            {persistentFeedback?.id === "sync-error" ? (
-              <Pressable
-                accessibilityLabel="Ver diagnostico de error de sincronizacion"
-                accessibilityRole="button"
-                onPress={() => {
-                  setSelectedDiagnosticsTab(shouldShowRecordsSyncErrorDetail ? "records" : "state-update");
-                  setIsDiagnosticsOpen(true);
-                }}
-                style={styles.feedbackDetailButton}
-              >
-                <Text style={styles.feedbackDetailText}>Ver diagnostico</Text>
-              </Pressable>
-            ) : null}
-            {!persistentFeedback ? (
-              <Pressable
-                accessibilityLabel="Cerrar mensaje"
-                accessibilityRole="button"
-                onPress={() => setToast(null)}
-                style={styles.feedbackCloseButton}
-              >
-                <Text style={styles.feedbackCloseText}>Cerrar</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        </View>
-      ) : null}
 
       <View style={styles.content}>
         <Stack screenOptions={{ headerShown: false }} />
@@ -1441,107 +1365,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     minWidth: 0,
-  },
-  feedbackBanner: {
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 10,
-    justifyContent: "space-between",
-    minHeight: 42,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  feedbackBannerError: {
-    backgroundColor: "#fff7f7",
-    borderColor: "#f1b8b8",
-  },
-  feedbackBannerInfo: {
-    backgroundColor: "#f3f8f8",
-    borderColor: "#d6e4e6",
-  },
-  feedbackBannerSuccess: {
-    backgroundColor: "#eefbf4",
-    borderColor: "#b9e4c9",
-  },
-  feedbackBannerWarning: {
-    backgroundColor: "#fff7e0",
-    borderColor: "#f0c36d",
-  },
-  feedbackCloseButton: {
-    minHeight: 32,
-    justifyContent: "center",
-  },
-  feedbackCloseText: {
-    color: "#135d66",
-    fontWeight: "800",
-  },
-  feedbackDetailButton: {
-    alignItems: "center",
-    borderColor: "#f1b8b8",
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 32,
-    paddingHorizontal: 10,
-  },
-  feedbackDetailText: {
-    color: "#b42318",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  feedbackErrorIcon: {
-    alignItems: "center",
-    flexShrink: 0,
-    height: 20,
-    justifyContent: "center",
-    width: 20,
-  },
-  feedbackSuccessIcon: {
-    alignItems: "center",
-    height: 20,
-    justifyContent: "center",
-    width: 20,
-  },
-  feedbackInfoIcon: {
-    alignItems: "center",
-    flexShrink: 0,
-    height: 18,
-    justifyContent: "center",
-    width: 18,
-  },
-  feedbackRow: {
-    width: "100%",
-  },
-  feedbackRowCompact: {
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingTop: 10,
-  },
-  feedbackRowWide: {
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingTop: 12,
-  },
-  feedbackText: {
-    color: "#17363c",
-    flex: 1,
-    fontWeight: "700",
-    lineHeight: 20,
-    minWidth: 0,
-  },
-  feedbackTextError: {
-    color: "#b42318",
-  },
-  feedbackTextInfo: {
-    color: "#2f5e66",
-  },
-  feedbackTextSuccess: {
-    color: "#13795b",
-  },
-  feedbackTextWarning: {
-    color: "#6f4f08",
   },
   logoutButton: {
     alignItems: "center",

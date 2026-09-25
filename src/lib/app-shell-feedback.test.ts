@@ -174,27 +174,16 @@ describe("app shell feedback", () => {
   });
 
   it("uses loading feedback only for active process messages", () => {
-    const offlinePreparing = resolveAppShellPersistentFeedback({
-      ...baseInput,
-      isOfflinePreparationRunning: true,
-      offlineReadiness: "preparing",
-    });
     const reconnecting = resolveAppShellPersistentFeedback({
       ...baseInput,
       isOperationalCoreReadinessChecking: true,
     });
 
-    expect(offlinePreparing).toMatchObject({
-      id: "offline-preparing",
-      message: "Preparando uso sin conexion...",
-      visual: "loading",
-    });
     expect(reconnecting).toMatchObject({
       id: "reconnecting",
       message: "Reconectando con Opco...",
       visual: "loading",
     });
-    expect(shouldShowAppShellFeedbackSpinner(offlinePreparing)).toBe(true);
     expect(shouldShowAppShellFeedbackSpinner(reconnecting)).toBe(true);
   });
 
@@ -206,7 +195,7 @@ describe("app shell feedback", () => {
     })).toBeNull();
   });
 
-  it("keeps offline preparation feedback aligned with runtime activity", () => {
+  it("does not duplicate offline preparation state in the global feedback band", () => {
     const running = resolveAppShellPersistentFeedback({
       ...baseInput,
       isOfflinePreparationRunning: true,
@@ -232,19 +221,9 @@ describe("app shell feedback", () => {
       offlineReadiness: "ready",
     });
 
-    expect(running).toMatchObject({ id: "offline-preparing", visual: "loading" });
-    expect(interrupted).toEqual({
-      id: "offline-preparation-interrupted",
-      message: "Preparacion anterior interrumpida.",
-      tone: "info",
-      visual: "info",
-    });
-    expect(failed).toEqual({
-      id: "offline-preparation-failed",
-      message: "Preparacion sin conexion incompleta.",
-      tone: "warning",
-      visual: "warning",
-    });
+    expect(running).toBeNull();
+    expect(interrupted).toBeNull();
+    expect(failed).toBeNull();
     expect(completed).toBeNull();
     expect(shouldShowAppShellFeedbackSpinner(interrupted)).toBe(false);
     expect(shouldShowAppShellFeedbackSpinner(failed)).toBe(false);
@@ -317,18 +296,58 @@ describe("app shell feedback", () => {
     });
   });
 
-  it("keeps offline preparation out of the global sync activity indicator", () => {
+  it("shows active offline preparation in the header and stops animating after failure", () => {
     const observedCandidate = {
       ...baseInput,
       isOfflinePreparationRunning: true,
     };
 
     expect(resolvePreviousStatusIndicator(observedCandidate)).toBe("working");
-    expect(resolveAppShellStatusIndicator(observedCandidate)).toEqual({
-      accessibilityLabel: "Listo",
-      label: "Listo",
-      state: "online",
+    expect(resolveAppShellStatusIndicator(observedCandidate)).toMatchObject({
+      label: "Preparando uso offline…",
+      state: "working",
     });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      offlinePreparationStatus: "failed",
+    })).toMatchObject({
+      label: "Preparación offline incompleta",
+      state: "pending",
+    });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      offlinePreparationStatus: "completed",
+    })).toMatchObject({ label: "Listo", state: "online" });
+  });
+
+  it("keeps send errors above offline preparation while diagnostics retain both", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      hasError: true,
+      offlinePreparationStatus: "failed",
+    })).toMatchObject({ label: "Requiere atención", state: "error" });
+  });
+
+  it("returns to an offline warning after a scoped save confirmation expires", () => {
+    const writeFeedback = {
+      appViewId: "view-people",
+      appViewTitle: "Personas",
+      id: "write-feedback-1",
+      kind: "local-saved" as const,
+      recordedAt: "2026-09-22T10:00:00.000Z",
+      scopeKey: "safe-scope",
+    };
+
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      offlinePreparationStatus: "failed",
+      writeFeedback,
+    }).label).toBe("Guardado localmente");
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      offlinePreparationStatus: "failed",
+      writeFeedback: null,
+    }).label).toBe("Preparación offline incompleta");
   });
 
   it("identifies each real active operation and stops animating when it finishes", () => {

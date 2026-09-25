@@ -30,8 +30,8 @@ import {
 import {
   getRecordsInlineSyncSummary,
   getRecordsListErrorMessage,
+  getRecordsSyncProblemMessage,
   resolveRecordsSearchForScopeChange,
-  shouldShowRecordsSyncProblem,
 } from "@/renderers/records/records-renderer-state";
 import {
   activateRecordsOpeningHistoryOwner,
@@ -628,8 +628,10 @@ function SyncTelemetrySummary({
   fallbackSyncedAt: string | null;
   telemetry: SyncTelemetry | null;
 }) {
-  if (shouldShowRecordsSyncProblem({ connectivityStatus, telemetry })) {
-    return <Text style={styles.syncProblemText}>Problema de sincronizacion</Text>;
+  const problemMessage = getRecordsSyncProblemMessage({ connectivityStatus, telemetry });
+
+  if (problemMessage) {
+    return <Text style={styles.syncProblemText}>{problemMessage}</Text>;
   }
 
   const formatted = formatLastSuccessfulSyncAt(telemetry?.lastSuccessfulSyncAt ?? null) ?? fallbackSyncedAt;

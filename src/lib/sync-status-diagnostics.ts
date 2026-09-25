@@ -288,6 +288,10 @@ function indicatorReason(input: SyncStatusDiagnosticsInput) {
   if (input.readiness.active) return "Comprobación activa de disponibilidad de Operational Core.";
   if (input.session.restoring) return "Restauración activa de sesión.";
   if (input.experience.activeRuns.length > 0) return `Actualización activa de ${input.experience.appViewTitle ?? "la experiencia visible"}.`;
+  if (input.offlinePreparation.status === "failed") return "La última preparación offline quedó incompleta; el detalle permanece disponible en Diagnóstico.";
+  if (input.offlinePreparation.status === "running") return input.offlinePreparation.activeInCurrentRuntime
+    ? "Preparación offline activa; no representa envío de cambios."
+    : "La preparación offline anterior quedó interrumpida; el detalle permanece disponible en Diagnóstico.";
   if (input.indicator.state === "pending") return `${input.pendingCount} cambios locales pendientes; sin envío activo.`;
   return "Online, sin pendientes, errores ni operación global activa.";
 }

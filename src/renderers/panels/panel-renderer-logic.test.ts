@@ -583,13 +583,32 @@ describe("panel TABLE renderer structure", () => {
     expect(source).not.toContain("pagination.total}");
   });
 
+  it("shows only the module title for simple and composed KPI cards", () => {
+    expect(source).toContain('<Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>');
+    expect(source).toContain("title={moduleTitle}");
+    expect(source).toContain("<View\n      accessible\n      accessibilityLabel={`${title}: ${kpi.fullValue}");
+    expect(source).toContain('accessibilityLabel={`${title}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}');
+    expect(source).not.toContain("styles.kpiLabel");
+    expect(source).not.toContain("{kpi.label}</Text>");
+  });
+
+  it("keeps long module titles bounded in mobile and desktop panel layouts", () => {
+    const moduleTitleStyleStart = source.indexOf("moduleTitle: {");
+    const moduleTitleStyleEnd = source.indexOf("pagination: {", moduleTitleStyleStart);
+    const moduleTitleStyle = source.slice(moduleTitleStyleStart, moduleTitleStyleEnd);
+
+    expect(source).toContain('<Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>');
+    expect(moduleTitleStyle).toContain("flexShrink: 1");
+    expect(moduleTitleStyle).toContain("lineHeight: 21");
+  });
+
   it("gives the KPI value an explicit line box without hiding overflow", () => {
     const kpiValueStyleStart = source.indexOf("kpiValue: {");
     const kpiValueStyleEnd = source.indexOf("module: {", kpiValueStyleStart);
     const kpiValueStyle = source.slice(kpiValueStyleStart, kpiValueStyleEnd);
 
     expect(source).toContain("justifyContent: \"space-between\"");
-    expect(source).toContain("lineHeight: 18");
+    expect(source).toContain("lineHeight: 21");
     expect(source).toContain("lineHeight: 17");
     expect(kpiValueStyle).toContain("fontSize: 34");
     expect(kpiValueStyle).toContain("fontWeight: \"800\"");

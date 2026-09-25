@@ -45,6 +45,22 @@ export function shouldShowRecordsSyncProblem({
   return connectivityStatus === "online" && telemetry?.syncPhase === "error";
 }
 
+export function getRecordsSyncProblemMessage({
+  connectivityStatus,
+  telemetry,
+}: {
+  connectivityStatus: ConnectivityStatus;
+  telemetry: SyncTelemetry | null;
+}) {
+  if (!shouldShowRecordsSyncProblem({ connectivityStatus, telemetry })) {
+    return null;
+  }
+
+  return telemetry?.lastSyncErrorPhase === "pushing"
+    ? "Problema al enviar cambios"
+    : "Problema al actualizar registros";
+}
+
 export function getRecordsListErrorMessage(error: unknown) {
   return error ? RECORDS_LIST_LOAD_ERROR_MESSAGE : null;
 }

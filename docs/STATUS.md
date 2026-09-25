@@ -1,5 +1,25 @@
 # Current Status
 
+## Recovered Client Improvements 2026-09-24
+
+- The validated candidate restores four independent changes on base
+  `84c6d21a2692b3d26cd3072e01aa0d7303520686`: KPI module titles without a duplicate metric label,
+  RECORDS read/send error wording, the unified header with scoped offline-preparation status, and
+  per-run entity-definition request deduplication.
+- The complete pre-consolidation tree, including the incomplete SQLite v11/outbox experiment and its
+  tests, is preserved at
+  `/home/dannysilver/dev2026/backups/opco-client/2026-09-24-pre-consolidation-v11-full-84c6d21`.
+- Consecutive RECORDS edits during synchronization remain unresolved; no v10 reconstruction or v11
+  migration is active in this candidate.
+- The 13 recovered implementation/test files are byte-identical to the validated candidate at
+  `/home/dannysilver/dev2026/backups/opco-client/2026-09-24-four-patches-validation-84c6d21`.
+  The persistence and sync files remain identical to base `84c6d21a2692b3d26cd3072e01aa0d7303520686`,
+  and SQLite remains at schema v10. The matching candidate passed typecheck, lint, 799 tests, and
+  the production Web build.
+- Local visual review confirmed the RECORDS experience, the PANEL table, and a KPI that shows only
+  its module title with value `1`. Failed and interrupted offline-preparation transitions were not
+  manually verified and remain an explicit visual follow-up.
+
 ## PANEL Related Fields Release 2026-09-22
 
 - Client moved by fast-forward from `8805de170aff78ae191e71e6f94a970c67fc3f89` to functional SHA `fff8aaf9125d8f30a16906feb11606a796d7d1d9` after Core `90dd4b909a7a0d83553cf518ec7488d121d00a1b` was active and ready. Railway reported `success` for that exact Client SHA. The public HTML serves `entry-81e6d5a243671168fa2d1a0581e6d736.js`, matching the validated local Web export; the bundle contains `relatedFields` and `related:` markers.

@@ -150,33 +150,6 @@ export function resolveAppShellPersistentFeedback({
     };
   }
 
-  if (isOfflinePreparationRunning && offlineReadiness !== "ready" && offlineReadiness !== "unsupported") {
-    return {
-      id: "offline-preparing",
-      message: "Preparando uso sin conexion...",
-      tone: "info",
-      visual: "loading",
-    };
-  }
-
-  if (offlinePreparationStatus === "failed") {
-    return {
-      id: "offline-preparation-failed",
-      message: "Preparacion sin conexion incompleta.",
-      tone: "warning",
-      visual: "warning",
-    };
-  }
-
-  if (offlinePreparationStatus === "running" && !isOfflinePreparationRunning) {
-    return {
-      id: "offline-preparation-interrupted",
-      message: "Preparacion anterior interrumpida.",
-      tone: "info",
-      visual: "info",
-    };
-  }
-
   return null;
 }
 
@@ -186,9 +159,11 @@ export function resolveAppShellStatusIndicator({
   hasConflict,
   hasError,
   isAuthSessionRestoring,
+  isOfflinePreparationRunning,
   isOperationalCoreReadinessChecking,
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
+  offlinePreparationStatus = null,
   pendingCount,
   syncConfirmationVisible = false,
   writeFeedback,
@@ -267,6 +242,30 @@ export function resolveAppShellStatusIndicator({
       accessibilityLabel: pendingCount > 0 ? `${activity} ${formatPendingCount(pendingCount)}` : activity,
       label: pendingCount > 0 ? `${activity} · ${formatPendingCount(pendingCount)}` : activity,
       state: "working",
+    };
+  }
+
+  if (isOfflinePreparationRunning) {
+    return {
+      accessibilityLabel: "Preparando uso sin conexion",
+      label: "Preparando uso offline…",
+      state: "working",
+    };
+  }
+
+  if (offlinePreparationStatus === "failed") {
+    return {
+      accessibilityLabel: "Preparacion offline incompleta. Abre Diagnostico para revisar el detalle",
+      label: "Preparación offline incompleta",
+      state: "pending",
+    };
+  }
+
+  if (offlinePreparationStatus === "running") {
+    return {
+      accessibilityLabel: "Preparacion offline anterior interrumpida. Abre Diagnostico para revisar el detalle",
+      label: "Preparación offline interrumpida",
+      state: "pending",
     };
   }
 

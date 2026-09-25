@@ -507,11 +507,12 @@ function PanelModule({
   const isTable = module.visualization.type === "TABLE";
   const isKpi = module.visualization.type === "KPI";
   const tableConfig = isPanelTableModule(module) ? module.visualization.config : null;
+  const moduleTitle = module.title ?? module.id;
 
   return (
     <View style={styles.moduleContent}>
       <View style={styles.moduleHeader}>
-        <Text style={styles.moduleTitle}>{module.title ?? module.id}</Text>
+        <Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>
         {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
       </View>
 
@@ -536,6 +537,7 @@ function PanelModule({
           kpi={kpi}
           offline={Boolean(currentState?.fromCache)}
           onRetry={onRetry}
+          title={moduleTitle}
         />
       ) : (!currentState || currentState.isLoading) && !dataset ? (
         <View style={styles.stateBox}>
@@ -583,12 +585,14 @@ function PanelKpi({
   kpi,
   offline,
   onRetry,
+  title,
 }: {
   error: string | null;
   isLoading: boolean;
   kpi: ReturnType<typeof buildPanelKpiModel>;
   offline: boolean;
   onRetry(): void;
+  title: string;
 }) {
   if (isLoading) {
     return (
@@ -616,10 +620,10 @@ function PanelKpi({
 
   return (
     <View
-      accessibilityLabel={`${kpi.label}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}
+      accessible
+      accessibilityLabel={`${title}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}
       style={styles.kpiCard}
     >
-      <Text numberOfLines={2} style={styles.kpiLabel}>{kpi.label}</Text>
       <Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>
       {kpi.configurationIssue ? (
         <Text style={styles.kpiMeta}>{kpi.configurationIssue}</Text>
@@ -781,12 +785,6 @@ const styles = StyleSheet.create({
     minHeight: 120,
     padding: 16,
   },
-  kpiLabel: {
-    color: "#4b5563",
-    fontSize: 14,
-    fontWeight: "700",
-    lineHeight: 18,
-  },
   kpiMeta: {
     color: "#6b7280",
     fontSize: 12,
@@ -817,8 +815,10 @@ const styles = StyleSheet.create({
   },
   moduleTitle: {
     color: "#111827",
+    flexShrink: 1,
     fontSize: 16,
     fontWeight: "700",
+    lineHeight: 21,
   },
   pagination: {
     alignItems: "center",

@@ -5,6 +5,7 @@ import { SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   getRecordsInlineSyncSummary,
   getRecordsListErrorMessage,
+  getRecordsSyncProblemMessage,
   resolveRecordsSearchForScopeChange,
   shouldShowRecordsSyncProblem,
 } from "./records-renderer-state";
@@ -82,6 +83,37 @@ describe("records renderer state", () => {
       connectivityStatus: "unknown",
       telemetry: errorTelemetry,
     })).toBe(false);
+  });
+
+  it("distinguishes read failures from failures sending local changes", () => {
+    expect(getRecordsSyncProblemMessage({
+      connectivityStatus: "online",
+      telemetry: {
+        ...baseTelemetry,
+        lastSyncErrorPhase: "refreshing",
+        syncPhase: "error",
+      },
+    })).toBe("Problema al actualizar registros");
+
+    expect(getRecordsSyncProblemMessage({
+      connectivityStatus: "online",
+      telemetry: {
+        ...baseTelemetry,
+        lastSyncErrorPhase: "pushing",
+        syncPhase: "error",
+      },
+    })).toBe("Problema al enviar cambios");
+  });
+
+  it("removes the read warning after a successful refresh returns telemetry to idle", () => {
+    expect(getRecordsSyncProblemMessage({
+      connectivityStatus: "online",
+      telemetry: {
+        ...baseTelemetry,
+        lastSuccessfulSyncAt: "2026-09-22T17:01:50.000Z",
+        syncPhase: "idle",
+      },
+    })).toBeNull();
   });
 
   it("keeps offline cache and pending status primary even when records telemetry has an error", () => {

@@ -5,6 +5,8 @@ import {
   ATTENDANCE_MONTH_PREWARM_CONCURRENCY,
   OFFLINE_PREPARATION_SLOW_THRESHOLD_MS,
   OfflinePreparationDiagnostics,
+  isOfflinePreparationDiagnosticsCurrent,
+  offlinePreparationScopeKey,
   prewarmAssignedAppViewsOnce,
 } from "./app-view-prewarm";
 import { CachedEntityRecord } from "./offline-records";
@@ -332,6 +334,60 @@ describe("app view prewarm", () => {
     expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses a shared source entity definition within one prewarm run", async () => {
+    const stateUpdateView: AppView = {
+      config: {
+        historyMode: "append",
+        sourceEntityTypeId: "entity_1",
+        stateFields: [],
+        subjectFieldId: "field_equipment",
+        targetEntityTypeId: "entity_states",
+        uniqueness: "subject",
+        workflowKey: "state-update",
+      },
+      icon: "workflow",
+      id: "view_equipment_state",
+      name: "Estado de equipos",
+      slug: "estado-equipos",
+      sortOrder: 3,
+      type: "WORKFLOW",
+    };
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(async () => ({
+        appView: { id: stateUpdateView.id, name: stateUpdateView.name, slug: stateUpdateView.slug },
+        historyMode: "append",
+        sourceEntityType: { id: "entity_1", name: "Equipos" },
+        subjectFieldId: "field_equipment",
+        targetEntityType: { id: "entity_states", name: "Estados" },
+        uniqueness: "subject",
+      }) as StateUpdateResponse),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(async (_token, _contractId, _entityTypeId, query?: { page?: number; pageSize?: number }) => ({
+        pagination: { page: query?.page ?? 1, pageSize: query?.pageSize ?? 100, total: 0, totalPages: 1 },
+        records: [],
+      })),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [appViewsFixture[0], stateUpdateView],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(api.getEntityDefinition).toHaveBeenCalledTimes(1);
+    expect(api.getEntityDefinition).toHaveBeenCalledWith("token_1", "contract_1", "entity_1");
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", "view_records")).resolves.toMatchObject({
+      status: "ready",
+    });
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", stateUpdateView.id)).resolves.toMatchObject({
+      status: "ready",
+    });
+  });
+
   it("records sanitized prewarm telemetry from running to completed", async () => {
     const telemetry: OfflinePreparationDiagnostics[] = [];
     const api = {
@@ -362,10 +418,30 @@ describe("app view prewarm", () => {
       status: "completed",
     });
     expect(telemetry.at(-1)?.lastAppView?.fingerprint).toMatch(/^fp_/);
+    expect(telemetry.at(-1)?.scopeKey).toBe(offlinePreparationScopeKey("org_1:user_1", "contract_1"));
     expect(JSON.stringify(telemetry)).not.toContain("view_records");
     await expect(store.getOfflinePreparationDiagnostics("org_1:user_1")).resolves.toMatchObject({
       status: "completed",
     });
+  });
+
+  it("isolates offline preparation results by owner and contract", () => {
+    const diagnostics = {
+      appViews: { completed: 1, failed: 0, running: 0, total: 1 },
+      lastAppView: null,
+      prewarmCompletedAt: "2026-09-22T10:00:01.000Z",
+      prewarmDurationMs: 1000,
+      prewarmStartedAt: "2026-09-22T10:00:00.000Z",
+      scopeKey: offlinePreparationScopeKey("owner_1", "contract_1"),
+      slow: false,
+      slowestStages: [],
+      status: "completed" as const,
+    };
+
+    expect(isOfflinePreparationDiagnosticsCurrent(diagnostics, "owner_1", "contract_1")).toBe(true);
+    expect(isOfflinePreparationDiagnosticsCurrent(diagnostics, "owner_1", "contract_2")).toBe(false);
+    expect(isOfflinePreparationDiagnosticsCurrent(diagnostics, "owner_2", "contract_1")).toBe(false);
+    expect(isOfflinePreparationDiagnosticsCurrent({ ...diagnostics, scopeKey: null }, "owner_1", "contract_1")).toBe(false);
   });
 
   it("identifies a slow AppView stage without changing prewarm behavior", async () => {
@@ -409,7 +485,15 @@ describe("app view prewarm", () => {
 
     await prewarmAssignedAppViewsOnce({
       api,
-      appViews: [appViewsFixture[0], { ...appViewsFixture[0], id: "view_failed" }],
+      appViews: [
+        appViewsFixture[0],
+        {
+          ...appViewsFixture[0],
+          config: { entityTypeId: "entity_failed" },
+          id: "view_failed",
+          type: "RECORDS" as const,
+        },
+      ],
       contractId: "contract_1",
       ownerKey: "org_1:user_1",
       store,

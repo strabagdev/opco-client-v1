@@ -100,6 +100,25 @@ describe("sync status diagnostics", () => {
     expect(failed.checklist.find((item) => item.id === "offline-preparation")?.state).toBe("Error");
     expect(completed.activities).not.toContain("Preparación offline");
     expect(failed.activities).not.toContain("Preparación offline");
+    expect(failed.reason).toContain("preparación offline quedó incompleta");
+  });
+
+  it("keeps send failure priority while retaining offline preparation detail", () => {
+    const result = buildSyncStatusDiagnostics({
+      ...baseInput,
+      errors: 1,
+      indicator: { accessibilityLabel: "Requiere atención", label: "Requiere atención", state: "error" },
+      offlinePreparation: {
+        activeInCurrentRuntime: false,
+        completedAt: "2026-09-22T10:00:10.000Z",
+        startedAt: "2026-09-22T10:00:00.000Z",
+        status: "failed",
+      },
+    });
+
+    expect(result.indicator.state).toBe("error");
+    expect(result.checklist.find((item) => item.id === "problems")?.state).toBe("Error");
+    expect(result.checklist.find((item) => item.id === "offline-preparation")?.state).toBe("Error");
   });
 
   it("keeps header reason, experience checklist, and copied diagnostics coherent", () => {

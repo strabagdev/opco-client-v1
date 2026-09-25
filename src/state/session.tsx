@@ -21,6 +21,8 @@ import {
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import {
   OfflinePreparationDiagnostics,
+  isOfflinePreparationDiagnosticsCurrent,
+  offlinePreparationScopeKey,
   prewarmAssignedAppViewsOnce,
 } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
@@ -180,6 +182,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const connectivityStatus = useConnectivityStatus();
   const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
   const ownerKey = me && context ? buildOwnerKey(me, context) : null;
+  const offlinePreparationScopeRef = useRef<string | null>(null);
+  const offlinePreparationScope = ownerKey && selectedContractIdState
+    ? offlinePreparationScopeKey(ownerKey, selectedContractIdState)
+    : null;
   const isOfflinePreparationRunning = activeOfflinePreparationRuns.size > 0;
   const clearOfflinePreparationRuntime = useCallback(() => {
     setActiveOfflinePreparationRuns(new Set());
@@ -289,6 +295,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [definitionCache, ownerKey, selectedContractIdState]);
 
   const recordOfflinePreparationDiagnostics = useCallback((diagnostics: OfflinePreparationDiagnostics) => {
+    if (!diagnostics.scopeKey || diagnostics.scopeKey !== offlinePreparationScopeRef.current) {
+      return;
+    }
+
     setOfflinePreparationDiagnostics(diagnostics);
     const runKey = diagnostics.prewarmStartedAt;
 
@@ -308,18 +318,28 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
+    offlinePreparationScopeRef.current = offlinePreparationScope;
+  }, [offlinePreparationScope]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function hydrateOfflinePreparationDiagnostics() {
-      if (!ownerKey) {
-        setOfflinePreparationDiagnostics(null);
+      await Promise.resolve();
+
+      if (!isMounted) return;
+
+      setOfflinePreparationDiagnostics(null);
+      setActiveOfflinePreparationRuns(new Set());
+
+      if (!ownerKey || !selectedContractIdState) {
         return;
       }
 
       try {
         const diagnostics = await definitionCache.getOfflinePreparationDiagnostics(ownerKey);
 
-        if (isMounted) {
+        if (isMounted && isOfflinePreparationDiagnosticsCurrent(diagnostics, ownerKey, selectedContractIdState)) {
           setOfflinePreparationDiagnostics(diagnostics);
         }
       } catch {
@@ -334,7 +354,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [definitionCache, ownerKey]);
+  }, [definitionCache, ownerKey, selectedContractIdState]);
 
   const {
     isStateUpdateDiagnosticSyncing,

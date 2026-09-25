@@ -33,6 +33,8 @@ El usuario escribe email/password. Si la API detecta una sola empresa válida, c
 
 ## Arquitectura
 
+- [Guía offline-first](docs/OFFLINE_FIRST_GUIDE.md): recorrido operativo y separación entre base publicada, mejoras recuperadas y experimento v11 respaldado.
+- [Auditoría offline-first](docs/OFFLINE_FIRST_AUDIT.md): evidencia, hallazgos y escenarios pendientes.
 - `app/`: rutas Expo Router.
 - `app/(auth)/login.tsx`: login minimo con email/password.
 - `app/(app)/index.tsx`: Home autenticada, contexto, contrato, AppViews asignadas, categorias de experiencias y disponibilidad offline.

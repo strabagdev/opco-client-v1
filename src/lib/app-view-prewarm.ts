@@ -25,6 +25,8 @@ export const OFFLINE_PREPARATION_SLOW_THRESHOLD_MS = 10_000;
 const activePrewarms = new Map<string, Promise<void>>();
 
 type PrewarmStageKey = "definitionLoad" | "sourceRecordsFetch" | "sqliteWrite" | "snapshot";
+type EntityDefinitionResponse = Awaited<ReturnType<OpcoApi["getEntityDefinition"]>>;
+type EntityDefinitionLoader = (entityTypeId: string) => Promise<EntityDefinitionResponse>;
 
 export type OfflinePreparationStageTelemetry = {
   completedAt: string | null;
@@ -63,6 +65,7 @@ export type OfflinePreparationDiagnostics = {
   prewarmCompletedAt: string | null;
   prewarmDurationMs: number | null;
   prewarmStartedAt: string | null;
+  scopeKey?: string | null;
   slow: boolean;
   slowestStages: OfflinePreparationStageTelemetry[];
   status: "idle" | "running" | "completed" | "failed";
@@ -118,10 +121,26 @@ export async function prewarmAssignedAppViews({
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
+  const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
+  const loadEntityDefinition: EntityDefinitionLoader = (entityTypeId) => {
+    const existing = entityDefinitionLoads.get(entityTypeId);
+
+    if (existing) return existing;
+
+    const request = api.getEntityDefinition(token, contractId, entityTypeId);
+
+    entityDefinitionLoads.set(entityTypeId, request);
+    void request.catch(() => {
+      if (entityDefinitionLoads.get(entityTypeId) === request) entityDefinitionLoads.delete(entityTypeId);
+    });
+    return request;
+  };
 
   await recordOfflinePreparationTelemetry({
     diagnostics: buildOfflinePreparationDiagnostics({
       appViewTelemetry,
+      contractId,
+      ownerKey,
       startedAt,
       startedMs,
       status: "running",
@@ -141,6 +160,8 @@ export async function prewarmAssignedAppViews({
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
           appViewTelemetry,
+          contractId,
+          ownerKey,
           startedAt,
           startedMs,
           status: "running",
@@ -151,12 +172,22 @@ export async function prewarmAssignedAppViews({
         store,
       });
 
-      const nextTelemetry = await prewarmOneAppView({ api, appView, contractId, ownerKey, store, token });
+      const nextTelemetry = await prewarmOneAppView({
+        api,
+        appView,
+        contractId,
+        loadEntityDefinition,
+        ownerKey,
+        store,
+        token,
+      });
 
       appViewTelemetry.set(appView.id, nextTelemetry);
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
           appViewTelemetry,
+          contractId,
+          ownerKey,
           startedAt,
           startedMs,
           status: "running",
@@ -171,6 +202,8 @@ export async function prewarmAssignedAppViews({
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
         appViewTelemetry,
+        contractId,
+        ownerKey,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
@@ -186,6 +219,8 @@ export async function prewarmAssignedAppViews({
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
         appViewTelemetry,
+        contractId,
+        ownerKey,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
@@ -205,6 +240,7 @@ async function prewarmOneAppView({
   api,
   appView,
   contractId,
+  loadEntityDefinition,
   ownerKey,
   store,
   token,
@@ -212,6 +248,7 @@ async function prewarmOneAppView({
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appView: AppView;
   contractId: string;
+  loadEntityDefinition: EntityDefinitionLoader;
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
@@ -223,7 +260,7 @@ async function prewarmOneAppView({
   try {
     if (appView.type === "RECORDS") {
       const response = await measurePrewarmStage(telemetry, "definitionLoad", () =>
-        api.getEntityDefinition(token, contractId, appView.config.entityTypeId),
+        loadEntityDefinition(appView.config.entityTypeId),
       );
 
       await measurePrewarmStage(telemetry, "sqliteWrite", async () => {
@@ -256,7 +293,7 @@ async function prewarmOneAppView({
         const workflow = await api.getAttendanceWorkflow(token, contractId, appView.id, {
           date: today,
         });
-        const definition = await api.getEntityDefinition(token, contractId, workflow.sourceEntityType.id);
+        const definition = await loadEntityDefinition(workflow.sourceEntityType.id);
 
         return { response: workflow, sourceDefinition: definition };
       });
@@ -341,7 +378,7 @@ async function prewarmOneAppView({
         const workflow = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
           date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
         });
-        const definition = await api.getEntityDefinition(token, contractId, workflow.sourceEntityType.id);
+        const definition = await loadEntityDefinition(workflow.sourceEntityType.id);
 
         return { response: workflow, sourceDefinition: definition };
       });
@@ -575,6 +612,8 @@ function buildOfflinePreparationDiagnostics({
   appViewTelemetry,
   completedAt = null,
   completedMs,
+  contractId,
+  ownerKey,
   startedAt,
   startedMs,
   status,
@@ -583,6 +622,8 @@ function buildOfflinePreparationDiagnostics({
   appViewTelemetry: Map<string, OfflinePreparationAppViewTelemetry>;
   completedAt?: string | null;
   completedMs?: number;
+  contractId: string;
+  ownerKey: string;
   startedAt: string;
   startedMs: number;
   status: OfflinePreparationDiagnostics["status"];
@@ -614,6 +655,7 @@ function buildOfflinePreparationDiagnostics({
     prewarmCompletedAt: completedAt,
     prewarmDurationMs,
     prewarmStartedAt: startedAt,
+    scopeKey: offlinePreparationScopeKey(ownerKey, contractId),
     slow: Boolean((prewarmDurationMs && prewarmDurationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS) || appViews.some((appView) => appView.slow)),
     slowestStages,
     status,
@@ -700,12 +742,30 @@ export function normalizeOfflinePreparationDiagnostics(
     prewarmCompletedAt: normalizeNullableString(value.prewarmCompletedAt),
     prewarmDurationMs: normalizeNullableNumber(value.prewarmDurationMs),
     prewarmStartedAt: normalizeNullableString(value.prewarmStartedAt),
+    scopeKey: normalizeNullableString(value.scopeKey),
     slow: Boolean(value.slow),
     slowestStages: Array.isArray(value.slowestStages)
       ? value.slowestStages.map(normalizeStageTelemetry).filter((stage): stage is OfflinePreparationStageTelemetry => Boolean(stage)).slice(0, 3)
       : [],
     status: value.status,
   };
+}
+
+export function offlinePreparationScopeKey(ownerKey: string, contractId: string) {
+  return fingerprintPrewarmValue(`${ownerKey}:${contractId}`);
+}
+
+export function isOfflinePreparationDiagnosticsCurrent(
+  diagnostics: OfflinePreparationDiagnostics | null | undefined,
+  ownerKey: string | null,
+  contractId: string | null,
+) {
+  return Boolean(
+    diagnostics?.scopeKey &&
+    ownerKey &&
+    contractId &&
+    diagnostics.scopeKey === offlinePreparationScopeKey(ownerKey, contractId),
+  );
 }
 
 function normalizeAppViewTelemetry(
