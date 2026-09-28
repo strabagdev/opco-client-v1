@@ -19,7 +19,7 @@ describe("records sync engine", () => {
         clientRequestId: "request_original",
         localRecordId: "local_1",
         operation: "CREATE",
-        payload: { clientRequestId: "request_original", values: { codigo: "EQ-1" } },
+        payload: { clientRequestId: "request_original", intentId: "intent_create_1", values: { codigo: "EQ-1" } },
       }),
     ];
     const api = {
@@ -50,7 +50,7 @@ describe("records sync engine", () => {
       operation({
         localRecordId: "record_1",
         operation: "UPDATE",
-        payload: { values: { estado: "operativo" } },
+        payload: { intentId: "intent_update_1", values: { estado: "operativo" } },
         serverRecordId: "record_1",
       }),
     ];

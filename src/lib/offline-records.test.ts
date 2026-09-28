@@ -175,6 +175,83 @@ describe("offline records cache", () => {
     expect(result.record?.id).toBe("record_1");
   });
 
+  it("opens a pending CREATE by local id without requesting that id from Core", async () => {
+    await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "Taller" },
+    });
+    let requestedRecordId: string | null = null;
+
+    const result = await loadRecordWithOfflineCache({
+      ...scope,
+      api: {
+        getEntityRecord: async (_token, _contractId, _entityTypeId, recordId) => {
+          requestedRecordId = recordId;
+          throw new OpcoApiError("Registro no encontrado.", "RECORD_NOT_FOUND", 404);
+        },
+      },
+      recordId: "local_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(requestedRecordId).toBeNull();
+    expect(result).toMatchObject({
+      fromCache: true,
+      offline: false,
+      record: {
+        id: "local_1",
+        localId: "local_1",
+        serverId: null,
+        syncStatus: "pending_create",
+        values: { codigo: "Taller" },
+      },
+    });
+  });
+
+  it("keeps a local-id route accessible after CREATE receives its server id", async () => {
+    const created = await store.createLocalRecord({
+      ...scope,
+      clientRequestId: "request_1",
+      localId: "local_1",
+      values: { codigo: "Taller" },
+    });
+    store.records.set(key(scope.ownerKey, scope.contractId, scope.entityTypeId, created.localId), {
+      ...created,
+      id: "record_1",
+      remoteUpdatedAt: "2026-09-28T12:00:00.000Z",
+      serverId: "record_1",
+      syncStatus: "synced",
+    });
+    let requestedRecordId: string | null = null;
+
+    const result = await loadRecordWithOfflineCache({
+      ...scope,
+      api: {
+        getEntityRecord: async (_token, _contractId, _entityTypeId, recordId) => {
+          requestedRecordId = recordId;
+          if (recordId !== "record_1") {
+            throw new OpcoApiError("Registro no encontrado.", "RECORD_NOT_FOUND", 404);
+          }
+
+          return { record: record("record_1", "Bodega", { codigo: "Bodega" }) };
+        },
+      },
+      recordId: "local_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(requestedRecordId).toBe("record_1");
+    expect(result.record).toMatchObject({
+      id: "record_1",
+      localId: "local_1",
+      serverId: "record_1",
+    });
+  });
+
   it("does not use synced cached detail when the API returns an auth error", async () => {
     await store.upsertRemoteRecords({
       ...scope,

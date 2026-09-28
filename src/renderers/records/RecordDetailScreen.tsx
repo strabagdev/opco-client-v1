@@ -17,7 +17,16 @@ type Props = {
 
 export function RecordDetailScreen({ appView, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
-  const { api, definitionCache, ownerKey, refreshRecordsSyncSummary, selectedContractId, syncPendingRecords, token } = useSession();
+  const {
+    api,
+    definitionCache,
+    ownerKey,
+    recordsReconnectRefreshKey,
+    refreshRecordsSyncSummary,
+    selectedContractId,
+    syncPendingRecords,
+    token,
+  } = useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +96,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, entityTypeId, ownerKey, recordId, retryCount, selectedContractId, token]);
+  }, [api, definitionCache, entityTypeId, ownerKey, recordId, recordsReconnectRefreshKey, retryCount, selectedContractId, token]);
 
   async function retryFailedRecord() {
     if (!record || !selectedContractId || !ownerKey) {

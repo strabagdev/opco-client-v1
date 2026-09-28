@@ -658,13 +658,17 @@ export function usePendingWorkLifecycle({
     const syncRunId = createSyncRunId();
 
     try {
-      await runPendingWorkAfterReadiness({
+      const syncResult = await runPendingWorkAfterReadiness({
         ownerKey,
         runScope,
         syncRunId,
         token,
         trigger,
       });
+      if (syncResult === "completed" && isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+        setRecordsReconnectRefreshKeyRef.current((key) => key + 1);
+      }
+
       if (isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current) && shouldShowStateUpdateDiagnostics) {
         await refreshStateUpdateDiagnostics();
       }

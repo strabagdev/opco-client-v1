@@ -1,5 +1,44 @@
 # Current Status
 
+## RECORDS A-to-B Technical Closure 2026-09-28
+
+- Final automated checks on `main` at `487c970c7238a50d84446481a3ff101092222728` passed: typecheck, lint, 69 test files with 811 tests at two workers, Web build/export with Expo SQLite WASM and service-worker generation, and `git diff --check`.
+- The final diff is limited to the SQLite v10 RECORDS intent-preservation correction, scoped `local_id`/`server_id` resolution, mounted-detail refresh after direct sync, and their tests/documentation. There are no schema-version, migration, API/Core, dependency, or configuration changes, and no credentials or generated artifacts are included.
+- Automated evidence uses the real persistence and sync functions with controlled APIs and a stateful SQLite-shaped harness. It is distinct from the earlier Chrome/CDP evidence with Expo SQLite OPFS/WASM summarized below; no browser scenario was repeated for this closure.
+- The UPDATE A-to-B browser scenario has an uninterrupted retained-response trace and passed without reload after the mounted-detail correction. The CREATE-to-UPDATE final-delivery evidence remains limited: Core/PostgreSQL proved one final remote record with `Bodega`, but the CDP harness did not retain one uninterrupted trace of that final transition, so it is not treated as a complete browser verification.
+- During an earlier development/HMR setup, Expo Web emitted a transient `Database not found - nativeDatabaseId[0]` message and remounted. The subsequent clean controlled scenario passed, but the HMR observation was not independently reproduced or investigated and is not considered verified by this closure.
+
+## RECORDS Mounted Conflict Refresh 2026-09-28
+
+- The stale conflict was a mounted-view refresh defect, not a durable conflict left after A completed. While A was in flight, the detail GET observed remote A against B's older base and correctly persisted a transient `conflict`; superseded completion of A then transactionally cleared the conflict fields and restored B as `pending_update`.
+- Direct/manual `syncPendingRecords()` completion now publishes the existing RECORDS refresh key for the current session scope, and `RecordDetailScreen` consumes that key. A real conflict remains visible because reload reads the still-persisted `conflict`; only the already-cleared transient conflict disappears.
+- Focused evidence passed: the stateful SQLite regression observes persisted conflict B/A before confirmation and pending B with null conflict fields afterward; mounted-detail refresh coverage plus lifecycle, reconnect, and RECORDS sync tests passed (4 files, 53 tests). Typecheck, lint, and `git diff --check` passed.
+- Chrome/CDP with an exclusive profile and real Expo SQLite OPFS/WASM reproduced the transient banner. Releasing A's retained HTTP 200 kept the same mounted URL and changed the detail to `Bodega` + `Pendiente` with no conflict, without reload. Six OPFS files remained and the Expo SQLite worker bundle was loaded.
+- The independent stale-conflict item is resolved. No schema, migration, API/Core, dependency, configuration, production, or real-data change was made.
+
+## RECORDS Pending CREATE Edit 2026-09-28
+
+- Cause: the detail and edit routes retain `local_id`, but `loadRecordWithOfflineCache()` previously sent that identifier to Core before resolving the scoped SQLite row. Once CREATE assigned `server_id` and the row became synced, Core returned 404 for the local identifier and the fallback deliberately rejected a synced cache row.
+- Minimal correction: individual RECORDS loading first resolves by `owner_key + contract_id + entity_type_id + (local_id or server_id)`. A row without `server_id` opens directly from local storage; a row that already has `server_id` refreshes from Core using that remote identity while the original local route remains valid. No schema, API, Core, dependency, or configuration changed.
+- Focused automated evidence passed: `offline-records.test.ts`, the stateful SQLite A-to-B regression, and RECORDS sync tests (3 files, 65 tests). The new coverage rejects a Core request using a pending local id and verifies that the same local-id route resolves through `server_id` after CREATE confirmation. Typecheck and lint passed.
+- Browser evidence with Chrome/CDP and Expo SQLite OPFS/WASM: Core processed CREATE A=`Taller` while its response was retained; `/record/local_.../edit` opened successfully instead of showing `Registro no encontrado`; saving B=`Bodega` succeeded locally. After release, Core still had exactly one synthetic remote record with A while Client showed durable B pending, and B remained after a full Chrome restart with the same exclusive profile. The runtime loaded the Expo SQLite Web worker.
+- Browser completion evidence: Core logged the final PATCH 200 and PostgreSQL contained exactly one matching synthetic record with Cargo=`Bodega`. The CDP harness did not preserve one uninterrupted trace of that final delivery: an aborted Fetch interception contaminated the first disposable profile, and the final clean attempt timed out waiting for a local-id URL after the route had already advanced to `server_id`. The database result proves completion and uniqueness, but the exact final response-release transition remains a harness limitation. No additional product change was made; the separate stale-conflict presentation issue was subsequently resolved and validated as documented above.
+
+## RECORDS A-to-B Browser Validation 2026-09-28
+
+- Environment evidence: Chrome 153 for Windows ran headless through CDP with a dedicated disposable profile, while Expo started with automatic browser opening disabled. Core was guarded against `opco_dev@127.0.0.1:5432/opco_development`; Client used `http://localhost:3000` and the verified private `client-review@operational-core.local` credentials. No habitual browser profile or production destination was used.
+- SQLite Web evidence: the runtime loaded the Expo SQLite worker, created six files under the `expo-sqlite` OPFS directory including a 131072-byte database file, and later grew that file to 135168 bytes. After a real page reload while B's PATCH was intercepted before Core, the same OPFS files remained and the detail rendered durable local value `Bodega` with status `Pendiente`.
+- UPDATE A-to-B passed for durable data. CDP retained A's HTTP 200 response after Core had applied `Taller`; B was then saved as `Bodega`. B stayed visible and durable, survived reload while its PATCH was held before Core, and synchronized after release. Core ended with exactly one matching remote record and `Bodega`.
+- UPDATE presentation observation: before A's retained response was released, detail's remote read saw A and displayed a conflict for local B. Completing A corrected SQLite to pending, but the mounted detail kept the stale conflict label until reload. No B data or outbox intent was lost; this presentation-only issue is resolved by the mounted conflict refresh validation above.
+- The original CREATE-to-UPDATE browser blocker is resolved by the scoped local-first identity lookup documented above. The prior run retained CREATE A after Core created one `Taller` record and reproduced `Registro no encontrado` at `/record/local_.../edit`; the current run opened that same route shape and saved B locally. No v11, schema, migration, or Core change was needed.
+- Compatibility and automated evidence remain valid: legacy operations without `intentId` fall back to `client_request_id`; API bodies exclude `intentId`; the final complete suite passed with 69 files and 811 tests at two workers, and Web export/service-worker generation passed with Expo SQLite WASM included.
+
+## RECORDS Consecutive Edit Preservation 2026-09-26
+
+- SQLite v10 RECORDS outbox payloads now carry a local intent identity. Completion, retry, definitive failure, and conflict handling only mutate the intent they actually sent, so a later edit remains locally visible and durable.
+- When CREATE is confirmed after a later local edit, the existing outbox intent is converted transactionally to UPDATE with the confirmed server id and remote version. UPDATE confirmation refreshes that same remote base without replacing the later local values; the next preflight still detects genuine remote changes as conflicts.
+- Focused coverage uses the real local persistence and RECORDS sync functions with a controlled API and a stateful SQLite-shaped harness. It covers A-to-B preservation and resend, module reload, remote conflict, network failure, late A failure/conflict, and CREATE-to-UPDATE without duplicate creation. It does not exercise Expo Web's real OPFS/WASM SQLite engine or production data.
+
 ## Recovered Client Improvements 2026-09-24
 
 - The validated candidate restores four independent changes on base
@@ -9,8 +48,8 @@
 - The complete pre-consolidation tree, including the incomplete SQLite v11/outbox experiment and its
   tests, is preserved at
   `/home/dannysilver/dev2026/backups/opco-client/2026-09-24-pre-consolidation-v11-full-84c6d21`.
-- Consecutive RECORDS edits during synchronization remain unresolved; no v10 reconstruction or v11
-  migration is active in this candidate.
+- At that recovered candidate SHA, consecutive RECORDS edits during synchronization remained unresolved
+  and no v10 reconstruction or v11 migration was active. The current v10 correction is documented above.
 - The 13 recovered implementation/test files are byte-identical to the validated candidate at
   `/home/dannysilver/dev2026/backups/opco-client/2026-09-24-four-patches-validation-84c6d21`.
   The persistence and sync files remain identical to base `84c6d21a2692b3d26cd3072e01aa0d7303520686`,

@@ -1995,6 +1995,7 @@ async function createLocalRecord({
       ownerKey,
       payload: {
         clientRequestId,
+        intentId: createLocalRecordId(),
         values: payloadValues,
       },
       serverRecordId: null,
@@ -2085,6 +2086,7 @@ async function updateLocalRecord({
         `,
         JSON.stringify({
           clientRequestId: createOperation.client_request_id,
+          intentId: createLocalRecordId(),
           values: payloadValues,
         }),
         now,
@@ -2105,6 +2107,7 @@ async function updateLocalRecord({
       operation: "UPDATE",
       ownerKey,
       payload: {
+        intentId: createLocalRecordId(),
         values: payloadValues,
       },
       serverRecordId: existing.serverId,
@@ -3325,6 +3328,12 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
   const now = new Date().toISOString();
 
   await db.withTransactionAsync(async (transaction) => {
+    const currentOperation = await readPendingOperationInTransaction(transaction, operation.id);
+    if (!currentOperation) {
+      return;
+    }
+    const wasSuperseded = !isSameRecordIntent(currentOperation, operation);
+
     await transaction.runAsync(
       `
         DELETE FROM entity_records
@@ -3340,6 +3349,44 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
       record.id,
       operation.localRecordId,
     );
+
+    if (wasSuperseded) {
+      if (operation.operation === "CREATE") {
+        await transaction.runAsync(
+          `
+            UPDATE pending_operations
+            SET id = ?,
+                operation = 'UPDATE',
+                server_record_id = ?,
+                last_error_code = NULL,
+                last_error_message = NULL
+            WHERE id = ?
+          `,
+          `update_${operation.localRecordId}`,
+          record.id,
+          operation.id,
+        );
+      }
+
+      await transaction.runAsync(
+        `
+          UPDATE entity_records
+          SET server_id = ?,
+              remote_updated_at = ?,
+              sync_status = 'pending_update',
+              sync_error_code = NULL,
+              sync_error_message = NULL,
+              conflict_remote_values_json = NULL,
+              conflict_remote_display_name = NULL,
+              conflict_remote_updated_at = NULL
+          WHERE local_id = ?
+        `,
+        record.id,
+        record.updatedAt,
+        operation.localRecordId,
+      );
+      return;
+    }
 
     await transaction.runAsync(`DELETE FROM pending_operations WHERE id = ?`, operation.id);
 
@@ -3546,6 +3593,10 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
   const now = new Date().toISOString();
 
   await db.withTransactionAsync(async (transaction) => {
+    if (!(await isCurrentRecordIntent(transaction, operation))) {
+      return;
+    }
+
     await transaction.runAsync(
       `
         UPDATE pending_operations
@@ -4177,7 +4228,7 @@ async function upsertPendingOperationInTransaction(
     localRecordId: string;
     operation: PendingOperation["operation"];
     ownerKey: string;
-    payload: { clientRequestId?: string; values: Record<string, EntityRecordValue> };
+    payload: OfflineRecordPayload;
     serverRecordId: string | null;
     timestamp: string;
   },
@@ -4317,6 +4368,10 @@ async function setOperationError(
   details?: unknown,
   httpStatus?: number | null,
 ) {
+  if (operation.operation !== STATE_UPDATE_OPERATION && !(await isCurrentRecordIntent(db, operation))) {
+    return;
+  }
+
   const now = new Date().toISOString();
   const payloadJson = operation.operation === STATE_UPDATE_OPERATION || operation.operation === "CREATE" || operation.operation === "UPDATE"
     ? JSON.stringify({
@@ -4355,6 +4410,36 @@ async function setOperationError(
     message,
     operation.localRecordId,
   );
+}
+
+async function isCurrentRecordIntent(db: SQLite.SQLiteDatabase, operation: PendingOperation) {
+  const currentOperation = await readPendingOperationInTransaction(db, operation.id);
+
+  return Boolean(currentOperation && isSameRecordIntent(currentOperation, operation));
+}
+
+async function readPendingOperationInTransaction(db: SQLite.SQLiteDatabase, operationId: string) {
+  const row = await db.getFirstAsync<PendingOperationRow>(
+    `
+      SELECT *
+      FROM pending_operations
+      WHERE id = ?
+      LIMIT 1
+    `,
+    operationId,
+  );
+
+  return row ? mapPendingOperationRow(row) : null;
+}
+
+function isSameRecordIntent(left: PendingOperation, right: PendingOperation) {
+  return recordIntentId(left) === recordIntentId(right);
+}
+
+function recordIntentId(operation: PendingOperation) {
+  const intentId = (operation.payload as OfflineRecordPayload).intentId;
+
+  return typeof intentId === "string" && intentId ? intentId : operation.clientRequestId;
 }
 
 type EntityRecordRow = {

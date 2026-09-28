@@ -47,6 +47,7 @@ export type PendingOperation = {
 
 export type OfflineRecordPayload = {
   clientRequestId?: string;
+  intentId?: string;
   lastErrorDetails?: StateUpdateSyncErrorDetails | null;
   lastErrorHttpStatus?: number | null;
   values: Record<string, EntityRecordValue>;
@@ -512,8 +513,20 @@ export async function loadRecordWithOfflineCache({
   store,
   token,
 }: LoadRecordParams): Promise<{ fromCache: boolean; offline: boolean; record: CachedEntityRecord | null }> {
+  const cachedBeforeRemote = await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  if (cachedBeforeRemote && !cachedBeforeRemote.serverId) {
+    return {
+      fromCache: true,
+      offline: false,
+      record: cachedBeforeRemote,
+    };
+  }
+
+  const remoteRecordId = cachedBeforeRemote?.serverId ?? recordId;
+
   try {
-    const remote = await api.getEntityRecord(token, contractId, entityTypeId, recordId);
+    const remote = await api.getEntityRecord(token, contractId, entityTypeId, remoteRecordId);
 
     await store.upsertRemoteRecords({
       contractId,

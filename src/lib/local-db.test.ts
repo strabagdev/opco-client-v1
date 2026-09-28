@@ -2826,7 +2826,7 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS remote completion as one transaction", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
     await store.completePendingOperation(recordsPendingOperation(), remoteRecord("record_1"));
@@ -2844,6 +2844,7 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS completion half-applied when the outbox delete fails inside the transaction", async () => {
+    mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("delete failed");
       throw new Error("delete failed");
@@ -2860,6 +2861,7 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS conflict metadata and outbox error as one transaction", async () => {
+    mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
     await store.markPendingOperationConflict(
@@ -2948,6 +2950,7 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS conflict half-applied when the record conflict write fails inside the transaction", async () => {
+    mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("conflict failed");
       throw new Error("conflict failed");
@@ -2969,6 +2972,7 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS definitive failure as one transaction", async () => {
+    mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
     await store.failPendingOperation(recordsPendingOperation(), "INVALID_RELATION", "invalid", {
@@ -2997,6 +3001,7 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS failure half-applied when the record status write fails inside the transaction", async () => {
+    mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("failure write failed");
       throw new Error("failure write failed");
@@ -3548,6 +3553,20 @@ function pendingOperationRow(overrides: Record<string, unknown> = {}) {
     updated_at: "2026-08-24T10:00:00.000Z",
     ...overrides,
   };
+}
+
+function mockCurrentRecordsOperation() {
+  db.getFirstAsync.mockImplementation(async (sql: string) => {
+    if (sql.includes("FROM pending_operations") && sql.includes("WHERE id = ?")) {
+      return pendingOperationRow();
+    }
+
+    if (sql.includes("COUNT(*) AS total FROM pending_operations")) {
+      return { total: 0 };
+    }
+
+    return null;
+  });
 }
 
 function recordsPendingOperation(overrides: Partial<PendingOperation> = {}): PendingOperation {
