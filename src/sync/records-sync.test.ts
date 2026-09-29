@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PendingOperation } from "../lib/offline-records";
+import { OfflineRecordPayload, PendingOperation, RecordUpdateCommand } from "../lib/offline-records";
 import { LocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { EntityRecord, EntityRecordValue, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { SyncTelemetry, SyncTelemetryScope, emptySyncTelemetry } from "../lib/sync-telemetry";
@@ -67,6 +67,8 @@ describe("records sync engine", () => {
     await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
 
     expect(api.updateEntityRecord).toHaveBeenCalledWith("token_1", "contract_1", "entity_1", "record_1", {
+      clientRequestId: "intent_update_1",
+      expectedUpdatedAt: "2026-08-20T12:00:00.000Z",
       values: { estado: "operativo" },
     });
     expect(store.completed).toHaveLength(1);
@@ -99,6 +101,8 @@ describe("records sync engine", () => {
     await syncPendingRecordsOnce({ api, ownerKey: "org_1:user_1", store, token: "token_1" });
 
     expect(api.updateEntityRecord).toHaveBeenCalledWith("token_1", "contract_1", "entity_1", "record_1", {
+      clientRequestId: "request_1",
+      expectedUpdatedAt: "2026-08-20T12:00:00.000Z",
       values: {
         cargo: "cargo_1",
         responsables: ["a", "b"],
@@ -480,6 +484,39 @@ class MemorySyncStore implements RecordsSyncStore {
 
   async markPendingOperationSyncing(operationId: string) {
     this.syncing.push(operationId);
+  }
+
+  async preparePendingUpdateCommand(operationItem: PendingOperation) {
+    const payload = operationItem.payload as OfflineRecordPayload;
+    const existing = payload.sentCommand;
+    const intentId = payload.intentId || operationItem.clientRequestId;
+    const command: RecordUpdateCommand | null = existing ?? (this.remoteUpdatedAt
+      ? {
+          clientRequestId: intentId,
+          expectedUpdatedAt: this.remoteUpdatedAt,
+          intentId,
+          values: payload.values,
+        }
+      : null);
+
+    if (command && !existing) {
+      const current = this.operations.find((item) => item.id === operationItem.id);
+      if (current) {
+        current.payload = {
+          ...(current.payload as OfflineRecordPayload),
+          intentId,
+          sentCommand: command,
+        };
+      }
+    }
+
+    return {
+      command,
+      operation: command
+        ? { ...operationItem, payload: { ...payload, intentId: command.intentId, sentCommand: command, values: command.values } }
+        : operationItem,
+      recovering: Boolean(existing),
+    };
   }
 
   async markPendingOperationConflict(operationItem: PendingOperation, remoteRecord: EntityRecord, code: string, message: string) {

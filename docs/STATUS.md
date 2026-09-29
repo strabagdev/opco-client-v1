@@ -1,5 +1,127 @@
 # Current Status
 
+## Idempotent PATCH Client Technical Closure 2026-09-28
+
+- The reviewed base is `a0d24a6dfc362004fad102bc586c564ef4471601` on `main`; all idempotent
+  PATCH Client work remains uncommitted in this worktree. The final inventory is 11 modified files.
+- The diff is limited to durable PATCH command recovery in the existing SQLite v10 payload, guarded
+  remote reconciliation, affected API/sync tests, the stateful local-database regression, and
+  architecture/audit/status documentation. There are no migrations, dependency, configuration,
+  credential, local-environment, or generated-artifact changes in the publishable diff.
+- Final checks passed with the API destination fixed to `http://localhost:3000`: typecheck, ESLint
+  (zero errors and two existing `no-require-imports` warnings in the module-reload regression), 69 test
+  files/817 tests with at most two workers, Web export/service-worker generation with SQLite WASM,
+  and `git diff --check`. The generated `dist` remains ignored, local-only, and is not a production
+  or commit artifact; its bundle contained localhost and not `https://web.opco.cl`.
+- The previously approved three Chrome/CDP scenarios remain applicable because functional content did
+  not change after them and were not repeated. Evidence remains local Web plus PostgreSQL: OPFS file
+  persistence and replay behavior were observed, but raw `sentCommand` was not decoded from OPFS. The
+  CREATE-to-UPDATE trace is still not one uninterrupted CDP trace, and the Access Handle/HMR observation
+  remains a harness limitation rather than a completed multi-tab validation.
+- Core implementing the optional idempotent PATCH pair must be published before this Client. Older
+  operations without a durable command retain conservative conflict handling and gain no retroactive
+  idempotency. No browser, production, commit, push, deploy, migration, or data write ran in this closure.
+
+## RECORDS Remote Read Replay Guard 2026-09-28
+
+- Cause demonstrated: after Core had accepted an idempotent PATCH whose response was lost, a detail/list
+  read reached the shared `upsertRemoteRecords()`. The newer remote version was treated as an external
+  conflict even though the UPDATE outbox still held the exact unresolved `sentCommand`; conflict status
+  then excluded the operation from replay.
+- Correction in the current worktree: the scoped remote upsert and sent-command check run in one SQLite
+  transaction. While a valid unresolved `sentCommand` exists, reads preserve local values, its immutable
+  values/key/`expectedUpdatedAt`, and `pending_update`. Commands without that descriptor retain the old
+  conservative version-conflict behavior; Core-confirmed conflicts and definitive failures remain blocked.
+- Stateful SQLite-harness evidence covers repeated remote reads, module restart, exact replay with one
+  effective mutation, B preserved while A is recovered, later B synchronization with a distinct key, a real
+  later remote-version conflict, legacy UPDATE, and refresh to a newer remote value after A resolves. The
+  complete regression file passed 16 tests; the final combined affected run passed 5 files and 176 tests.
+  Typecheck and `git diff --check` passed; lint passed with zero errors and two pre-existing
+  `no-require-imports` warnings in the source-inspection regression.
+- Real validation after the correction used Chrome 153 through CDP with exclusive disposable profiles, the
+  actual Expo SQLite Web worker and six OPFS files. The database file persisted across full Chrome restarts
+  and grew from 126976 to 131072/135168 bytes. The local export contained SQLite WASM and pointed to the
+  process-only same-origin proxy at `localhost:3000`, which forwarded only `/api/v1` to Core local on
+  port 3001; PostgreSQL was explicitly `opco_dev@127.0.0.1:5432/opco_development`.
+- Lost A (`CDP_SENTCOMMAND_S1_20260928_1700`) was applied once, its HTTP 200 was discarded at
+  response stage, and subsequent detail GETs kept A visible/pending without conflict. After restart, Client
+  resent the exact key, `expectedUpdatedAt`, and values. PostgreSQL had one `RECORD_UPDATED`, one
+  completed PATCH key, and final A; no third PATCH occurred and the final restart had no pending/conflict.
+- B during uncertainty (`CDP_SENTCOMMAND_S2_FINAL2_20260928`) survived an offline close/restart.
+  The trace was GET, exact replay A, GET preflight, PATCH B with a different key and A's confirmed version,
+  then final GET. PostgreSQL ended at B with two mutations, two audits, two completed PATCH keys, and Client
+  had no pending/conflict.
+- Real later change (`CDP_SENTCOMMAND_S3_FINAL_20260928`) replayed A exactly, then B performed
+  remote reads/preflight and became a visible conflict with zero PATCH B attempts. Client retained B while
+  PostgreSQL retained the external value; Core recorded A plus the external mutation and only A's keyed PATCH.
+- CDP observed behavior, requests, UI and OPFS file persistence, but did not decode `sentCommand` directly
+  from OPFS. Preparatory full-document navigation reproduced the known Access Handle/HMR-style limitation;
+  valid traces used one SPA instance and proxy gating before restart. Only the indispensable local Web export
+  ran; no suite, migration, production, commit, push, or deploy action was performed. SQLite remains v10.
+
+## RECORDS Lost PATCH Response Browser Blocker (Historical) 2026-09-28
+
+- Real Client + Core validation stopped in scenario 1 after demonstrating a product defect. Chrome 153
+  used CDP with an exclusive profile; Client was served at `http://localhost:3000`, Core at local port
+  3001 through a process-only localhost proxy, and Core used the explicitly validated
+  `opco_dev@127.0.0.1:5432/opco_development` database. The runtime loaded the Expo SQLite Web worker and
+  its OPFS database file grew while the isolated profile was active.
+- Synthetic record `CDP_PATCH_LOST_S1_20260928` started at Cargo=`Base`. Client sent A=`Taller-S1` with
+  `clientRequestId=local_c9f8dfbd-433b-4aa1-9acb-be77bf45e5ed` and
+  `expectedUpdatedAt=2026-09-28T18:38:05.672Z`. CDP observed the PATCH response-stage HTTP 200 and then
+  aborted delivery, so this was a discarded response after Core, not a held response later released.
+- PostgreSQL contained Cargo=`Taller-S1`, one `RECORD_UPDATED` audit event (`Base` -> `Taller-S1`), and
+  one completed PATCH idempotency row for that exact key. Client retained the local value, but the
+  mounted detail persisted `REMOTE_VERSION_CHANGED`/`conflict`; after a full Chrome restart with the
+  same profile it still showed Cargo=`Taller-S1`, `Conflicto`, and global `Requiere atencion`.
+- Cause: the detail load performs a remote GET after the failed delivery. `upsertRemoteRecords()` treats
+  any version change on `pending_update` as an external conflict without checking whether the outbox has
+  a recoverable `sentCommand`. `listPendingOperations()` then excludes the resulting `conflict` record,
+  so startup cannot replay the completed idempotent command. The outbox descriptor was not extracted
+  from the raw OPFS database; its runtime persistence is therefore not claimed independently here.
+- Scenarios B-during-uncertainty and real other-user change were not run after this blocker. Two unused
+  synthetic bases, `CDP_PATCH_LOST_S2_20260928` and `CDP_PATCH_LOST_S3_20260928`, were also created in
+  local PostgreSQL. After evidence capture, all three synthetic records plus their four audits and four
+  idempotency rows were removed; zero matching records remain. No functional code, schema, migration, dependency,
+  configuration, production data, commit, push, or deploy changed; no suite or build was run.
+
+## RECORDS Idempotent PATCH Integration 2026-09-28
+
+- Client now derives PATCH `clientRequestId` from each UPDATE `intentId` and sends it with the durable
+  `expectedUpdatedAt`. The exact command is persisted atomically as `sentCommand` inside the existing
+  `pending_operations.payload_json`; SQLite remains schema v10.
+- A later B keeps its own visible values/intent in the same row while unresolved A remains immutable in
+  `sentCommand`. Recovery resends A directly without GET, consumes Core replay, advances B's remote base,
+  then gives B a different key and the normal preflight. No value-equality inference or fallback to an
+  unprotected PATCH was added.
+- Network/5xx failures retain the exact command and perform one PATCH per sync invocation. Known success,
+  conflict, or definitive failure removes only the matching descriptor. A result for superseded A leaves
+  B `pending_update`; Core `REMOTE_VERSION_CHANGED` remains a visible durable conflict.
+- Compatibility coverage keeps CREATE->UPDATE behavior and handles old UPDATE rows without `intentId` or
+  `sentCommand`: they use existing `client_request_id` only for a new protected attempt after preflight.
+  A version advanced by a possibly accepted legacy PATCH remains a conflict; no retroactive idempotency is
+  claimed. Internal `intentId` is absent from the API body.
+- Focused automated evidence uses controlled API behavior plus the stateful SQLite-shaped harness, not a
+  real Core, network, browser, or Expo OPFS/WASM runtime. It covers accepted A with lost response and one
+  effect, B during uncertainty, module restart, different A/B keys, real remote conflict, repeated network
+  failures, legacy rows, and CREATE->UPDATE. Browser validation was intentionally not run in this stage.
+- Validation on the final functional content: five affected test files passed with 192 tests and
+  `npm run typecheck`, `npm run lint`, and `git diff --check` passed. No
+  schema, migration, dependency, configuration, Core, production, commit, push, deploy, full suite, or
+  build action was performed.
+
+## RECORDS Lost UPDATE Response Characterization 2026-09-28
+
+- Historical characterization before the idempotent PATCH integration showed that an accepted PATCH
+  with a lost response became indistinguishable from another user's edit: the next GET saw a changed
+  version, Client preserved local intent, skipped a second PATCH, and reported conflict.
+- The integration above supersedes that runtime behavior for commands carrying durable `sentCommand`:
+  Client now replays the exact keyed PATCH before evaluating the old base. The real remote-change control
+  remains and still produces `REMOTE_VERSION_CHANGED`. Values are never compared to infer authorship.
+- Legacy rows without a durable sent command retain conservative behavior and receive no retroactive
+  idempotency claim. The original evidence used controlled API behavior and a SQLite-shaped harness, not
+  Core, browser, OPFS/WASM, production, or real data.
+
 ## RECORDS A-to-B Technical Closure 2026-09-28
 
 - Final automated checks on `main` at `487c970c7238a50d84446481a3ff101092222728` passed: typecheck, lint, 69 test files with 811 tests at two workers, Web build/export with Expo SQLite WASM and service-worker generation, and `git diff --check`.

@@ -45,11 +45,25 @@ export type PendingOperation = {
   updatedAt: string;
 };
 
+export type RecordUpdateCommand = {
+  clientRequestId: string;
+  expectedUpdatedAt: string;
+  intentId: string;
+  values: Record<string, EntityRecordValue>;
+};
+
+export type PreparedRecordUpdate = {
+  command: RecordUpdateCommand | null;
+  operation: PendingOperation;
+  recovering: boolean;
+};
+
 export type OfflineRecordPayload = {
   clientRequestId?: string;
   intentId?: string;
   lastErrorDetails?: StateUpdateSyncErrorDetails | null;
   lastErrorHttpStatus?: number | null;
+  sentCommand?: RecordUpdateCommand;
   values: Record<string, EntityRecordValue>;
 };
 

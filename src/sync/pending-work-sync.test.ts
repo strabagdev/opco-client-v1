@@ -469,6 +469,10 @@ class EmptyRecordsStore implements RecordsSyncStore {
 
   async markPendingOperationSyncing() {}
 
+  async preparePendingUpdateCommand(operation: PendingOperation) {
+    return { command: null, operation, recovering: false };
+  }
+
   async markSyncError(input: SyncTelemetryScope & { code: SyncTelemetry["lastSyncErrorCode"]; phase: NonNullable<SyncTelemetry["lastSyncErrorPhase"]> }) {
     void input;
   }

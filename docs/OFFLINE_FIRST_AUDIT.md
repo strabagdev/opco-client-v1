@@ -1,9 +1,9 @@
 # Auditoria Offline-First
 
 Fecha de corte original: 2026-09-22. Este documento contrasta la arquitectura documentada con el
-codigo actual. La verificacion de resiliencia RECORDS del 2026-09-23 agrega evidencia de un árbol
-experimental respaldado. Su corrección funcional A→B no forma parte del candidato v10 publicable y
-se identifica como trabajo apartado en su propia sección.
+codigo actual. La verificacion de resiliencia RECORDS del 2026-09-23 conserva evidencia historica de un arbol
+experimental respaldado. La matriz de cierre 2026-09-28 distingue ese antecedente de la correccion
+publicada en `a0d24a6dfc362004fad102bc586c564ef4471601` y de propuestas aun no implementadas.
 
 Fuentes canonicas leidas:
 
@@ -21,14 +21,32 @@ Fuentes canonicas leidas:
 - **No verificado aqui**: falta evidencia real en esta auditoria; no significa ausente ni roto.
 - **Pregunta pendiente**: requiere requisito o prueba adicional antes de calificarlo como brecha.
 
+## Matriz De Cierre RECORDS 2026-09-28
+
+La tabla separa pruebas automatizadas con API controlada/SQLite stateful de evidencia obtenida en
+Chrome con Expo SQLite OPFS/WASM real. Una prueba con mocks nunca se clasifica como validacion real
+de navegador o Core.
+
+El cierre tecnico final sobre el worktree no publicado paso 69 archivos y 817 pruebas, typecheck, lint y
+build Web local. Las tres trazas Chrome/CDP y la integracion PostgreSQL se reutilizan sin atribuirles una
+nueva ejecucion; el HEAD base publicado sigue siendo `a0d24a6dfc362004fad102bc586c564ef4471601`.
+
+| Escenario | Comportamiento esperado | Evidencia disponible | Prueba asociada | Estado | Commit publicado | Limitaciones |
+| --- | --- | --- | --- | --- | --- | --- |
+| UPDATE A->B | La respuesta de A no elimina ni reemplaza B; B conserva valores, outbox y base remota confirmada, y luego puede sincronizarse. | Ademas del arnes stateful, Chrome/CDP con OPFS/WASM real perdio la respuesta de A, guardo B offline, reinicio, reprodujo A y envio B con otra clave sobre la version confirmada. PostgreSQL termino en B con dos mutaciones/auditorias. | `records-sync.local-db-regression.test.ts`: `keeps B locally visible...`, `preserves B across lost A...`; traza `CDP_SENTCOMMAND_S2_FINAL2_20260928`. | Correccion en el worktree verificada automaticamente y en navegador/Core locales. | `a0d24a6dfc362004fad102bc586c564ef4471601` no contiene la integracion PATCH ni el guard nuevo. | Datos sinteticos locales; no valida movil ni produccion. No se leyo el payload OPFS directamente. |
+| CREATE->UPDATE durante envio | El registro pendiente abre por `local_id`; confirmar CREATE asigna `server_id`, conserva B como UPDATE y termina con un solo registro remoto. | Arnes stateful cubre un POST y un PATCH. Chrome real abrio/edito el pendiente y B sobrevivio respuesta y reinicio; Core/PostgreSQL local termino con un registro B. | `records-sync.local-db-regression.test.ts`: `turns CREATE followed...`; `offline-records.test.ts` para apertura local/remota. | Implementado y publicado; evidencia final de navegador parcial. | `a0d24a6dfc362004fad102bc586c564ef4471601` | La entrega final CREATE->UPDATE no tiene una traza CDP unica e ininterrumpida; el resultado DB no sustituye esa traza. |
+| Resolucion `local_id`/`server_id` | Una ruta con `local_id` abre el pendiente sin consultar Core y sigue funcionando despues de conocer `server_id`, usando siempre owner+contrato+entidad. | Pruebas focalizadas y apertura/edicion en Chrome OPFS/WASM con perfil aislado. | `offline-records.test.ts`: `opens a pending CREATE...` y `keeps a local-id route accessible...`. | Implementado y publicado. | `a0d24a6dfc362004fad102bc586c564ef4471601` | La prueba automatizada usa store controlado; Chrome fue local y sintetico. |
+| Conflicto visual obsoleto | Al completar A, si SQLite ya dejo B `pending_update`, la pantalla montada recarga ese estado; conflictos realmente persistidos siguen visibles. Una lectura ya no crea conflicto mientras A tenga `sentCommand` sin resolver. | El arnes stateful y Chrome/CDP real observaron GET posteriores al 200 descartado con A/B local pendiente y sin conflicto. El escenario de cambio ajeno conservo un conflicto real visible. | `records-sync.local-db-regression.test.ts`: `does not persist a read conflict...`; trazas S1/S3 del cierre actual. | Guard de lectura verificado en navegador local; conflictos reales siguen visibles. | `a0d24a6dfc362004fad102bc586c564ef4471601` no contiene el guard nuevo. | La observacion Access Handle/HMR requiere evitar recargas completas simultaneas; no se amplio esa investigacion. |
+| PATCH aplicado con respuesta perdida | Persistir el comando exacto antes de PATCH; las lecturas conservan valores/base/descriptor y elegibilidad; reintentar A con la misma clave/version sin GET; si B existe, conservarla y luego preflight con la version confirmada de A. | Arnes stateful mas tres trazas Chrome/CDP con SQLite OPFS/WASM, Core y PostgreSQL locales: S1 replay exacto y una mutacion; S2 B con clave distinta/dos mutaciones; S3 cambio ajeno, conflicto B y cero PATCH B. | `records-sync.local-db-regression.test.ts`: replay/lecturas/B/conflicto; trazas `CDP_SENTCOMMAND_S1_20260928_1700`, `S2_FINAL2` y `S3_FINAL`. | Corregido y verificado automaticamente y en navegador/Core locales; no publicado. | `a0d24a6dfc362004fad102bc586c564ef4471601` no contiene este ajuste. | CDP probo comportamiento y persistencia de archivos OPFS, no decodifico `sentCommand` desde la base. La prueba es Web local, no movil/produccion. |
+
 La ejecucion local informada por el usuario completo 5/5 AppViews, cero fallos, en 7686 ms. Confirma
 una preparacion online correcta. No prueba por si sola arranque offline, OPFS tras recarga ni cuanto
 de la mejora temporal corresponde a la deduplicacion de definiciones.
 
 ## Evidencia De Navegador 2026-09-23
 
-Esta evidencia pertenece al árbol preconsolidación respaldado. Demuestra el defecto y el resultado
-del experimento, pero no declara esa corrección activa en la publicación v10 actual.
+Esta evidencia pertenece al arbol preconsolidacion respaldado. Demuestra el defecto y el resultado
+del experimento, pero no sustituye la evidencia de la publicacion actual resumida en la matriz de cierre.
 
 Se genero un export Web cuyo bundle contenia `http://localhost:3003` y no contenia el destino de
 produccion ni `localhost:3000`. Chrome uso origen `localhost:19102`, perfil temporal aislado,
@@ -113,8 +131,10 @@ tombstones, por lo que `updatedAt` solo no permite reconciliar eliminaciones.
 
 CREATE/UPDATE offline confirma guardado despues de una transaccion atomica de snapshot+outbox.
 Completado, conflicto y fallo tambien mantienen coherencia record/outbox. CREATE usa
-`clientRequestId` persistente e idempotencia Core. UPDATE hace preflight GET y compara la version
-remota observada antes de PATCH (`records-sync.ts`; Core `EXTERNAL_API.md`, Dynamic Entities).
+`clientRequestId` persistente e idempotencia Core. UPDATE persiste el comando PATCH idempotente en el outbox, hace preflight GET para un comando nuevo y
+compara la version remota antes de enviarlo. Un `sentCommand` incierto se reenvia exactamente y las
+lecturas no sustituyen sus valores ni su version base (`records-sync.ts`; Core `EXTERNAL_API.md`,
+Dynamic Entities).
 
 ### STATE_UPDATE Y Attendance
 
@@ -194,8 +214,9 @@ o fallo. Guards de UI descartan resultados tardios; eso no equivale necesariamen
 
 ## Verificacion Respaldada RECORDS A/B 2026-09-23
 
-Todo el contenido de esta sección corresponde al respaldo experimental y queda excluido de la
-publicación actual. El defecto de ediciones consecutivas A→B sigue pendiente en el árbol v10 activo.
+Todo el contenido de esta seccion corresponde al respaldo experimental previo a la consolidacion.
+Se conserva como antecedente; la implementacion publicada y sus limites vigentes estan en la matriz
+de cierre 2026-09-28.
 
 Se reprodujo con los metodos reales de persistencia local y `syncPendingRecordsOnce`, un SQLite
 stateful mock y respuestas Core controladas. Antes de la correccion, UPDATE A en vuelo y una edicion
@@ -229,16 +250,15 @@ worker ni un navegador real. No se usaron datos productivos ni se modifico Opera
    coordinador usan un mock determinista y no ejecutan Expo Web OPFS/WASM. Esto es una brecha de
    verificacion, no evidencia de un fallo de almacenamiento.
 
-Fuera del defecto RECORDS A/B corregido solo en el respaldo experimental y documentado arriba, no se reprodujeron corrupcion, mezcla
+Fuera de los defectos RECORDS ya clasificados en la matriz de cierre, no se reprodujeron corrupcion, mezcla
 de scopes, reconciliacion destructiva parcial, overwrite silencioso, calculo local incorrecto de
 REPORT/PANEL ni fallo de arranque offline.
 
 ## Limitaciones Documentadas
 
-- Core PATCH RECORDS no usa `clientRequestId` y no es idempotente. Client mitiga reenvio ciego con
-  preflight/version: si una respuesta se pierde despues del commit, la siguiente lectura detecta una
-  version distinta y deriva a conflicto en vez de repetir PATCH automaticamente. Esto puede requerir
-  intervencion, pero esta auditoria no demostro duplicacion ni segunda mutacion.
+- PATCH RECORDS idempotente requiere el par `clientRequestId`/`expectedUpdatedAt` y un
+  `sentCommand` durable. Operaciones historicas que ya se enviaron sin ese descriptor no adquieren
+  idempotencia retroactiva y conservan el tratamiento conservador de conflicto.
 - No hay endpoint externo de DELETE ni feed incremental con tombstones. Full snapshot sigue siendo la
   base segura para detectar eliminaciones.
 - Multi-tab OPFS no se asume soportado; `ACCESS_HANDLE_BUSY` pertenece a recovery.
@@ -271,8 +291,7 @@ auditoria no observo sobre service worker y OPFS/WASM reales.
 
 1. ¿Se requiere una prueba PWA repetible con build explicitamente local, perfil/origen aislado y Core
    sintetico para convertir los escenarios anteriores en evidencia real?
-2. ¿Que experiencia de usuario se espera tras un PATCH RECORDS confirmado por Core cuya respuesta se
-   pierde: conflicto conservador actual o un futuro contrato de reconciliacion/idempotencia?
+2. ¿En que entrega se publicara el contrato idempotente PATCH ya implementado, manteniendo Core antes que Client?
 3. ¿La etapa derivada `snapshot` de STATE_UPDATE debe conservarse como indicador de cobertura con
    otra clasificacion, o eliminarse de rankings temporales para evitar doble conteo?
 4. ¿Hay una necesidad de producto medible para priorizar pantalla visible, cancelar lecturas o

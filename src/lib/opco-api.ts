@@ -963,6 +963,8 @@ export type CreateEntityRecordInput = {
 };
 
 export type UpdateEntityRecordInput = {
+  clientRequestId?: string;
+  expectedUpdatedAt?: string;
   values: Record<string, EntityRecordValue>;
 };
 

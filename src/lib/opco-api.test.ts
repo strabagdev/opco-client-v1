@@ -2372,6 +2372,8 @@ describe("createOpcoApi", () => {
     });
 
     await api.updateEntityRecord("token_123", "contract_1", "entity_1", "record_1", {
+      clientRequestId: "intent_1",
+      expectedUpdatedAt: "2026-09-28T10:00:00.000Z",
       values: {
         estado: "operativo",
       },
@@ -2380,6 +2382,8 @@ describe("createOpcoApi", () => {
     expect(urls[0]).toBe("https://opco.test/api/v1/contracts/contract_1/entities/entity_1/records/record_1");
     expect(requests[0].method).toBe("PATCH");
     expect(JSON.parse(String(requests[0].body))).toEqual({
+      clientRequestId: "intent_1",
+      expectedUpdatedAt: "2026-09-28T10:00:00.000Z",
       values: {
         estado: "operativo",
       },

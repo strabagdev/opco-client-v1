@@ -64,6 +64,8 @@ import {
   RecordsSyncSummary,
   RecordOutboxConsistency,
   RecordOutboxConsistencyIssueCode,
+  PreparedRecordUpdate,
+  RecordUpdateCommand,
   fingerprintRecordsScope,
   normalizeRecordValuesForPersistence,
 } from "./offline-records";
@@ -255,6 +257,7 @@ export function getLocalDatabase(): LocalDatabase {
     recordStateUpdateVisibleErrorEvent,
     markPendingOperationConflict,
     markStateUpdateOperationConflict,
+    preparePendingUpdateCommand,
     readRecordRemoteUpdatedAt,
     markSyncError,
     markSyncPhase,
@@ -1523,35 +1526,64 @@ async function upsertRemoteRecords({
   const db = await getDatabase();
 
   for (const record of records) {
-    const existing = await db.getFirstAsync<EntityRecordRow>(
-      `
+    await db.withTransactionAsync(async (transaction) => {
+      const existing = await transaction.getFirstAsync<EntityRecordRow>(
+        `
         SELECT *
         FROM entity_records
         WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ? AND server_id = ?
         LIMIT 1
       `,
-      ownerKey,
-      contractId,
-      entityTypeId,
-      record.id,
-    );
+        ownerKey,
+        contractId,
+        entityTypeId,
+        record.id,
+      );
 
-    if (existing?.sync_status === "pending_update" && hasRemoteVersionChanged(existing.remote_updated_at, record.updatedAt)) {
-      await markRecordConflict(db, {
-        localRecordId: existing.local_id,
-        remoteRecord: record,
-        syncErrorCode: "REMOTE_VERSION_CHANGED",
-        syncErrorMessage: "Este registro cambio en Opco mientras tenias modificaciones locales pendientes.",
-      });
-      continue;
-    }
+      if (
+        existing?.sync_status === "pending_update" &&
+        hasRemoteVersionChanged(existing.remote_updated_at, record.updatedAt)
+      ) {
+        const pendingUpdate = await transaction.getFirstAsync<{
+          payload_json: string;
+        }>(
+          `
+            SELECT payload_json
+            FROM pending_operations
+            WHERE owner_key = ?
+              AND contract_id = ?
+              AND entity_type_id = ?
+              AND local_record_id = ?
+              AND operation = 'UPDATE'
+            LIMIT 1
+          `,
+          ownerKey,
+          contractId,
+          entityTypeId,
+          existing.local_id,
+        );
+        const sentCommand = pendingUpdate
+          ? readRecordUpdateCommand(
+              JSON.parse(pendingUpdate.payload_json) as OfflineRecordPayload,
+            )
+          : null;
 
-    if (existing && existing.sync_status !== "synced") {
-      continue;
-    }
+        if (sentCommand) return;
 
-    await db.runAsync(
-      `
+        await markRecordConflict(transaction, {
+          localRecordId: existing.local_id,
+          remoteRecord: record,
+          syncErrorCode: "REMOTE_VERSION_CHANGED",
+          syncErrorMessage:
+            "Este registro cambio en Opco mientras tenias modificaciones locales pendientes.",
+        });
+        return;
+      }
+
+      if (existing && existing.sync_status !== "synced") return;
+
+      await transaction.runAsync(
+        `
         INSERT INTO entity_records (
           local_id,
           server_id,
@@ -1602,16 +1634,23 @@ async function upsertRemoteRecords({
             ELSE entity_records.conflict_remote_updated_at
       END
       `,
-      existing?.local_id ?? createRemoteRecordLocalId({ contractId, entityTypeId, ownerKey, serverId: record.id }),
-      record.id,
-      ownerKey,
-      contractId,
-      entityTypeId,
-      record.displayName,
-      JSON.stringify(record.values),
-      record.updatedAt,
-      cachedAt,
-    );
+        existing?.local_id ??
+          createRemoteRecordLocalId({
+            contractId,
+            entityTypeId,
+            ownerKey,
+            serverId: record.id,
+          }),
+        record.id,
+        ownerKey,
+        contractId,
+        entityTypeId,
+        record.displayName,
+        JSON.stringify(record.values),
+        record.updatedAt,
+        cachedAt,
+      );
+    }, "transaction:records-upsert-remote");
   }
 }
 
@@ -3127,6 +3166,104 @@ async function listStateUpdateConflicts(input: StateUpdateScope) {
   return rows.map((row) => normalizeStateUpdateRecord(mapRecordRow(row)));
 }
 
+async function preparePendingUpdateCommand(
+  operation: PendingOperation,
+): Promise<PreparedRecordUpdate> {
+  if (operation.operation !== "UPDATE") {
+    throw new Error("Solo UPDATE puede preparar un comando PATCH.");
+  }
+
+  const db = await getDatabase();
+  let prepared: PreparedRecordUpdate | null = null;
+
+  await db.withTransactionAsync(async (transaction) => {
+    const currentOperation = await readPendingOperationInTransaction(
+      transaction,
+      operation.id,
+    );
+    if (!currentOperation) {
+      throw new Error("La operacion UPDATE ya no esta disponible.");
+    }
+
+    const existingCommand = readRecordUpdateCommand(currentOperation.payload);
+    if (existingCommand) {
+      prepared = {
+        command: existingCommand,
+        operation: operationForRecordUpdateCommand(
+          currentOperation,
+          existingCommand,
+        ),
+        recovering: true,
+      };
+      return;
+    }
+
+    const version = await transaction.getFirstAsync<{
+      remote_updated_at: string | null;
+    }>(
+      `
+        SELECT remote_updated_at
+        FROM entity_records
+        WHERE local_id = ?
+          AND owner_key = ?
+          AND contract_id = ?
+          AND entity_type_id = ?
+        LIMIT 1
+      `,
+      operation.localRecordId,
+      operation.ownerKey,
+      operation.contractId,
+      operation.entityTypeId,
+    );
+
+    if (!version?.remote_updated_at) {
+      prepared = { command: null, operation, recovering: false };
+      return;
+    }
+
+    const intentId = recordIntentId(operation);
+    const command: RecordUpdateCommand = {
+      clientRequestId: intentId,
+      expectedUpdatedAt: version.remote_updated_at,
+      intentId,
+      values: (operation.payload as OfflineRecordPayload).values,
+    };
+    const currentPayload = currentOperation.payload as OfflineRecordPayload;
+    const nextPayload: OfflineRecordPayload = {
+      ...currentPayload,
+      ...(isSameRecordIntent(currentOperation, operation) ? { intentId } : {}),
+      sentCommand: command,
+    };
+
+    await transaction.runAsync(
+      `
+        UPDATE pending_operations
+        SET payload_json = ?,
+            updated_at = ?
+          WHERE id = ?
+          AND owner_key = ?
+          AND contract_id = ?
+          AND entity_type_id = ?
+      `,
+      JSON.stringify(nextPayload),
+      new Date().toISOString(),
+      operation.id,
+      operation.ownerKey,
+      operation.contractId,
+      operation.entityTypeId,
+    );
+
+    prepared = {
+      command,
+      operation: operationForRecordUpdateCommand(operation, command),
+      recovering: false,
+    };
+  }, "transaction:records-prepare-update-command");
+
+  if (!prepared) throw new Error("No fue posible preparar el comando PATCH.");
+  return prepared;
+}
+
 async function markPendingOperationSyncing(operationId: string) {
   const db = await getDatabase();
   const now = new Date().toISOString();
@@ -3358,12 +3495,24 @@ async function completePendingOperation(operation: PendingOperation, record: Ent
             SET id = ?,
                 operation = 'UPDATE',
                 server_record_id = ?,
+                payload_json = json_remove(payload_json, '$.sentCommand'),
                 last_error_code = NULL,
                 last_error_message = NULL
             WHERE id = ?
           `,
           `update_${operation.localRecordId}`,
           record.id,
+          operation.id,
+        );
+      } else {
+        await transaction.runAsync(
+          `
+            UPDATE pending_operations
+            SET payload_json = json_remove(payload_json, '$.sentCommand'),
+                last_error_code = NULL,
+                last_error_message = NULL
+            WHERE id = ?
+          `,
           operation.id,
         );
       }
@@ -3593,7 +3742,22 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
   const now = new Date().toISOString();
 
   await db.withTransactionAsync(async (transaction) => {
-    if (!(await isCurrentRecordIntent(transaction, operation))) {
+    const currentOperation = await readPendingOperationInTransaction(
+      transaction,
+      operation.id,
+    );
+    if (!currentOperation) return;
+
+    const currentPayload = await clearPreparedRecordUpdateCommand(
+      transaction,
+      currentOperation,
+      operation,
+    );
+    if (!isSameRecordIntent(currentOperation, operation)) {
+      await markSupersededRecordIntentPending(
+        transaction,
+        operation.localRecordId,
+      );
       return;
     }
 
@@ -3602,12 +3766,14 @@ async function markPendingOperationConflict(operation: PendingOperation, remoteR
         UPDATE pending_operations
         SET updated_at = ?,
             last_error_code = ?,
-            last_error_message = ?
+            last_error_message = ?,
+            payload_json = ?
         WHERE id = ?
       `,
       now,
       code,
       message,
+      JSON.stringify(currentPayload),
       operation.id,
     );
     await markRecordConflict(transaction, {
@@ -4234,6 +4400,18 @@ async function upsertPendingOperationInTransaction(
   },
 ) {
   const id = `${operation.toLocaleLowerCase("en-US")}_${localRecordId}`;
+  let nextPayload = payload;
+
+  if (operation === "UPDATE") {
+    const existingOperation = await readPendingOperationInTransaction(db, id);
+    const sentCommand = existingOperation
+      ? readRecordUpdateCommand(existingOperation.payload)
+      : null;
+
+    if (sentCommand) {
+      nextPayload = { ...payload, sentCommand };
+    }
+  }
 
   await db.runAsync(
     `
@@ -4269,7 +4447,7 @@ async function upsertPendingOperationInTransaction(
     entityTypeId,
     localRecordId,
     serverRecordId,
-    JSON.stringify(payload),
+    JSON.stringify(nextPayload),
     timestamp,
     timestamp,
   );
@@ -4368,18 +4546,42 @@ async function setOperationError(
   details?: unknown,
   httpStatus?: number | null,
 ) {
-  if (operation.operation !== STATE_UPDATE_OPERATION && !(await isCurrentRecordIntent(db, operation))) {
-    return;
+  let payload = operation.payload;
+
+  if (operation.operation !== STATE_UPDATE_OPERATION) {
+    const currentOperation = await readPendingOperationInTransaction(
+      db,
+      operation.id,
+    );
+    if (!currentOperation) return;
+
+    if (syncStatus === "failed") {
+      payload = await clearPreparedRecordUpdateCommand(
+        db,
+        currentOperation,
+        operation,
+      );
+    } else {
+      payload = currentOperation.payload;
+    }
+
+    if (!isSameRecordIntent(currentOperation, operation)) {
+      await markSupersededRecordIntentPending(db, operation.localRecordId);
+      return;
+    }
   }
 
   const now = new Date().toISOString();
-  const payloadJson = operation.operation === STATE_UPDATE_OPERATION || operation.operation === "CREATE" || operation.operation === "UPDATE"
-    ? JSON.stringify({
-        ...operation.payload,
-        lastErrorDetails: normalizeStateUpdateSyncErrorDetails(details),
-        lastErrorHttpStatus: normalizeHttpStatus(httpStatus),
-      })
-    : null;
+  const payloadJson =
+    operation.operation === STATE_UPDATE_OPERATION ||
+    operation.operation === "CREATE" ||
+    operation.operation === "UPDATE"
+      ? JSON.stringify({
+          ...payload,
+          lastErrorDetails: normalizeStateUpdateSyncErrorDetails(details),
+          lastErrorHttpStatus: normalizeHttpStatus(httpStatus),
+        })
+      : null;
 
   await db.runAsync(
     `
@@ -4412,12 +4614,6 @@ async function setOperationError(
   );
 }
 
-async function isCurrentRecordIntent(db: SQLite.SQLiteDatabase, operation: PendingOperation) {
-  const currentOperation = await readPendingOperationInTransaction(db, operation.id);
-
-  return Boolean(currentOperation && isSameRecordIntent(currentOperation, operation));
-}
-
 async function readPendingOperationInTransaction(db: SQLite.SQLiteDatabase, operationId: string) {
   const row = await db.getFirstAsync<PendingOperationRow>(
     `
@@ -4440,6 +4636,86 @@ function recordIntentId(operation: PendingOperation) {
   const intentId = (operation.payload as OfflineRecordPayload).intentId;
 
   return typeof intentId === "string" && intentId ? intentId : operation.clientRequestId;
+}
+
+function readRecordUpdateCommand(
+  payload: PendingOperation["payload"],
+): RecordUpdateCommand | null {
+  const candidate = (payload as OfflineRecordPayload).sentCommand;
+  if (!candidate || !isRecordObject(candidate.values)) return null;
+  if (
+    typeof candidate.clientRequestId !== "string" ||
+    !candidate.clientRequestId ||
+    typeof candidate.expectedUpdatedAt !== "string" ||
+    !candidate.expectedUpdatedAt ||
+    typeof candidate.intentId !== "string" ||
+    !candidate.intentId
+  ) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function operationForRecordUpdateCommand(
+  operation: PendingOperation,
+  command: RecordUpdateCommand,
+): PendingOperation {
+  return {
+    ...operation,
+    payload: {
+      ...(operation.payload as OfflineRecordPayload),
+      intentId: command.intentId,
+      sentCommand: command,
+      values: command.values,
+    },
+  };
+}
+
+async function clearPreparedRecordUpdateCommand(
+  db: SQLite.SQLiteDatabase,
+  currentOperation: PendingOperation,
+  attemptedOperation: PendingOperation,
+) {
+  const payload = currentOperation.payload as OfflineRecordPayload;
+  const command = readRecordUpdateCommand(payload);
+  if (!command || command.intentId !== recordIntentId(attemptedOperation))
+    return payload;
+
+  const { sentCommand: _sentCommand, ...nextPayload } = payload;
+  await db.runAsync(
+    `
+      UPDATE pending_operations
+      SET payload_json = ?
+      WHERE id = ?
+    `,
+    JSON.stringify(nextPayload),
+    currentOperation.id,
+  );
+  return nextPayload;
+}
+
+async function markSupersededRecordIntentPending(
+  db: SQLite.SQLiteDatabase,
+  localRecordId: string,
+) {
+  await db.runAsync(
+    `
+      UPDATE entity_records
+      SET sync_status = ?,
+          sync_error_code = NULL,
+          sync_error_message = NULL
+      WHERE local_id = ?
+    `,
+    "pending_update",
+    localRecordId,
+  );
+}
+
+function isRecordObject(
+  value: unknown,
+): value is Record<string, EntityRecordValue> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type EntityRecordRow = {

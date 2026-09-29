@@ -1,4 +1,4 @@
-import { CachedEntityRecord, PendingOperation } from "../lib/offline-records";
+import { CachedEntityRecord, PendingOperation, PreparedRecordUpdate } from "../lib/offline-records";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { EntityRecord, EntityRecordValue, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { classifySyncTelemetryError, SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetryStore } from "../lib/sync-telemetry";
@@ -9,6 +9,7 @@ export type RecordsSyncStore = {
   listPendingOperations(ownerKey: string): Promise<PendingOperation[]>;
   markPendingOperationConflict(operation: PendingOperation, remoteRecord: EntityRecord, code: string, message: string): Promise<void>;
   markPendingOperationSyncing(operationId: string): Promise<void>;
+  preparePendingUpdateCommand(operation: PendingOperation): Promise<PreparedRecordUpdate>;
   readRecordRemoteUpdatedAt(operation: PendingOperation): Promise<string | null>;
   retryPendingOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
 } & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
@@ -71,6 +72,7 @@ async function runSync({
   );
 
   for (const operation of operations) {
+    let attemptedOperation = operation;
     try {
       await store.markPendingOperationSyncing(operation.id);
 
@@ -80,13 +82,21 @@ async function runSync({
               clientRequestId: operation.clientRequestId,
               values: (operation.payload as { values: Record<string, EntityRecordValue> }).values,
             })
-          : await syncUpdate({ api, operation, store, token });
+          : await prepareAndSyncUpdate({
+              api,
+              operation,
+              prepared: await store.preparePendingUpdateCommand(operation),
+              setAttemptedOperation: (preparedOperation) => {
+                attemptedOperation = preparedOperation;
+              },
+              token,
+            });
 
-      await store.completePendingOperation(operation, response.record);
+      await store.completePendingOperation(attemptedOperation, response.record);
       result.completed += 1;
     } catch (error) {
       if (error instanceof RecordConflictDetected) {
-        await store.markPendingOperationConflict(operation, error.remoteRecord, error.code, error.message);
+        await store.markPendingOperationConflict(attemptedOperation, error.remoteRecord, error.code, error.message);
         scopesWithErrors.add(operationScopeKey(operation));
         await safeMarkSyncError(store, {
           code: "CONFLICT",
@@ -110,13 +120,13 @@ async function runSync({
       });
 
       if (classification.action === "retry") {
-        await store.retryPendingOperation(operation, classification.code, classification.message);
+        await store.retryPendingOperation(attemptedOperation, classification.code, classification.message);
         result.retriable += 1;
         continue;
       }
 
       await store.failPendingOperation(
-        operation,
+        attemptedOperation,
         classification.code,
         classification.message,
         error instanceof OpcoApiError ? error.details : undefined,
@@ -190,33 +200,79 @@ function operationScopeKey(scope: Pick<PendingOperation, "contractId" | "entityT
   return `${scope.contractId}:${scope.entityTypeId}`;
 }
 
-async function syncUpdate({
+async function prepareAndSyncUpdate({
   api,
   operation,
-  store,
+  prepared,
+  setAttemptedOperation,
   token,
 }: {
   api: Pick<OpcoApi, "getEntityRecord" | "updateEntityRecord">;
   operation: PendingOperation;
-  store: Pick<RecordsSyncStore, "readRecordRemoteUpdatedAt">;
+  prepared: PreparedRecordUpdate;
+  setAttemptedOperation(operation: PendingOperation): void;
   token: string;
 }): Promise<{ record: EntityRecord }> {
   if (!operation.serverRecordId) {
     throw new OpcoApiError("No se puede sincronizar UPDATE sin server_id.", "MISSING_SERVER_RECORD_ID", 400);
   }
 
-  const [baseRemoteUpdatedAt, remote] = await Promise.all([
-    store.readRecordRemoteUpdatedAt(operation),
-    api.getEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId),
-  ]);
+  setAttemptedOperation(prepared.operation);
 
-  if (!baseRemoteUpdatedAt || remote.record.updatedAt !== baseRemoteUpdatedAt) {
+  if (!prepared.command) {
+    const remote = await api.getEntityRecord(
+      token,
+      operation.contractId,
+      operation.entityTypeId,
+      operation.serverRecordId,
+    );
     throw new RecordConflictDetected(remote.record);
   }
 
-  return api.updateEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId, {
-    values: (operation.payload as { values: Record<string, EntityRecordValue> }).values,
-  });
+  if (!prepared.recovering) {
+    const remote = await api.getEntityRecord(
+      token,
+      operation.contractId,
+      operation.entityTypeId,
+      operation.serverRecordId,
+    );
+
+    if (remote.record.updatedAt !== prepared.command.expectedUpdatedAt) {
+      throw new RecordConflictDetected(remote.record);
+    }
+  }
+
+  try {
+    return await api.updateEntityRecord(token, operation.contractId, operation.entityTypeId, operation.serverRecordId, {
+      clientRequestId: prepared.command.clientRequestId,
+      expectedUpdatedAt: prepared.command.expectedUpdatedAt,
+      values: prepared.command.values,
+    });
+  } catch (error) {
+    const remoteRecord = readRemoteVersionConflictRecord(error);
+    if (remoteRecord) throw new RecordConflictDetected(remoteRecord);
+    throw error;
+  }
+}
+
+function readRemoteVersionConflictRecord(error: unknown): EntityRecord | null {
+  if (!(error instanceof OpcoApiError) || error.code !== "REMOTE_VERSION_CHANGED") return null;
+  if (!isPlainObject(error.details) || !isPlainObject(error.details.record)) return null;
+  const record = error.details.record;
+  if (
+    typeof record.id !== "string" ||
+    typeof record.displayName !== "string" ||
+    typeof record.updatedAt !== "string" ||
+    !isPlainObject(record.values)
+  ) {
+    return null;
+  }
+
+  return record as EntityRecord;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function getRecordSyncLabel(record: Pick<CachedEntityRecord, "syncStatus">) {

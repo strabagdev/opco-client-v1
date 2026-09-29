@@ -375,8 +375,13 @@ Rules:
 Conflict model:
 
 - UPDATE sync performs preflight `GET record`.
-- If remote `updatedAt` differs from local `remote_updated_at`, it marks conflict before PATCH.
-- Old cache without `remote_updated_at` is treated as conflict rather than patching blindly.
+- If remote `updatedAt` differs from local `remote_updated_at`, it marks conflict before a fresh PATCH.
+- A non-authoritative read does not apply that version conflict while the scoped UPDATE outbox contains a
+  valid unresolved `sentCommand`: the exact command must remain replayable before its old base is judged.
+  Once Core confirms conflict or definitive failure and the matching descriptor is removed, the durable
+  blocked state remains visible and is not re-enabled by reads.
+- Old operations without `sentCommand`, and old cache without `remote_updated_at`, retain conservative
+  conflict behavior rather than patching blindly.
 
 Recovery model:
 
@@ -391,6 +396,45 @@ Retained RECORDS error recovery is local-intent recovery, not a new sync engine.
 Correction reuses the existing pending operation. For a failed `CREATE`, editing the local record updates the same local snapshot and pending operation payload, preserving `local_id` and `clientRequestId`. For a failed `UPDATE`, editing updates the existing pending update payload rather than creating a second operation. These updates are transactional with the visible local snapshot; partial failures must leave the previous pending state recoverable. Destructive discard is narrower: a failed `CREATE` can be discarded only while it has no remote identity, and a failed `UPDATE` must restore the remote snapshot before the pending local change is removed. Web and Native actions require explicit confirmation and guard against double execution while an action is in flight.
 
 A retained notice can close only when the scoped failed/conflict row and its pending operation are actually gone, or when a successful sync/recovery action has made that local intent no longer unresolved. Merely hiding a banner does not resolve the outbox. `translate="no"` is scoped to technical values such as ids, backend codes, and raw diagnostics; it is not a blanket marker for the whole RECORDS UI.
+
+### RECORDS PATCH Idempotent Recovery
+
+RECORDS UPDATE integrates the optional idempotent PATCH contract exposed by Operational Core. This is
+implemented without changing SQLite schema v10:
+
+1. **Command identity.** Every new UPDATE save rotates `payload.intentId`. The outbound PATCH
+   `clientRequestId` is that intent id, so retries of A keep one key while a later B has another. The
+   stable `pending_operations.client_request_id` remains a local compatibility identity and is not used
+   as the key for new intents.
+2. **Durable command.** Before the first PATCH, Client atomically writes `sentCommand` into the existing
+   `payload_json`. It contains the exact API key, intent id, values, and `expectedUpdatedAt`. The API body
+   sends only `clientRequestId`, `expectedUpdatedAt`, and `values`; internal `intentId` is not leaked.
+3. **A and B in one v10 row.** If B is saved while A is unresolved, the top-level `intentId` and `values`
+   describe visible B, while immutable `sentCommand` retains A. Local snapshot, replacement payload, and
+   descriptor preservation use the existing SQLite transaction and owner/contract/entity scope.
+4. **Send, read, and recovery order.** A fresh command keeps the advisory GET preflight and sends the same
+   `expectedUpdatedAt` to Core for atomic enforcement. If `sentCommand` already exists, Client skips GET
+   and resends that exact PATCH so Core can replay A before considering the now-old local base. Shared remote
+   upserts used by detail, list, and full refresh inspect the same scoped outbox transactionally and leave
+   local values, command, base version, and retry eligibility untouched until that replay resolves. There is
+   no automatic fallback to unprotected PATCH.
+5. **Resolution.** A successful replay removes only A. When B is behind it, Client keeps B visible and
+   pending and advances `remote_updated_at` from A's immutable response; B then receives its own command
+   and preflight. `REMOTE_VERSION_CHANGED` returned by Core is mapped to the existing durable RECORDS
+   conflict. Network/5xx failures retain the command and perform at most one PATCH per sync run.
+6. **Compatibility.** Pending UPDATE rows without `intentId` or `sentCommand` first use their existing
+   `client_request_id` as the new protected key, but still perform GET preflight. If an earlier legacy
+   unkeyed PATCH may have succeeded and the remote version advanced, Client reports conflict rather than
+   claiming replay or comparing values. CREATE and legacy Core PATCH compatibility remain unchanged.
+
+Completed, conflicted, or definitively failed commands remove their matching descriptor. A result for A
+never applies A's error state to later B; B returns to `pending_update`. Historical malformed descriptors
+are not interpreted as proof that Core applied an operation. Core must support the optional pair before
+this Client version is published; older Client PATCH requests continue through Core's legacy path.
+
+No SQLite migration, new table, lease, dependency, or parallel outbox is required. The stronger
+STATE_UPDATE replay pattern remains the architectural reference, while PATCH replay stores the complete
+historical record response because B may already have changed current remote state.
 
 ## STATE_UPDATE Engine
 

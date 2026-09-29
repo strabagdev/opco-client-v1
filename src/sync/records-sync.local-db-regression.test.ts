@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { __resetLocalDatabaseForTests, getLocalDatabase } from "../lib/local-db";
-import { EntityRecord, OpcoNetworkError } from "../lib/opco-api";
+import { OfflineRecordPayload } from "../lib/offline-records";
+import { EntityRecord, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
 import { syncPendingRecordsOnce } from "./records-sync";
 
 const sqliteMock = vi.hoisted(() => ({
@@ -52,10 +53,12 @@ describe("RECORDS consecutive local edits during sync", () => {
     const api = {
       createEntityRecord: vi.fn(),
       getEntityRecord: vi.fn(async () => ({ record: remoteRecord })),
-      updateEntityRecord: vi.fn(async (_token: string, _contractId: string, _entityTypeId: string, _recordId: string, input: { values: Record<string, unknown> }) => {
-        remoteRecord = record("record_1", String(input.values.ubicacion), "2026-09-26T10:02:00.000Z");
-        return { record: remoteRecord };
-      }).mockImplementationOnce(() => aStarted.promise),
+      updateEntityRecord: vi
+        .fn(async (_token: string, _contractId: string, _entityTypeId: string, _recordId: string, input: { values: Record<string, unknown> }) => {
+          remoteRecord = record("record_1", String(input.values.ubicacion), "2026-09-26T10:02:00.000Z");
+          return { record: remoteRecord };
+        })
+        .mockImplementationOnce(() => aStarted.promise),
     };
 
     const syncA = syncPendingRecordsOnce({
@@ -104,7 +107,12 @@ describe("RECORDS consecutive local edits during sync", () => {
       },
     });
 
-    await syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
 
     expect(api.updateEntityRecord).toHaveBeenCalledTimes(2);
     await expect(snapshot(store)).resolves.toMatchObject({
@@ -113,24 +121,45 @@ describe("RECORDS consecutive local edits during sync", () => {
     });
   });
 
-  it("clears a transient persisted A conflict when A completion leaves B pending", async () => {
+  it("does not persist a read conflict while A completion leaves B pending", async () => {
     const store = getLocalDatabase();
     await seedSyncedRecord(store);
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Taller" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
     const aStarted = deferred<{ record: EntityRecord }>();
     const api = updateApi(record("record_1", "Original", "2026-09-26T10:00:00.000Z"));
     api.updateEntityRecord.mockImplementationOnce(() => aStarted.promise);
-    const syncA = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const syncA = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
     await vi.waitFor(() => expect(api.updateEntityRecord).toHaveBeenCalledOnce());
 
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Bodega" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Bodega" },
+    });
     const remoteA = record("record_1", "Taller", "2026-09-26T10:01:00.000Z");
     await store.upsertRemoteRecords({ ...scope, records: [remoteA] });
 
     await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [
+        {
+          payload: {
+            sentCommand: { values: { ubicacion: "Taller" } },
+            values: { ubicacion: "Bodega" },
+          },
+        },
+      ],
       record: {
-        conflictRemoteValues: { ubicacion: "Taller" },
-        syncStatus: "conflict",
+        conflictRemoteValues: null,
+        syncStatus: "pending_update",
         values: { ubicacion: "Bodega" },
       },
     });
@@ -161,7 +190,11 @@ describe("RECORDS consecutive local edits during sync", () => {
   it("distinguishes a later B from a legacy A without intentId", async () => {
     const store = getLocalDatabase();
     await seedSyncedRecord(store);
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Taller" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
 
     const legacyRow = [...db.pendingOperations.values()][0];
     const legacyPayload = JSON.parse(legacyRow.payload_json) as Record<string, unknown>;
@@ -171,18 +204,71 @@ describe("RECORDS consecutive local edits during sync", () => {
     const aStarted = deferred<{ record: EntityRecord }>();
     const api = updateApi(record("record_1", "Original", "2026-09-26T10:00:00.000Z"));
     api.updateEntityRecord.mockImplementationOnce(() => aStarted.promise);
-    const syncA = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const syncA = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
     await vi.waitFor(() => expect(api.updateEntityRecord).toHaveBeenCalledOnce());
 
-    expect(api.updateEntityRecord.mock.calls[0][4]).toEqual({ values: { ubicacion: "Taller" } });
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Bodega" } });
-    aStarted.resolve({ record: record("record_1", "Taller", "2026-09-26T10:01:00.000Z") });
+    expect(api.updateEntityRecord.mock.calls[0][4]).toEqual({
+      clientRequestId: legacyRow.client_request_id,
+      expectedUpdatedAt: "2026-09-26T10:00:00.000Z",
+      values: { ubicacion: "Taller" },
+    });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Bodega" },
+    });
+    aStarted.resolve({
+      record: record("record_1", "Taller", "2026-09-26T10:01:00.000Z"),
+    });
     await syncA;
 
     await expect(snapshot(store)).resolves.toMatchObject({
       operations: [{ payload: { values: { ubicacion: "Bodega" } } }],
       record: { syncStatus: "pending_update", values: { ubicacion: "Bodega" } },
     });
+  });
+
+  it("does not claim idempotent recovery for a legacy UPDATE without a sent command", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    const legacyRow = [...db.pendingOperations.values()][0];
+    const legacyPayload = JSON.parse(legacyRow.payload_json) as Record<string, unknown>;
+    delete legacyPayload.intentId;
+    delete legacyPayload.sentCommand;
+    legacyRow.payload_json = JSON.stringify(legacyPayload);
+    legacyRow.last_error_code = "NETWORK";
+    legacyRow.last_error_message = "La respuesta del PATCH legado era incierta.";
+    const api = updateApi(record("record_1", "Patio", "2026-09-26T10:01:00.000Z"));
+
+    const result = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+
+    expect(result).toMatchObject({ completed: 0, conflicts: 1 });
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).not.toHaveBeenCalled();
+    await expect(snapshot(store)).resolves.toMatchObject({
+      record: {
+        conflictRemoteValues: { ubicacion: "Patio" },
+        syncStatus: "conflict",
+        values: { ubicacion: "Taller" },
+      },
+    });
+    const persistedPayload = JSON.parse(legacyRow.payload_json) as Record<string, unknown>;
+    expect(persistedPayload).not.toHaveProperty("sentCommand");
   });
 
   it("keeps B durable across a module restart before its send", async () => {
@@ -202,7 +288,12 @@ describe("RECORDS consecutive local edits during sync", () => {
     });
 
     const api = updateApi(record("record_1", "Taller", "2026-09-26T10:01:00.000Z"));
-    await syncRestartedRecordsOnce({ api, ownerKey: scope.ownerKey, store: restartedStore, token: "token_1" });
+    await syncRestartedRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store: restartedStore,
+      token: "token_1",
+    });
 
     expect(api.updateEntityRecord).toHaveBeenCalledOnce();
     await expect(snapshot(restartedStore)).resolves.toMatchObject({
@@ -216,7 +307,12 @@ describe("RECORDS consecutive local edits during sync", () => {
     await leaveBPendingAfterConfirmingA(store);
     const api = updateApi(record("record_1", "Patio", "2026-09-26T10:02:00.000Z"));
 
-    const result = await syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const result = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
 
     expect(result.conflicts).toBe(1);
     expect(api.updateEntityRecord).not.toHaveBeenCalled();
@@ -228,9 +324,7 @@ describe("RECORDS consecutive local edits during sync", () => {
         values: { ubicacion: "Bodega" },
       },
     });
-    expect([...db.pendingOperations.values()].map((operation) => JSON.parse(operation.payload_json))).toMatchObject([
-      { values: { ubicacion: "Bodega" } },
-    ]);
+    expect([...db.pendingOperations.values()].map((operation) => JSON.parse(operation.payload_json))).toMatchObject([{ values: { ubicacion: "Bodega" } }]);
   });
 
   it("keeps B pending when B gets a network failure", async () => {
@@ -238,53 +332,558 @@ describe("RECORDS consecutive local edits during sync", () => {
     await leaveBPendingAfterConfirmingA(store);
     const api = {
       ...updateApi(record("record_1", "Taller", "2026-09-26T10:01:00.000Z")),
-      updateEntityRecord: vi.fn(async () => { throw new OpcoNetworkError(); }),
+      updateEntityRecord: vi.fn(async () => {
+        throw new OpcoNetworkError();
+      }),
     };
 
-    const result = await syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const result = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
 
     expect(result.retriable).toBe(1);
     await expect(snapshot(store)).resolves.toMatchObject({
-      operations: [{ lastErrorCode: "NETWORK", payload: { values: { ubicacion: "Bodega" } } }],
+      operations: [
+        {
+          lastErrorCode: "NETWORK",
+          payload: { values: { ubicacion: "Bodega" } },
+        },
+      ],
       record: { syncStatus: "pending_update", values: { ubicacion: "Bodega" } },
     });
+  });
+
+  it("recovers an accepted UPDATE whose response was lost without applying it twice", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    let appliedPatchCount = 0;
+    let remoteRecord = record("record_1", "Original", "2026-09-26T10:00:00.000Z");
+    const responses = new Map<string, { record: EntityRecord }>();
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({ record: remoteRecord })),
+      updateEntityRecord: vi.fn(async (_token, _contractId, _entityTypeId, _recordId, input) => {
+        const replay = responses.get(input.clientRequestId!);
+        if (replay) return replay;
+
+        appliedPatchCount += 1;
+        remoteRecord = record("record_1", "Taller", "2026-09-26T10:01:00.000Z");
+        responses.set(input.clientRequestId!, { record: remoteRecord });
+        throw new OpcoNetworkError("La respuesta del PATCH se perdio despues de aplicarse.");
+      }),
+    };
+
+    const lostResponseResult = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+
+    expect(lostResponseResult).toMatchObject({ conflicts: 0, retriable: 1 });
+    expect(appliedPatchCount).toBe(1);
+    expect(remoteRecord).toMatchObject({
+      updatedAt: "2026-09-26T10:01:00.000Z",
+      values: { ubicacion: "Taller" },
+    });
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [
+        {
+          attempts: 1,
+          lastErrorCode: "NETWORK",
+          payload: {
+            sentCommand: {
+              clientRequestId: expect.any(String),
+              expectedUpdatedAt: "2026-09-26T10:00:00.000Z",
+              intentId: expect.any(String),
+              values: { ubicacion: "Taller" },
+            },
+            values: { ubicacion: "Taller" },
+          },
+        },
+      ],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:00:00.000Z",
+        syncErrorCode: "NETWORK",
+        syncStatus: "pending_update",
+        values: { ubicacion: "Taller" },
+      },
+    });
+
+    const retryResult = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+
+    expect(retryResult).toMatchObject({
+      completed: 1,
+      conflicts: 0,
+      retriable: 0,
+    });
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(2);
+    expect(api.updateEntityRecord.mock.calls[1][4]).toEqual(api.updateEntityRecord.mock.calls[0][4]);
+    expect(appliedPatchCount).toBe(1);
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:01:00.000Z",
+        syncErrorCode: null,
+        syncStatus: "synced",
+        values: { ubicacion: "Taller" },
+      },
+    });
+  });
+
+  it("keeps a lost accepted PATCH recoverable across remote reads and module restart", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    let appliedPatchCount = 0;
+    let remoteRecord = record("record_1", "Original", "2026-09-26T10:00:00.000Z");
+    const responses = new Map<string, { record: EntityRecord }>();
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({ record: remoteRecord })),
+      updateEntityRecord: vi.fn(async (_token, _contractId, _entityTypeId, _recordId, input) => {
+        const replay = responses.get(input.clientRequestId!);
+        if (replay) return replay;
+
+        appliedPatchCount += 1;
+        remoteRecord = record("record_1", "Taller", "2026-09-26T10:01:00.000Z");
+        responses.set(input.clientRequestId!, { record: remoteRecord });
+        throw new OpcoNetworkError("La respuesta del PATCH se perdio despues de aplicarse.");
+      }),
+    };
+
+    await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+    const sentInput = api.updateEntityRecord.mock.calls[0][4];
+
+    await store.upsertRemoteRecords({ ...scope, records: [remoteRecord] });
+    await store.upsertRemoteRecords({ ...scope, records: [remoteRecord] });
+
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [
+        {
+          payload: {
+            sentCommand: {
+              clientRequestId: sentInput.clientRequestId,
+              expectedUpdatedAt: sentInput.expectedUpdatedAt,
+              values: sentInput.values,
+            },
+          },
+        },
+      ],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:00:00.000Z",
+        syncStatus: "pending_update",
+        values: { ubicacion: "Taller" },
+      },
+    });
+
+    __resetLocalDatabaseForTests();
+    vi.resetModules();
+    sqliteMock.openDatabaseAsync.mockResolvedValue(db);
+    const { getLocalDatabase: getRestartedLocalDatabase } = await import("../lib/local-db");
+    const { syncPendingRecordsOnce: syncRestartedRecordsOnce } = await import("./records-sync");
+    const restartedStore = getRestartedLocalDatabase();
+
+    await syncRestartedRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store: restartedStore,
+      token: "token_1",
+    });
+
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(2);
+    expect(api.updateEntityRecord.mock.calls[1][4]).toEqual(sentInput);
+    expect(appliedPatchCount).toBe(1);
+    await expect(snapshot(restartedStore)).resolves.toMatchObject({
+      operations: [],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:01:00.000Z",
+        syncStatus: "synced",
+        values: { ubicacion: "Taller" },
+      },
+    });
+
+    remoteRecord = record("record_1", "Patio", "2026-09-26T10:02:00.000Z");
+    await restartedStore.upsertRemoteRecords({
+      ...scope,
+      records: [remoteRecord],
+    });
+
+    await expect(snapshot(restartedStore)).resolves.toMatchObject({
+      operations: [],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:02:00.000Z",
+        syncStatus: "synced",
+        values: { ubicacion: "Patio" },
+      },
+    });
+  });
+
+  it("preserves B across lost A response and module restart, then sends B with a new key", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    const firstDelivery = deferred<{ record: EntityRecord }>();
+    const responses = new Map<string, { record: EntityRecord }>();
+    let remoteRecord = record("record_1", "Original", "2026-09-26T10:00:00.000Z");
+    let appliedPatchCount = 0;
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({ record: remoteRecord })),
+      updateEntityRecord: vi.fn(async (_token, _contractId, _entityTypeId, _recordId, input) => {
+        const replay = responses.get(input.clientRequestId!);
+        if (replay) return replay;
+        appliedPatchCount += 1;
+        const value = String(input.values.ubicacion);
+        remoteRecord = record("record_1", value, value === "Taller" ? "2026-09-26T10:01:00.000Z" : "2026-09-26T10:02:00.000Z");
+        const response = { record: remoteRecord };
+        responses.set(input.clientRequestId!, response);
+        return value === "Taller" ? firstDelivery.promise : response;
+      }),
+    };
+
+    const syncA = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+    await vi.waitFor(() => expect(api.updateEntityRecord).toHaveBeenCalledOnce());
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Bodega" },
+    });
+
+    const uncertain = await snapshot(store);
+    expect(uncertain).toMatchObject({
+      operations: [
+        {
+          payload: {
+            intentId: expect.any(String),
+            sentCommand: {
+              clientRequestId: expect.any(String),
+              expectedUpdatedAt: "2026-09-26T10:00:00.000Z",
+              intentId: expect.any(String),
+              values: { ubicacion: "Taller" },
+            },
+            values: { ubicacion: "Bodega" },
+          },
+        },
+      ],
+      record: { syncStatus: "pending_update", values: { ubicacion: "Bodega" } },
+    });
+    const uncertainPayload = uncertain.operations[0].payload as OfflineRecordPayload;
+    expect(uncertainPayload.intentId).not.toBe(uncertainPayload.sentCommand?.intentId);
+
+    firstDelivery.reject(new OpcoNetworkError("La respuesta confirmada de A se perdio."));
+    await syncA;
+
+    await store.upsertRemoteRecords({ ...scope, records: [remoteRecord] });
+    await store.upsertRemoteRecords({ ...scope, records: [remoteRecord] });
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [
+        {
+          payload: {
+            sentCommand: { values: { ubicacion: "Taller" } },
+            values: { ubicacion: "Bodega" },
+          },
+        },
+      ],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:00:00.000Z",
+        syncStatus: "pending_update",
+        values: { ubicacion: "Bodega" },
+      },
+    });
+
+    __resetLocalDatabaseForTests();
+    vi.resetModules();
+    sqliteMock.openDatabaseAsync.mockResolvedValue(db);
+    const { getLocalDatabase: getRestartedLocalDatabase } = await import("../lib/local-db");
+    const { syncPendingRecordsOnce: syncRestartedRecordsOnce } = await import("./records-sync");
+    const restartedStore = getRestartedLocalDatabase();
+
+    const recoveredA = await syncRestartedRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store: restartedStore,
+      token: "token_1",
+    });
+    expect(recoveredA.completed).toBe(1);
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(2);
+    expect(api.updateEntityRecord.mock.calls[1][4]).toEqual(api.updateEntityRecord.mock.calls[0][4]);
+    await expect(snapshot(restartedStore)).resolves.toMatchObject({
+      operations: [{ payload: { values: { ubicacion: "Bodega" } } }],
+      record: {
+        remoteUpdatedAt: "2026-09-26T10:01:00.000Z",
+        syncStatus: "pending_update",
+        values: { ubicacion: "Bodega" },
+      },
+    });
+    expect(JSON.parse([...db.pendingOperations.values()][0].payload_json)).not.toHaveProperty("sentCommand");
+
+    const syncedB = await syncRestartedRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store: restartedStore,
+      token: "token_1",
+    });
+    expect(syncedB.completed).toBe(1);
+    expect(appliedPatchCount).toBe(2);
+    expect(api.getEntityRecord).toHaveBeenCalledTimes(2);
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(3);
+    expect(api.updateEntityRecord.mock.calls[2][4].clientRequestId).not.toBe(api.updateEntityRecord.mock.calls[0][4].clientRequestId);
+    expect(api.updateEntityRecord.mock.calls[2][4]).toMatchObject({
+      expectedUpdatedAt: "2026-09-26T10:01:00.000Z",
+      values: { ubicacion: "Bodega" },
+    });
+    await expect(snapshot(restartedStore)).resolves.toMatchObject({
+      operations: [],
+      record: { syncStatus: "synced", values: { ubicacion: "Bodega" } },
+    });
+  });
+
+  it("keeps one durable command across repeated network failures", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({
+        record: record("record_1", "Original", "2026-09-26T10:00:00.000Z"),
+      })),
+      updateEntityRecord: vi.fn(
+        async (
+          _token: string,
+          _contractId: string,
+          _entityTypeId: string,
+          _recordId: string,
+          _input: {
+            clientRequestId?: string;
+            expectedUpdatedAt?: string;
+            values: Record<string, unknown>;
+          },
+        ) => {
+          throw new OpcoNetworkError("La red sigue interrumpida.");
+        },
+      ),
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await syncPendingRecordsOnce({
+        api,
+        ownerKey: scope.ownerKey,
+        store,
+        token: "token_1",
+      });
+      expect(result).toMatchObject({ retriable: 1 });
+    }
+
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(3);
+    expect(api.updateEntityRecord.mock.calls.map((call) => call[4])).toEqual([
+      api.updateEntityRecord.mock.calls[0][4],
+      api.updateEntityRecord.mock.calls[0][4],
+      api.updateEntityRecord.mock.calls[0][4],
+    ]);
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [
+        {
+          attempts: 3,
+          lastErrorCode: "NETWORK",
+          payload: { values: { ubicacion: "Taller" } },
+        },
+      ],
+      record: { syncStatus: "pending_update", values: { ubicacion: "Taller" } },
+    });
+    expect(JSON.parse([...db.pendingOperations.values()][0].payload_json)).toMatchObject({
+      sentCommand: {
+        expectedUpdatedAt: "2026-09-26T10:00:00.000Z",
+        values: { ubicacion: "Taller" },
+      },
+    });
+  });
+
+  it("keeps a real remote change as conflict after an uncertain PATCH", async () => {
+    const store = getLocalDatabase();
+    await seedSyncedRecord(store);
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
+    let remoteRecord = record("record_1", "Original", "2026-09-26T10:00:00.000Z");
+    const api = {
+      createEntityRecord: vi.fn(),
+      getEntityRecord: vi.fn(async () => ({ record: remoteRecord })),
+      updateEntityRecord: vi
+        .fn()
+        .mockRejectedValueOnce(new OpcoNetworkError("El primer PATCH no llego a Core."))
+        .mockImplementationOnce(async () => {
+          throw new OpcoApiError("El registro cambio desde la ultima lectura.", "REMOTE_VERSION_CHANGED", 409, { record: remoteRecord });
+        }),
+    };
+
+    const networkFailureResult = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+    expect(networkFailureResult.retriable).toBe(1);
+    expect(remoteRecord.values).toEqual({ ubicacion: "Original" });
+
+    remoteRecord = record("record_1", "Patio", "2026-09-26T10:01:00.000Z");
+    const retryResult = await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
+
+    expect(retryResult.conflicts).toBe(1);
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(2);
+    expect(api.updateEntityRecord.mock.calls[1][4]).toEqual(api.updateEntityRecord.mock.calls[0][4]);
+    await expect(snapshot(store)).resolves.toMatchObject({
+      operations: [],
+      record: {
+        conflictRemoteValues: { ubicacion: "Patio" },
+        syncErrorCode: "REMOTE_VERSION_CHANGED",
+        syncErrorMessage: "Este registro cambio en Opco mientras tenias modificaciones locales pendientes.",
+        syncStatus: "conflict",
+        values: { ubicacion: "Taller" },
+      },
+    });
+    expect([...db.pendingOperations.values()]).toHaveLength(1);
+    const payload = JSON.parse([...db.pendingOperations.values()][0].payload_json) as Record<string, unknown>;
+    expect(payload).toMatchObject({ values: { ubicacion: "Taller" } });
+    expect(payload).not.toHaveProperty("sentCommand");
   });
 
   it("does not apply A network failure to a later B intent", async () => {
     const store = getLocalDatabase();
     await seedSyncedRecord(store);
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Taller" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
     const aStarted = deferred<{ record: EntityRecord }>();
     const api = updateApi(record("record_1", "Original", "2026-09-26T10:00:00.000Z"));
     api.updateEntityRecord.mockImplementationOnce(() => aStarted.promise);
-    const syncA = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const syncA = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
     await vi.waitFor(() => expect(api.updateEntityRecord).toHaveBeenCalledOnce());
 
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Bodega" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Bodega" },
+    });
     aStarted.reject(new OpcoNetworkError());
     await syncA;
+    api.updateEntityRecord.mockRejectedValue(new OpcoNetworkError("La respuesta de replay sigue interrumpida."));
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const retry = await syncPendingRecordsOnce({
+        api,
+        ownerKey: scope.ownerKey,
+        store,
+        token: "token_1",
+      });
+      expect(retry.retriable).toBe(1);
+    }
 
     await expect(snapshot(store)).resolves.toMatchObject({
-      operations: [{ lastErrorCode: null, payload: { values: { ubicacion: "Bodega" } } }],
+      operations: [
+        {
+          attempts: 3,
+          lastErrorCode: null,
+          payload: {
+            sentCommand: { values: { ubicacion: "Taller" } },
+            values: { ubicacion: "Bodega" },
+          },
+        },
+      ],
       record: { syncStatus: "pending_update", values: { ubicacion: "Bodega" } },
     });
+    expect(api.getEntityRecord).toHaveBeenCalledOnce();
+    expect(api.updateEntityRecord).toHaveBeenCalledTimes(3);
+    expect(api.updateEntityRecord.mock.calls.map((call) => call[4])).toEqual([
+      api.updateEntityRecord.mock.calls[0][4],
+      api.updateEntityRecord.mock.calls[0][4],
+      api.updateEntityRecord.mock.calls[0][4],
+    ]);
   });
 
   it("does not apply A preflight conflict to a later B intent", async () => {
     const store = getLocalDatabase();
     await seedSyncedRecord(store);
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Taller" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Taller" },
+    });
     const preflight = deferred<{ record: EntityRecord }>();
     const api = {
       createEntityRecord: vi.fn(),
       getEntityRecord: vi.fn(() => preflight.promise),
       updateEntityRecord: vi.fn(),
     };
-    const syncA = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const syncA = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
     await vi.waitFor(() => expect(api.getEntityRecord).toHaveBeenCalledOnce());
 
-    await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Bodega" } });
-    preflight.resolve({ record: record("record_1", "Patio", "2026-09-26T10:02:00.000Z") });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "record_1",
+      values: { ubicacion: "Bodega" },
+    });
+    preflight.resolve({
+      record: record("record_1", "Patio", "2026-09-26T10:02:00.000Z"),
+    });
     await syncA;
 
     await expect(snapshot(store)).resolves.toMatchObject({
@@ -295,7 +894,11 @@ describe("RECORDS consecutive local edits during sync", () => {
 
   it("turns CREATE followed by an in-flight edit into one CREATE and one UPDATE", async () => {
     const store = getLocalDatabase();
-    await store.createLocalRecord({ ...scope, localId: "local_1", values: { ubicacion: "Taller" } });
+    await store.createLocalRecord({
+      ...scope,
+      localId: "local_1",
+      values: { ubicacion: "Taller" },
+    });
     const createStarted = deferred<{ record: EntityRecord }>();
     let remoteRecord = record("record_1", "Taller", "2026-09-26T10:01:00.000Z");
     const api = {
@@ -306,19 +909,44 @@ describe("RECORDS consecutive local edits during sync", () => {
         return { record: remoteRecord };
       }),
     };
-    const syncCreate = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    const syncCreate = syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
     await vi.waitFor(() => expect(api.createEntityRecord).toHaveBeenCalledOnce());
 
-    await store.updateLocalRecord({ ...scope, recordId: "local_1", values: { ubicacion: "Bodega" } });
+    await store.updateLocalRecord({
+      ...scope,
+      recordId: "local_1",
+      values: { ubicacion: "Bodega" },
+    });
     createStarted.resolve({ record: remoteRecord });
     await syncCreate;
 
     await expect(snapshotRecord(store, "local_1")).resolves.toMatchObject({
-      operations: [{ id: "update_local_1", operation: "UPDATE", serverRecordId: "record_1", payload: { values: { ubicacion: "Bodega" } } }],
-      record: { serverId: "record_1", syncStatus: "pending_update", values: { ubicacion: "Bodega" } },
+      operations: [
+        {
+          id: "update_local_1",
+          operation: "UPDATE",
+          serverRecordId: "record_1",
+          payload: { values: { ubicacion: "Bodega" } },
+        },
+      ],
+      record: {
+        serverId: "record_1",
+        syncStatus: "pending_update",
+        values: { ubicacion: "Bodega" },
+      },
     });
 
-    await syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+    await syncPendingRecordsOnce({
+      api,
+      ownerKey: scope.ownerKey,
+      store,
+      token: "token_1",
+    });
 
     expect(api.createEntityRecord).toHaveBeenCalledOnce();
     expect(api.updateEntityRecord).toHaveBeenCalledOnce();
@@ -350,14 +978,29 @@ async function seedSyncedRecord(store: ReturnType<typeof getLocalDatabase>) {
 
 async function leaveBPendingAfterConfirmingA(store: ReturnType<typeof getLocalDatabase>) {
   await seedSyncedRecord(store);
-  await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Taller" } });
+  await store.updateLocalRecord({
+    ...scope,
+    recordId: "record_1",
+    values: { ubicacion: "Taller" },
+  });
   const aStarted = deferred<{ record: EntityRecord }>();
   const api = updateApi(record("record_1", "Original", "2026-09-26T10:00:00.000Z"));
   api.updateEntityRecord.mockImplementationOnce(() => aStarted.promise);
-  const syncA = syncPendingRecordsOnce({ api, ownerKey: scope.ownerKey, store, token: "token_1" });
+  const syncA = syncPendingRecordsOnce({
+    api,
+    ownerKey: scope.ownerKey,
+    store,
+    token: "token_1",
+  });
   await vi.waitFor(() => expect(api.updateEntityRecord).toHaveBeenCalledOnce());
-  await store.updateLocalRecord({ ...scope, recordId: "record_1", values: { ubicacion: "Bodega" } });
-  aStarted.resolve({ record: record("record_1", "Taller", "2026-09-26T10:01:00.000Z") });
+  await store.updateLocalRecord({
+    ...scope,
+    recordId: "record_1",
+    values: { ubicacion: "Bodega" },
+  });
+  aStarted.resolve({
+    record: record("record_1", "Taller", "2026-09-26T10:01:00.000Z"),
+  });
   await syncA;
 }
 
@@ -493,10 +1136,11 @@ class StatefulSqliteHarness {
           const local = this.entityRecords.get(operation.local_record_id);
           return local?.sync_status === "pending_create" || local?.sync_status === "pending_update";
         })
-        .sort((left, right) =>
-          left.local_record_id.localeCompare(right.local_record_id) ||
-          operationOrder(left.operation) - operationOrder(right.operation) ||
-          left.created_at.localeCompare(right.created_at),
+        .sort(
+          (left, right) =>
+            left.local_record_id.localeCompare(right.local_record_id) ||
+            operationOrder(left.operation) - operationOrder(right.operation) ||
+            left.created_at.localeCompare(right.created_at),
         ) as T[];
     }
 
@@ -506,20 +1150,43 @@ class StatefulSqliteHarness {
   async getFirstAsync<T>(sql: string, ...params: unknown[]): Promise<T | null> {
     if (sql.includes("FROM entity_records") && sql.includes("server_id = ?") && !sql.includes("local_id = ? OR server_id = ?")) {
       const [ownerKey, contractId, entityTypeId, serverId] = params;
-      return (this.findRecord({ ownerKey, contractId, entityTypeId, serverId }) ?? null) as T | null;
+      return (this.findRecord({
+        ownerKey,
+        contractId,
+        entityTypeId,
+        serverId,
+      }) ?? null) as T | null;
     }
 
     if (sql.includes("FROM entity_records") && sql.includes("(local_id = ? OR server_id = ?)")) {
       const [ownerKey, contractId, entityTypeId, localId, serverId] = params;
-      return (this.findRecord({ ownerKey, contractId, entityTypeId, localId, serverId }) ?? null) as T | null;
+      return (this.findRecord({
+        ownerKey,
+        contractId,
+        entityTypeId,
+        localId,
+        serverId,
+      }) ?? null) as T | null;
+    }
+
+    if (sql.includes("FROM pending_operations") && sql.includes("operation = 'UPDATE'") && sql.includes("local_record_id = ?")) {
+      const [ownerKey, contractId, entityTypeId, localRecordId] = params;
+      const operation = [...this.pendingOperations.values()].find(
+        (candidate) =>
+          candidate.owner_key === ownerKey &&
+          candidate.contract_id === contractId &&
+          candidate.entity_type_id === entityTypeId &&
+          candidate.local_record_id === localRecordId &&
+          candidate.operation === "UPDATE",
+      );
+
+      return (operation ? { payload_json: operation.payload_json } : null) as T | null;
     }
 
     if (sql.includes("FROM pending_operations") && sql.includes("operation = 'CREATE'")) {
       const [ownerKey, localRecordId] = params;
-      return ([...this.pendingOperations.values()].find((operation) =>
-        operation.owner_key === ownerKey &&
-        operation.local_record_id === localRecordId &&
-        operation.operation === "CREATE",
+      return ([...this.pendingOperations.values()].find(
+        (operation) => operation.owner_key === ownerKey && operation.local_record_id === localRecordId && operation.operation === "CREATE",
       ) ?? null) as T | null;
     }
 
@@ -537,7 +1204,9 @@ class StatefulSqliteHarness {
 
     if (sql.includes("SELECT remote_updated_at") && sql.includes("FROM entity_records")) {
       const [localRecordId] = params;
-      return { remote_updated_at: this.entityRecords.get(String(localRecordId))?.remote_updated_at ?? null } as T;
+      return {
+        remote_updated_at: this.entityRecords.get(String(localRecordId))?.remote_updated_at ?? null,
+      } as T;
     }
 
     return null;
@@ -549,7 +1218,21 @@ class StatefulSqliteHarness {
     }
 
     if (sql.includes("INSERT OR IGNORE INTO sync_telemetry")) {
-      const [ownerKey, contractId, entityTypeId, syncPhase, lastSyncAttemptAt, lastPushCompletedAt, lastFullRefreshCompletedAt, lastReconcileCompletedAt, lastSuccessfulSyncAt, lastSyncErrorAt, lastSyncErrorCode, lastSyncErrorPhase, updatedAt] = params;
+      const [
+        ownerKey,
+        contractId,
+        entityTypeId,
+        syncPhase,
+        lastSyncAttemptAt,
+        lastPushCompletedAt,
+        lastFullRefreshCompletedAt,
+        lastReconcileCompletedAt,
+        lastSuccessfulSyncAt,
+        lastSyncErrorAt,
+        lastSyncErrorCode,
+        lastSyncErrorPhase,
+        updatedAt,
+      ] = params;
       const key = telemetryKey(ownerKey, contractId, entityTypeId);
       if (!this.syncTelemetry.has(key)) {
         this.syncTelemetry.set(key, {
@@ -581,9 +1264,9 @@ class StatefulSqliteHarness {
       const row = this.entityRecords.get(String(localId));
       this.entityRecords.set(String(localId), {
         cached_at: String(cachedAt),
-        conflict_remote_display_name: row?.sync_status === "synced" ? null : row?.conflict_remote_display_name ?? null,
-        conflict_remote_updated_at: row?.sync_status === "synced" ? null : row?.conflict_remote_updated_at ?? null,
-        conflict_remote_values_json: row?.sync_status === "synced" ? null : row?.conflict_remote_values_json ?? null,
+        conflict_remote_display_name: row?.sync_status === "synced" ? null : (row?.conflict_remote_display_name ?? null),
+        conflict_remote_updated_at: row?.sync_status === "synced" ? null : (row?.conflict_remote_updated_at ?? null),
+        conflict_remote_values_json: row?.sync_status === "synced" ? null : (row?.conflict_remote_values_json ?? null),
         contract_id: String(contractId),
         display_name: String(displayName),
         entity_type_id: String(entityTypeId),
@@ -591,8 +1274,8 @@ class StatefulSqliteHarness {
         owner_key: String(ownerKey),
         remote_updated_at: nullableString(remoteUpdatedAt),
         server_id: nullableString(serverId),
-        sync_error_code: row?.sync_status === "synced" ? null : row?.sync_error_code ?? null,
-        sync_error_message: row?.sync_status === "synced" ? null : row?.sync_error_message ?? null,
+        sync_error_code: row?.sync_status === "synced" ? null : (row?.sync_error_code ?? null),
+        sync_error_message: row?.sync_status === "synced" ? null : (row?.sync_error_message ?? null),
         sync_status: row?.sync_status === "synced" || !row ? "synced" : row.sync_status,
         values_json: String(valuesJson),
       });
@@ -644,13 +1327,18 @@ class StatefulSqliteHarness {
     }
 
     if (sql.includes("UPDATE pending_operations") && sql.includes("SET payload_json = ?")) {
-      const [payloadJson, updatedAt, operationId] = params;
+      const hasUpdatedAt = sql.includes("updated_at = ?");
+      const payloadJson = params[0];
+      const updatedAt = hasUpdatedAt ? params[1] : null;
+      const operationId = hasUpdatedAt ? params[2] : params[1];
       const operation = this.pendingOperations.get(String(operationId));
       if (operation) {
         operation.payload_json = String(payloadJson);
-        operation.updated_at = String(updatedAt);
-        operation.last_error_code = null;
-        operation.last_error_message = null;
+        if (updatedAt !== null) operation.updated_at = String(updatedAt);
+        if (sql.includes("last_error_code = NULL")) {
+          operation.last_error_code = null;
+          operation.last_error_message = null;
+        }
       }
       return undefined;
     }
@@ -668,12 +1356,16 @@ class StatefulSqliteHarness {
     }
 
     if (sql.includes("UPDATE pending_operations") && sql.includes("last_error_code = ?")) {
-      const [updatedAt, code, message, operationId] = params;
+      const [updatedAt, code, message] = params;
+      const hasPayload = sql.includes("payload_json = ?");
+      const payloadJson = hasPayload ? params[3] : null;
+      const operationId = hasPayload ? params[4] : params[3];
       const operation = this.pendingOperations.get(String(operationId));
       if (operation) {
         operation.updated_at = String(updatedAt);
         operation.last_error_code = String(code);
         operation.last_error_message = String(message);
+        if (hasPayload) operation.payload_json = String(payloadJson);
       }
       return undefined;
     }
@@ -704,6 +1396,17 @@ class StatefulSqliteHarness {
       return undefined;
     }
 
+    if (sql.includes("UPDATE entity_records") && sql.includes("SET sync_status = ?") && sql.includes("sync_error_code = NULL")) {
+      const [syncStatus, localId] = params;
+      const recordRow = this.entityRecords.get(String(localId));
+      if (recordRow) {
+        recordRow.sync_status = syncStatus as EntityRecordRow["sync_status"];
+        recordRow.sync_error_code = null;
+        recordRow.sync_error_message = null;
+      }
+      return undefined;
+    }
+
     if (sql.includes("UPDATE entity_records") && sql.includes("SET sync_status = ?")) {
       const [syncStatus, code, message, localId] = params;
       const recordRow = this.entityRecords.get(String(localId));
@@ -727,6 +1430,19 @@ class StatefulSqliteHarness {
       return undefined;
     }
 
+    if (sql.includes("UPDATE pending_operations") && sql.includes("json_remove(payload_json, '$.sentCommand')") && !sql.includes("operation = 'UPDATE'")) {
+      const operationId = params.at(-1);
+      const operation = this.pendingOperations.get(String(operationId));
+      if (operation) {
+        const payload = JSON.parse(operation.payload_json) as Record<string, unknown>;
+        delete payload.sentCommand;
+        operation.payload_json = JSON.stringify(payload);
+        operation.last_error_code = null;
+        operation.last_error_message = null;
+      }
+      return undefined;
+    }
+
     if (sql.includes("UPDATE pending_operations") && sql.includes("operation = 'UPDATE'")) {
       const [nextId, serverRecordId, operationId] = params;
       const operation = this.pendingOperations.get(String(operationId));
@@ -737,6 +1453,9 @@ class StatefulSqliteHarness {
         operation.server_record_id = String(serverRecordId);
         operation.last_error_code = null;
         operation.last_error_message = null;
+        const payload = JSON.parse(operation.payload_json) as Record<string, unknown>;
+        delete payload.sentCommand;
+        operation.payload_json = JSON.stringify(payload);
         this.pendingOperations.set(operation.id, operation);
       }
       return undefined;
@@ -803,13 +1522,7 @@ class StatefulSqliteHarness {
     if (sql.includes("DELETE FROM entity_records") && sql.includes("server_id = ?")) {
       const [ownerKey, contractId, entityTypeId, serverId, exceptLocalId] = params;
       for (const row of [...this.entityRecords.values()]) {
-        if (
-          row.owner_key === ownerKey &&
-          row.contract_id === contractId &&
-          row.entity_type_id === entityTypeId &&
-          row.server_id === serverId &&
-          row.local_id !== exceptLocalId
-        ) {
+        if (row.owner_key === ownerKey && row.contract_id === contractId && row.entity_type_id === entityTypeId && row.server_id === serverId && row.local_id !== exceptLocalId) {
           this.entityRecords.delete(row.local_id);
         }
       }
@@ -846,11 +1559,12 @@ class StatefulSqliteHarness {
     ownerKey: unknown;
     serverId?: unknown;
   }) {
-    return [...this.entityRecords.values()].find((recordRow) =>
-      recordRow.owner_key === ownerKey &&
-      recordRow.contract_id === contractId &&
-      recordRow.entity_type_id === entityTypeId &&
-      (recordRow.local_id === localId || recordRow.server_id === serverId),
+    return [...this.entityRecords.values()].find(
+      (recordRow) =>
+        recordRow.owner_key === ownerKey &&
+        recordRow.contract_id === contractId &&
+        recordRow.entity_type_id === entityTypeId &&
+        (recordRow.local_id === localId || recordRow.server_id === serverId),
     );
   }
 
