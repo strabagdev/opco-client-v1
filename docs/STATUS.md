@@ -1,5 +1,56 @@
 # Current Status
 
+## PANEL/TABLE Validation Closure 2026-09-29
+
+- Accumulated Client scope was reviewed on `main`. The functional diff contains only the TABLE-specific
+  300 px visual minimum and bounded nested vertical/horizontal scrolling needed for rows and controls to be
+  usable without a KPI. Saved layout coordinates and KPI behavior remain intact; all other changes are PANEL
+  regressions and documentation. The Core counterpart is limited to initial TABLE columns, repairable opening
+  of `columns: []`, and its tests/docs.
+- Procedure for an older TABLE with no columns is performed in Core: open the PANEL, open `Módulos`, choose
+  `Editar módulo`, select at least one column under `Columnas y diseño`, press the module's `Guardar`, and then
+  press `Guardar experiencia`. Reopen the PANEL to confirm the selection persisted before using it in Client.
+- Final Client verification passed: `npm test -- --maxWorkers=2` ran 69 files and 822 tests, `npm run build`
+  completed the Expo web export and local service-worker generation, and `git diff --check` passed. The build
+  output remains local under ignored `dist/` and is not a production publication. Typecheck, lint, and the
+  completed Windows Chrome/CDP desktop/narrow-screen verification are reused because Client implementation
+  has not changed since those checks.
+- The two repository diffs contain no secret, `.env`, local configuration, database, log, generated bundle,
+  or other tracked artifact. No production data, migration, dependency, commit, push, deploy, or publication
+  was performed. Earlier notes that call `columns: []` repair pending describe the intermediate stage and are
+  superseded by the completed Core editor repair documented above.
+
+## PANEL TABLE Standalone Height 2026-09-29
+
+- Cause: PANEL layout used a generic 180 px minimum for every non-KPI module. A TABLE with the editor
+  defaults (`layout.rowHeight: 8`, module `h: 6`) therefore received exactly 180 px; its title, search,
+  header and pagination consumed the available height and the horizontal ScrollView clipped rows
+  vertically. A KPI changed the global effective row height through its 240 px minimum, indirectly making
+  the TABLE taller and creating the observed dependency.
+- Correction: TABLE now has a type-specific 300 px minimum. The existing layout planner still preserves
+  saved `x/y/w/h` coordinates and configured row height; it raises the shared effective row height only
+  enough for each module to satisfy its own visual minimum. The table body is a bounded nested vertical
+  ScrollView containing the existing horizontal ScrollView, while module title, search and pagination stay
+  outside it. No global overflow rule was removed and KPI minimum behavior is unchanged.
+- Regression coverage reproduces the old TABLE-only result (`rowHeight: 30`, height 180) and now expects
+  `rowHeight: 50`, height 300. It also covers two TABLE modules without overlap, TABLE+KPI retaining the
+  prior 120 px effective row height/distribution, mobile stacking without desktop positioning, and the
+  bounded vertical/horizontal viewport structure. The affected test file passes 47 tests; typecheck passes;
+  lint passes with zero errors and the two existing `no-require-imports` warnings in the RECORDS local-DB
+  regression. `git diff --check` is recorded after this documentation update.
+- Chrome 153 for Windows ran headless through CDP on port 9333 with the exclusive disposable
+  `C:\\Temp\\opco-cdp-table-height-20260929` profile. Core used only the explicit `.env.local`
+  `opco_dev@127.0.0.1:5432/opco_development` database and a process-only CORS allowance for Client at
+  `localhost:3003`. Pixel captures, not DOM presence alone, confirmed: TABLE-only rows on pages 1 and 2;
+  Estado filter and the empty state; search result `María González`; unchanged TABLE+KPI distribution;
+  two 300 px TABLE modules meeting exactly without overlap; and a 390 px viewport with no page-level
+  horizontal overflow. With six rows, the TABLE body had a 148 px client height and 295 px scroll height;
+  scrolling made the final row fully visible while search and pagination remained fixed.
+- Only two disposable local AppViews and their access rows were used for TABLE-only and multi-TABLE
+  evidence; the existing TABLE+KPI AppView and entity records were read without modification. Legacy TABLE
+  configs with `columns: []` remain the separate editor-hydration pending item and were not addressed here.
+  No API, offline snapshot, schema, dependency, production, migration, commit, push, or deploy changed.
+
 ## Idempotent PATCH Client Technical Closure 2026-09-28
 
 - The reviewed base is `a0d24a6dfc362004fad102bc586c564ef4471601` on `main`; all idempotent

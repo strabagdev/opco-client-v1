@@ -410,6 +410,57 @@ describe("panel KPI model", () => {
 });
 
 describe("panel module layout plan", () => {
+  it("reserves usable row and control space for TABLE-only panels", () => {
+    const modules = [
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 0 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 8 });
+
+    expect(plan.rowHeight).toBe(50);
+    expect(plan.moduleStyles.table).toMatchObject({ height: 300, left: "0%", top: 0, width: "100%" });
+    expect(plan.containerStyle).toMatchObject({ height: 300 });
+  });
+
+  it("keeps multiple TABLE modules separated when their configured row height is too small", () => {
+    const modules = [
+      { ...tableModule([{ fieldId: "status_field" }], "first", "records"), layout: { h: 6, w: 12, x: 0, y: 0 } },
+      { ...tableModule([{ fieldId: "status_field" }], "second", "records"), layout: { h: 6, w: 12, x: 0, y: 6 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 8 });
+
+    expect(plan.moduleStyles.first).toMatchObject({ height: 300, top: 0 });
+    expect(plan.moduleStyles.second).toMatchObject({ height: 300, top: 300 });
+    expect(plan.containerStyle).toMatchObject({ height: 600 });
+  });
+
+  it("keeps TABLE and KPI distribution stable while satisfying both visual minimums", () => {
+    const modules = [
+      { ...kpiModule("total-count", "records", "kpi"), layout: { h: 2, w: 4, x: 0, y: 0 } },
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 2 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 8 });
+
+    expect(plan.rowHeight).toBe(120);
+    expect(plan.moduleStyles.kpi).toMatchObject({ height: 240, top: 0, width: "33.33333333333333%" });
+    expect(plan.moduleStyles.table).toMatchObject({ height: 720, top: 240, width: "100%" });
+    expect(plan.containerStyle).toMatchObject({ height: 960 });
+  });
+
+  it("gives a narrow TABLE its own minimum without desktop positioning", () => {
+    const modules = [
+      { ...tableModule([{ fieldId: "status_field" }], "table", "records"), layout: { h: 6, w: 12, x: 0, y: 4 } },
+    ];
+
+    const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "mobile", modules, rowHeight: 8 });
+
+    expect(plan.moduleStyles.table).toMatchObject({ flexBasis: "100%", minHeight: 300, width: "100%" });
+    expect(plan.moduleStyles.table).not.toHaveProperty("position");
+    expect(plan.containerStyle).toEqual({});
+  });
+
   it("positions x=9 under the fourth KPI and preserves the empty space to its left", () => {
     const modules = panelRegressionModules();
 
@@ -566,6 +617,18 @@ describe("panel TABLE renderer structure", () => {
     expect(source).toContain("minWidth: \"100%\"");
     expect(source).toContain("width: \"100%\"");
     expect(source).not.toContain("width: 160");
+  });
+
+  it("keeps TABLE rows in a bounded accessible vertical viewport", () => {
+    const tableViewportStart = source.indexOf("tableViewport: {");
+    const tableViewportEnd = source.indexOf("title: {", tableViewportStart);
+    const tableViewportStyle = source.slice(tableViewportStart, tableViewportEnd);
+
+    expect(source).toContain("nestedScrollEnabled");
+    expect(source).toContain("showsVerticalScrollIndicator");
+    expect(source).toContain("style={styles.tableViewport}");
+    expect(tableViewportStyle).toContain("flex: 1");
+    expect(tableViewportStyle).toContain("minHeight: 84");
   });
 
   it("keeps pagination attached to the table with disabled previous and next states", () => {

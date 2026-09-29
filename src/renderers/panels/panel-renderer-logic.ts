@@ -48,6 +48,7 @@ type PanelLayoutStyleValue = number | string;
 
 const PANEL_MODULE_MIN_HEIGHT = 180;
 const PANEL_KPI_MODULE_MIN_HEIGHT = 240;
+const PANEL_TABLE_MODULE_MIN_HEIGHT = 300;
 
 export type PanelModuleLayoutMode = "desktop" | "mobile";
 
@@ -381,6 +382,10 @@ export function resolvePanelRendererRowHeight(modules: PanelModuleConfig[], conf
 function panelModuleMinimumHeight(module: PanelModuleConfig) {
   if (module.visualization.type === "KPI") {
     return PANEL_KPI_MODULE_MIN_HEIGHT;
+  }
+
+  if (module.visualization.type === "TABLE") {
+    return PANEL_TABLE_MODULE_MIN_HEIGHT;
   }
 
   return PANEL_MODULE_MIN_HEIGHT;

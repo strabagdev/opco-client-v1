@@ -641,53 +641,59 @@ function PanelKpi({
 function PanelTable({ table }: { table: ReturnType<typeof buildPanelTableModel> & {} }) {
   return (
     <ScrollView
-      contentContainerStyle={styles.horizontalScrollContent}
-      horizontal
-      showsHorizontalScrollIndicator
-      style={styles.horizontalScroll}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator
+      style={styles.tableViewport}
     >
-      <View style={[styles.table, { minWidth: table.minWidth }]}>
-        <View accessibilityRole="header" style={styles.tableHeaderRow}>
-          {table.columns.map((column) => (
-            <Text
-              accessibilityLabel={column.name}
-              key={column.fieldId}
-              numberOfLines={1}
-              style={[
-                styles.tableCell,
-                styles.tableHeaderText,
-                { flexGrow: column.weight, minWidth: column.minWidth },
-              ]}
-            >
-              {column.name}
-            </Text>
-          ))}
-        </View>
-        {table.rows.map((row) => (
-          <View
-            accessibilityLabel={row.values.map((value, index) => `${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`).join(". ")}
-            key={row.id}
-            style={styles.tableRow}
-          >
-            {row.values.map((value, index) => (
+      <ScrollView
+        contentContainerStyle={styles.horizontalScrollContent}
+        horizontal
+        showsHorizontalScrollIndicator
+        style={styles.horizontalScroll}
+      >
+        <View style={[styles.table, { minWidth: table.minWidth }]}>
+          <View accessibilityRole="header" style={styles.tableHeaderRow}>
+            {table.columns.map((column) => (
               <Text
-                accessibilityLabel={`${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`}
-                key={`${row.id}-${table.columns[index]?.fieldId ?? index}`}
+                accessibilityLabel={column.name}
+                key={column.fieldId}
                 numberOfLines={1}
                 style={[
                   styles.tableCell,
-                  {
-                    flexGrow: table.columns[index]?.weight ?? 1,
-                    minWidth: table.columns[index]?.minWidth ?? 144,
-                  },
+                  styles.tableHeaderText,
+                  { flexGrow: column.weight, minWidth: column.minWidth },
                 ]}
               >
-                {value || "-"}
+                {column.name}
               </Text>
             ))}
           </View>
-        ))}
-      </View>
+          {table.rows.map((row) => (
+            <View
+              accessibilityLabel={row.values.map((value, index) => `${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`).join(". ")}
+              key={row.id}
+              style={styles.tableRow}
+            >
+              {row.values.map((value, index) => (
+                <Text
+                  accessibilityLabel={`${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`}
+                  key={`${row.id}-${table.columns[index]?.fieldId ?? index}`}
+                  numberOfLines={1}
+                  style={[
+                    styles.tableCell,
+                    {
+                      flexGrow: table.columns[index]?.weight ?? 1,
+                      minWidth: table.columns[index]?.minWidth ?? 144,
+                    },
+                  ]}
+                >
+                  {value || "-"}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
     </ScrollView>
   );
 }
@@ -880,6 +886,10 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
+  },
+  tableViewport: {
+    flex: 1,
+    minHeight: 84,
   },
   title: {
     color: "#111827",
