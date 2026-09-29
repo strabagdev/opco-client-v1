@@ -1,5 +1,40 @@
 # Current Status
 
+## PANEL TABLE Configured Height 2026-09-29
+
+- Trace and cause: Core persists TABLE `layout.h` and PANEL `layout.rowHeight` unchanged. Client receives
+  `rowHeight` in the assigned AppView config, while the PANEL execution API returns the same module coordinates.
+  Client then derives one effective pixel row height before applying
+  absolute desktop `top`/`height`. The TABLE-specific 300 px minimum was divided by each TABLE's own `h`,
+  so a TABLE-only panel always resolved to `h * (300 / h) = 300 px`; `h=4`, `h=8`, and `h=12` therefore
+  produced the same module height. No `maxHeight` caused the clipping: the module and content are flex
+  containers, while the row body is the bounded vertical ScrollView around the existing horizontal one.
+- Correction: the 300 px TABLE minimum is calibrated to the editor's default TABLE height of six layout
+  units, giving a 50 px effective Client unit. A TABLE below six units still raises the shared unit enough
+  to keep its own 300 px floor and prevent overlap; heights above six units use that 50 px unit unless some
+  other module requires a larger shared unit. Saved `x/y/w/h`, Core's `rowHeight`, KPI rules, and both scroll
+  directions remain unchanged. Thus `h=4` is floored at 300 px, `h=8` is 400 px, and `h=12` is 600 px.
+- Regression coverage now asserts the TABLE-only `h=4/8/12` sequence, including container height and the
+  resolved shared row height. Existing cases continue covering TABLE+KPI distribution, multiple TABLEs,
+  narrow stacking, configured coordinates, search/pagination placement, and nested vertical/horizontal
+  scrolling. The affected test passed 48/48, typecheck passed, and lint passed with zero errors and the two
+  existing `no-require-imports` warnings in the RECORDS local-DB regression.
+- Local HTTP evidence used only Core at `localhost:3000` with the explicit `.env.local` PostgreSQL destination
+  `opco_dev@127.0.0.1:5432/opco_development`. The synthetic PANEL response was HTTP 200 with six rows, zero
+  metrics, four persisted columns, and the requested module `h`; the assigned config retained `rowHeight: 8`,
+  and the two-module API response returned TABLEs at `h=12,y=0` and `h=6,y=12`. No API or Core file changed.
+- Windows Chrome 153 ran through CDP port 9335 with the exclusive
+  `C:\\Temp\\opco-cdp-table-units-20260929` profile. At desktop width, measured module/body heights were
+  `300/148 px` for `h=4`, `400/248 px` for `h=8`, and `600/448 px` for `h=12`; search and pagination remained
+  outside the body and visible in the captured desktop viewport. With a second TABLE, the first ended and
+  the second began at the same pixel boundary (`684 px`) without overlap. At `390x844`, modules stacked at
+  the same boundary, the page scrolled vertically, and the table retained a 318 px horizontal viewport over
+  635 px of content without page-level horizontal overflow.
+- Only the disposable AppView `cmun3d6gy0001vqmugg7k3n62` and its access row were used; deletion was verified
+  at zero remaining rows for both. Screenshots and CDP harnesses were temporary local artifacts and were not
+  tracked. No production panel or record, migration, dependency, offline snapshot, commit, push, or deploy
+  was involved.
+
 ## PANEL/TABLE Validation Closure 2026-09-29
 
 - Accumulated Client scope was reviewed on `main`. The functional diff contains only the TABLE-specific

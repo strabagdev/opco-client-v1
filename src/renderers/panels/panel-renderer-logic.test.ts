@@ -422,6 +422,28 @@ describe("panel module layout plan", () => {
     expect(plan.containerStyle).toMatchObject({ height: 300 });
   });
 
+  it("uses the TABLE minimum as a floor while larger configured heights add row space", () => {
+    const heights = [4, 8, 12].map((height) => {
+      const module = {
+        ...tableModule([{ fieldId: "status_field" }], "table", "records"),
+        layout: { h: height, w: 12, x: 0, y: 0 },
+      };
+      const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules: [module], rowHeight: 8 });
+
+      return {
+        container: plan.containerStyle.height,
+        height: plan.moduleStyles.table?.height,
+        rowHeight: plan.rowHeight,
+      };
+    });
+
+    expect(heights).toEqual([
+      { container: 300, height: 300, rowHeight: 75 },
+      { container: 400, height: 400, rowHeight: 50 },
+      { container: 600, height: 600, rowHeight: 50 },
+    ]);
+  });
+
   it("keeps multiple TABLE modules separated when their configured row height is too small", () => {
     const modules = [
       { ...tableModule([{ fieldId: "status_field" }], "first", "records"), layout: { h: 6, w: 12, x: 0, y: 0 } },
