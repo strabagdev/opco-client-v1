@@ -776,6 +776,7 @@ export function usePendingWorkLifecycle({
           onTelemetry: recordOfflinePreparationDiagnostics,
           store: definitionCache,
           token: nextToken,
+          trigger,
         });
       }
     }

@@ -141,6 +141,7 @@ export default function AppLayout() {
     isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
+    offlinePreparationProgress: offlinePreparationDiagnostics?.appViews ?? null,
     offlinePreparationStatus: offlinePreparationDiagnostics?.status ?? null,
     pendingCount: pendingRecordsCount,
     syncConfirmationVisible: toast?.id === "sync-success",
@@ -149,6 +150,7 @@ export default function AppLayout() {
     syncErrorCount: durableSyncErrorCount,
   } satisfies AppShellFeedbackInput;
   const shellStatusIndicator = resolveAppShellStatusIndicator(appShellFeedbackInput);
+  const preparationProgress = shellStatusIndicator.preparationProgress;
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const lastActivity = stateUpdateReconnectDiagnostics.lastStateUpdateActivity;
   const lastPreflight = stateUpdateReconnectDiagnostics.lastReconnectPreflight;
@@ -346,16 +348,47 @@ export default function AppLayout() {
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );
   const statusIndicator = (
-    <View
-      accessibilityLabel={`Estado ${shellStatusIndicator.label}. ${shellStatusIndicator.accessibilityLabel}`}
-      accessibilityLiveRegion="polite"
-      accessible
-      style={styles.statusIndicator}
-    >
-      <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
-        {statusIndicatorIcon(shellStatusIndicator.state)}
-      </Animated.View>
-      <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+    <View accessibilityLiveRegion="polite" style={styles.statusIndicator}>
+      <View
+        accessibilityLabel={"Estado " + shellStatusIndicator.label + ". " + shellStatusIndicator.accessibilityLabel}
+        accessible
+        style={styles.statusIndicatorSummary}
+      >
+        <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
+          {preparationProgress?.state === "incomplete"
+            ? <AlertCircle color="#b7791f" size={17} />
+            : statusIndicatorIcon(shellStatusIndicator.state)}
+        </Animated.View>
+        <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+      </View>
+      {preparationProgress ? (
+        <View
+          accessibilityLabel={preparationProgress.processed + " de " + preparationProgress.total + " AppViews procesadas"}
+          accessibilityRole="progressbar"
+          accessibilityValue={{
+            max: preparationProgress.total,
+            min: 0,
+            now: preparationProgress.processed,
+            text: preparationProgress.processed + " de " + preparationProgress.total + " AppViews procesadas",
+          }}
+          accessible
+          style={styles.offlinePreparationProgress}
+        >
+          <View style={styles.offlinePreparationProgressTrack}>
+            <View
+              style={[
+                styles.offlinePreparationProgressFill,
+                preparationProgress.state === "active" ? null : styles.offlinePreparationProgressFillIncomplete,
+                { flex: preparationProgress.processed },
+              ]}
+            />
+            <View style={{ flex: preparationProgress.total - preparationProgress.processed }} />
+          </View>
+          <Text style={styles.offlinePreparationProgressText}>
+            {preparationProgress.processed + "/" + preparationProgress.total + " procesadas"}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
   const userMenuButton = (
@@ -1143,6 +1176,8 @@ function getOfflinePreparationRows(diagnostics: OfflinePreparationDiagnostics | 
 
   return [
     ["Estado", diagnostics.status],
+    ["runId", diagnostics.runId ?? "none"],
+    ["trigger", diagnostics.trigger ?? "none"],
     ["startedAt", diagnostics.prewarmStartedAt ?? "none"],
     ["completedAt", diagnostics.prewarmCompletedAt ?? "none"],
     ["durationMs", String(diagnostics.prewarmDurationMs ?? "none")],
@@ -1541,13 +1576,47 @@ const styles = StyleSheet.create({
     flex: 1,
     overflow: "hidden",
   },
+  offlinePreparationProgress: {
+    alignItems: "center",
+    maxWidth: 220,
+    width: "100%",
+  },
+  offlinePreparationProgressFill: {
+    backgroundColor: "#13795b",
+    borderRadius: 2,
+    height: 3,
+  },
+  offlinePreparationProgressFillIncomplete: {
+    backgroundColor: "#b7791f",
+  },
+  offlinePreparationProgressText: {
+    color: "#425d64",
+    fontSize: 10,
+    lineHeight: 13,
+    textAlign: "center",
+  },
+  offlinePreparationProgressTrack: {
+    backgroundColor: "#d9e3e5",
+    borderRadius: 2,
+    flexDirection: "row",
+    height: 3,
+    overflow: "hidden",
+    width: "100%",
+  },
   statusIndicator: {
     alignItems: "center",
-    flexDirection: "row",
     flexShrink: 1,
-    gap: 6,
-    minWidth: 0,
+    gap: 3,
     justifyContent: "center",
+    minWidth: 0,
+    width: "100%",
+  },
+  statusIndicatorSummary: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    justifyContent: "center",
+    minWidth: 0,
   },
   statusLabel: {
     color: "#425d64",

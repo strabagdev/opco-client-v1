@@ -76,7 +76,7 @@ The modal is a viewport-bounded three-region layout: a non-shrinking header, a n
 | Visible experience | In-memory scoped activity reported by the mounted RECORDS, PANEL, REPORT, attendance, or state-update renderer. | It describes current reads/updates, not performance history or cache completeness. |
 | Write result | In-memory scoped confirmation emitted after an atomic local commit or successful direct server response. | Local commit does not mean server synchronization; expiration affects presentation only. |
 | Errors/conflicts | Retained RECORDS and STATE_UPDATE summaries. | Counts remain visible without animation when no operation is active. |
-| Offline preparation | Persisted prewarm telemetry plus a separate in-memory active-run set. | Persisted `running` without a run observed in this runtime is pending diagnostic evidence, not active sync and not an upload. |
+| Offline preparation | Persisted prewarm telemetry plus a separate in-memory active-run set. Each run has a safe run id, real trigger and processed/failed/total counts. | Processed includes every terminal AppView result and is not a claim that each AppView is available offline. Persisted `running` without a run observed in this runtime is interrupted diagnostic evidence, not active sync or an upload. |
 
 The synchronization history is intentionally memory-only. It records derived process transitions, not renders or timer ticks, and keeps the newest 50 events. Each event contains timestamp, process, previous/new readable state, sanitized reason, and an existing safe run id when available. It is isolated by the current owner/contract scope and cleared when that scope disappears or changes. It never stores tokens, request/response payloads, field values, names, emails, or raw business records. Diagnostic failures must not affect the sync engines.
 
@@ -622,6 +622,10 @@ Definition prewarm:
 - Workflow metadata for `state-update` and `attendance`.
 - Attendance statuses mapped from active backend options.
 - Unsupported AppViews get a prepared unsupported definition.
+- PANEL does not execute its datasets in global prewarm; it follows the unsupported/skipped definition path here and remains remote-first in its renderer.
+- The owner+contract run waits until every assigned AppView has a terminal result. A failed attempt to persist an AppView error marker is itself contained, so sibling AppViews finish and a usable prior ready definition is preserved.
+- Run telemetry correlates a safe run id, real trigger, AppView fingerprint, current stage, duration and result. The header uses completed AppView results as processed progress; completed failures count as processed but not as available offline.
+- A terminal incomplete run is not automatically looped. A later normal Home, contract-selection, reconnect or foreground trigger may retry it through the existing single-flight path.
 
 Data cache:
 

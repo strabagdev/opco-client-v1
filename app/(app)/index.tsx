@@ -184,6 +184,7 @@ export default function HomeScreen() {
             ownerKey,
             store: definitionCache,
             token,
+            trigger: "home",
           }).finally(() => {
             if (isMounted) {
               void refreshOfflineAvailability(data.views, () => isMounted);

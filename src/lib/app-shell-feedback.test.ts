@@ -296,28 +296,55 @@ describe("app shell feedback", () => {
     });
   });
 
-  it("shows active offline preparation in the header and stops animating after failure", () => {
-    const observedCandidate = {
+  it("shows real active progress and reaches completed or incomplete terminal states", () => {
+    const active = {
       ...baseInput,
       isOfflinePreparationRunning: true,
+      offlinePreparationProgress: { completed: 1, failed: 0, total: 3 },
+      offlinePreparationStatus: "running" as const,
     };
 
-    expect(resolvePreviousStatusIndicator(observedCandidate)).toBe("working");
-    expect(resolveAppShellStatusIndicator(observedCandidate)).toMatchObject({
+    expect(resolvePreviousStatusIndicator(active)).toBe("working");
+    expect(resolveAppShellStatusIndicator(active)).toMatchObject({
       label: "Preparando uso offline…",
+      preparationProgress: { failed: 0, processed: 1, state: "active", total: 3 },
       state: "working",
     });
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
+      offlinePreparationProgress: { completed: 3, failed: 1, total: 3 },
       offlinePreparationStatus: "failed",
     })).toMatchObject({
-      label: "Preparación offline incompleta",
+      label: "Preparación incompleta · 1 fallo",
+      preparationProgress: { failed: 1, processed: 3, state: "incomplete", total: 3 },
       state: "pending",
     });
     expect(resolveAppShellStatusIndicator({
       ...baseInput,
+      offlinePreparationProgress: { completed: 3, failed: 0, total: 3 },
       offlinePreparationStatus: "completed",
-    })).toMatchObject({ label: "Listo", state: "online" });
+    })).toEqual({ accessibilityLabel: "Listo", label: "Listo", state: "online" });
+  });
+
+  it("shows an interrupted run as static progress and a later retry as active", () => {
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      offlinePreparationProgress: { completed: 1, failed: 0, total: 3 },
+      offlinePreparationStatus: "running",
+    })).toMatchObject({
+      label: "Preparación offline interrumpida",
+      preparationProgress: { processed: 1, state: "interrupted", total: 3 },
+      state: "pending",
+    });
+    expect(resolveAppShellStatusIndicator({
+      ...baseInput,
+      isOfflinePreparationRunning: true,
+      offlinePreparationProgress: { completed: 0, failed: 0, total: 3 },
+      offlinePreparationStatus: "running",
+    })).toMatchObject({
+      preparationProgress: { processed: 0, state: "active", total: 3 },
+      state: "working",
+    });
   });
 
   it("keeps send errors above offline preparation while diagnostics retain both", () => {
@@ -347,7 +374,7 @@ describe("app shell feedback", () => {
       ...baseInput,
       offlinePreparationStatus: "failed",
       writeFeedback: null,
-    }).label).toBe("Preparación offline incompleta");
+    }).label).toBe("Preparación incompleta · 0 fallos");
   });
 
   it("identifies each real active operation and stops animating when it finishes", () => {

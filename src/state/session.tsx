@@ -300,7 +300,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     setOfflinePreparationDiagnostics(diagnostics);
-    const runKey = diagnostics.prewarmStartedAt;
+    const runKey = diagnostics.runId ?? diagnostics.prewarmStartedAt;
 
     if (runKey) {
       setActiveOfflinePreparationRuns((current) => {
@@ -704,6 +704,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
             ownerKey,
             store: definitionCache,
             token,
+            trigger: "contract-selection",
           });
         }
       } catch {

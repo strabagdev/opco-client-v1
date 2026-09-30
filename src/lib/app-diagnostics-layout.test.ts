@@ -26,6 +26,10 @@ describe("diagnostics modal layout", () => {
 
     expect(source).toContain('accessibilityLiveRegion="polite"');
     expect(source).toContain("style={styles.statusIndicator}");
+    expect(source).toContain('accessibilityRole="progressbar"');
+    expect(source).toContain("accessibilityValue={{");
+    expect(source).toContain("styles.offlinePreparationProgressTrack");
+    expect(source).toContain('preparationProgress?.state === "incomplete"');
     expect(source).not.toContain('accessibilityHint="Abre el diagnóstico de sincronización"');
     expect(source).not.toContain("diagnosticTabForStatusIndicator");
     expect(source).toContain("GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel");

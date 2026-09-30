@@ -16,9 +16,17 @@ export type AppShellFeedbackMessage = {
 
 export type AppShellStatusIndicatorState = "online" | "working" | "pending" | "offline" | "error";
 
+export type AppShellPreparationProgress = {
+  failed: number;
+  processed: number;
+  state: "active" | "incomplete" | "interrupted";
+  total: number;
+};
+
 export type AppShellStatusIndicator = {
   accessibilityLabel: string;
   label: string;
+  preparationProgress?: AppShellPreparationProgress;
   state: AppShellStatusIndicatorState;
 };
 
@@ -30,6 +38,7 @@ export type AppShellFeedbackInput = {
   hasReadConnectivityIssue?: boolean;
   isAuthSessionRestoring: boolean;
   isOfflinePreparationRunning: boolean;
+  offlinePreparationProgress?: { completed: number; failed: number; total: number } | null;
   offlinePreparationStatus?: "idle" | "running" | "completed" | "failed" | null;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
@@ -163,6 +172,7 @@ export function resolveAppShellStatusIndicator({
   isOperationalCoreReadinessChecking,
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
+  offlinePreparationProgress = null,
   offlinePreparationStatus = null,
   pendingCount,
   syncConfirmationVisible = false,
@@ -249,14 +259,19 @@ export function resolveAppShellStatusIndicator({
     return {
       accessibilityLabel: "Preparando uso sin conexion",
       label: "Preparando uso offline…",
+      preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "active"),
       state: "working",
     };
   }
 
   if (offlinePreparationStatus === "failed") {
+    const failed = normalizePreparationCount(offlinePreparationProgress?.failed);
+    const failureCount = failed === 1 ? "1 fallo" : failed + " fallos";
+
     return {
-      accessibilityLabel: "Preparacion offline incompleta. Abre Diagnostico para revisar el detalle",
-      label: "Preparación offline incompleta",
+      accessibilityLabel: "Preparacion incompleta. " + failureCount + ". Abre Diagnostico para revisar el detalle",
+      label: "Preparación incompleta · " + failureCount,
+      preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "incomplete"),
       state: "pending",
     };
   }
@@ -265,6 +280,7 @@ export function resolveAppShellStatusIndicator({
     return {
       accessibilityLabel: "Preparacion offline anterior interrumpida. Abre Diagnostico para revisar el detalle",
       label: "Preparación offline interrumpida",
+      preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "interrupted"),
       state: "pending",
     };
   }
@@ -282,6 +298,26 @@ export function resolveAppShellStatusIndicator({
     label: "Listo",
     state: "online",
   };
+}
+
+function resolvePreparationProgress(
+  progress: AppShellFeedbackInput["offlinePreparationProgress"],
+  state: AppShellPreparationProgress["state"],
+): AppShellPreparationProgress | undefined {
+  const total = normalizePreparationCount(progress?.total);
+
+  if (total === 0) return undefined;
+
+  return {
+    failed: Math.min(normalizePreparationCount(progress?.failed), total),
+    processed: Math.min(normalizePreparationCount(progress?.completed), total),
+    state,
+    total,
+  };
+}
+
+function normalizePreparationCount(value: number | null | undefined) {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value ?? 0)) : 0;
 }
 
 function formatPendingCount(count: number) {

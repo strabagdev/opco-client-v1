@@ -506,6 +506,96 @@ describe("app view prewarm", () => {
     });
   });
 
+  it("waits for every AppView after a local failure-marker error and allows a later successful retry", async () => {
+    const failingView = {
+      ...appViewsFixture[0],
+      config: { entityTypeId: "entity_1" },
+      type: "RECORDS" as const,
+    } satisfies AppView;
+    const succeedingView: AppView = {
+      ...appViewsFixture[0],
+      config: { entityTypeId: "entity_2" },
+      id: "view_records_2",
+      name: "Second records view",
+      slug: "second-records-view",
+      type: "RECORDS" as const,
+    };
+    let resolveSecondDefinition!: (value: { entity: EntityDefinition }) => void;
+    const secondDefinition = new Promise<{ entity: EntityDefinition }>((resolve) => {
+      resolveSecondDefinition = resolve;
+    });
+    const telemetry: OfflinePreparationDiagnostics[] = [];
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(),
+      getEntityDefinition: vi.fn((_token: string, _contractId: string, entityTypeId: string) =>
+        entityTypeId === "entity_1" ? Promise.reject(new Error("definition unavailable")) : secondDefinition,
+      ),
+      getEntityRecords: vi.fn(),
+    };
+
+    await store.upsertAppViewDefinition({
+      appViewId: failingView.id,
+      appViewType: failingView.type,
+      contractId: "contract_1",
+      definition: { appView: failingView, entityDefinition: entityDefinitionFixture, kind: "records" },
+      lastPreparedAt: "2026-09-29T10:00:00.000Z",
+      ownerKey: "org_1:user_1",
+      status: "ready",
+      workflowKey: null,
+    });
+    store.failDefinitionUpsertFor = failingView.id;
+
+    const params = {
+      api,
+      appViews: [failingView, succeedingView],
+      contractId: "contract_1",
+      onTelemetry: (diagnostics: OfflinePreparationDiagnostics) => {
+        telemetry.push(diagnostics);
+      },
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+      trigger: "home" as const,
+    };
+    const firstRun = prewarmAssignedAppViewsOnce(params);
+
+    await vi.waitFor(() => expect(api.getEntityDefinition).toHaveBeenCalledTimes(2));
+    const duplicateTrigger = prewarmAssignedAppViewsOnce({ ...params, trigger: "reconnect" });
+
+    expect(duplicateTrigger).toBe(firstRun);
+    resolveSecondDefinition({ entity: entityDefinitionFixture });
+    await expect(firstRun).resolves.toBeUndefined();
+
+    const firstTerminalIndex = telemetry.findIndex((entry) => entry.status !== "running");
+    expect(firstTerminalIndex).toBeGreaterThanOrEqual(0);
+    expect(telemetry.slice(firstTerminalIndex + 1)).toEqual([]);
+    expect(telemetry[firstTerminalIndex]).toMatchObject({
+      appViews: { completed: 2, failed: 1, running: 0, total: 2 },
+      status: "failed",
+      trigger: "home",
+    });
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", failingView.id)).resolves.toMatchObject({
+      definition: { kind: "records" },
+      status: "ready",
+    });
+
+    store.failDefinitionUpsertFor = null;
+    api.getEntityDefinition.mockResolvedValue({ entity: entityDefinitionFixture });
+    await prewarmAssignedAppViewsOnce({ ...params, trigger: "manual-retry" });
+
+    expect(telemetry.at(-1)).toMatchObject({
+      appViews: { completed: 2, failed: 0, running: 0, total: 2 },
+      status: "completed",
+      trigger: "manual-retry",
+    });
+    expect(telemetry.at(-1)?.runId).not.toBe(telemetry[firstTerminalIndex].runId);
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", failingView.id)).resolves.toMatchObject({
+      definition: { kind: "records" },
+      status: "ready",
+    });
+  });
+
   it("does not let telemetry failures block the actual prewarm", async () => {
     store.failTelemetry = true;
     const api = {
@@ -723,6 +813,7 @@ describe("app view prewarm", () => {
 class MemoryPrewarmStore implements AppViewDefinitionCache {
   definitions = new Map<string, CachedAppViewDefinition>();
   entityDefinitions = new Map<string, EntityDefinition>();
+  failDefinitionUpsertFor: string | null = null;
   failTelemetry = false;
   offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null = null;
   records = new Map<string, CachedEntityRecord[]>();
@@ -765,6 +856,10 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
   }
 
   async upsertAppViewDefinition(input: UpsertAppViewDefinitionInput) {
+    if (input.appViewId === this.failDefinitionUpsertFor) {
+      throw new Error("definition write unavailable");
+    }
+
     this.definitions.set(`${input.ownerKey}:${input.contractId}:${input.appViewId}`, {
       appViewId: input.appViewId,
       appViewType: input.appViewType,

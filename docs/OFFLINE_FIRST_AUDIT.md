@@ -114,7 +114,12 @@ La preparacion ocurre en segundo plano y distingue definicion de datos:
   global de registros (`CLIENT_ARCHITECTURE.md`, AppViews y Prewarm).
 
 Las definiciones repetidas por entidad se coalescen dentro de un run. El run completo se deduplica
-por owner+contrato mientras esta activo (`src/lib/app-view-prewarm.ts`).
+por owner+contrato mientras esta activo (`src/lib/app-view-prewarm.ts`). Cada AppView termina en
+`success`, `skipped` o `failed`, incluso si tambien falla el intento local de marcar su error; el run
+espera a los workers restantes y publica un unico terminal. Un fallo no agenda loops automaticos: solo
+un disparador normal posterior puede reintentar. La telemetria correlaciona run id seguro, disparador,
+fingerprint, fase, duracion y resultado. La cabecera usa completadas/total como procesadas; esa cifra
+incluye fallos y no equivale a disponibilidad offline.
 
 ### RECORDS
 
@@ -196,7 +201,8 @@ telemetria no cambian negocio (`CLIENT_ARCHITECTURE.md`, Global Sync Orchestrati
 | Attendance | Fuente local+definicion+snapshot por fecha | STATE_UPDATE comun | Mes actual prewarm; otras fechas bajo demanda | Existente en codigo/tests; recarga OPFS no verificada aqui |
 | STATE_UPDATE | Fuente hidratada+estados locales | Outbox/idempotencia/conflicto comun | Complete vs partial explicito | Existente en codigo/tests; recarga OPFS no verificada aqui |
 | REPORT | Snapshot exacto como fallback de red | No aplica | Resultado derivado por Core, query-scoped | Existente; remote-first es deliberado |
-| PANEL | Snapshot exacto compatible como fallback | No aplica | Core calcula; scope incluye revision y query | Existente; remote-first es deliberado |
+| PANEL | Snapshot exacto compatible como fallback | No aplica | Core calcula; scope incluye revision y query; prewarm global no ejecuta datasets PANEL | Existente; remote-first es deliberado |
+| Preparacion global | Definiciones y fuentes seleccionadas por renderer; snapshots validos previos se conservan ante fallo | No aplica | Single-flight owner+contrato; cada AppView llega a resultado terminal; processed incluye exito, skipped y fallo | Regresion controlada y Chrome/Core local: activa, incompleta estatica y retry exitoso |
 
 ## Carga Y Telemetria
 

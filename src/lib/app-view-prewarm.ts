@@ -23,6 +23,17 @@ export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
 export const OFFLINE_PREPARATION_SLOW_THRESHOLD_MS = 10_000;
 
 const activePrewarms = new Map<string, Promise<void>>();
+let offlinePreparationRunSequence = 0;
+
+export type OfflinePreparationTrigger =
+  | "contract-selection"
+  | "foreground/resume"
+  | "home"
+  | "manual-retry"
+  | "other"
+  | "reconnect"
+  | "startup-with-pending"
+  | "unknown-to-online";
 
 type PrewarmStageKey = "definitionLoad" | "sourceRecordsFetch" | "sqliteWrite" | "snapshot";
 type EntityDefinitionResponse = Awaited<ReturnType<OpcoApi["getEntityDefinition"]>>;
@@ -65,10 +76,12 @@ export type OfflinePreparationDiagnostics = {
   prewarmCompletedAt: string | null;
   prewarmDurationMs: number | null;
   prewarmStartedAt: string | null;
+  runId?: string | null;
   scopeKey?: string | null;
   slow: boolean;
   slowestStages: OfflinePreparationStageTelemetry[];
   status: "idle" | "running" | "completed" | "failed";
+  trigger?: OfflinePreparationTrigger | null;
 };
 
 export type AppViewPrewarmStore = AppViewDefinitionCache & {
@@ -91,6 +104,7 @@ export function prewarmAssignedAppViewsOnce(params: {
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
+  trigger?: OfflinePreparationTrigger;
 }) {
   const key = `${params.ownerKey}:${params.contractId}`;
 
@@ -109,6 +123,7 @@ export async function prewarmAssignedAppViews({
   ownerKey,
   store,
   token,
+  trigger = "other",
 }: {
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
@@ -117,9 +132,11 @@ export async function prewarmAssignedAppViews({
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
+  trigger?: OfflinePreparationTrigger;
 }) {
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
+  const runId = createOfflinePreparationRunId(startedMs);
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
   const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
   const loadEntityDefinition: EntityDefinitionLoader = (entityTypeId) => {
@@ -141,10 +158,12 @@ export async function prewarmAssignedAppViews({
       appViewTelemetry,
       contractId,
       ownerKey,
+      runId,
       startedAt,
       startedMs,
       status: "running",
       total: appViews.length,
+      trigger,
     }),
     onTelemetry,
     ownerKey,
@@ -162,25 +181,33 @@ export async function prewarmAssignedAppViews({
           appViewTelemetry,
           contractId,
           ownerKey,
+          runId,
           startedAt,
           startedMs,
           status: "running",
           total: appViews.length,
+          trigger,
         }),
         onTelemetry,
         ownerKey,
         store,
       });
 
-      const nextTelemetry = await prewarmOneAppView({
-        api,
-        appView,
-        contractId,
-        loadEntityDefinition,
-        ownerKey,
-        store,
-        token,
-      });
+      let nextTelemetry: OfflinePreparationAppViewTelemetry;
+
+      try {
+        nextTelemetry = await prewarmOneAppView({
+          api,
+          appView,
+          contractId,
+          loadEntityDefinition,
+          ownerKey,
+          store,
+          token,
+        });
+      } catch (error) {
+        nextTelemetry = completeAppViewTelemetry(initial, Date.parse(initial.appViewStartedAt), "failed", error);
+      }
 
       appViewTelemetry.set(appView.id, nextTelemetry);
       await recordOfflinePreparationTelemetry({
@@ -188,10 +215,12 @@ export async function prewarmAssignedAppViews({
           appViewTelemetry,
           contractId,
           ownerKey,
+          runId,
           startedAt,
           startedMs,
           status: "running",
           total: appViews.length,
+          trigger,
         }),
         onTelemetry,
         ownerKey,
@@ -204,35 +233,38 @@ export async function prewarmAssignedAppViews({
         appViewTelemetry,
         contractId,
         ownerKey,
+        runId,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
         startedMs,
         status: hasFailedAppViews(appViewTelemetry) ? "failed" : "completed",
         total: appViews.length,
+        trigger,
       }),
       onTelemetry,
       ownerKey,
       store,
     });
-  } catch (error) {
+  } catch {
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
         appViewTelemetry,
         contractId,
         ownerKey,
+        runId,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
         startedMs,
         status: "failed",
         total: appViews.length,
+        trigger,
       }),
       onTelemetry,
       ownerKey,
       store,
     });
-    throw error;
   }
 }
 
@@ -431,14 +463,18 @@ async function prewarmOneAppView({
     );
     return completeAppViewTelemetry(telemetry, appStartedMs, "skipped");
   } catch (error) {
-    await preserveOrMarkPrewarmFailure({
-      appView,
-      contractId,
-      error,
-      lastPreparedAt,
-      ownerKey,
-      store,
-    });
+    try {
+      await preserveOrMarkPrewarmFailure({
+        appView,
+        contractId,
+        error,
+        lastPreparedAt,
+        ownerKey,
+        store,
+      });
+    } catch {
+      // A failed error marker must not abort the remaining AppViews or replace a usable snapshot.
+    }
     return completeAppViewTelemetry(telemetry, appStartedMs, "failed", error);
   }
 }
@@ -614,20 +650,24 @@ function buildOfflinePreparationDiagnostics({
   completedMs,
   contractId,
   ownerKey,
+  runId,
   startedAt,
   startedMs,
   status,
   total,
+  trigger,
 }: {
   appViewTelemetry: Map<string, OfflinePreparationAppViewTelemetry>;
   completedAt?: string | null;
   completedMs?: number;
   contractId: string;
   ownerKey: string;
+  runId: string;
   startedAt: string;
   startedMs: number;
   status: OfflinePreparationDiagnostics["status"];
   total: number;
+  trigger: OfflinePreparationTrigger;
 }): OfflinePreparationDiagnostics {
   const appViews = [...appViewTelemetry.values()];
   const completed = appViews.filter((appView) => appView.appViewCompletedAt).length;
@@ -655,10 +695,12 @@ function buildOfflinePreparationDiagnostics({
     prewarmCompletedAt: completedAt,
     prewarmDurationMs,
     prewarmStartedAt: startedAt,
+    runId,
     scopeKey: offlinePreparationScopeKey(ownerKey, contractId),
     slow: Boolean((prewarmDurationMs && prewarmDurationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS) || appViews.some((appView) => appView.slow)),
     slowestStages,
     status,
+    trigger,
   };
 }
 
@@ -742,13 +784,33 @@ export function normalizeOfflinePreparationDiagnostics(
     prewarmCompletedAt: normalizeNullableString(value.prewarmCompletedAt),
     prewarmDurationMs: normalizeNullableNumber(value.prewarmDurationMs),
     prewarmStartedAt: normalizeNullableString(value.prewarmStartedAt),
+    runId: normalizeNullableString(value.runId),
     scopeKey: normalizeNullableString(value.scopeKey),
     slow: Boolean(value.slow),
     slowestStages: Array.isArray(value.slowestStages)
       ? value.slowestStages.map(normalizeStageTelemetry).filter((stage): stage is OfflinePreparationStageTelemetry => Boolean(stage)).slice(0, 3)
       : [],
     status: value.status,
+    trigger: normalizeOfflinePreparationTrigger(value.trigger),
   };
+}
+
+function createOfflinePreparationRunId(startedMs: number) {
+  offlinePreparationRunSequence += 1;
+  return "prewarm-" + startedMs + "-" + offlinePreparationRunSequence;
+}
+
+function normalizeOfflinePreparationTrigger(value: unknown): OfflinePreparationTrigger | null {
+  return value === "contract-selection" ||
+    value === "foreground/resume" ||
+    value === "home" ||
+    value === "manual-retry" ||
+    value === "other" ||
+    value === "reconnect" ||
+    value === "startup-with-pending" ||
+    value === "unknown-to-online"
+    ? value
+    : null;
 }
 
 export function offlinePreparationScopeKey(ownerKey: string, contractId: string) {
@@ -861,6 +923,7 @@ async function cacheAttendanceMonthSnapshots({
   response: Awaited<ReturnType<OpcoApi["getAttendanceWorkflow"]>>;
   store: Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "upsertStateUpdateSnapshot">;
   token: string;
+  trigger?: OfflinePreparationTrigger;
 }) {
   try {
     await cacheAttendanceRemoteSnapshot({

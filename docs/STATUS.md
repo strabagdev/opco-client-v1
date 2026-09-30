@@ -1,5 +1,72 @@
 # Current Status
 
+## Offline Preparation Terminal Progress 2026-09-29
+
+### Defect Reproduced And Corrected
+
+- Demonstrated cause: a failed AppView normally became a terminal per-AppView result, but if the
+  subsequent SQLite operation that preserved or marked that failure also threw,
+  `prewarmOneAppView` rejected into the fail-fast worker pool. The global run published `failed`,
+  released its owner+contract single-flight key, and rethrew while sibling workers were still alive.
+  Those siblings could then publish `running` after the terminal state, and a later
+  Home/session/reconnect trigger could begin a second global run. This explains both a retained
+  `Preparando` state and apparent automatic restarts without attributing the issue to PANEL or to
+  the request timeout.
+- Correction: failure preservation is best-effort and cannot escape the AppView boundary; a
+  defensive worker guard converts any other unexpected AppView exception into a completed failed
+  result. The run waits for every worker, emits one terminal state, and global setup failure resolves
+  after recording that terminal instead of creating an unhandled background rejection. Previous
+  ready definitions remain untouched when failure marking cannot be written. Dedupe and all caches
+  remain scoped by owner+contract; outbox, write synchronization, SQLite schema, timeouts and
+  one-tab policy are unchanged.
+- Correlation and header: each run now records a safe `runId` plus its real trigger (`home`, contract
+  selection or lifecycle trigger), while diagnostics retain the per-AppView fingerprint, stage,
+  duration and result. The sole global header displays a compact real `processed/total` progress
+  bar; processed includes successes, skipped AppViews and failures, and does not claim offline
+  availability. A failed terminal says `Preparación incompleta · N fallos`, keeps `N/total
+  procesadas`, and uses a static warning icon with no spinner, animated bar or working pulse. Existing send errors, conflicts, write
+  confirmations and other active operations retain their previous priority; Diagnóstico and normal
+  later retry triggers remain available.
+- Regression evidence: the focused prewarm test forces one definition failure plus a second failure
+  while writing its local marker, leaves another AppView pending, verifies concurrent trigger dedupe,
+  a single `2/2` failed terminal with no later `running`, preservation of the previous `ready`
+  definition, and a later successful `2/2` retry with a different run id. Header tests cover active
+  to completed, active to incomplete, persisted interruption and a later active retry. The focused
+  run passed 62 tests; typecheck passed; lint passed with only the two pre-existing
+  `no-require-imports` warnings.
+- Technical close: the complete suite passed 825 tests across 69 files with at most two workers;
+  typecheck and the web build passed; lint completed with zero errors and the same two pre-existing
+  warnings; `git diff --check` passed. The generated `dist` remained an ignored local artifact and
+  was not published.
+- Real local evidence used Core at `localhost:3000`, Expo Web at `localhost:3003`, and only the
+  explicit `.env.local` PostgreSQL destination `opco_dev@127.0.0.1:5432/opco_development`. Chrome
+  153 for Windows used CDP port 9336 and the exclusive
+  `C:\Temp\opco-cdp-offline-progress-20260929` profile. With network latency applied only in that
+  profile, the real header showed `1/2 procesadas`: the progress region measured 220x16 px at
+  1280x900 and at 390x844, with no page-level horizontal overflow or overlap. Blocking only the
+  local RECORDS definition request produced static `Preparación incompleta · 1 fallo`, `2/2
+  procesadas`, a static warning icon, opacity 1 and no CSS animation. PWA diagnostics correlated
+  `trigger=home`, one run id, `failed`, 2/2 and one failed
+  AppView. Removing the block and performing the existing later Home trigger produced a different
+  run id and `completed`, 2/2, failed 0. These are browser/Core observations, distinct from the
+  controlled API and store regression.
+
+### Reported Panel Incident Not Confirmed
+
+- The exact reported `Panel Protocolos - Piloto` is absent from local PostgreSQL (zero matching
+  AppViews), so its assigned AppView ids, workflow configuration and incident diagnostic copy remain
+  unavailable locally and production was not accessed. The equivalent local contract had one
+  RECORDS AppView and one PANEL; PANEL completed as the existing unsupported/skipped prewarm
+  definition and did not execute PANEL datasets. No local fixture or database row was created or
+  modified.
+
+### Visual Observation Limit
+
+- The local browser observation without restarts lasted five seconds: during that interval the
+  terminal label and request count remained unchanged. This short observation supports the visual
+  state check only; it is not evidence of indefinite stability. The no-late-`running` and later-retry
+  guarantees come from the controlled regression, not from the five-second browser window.
+
 ## PANEL TABLE Configured Height 2026-09-29
 
 - Trace and cause: Core persists TABLE `layout.h` and PANEL `layout.rowHeight` unchanged. Client receives
