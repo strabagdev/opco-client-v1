@@ -1,5 +1,24 @@
 # Current Status
 
+## Consistent Screen Read Indicators 2026-09-30
+
+- Scope: Home, AppView route bootstrap, RECORDS, Attendance/STATE_UPDATE, PANEL and REPORT now use one compact indeterminate read indicator. `Cargando…` means no compatible content is available; `Actualizando…` keeps only content for the same owner/contract/experience/query visible. Empty and terminal error states do not animate. Offline snapshots keep their existing static provenance/unavailability copy and retries; the global header remains the only global summary.
+- Query isolation: Home scopes cards by owner+contract and ignores a cache callback after the remote result settles. RECORDS includes owner, contract, entity and debounced search in its visible scope. Attendance scopes day content by date. STATE_UPDATE rejects a response for another date. PANEL retains a module snapshot only for the same normalized dataset query. REPORT retains a result only for the exact period/search query. Existing request sequence or mounted guards prevent late responses from replacing a newer selection.
+- Architecture preserved: no request, cache strategy, timeout, retry policy, outbox/write synchronization, SQLite schema, API, dependency or configuration changed. RECORDS remains cache-first; PANEL/REPORT keep exact snapshot rules. Save and load-more spinners remain action-local and are not read indicators. Reduced motion renders a static progress segment; the progressbar has a polite accessible label and no invented percentage.
+
+| Screen | Previous indicator | Current states | Evidence |
+| --- | --- | --- | --- |
+| Home/list | Generic spinners; no retained-content refresh distinction. | Initial `Cargando…`; cache-first `Actualizando…`; static local-copy notice; empty/error with retry. | Real Chrome/CDP desktop + 390 px; automated scope guards. |
+| Route/definition | Centered spinner. | Initial `Cargando…`; existing terminal error/retry. | Automated integration/source coverage. |
+| RECORDS | Spinner could coexist ambiguously with rows. | Initial load, compatible cache-first refresh, empty, retained-content error/retry and static offline copy. | Real Chrome/CDP with six local records; automated query guard. |
+| Attendance | Separate day/search spinners. | One day/search read bar, date-compatible content, empty/error/retry and existing offline-day warning. | Automated request/date guards; no local Attendance AppView available for real capture. |
+| STATE_UPDATE | Separate workflow/search spinners. | One workflow/search read bar, date-compatible response, empty/error/retry and existing offline warning. | Automated request/date guards; no local STATE_UPDATE AppView available for real capture. |
+| PANEL | Module spinners replaced content; compatible failures did not keep the module visible. | Per-module initial/refresh bars, compatible TABLE/KPI retained on refresh/error, empty remains terminal. | Real Chrome/CDP showed KPI `Actualizando…` and TABLE `Cargando…`, then six rows; desktop + 390 px. |
+| REPORT | Every request replaced the report with a spinner. | Exact-query initial/refresh distinction; compatible report survives refresh/error; changed period/search hides stale results; empty remains terminal. | Automated mounted/query guards; no local REPORT AppView available for real capture. |
+
+- Real visual evidence used Chrome 153 for Windows through CDP port 9337 and the exclusive prior local validation profile, Core at `localhost:3000`, Client at `localhost:3003`, and the explicitly validated `.env.local` PostgreSQL destination `opco_dev@127.0.0.1:5432/opco_development`. Home refresh bars measured 1240x28 px at 1280x900 and 350x28 px at 390x844 while cached cards remained visible. RECORDS refresh measured 1225x28 px with six compatible rows visible. PANEL simultaneously showed a 240x28 px KPI refresh and a 1176x84 px TABLE initial state, then rendered its KPI and six rows at 390 px. Every measured page had `body.scrollWidth === innerWidth`; screenshots showed usable controls and no overlap.
+- Automated evidence: the affected run passes 156 tests across 12 files and covers initial vs refresh, success, empty, error with/without compatible content, offline content/unavailability, accessibility/reduced motion, renderer adoption and stale-selection guards. Typecheck passes. Lint passes with only the two pre-existing `no-require-imports` warnings in `records-sync.local-db-regression.test.ts`.
+
 ## Offline Preparation Terminal Progress 2026-09-29
 
 ### Defect Reproduced And Corrected

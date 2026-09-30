@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { cacheAttendanceRemoteSnapshot, hasSuccessfulAttendanceDayHydration } from "@/lib/attendance-snapshot-cache";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import {
@@ -100,6 +101,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     token,
   } = useSession();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
+  const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [items, setItems] = useState<AttendanceItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
@@ -131,6 +133,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const isOnline = connectivityStatus === "online";
   const screenTitle = "Registro de Asistencia";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
+  const hasCompatibleDay = loadedDate === date;
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const showSubtitle = shouldShowAttendanceSubtitle({ subtitle: appView.name, title: screenTitle });
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
@@ -463,6 +466,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
+      if (isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) setLoadedDate(date);
       finishLoadingRequest(requestId);
     }
   }, [api, appView.id, applyAttendanceResponse, beginLoadingRequest, cacheAttendanceOnlineResponse, clearVisibleError, date, finishLoadingRequest, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
@@ -1082,7 +1086,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       <View style={styles.summaryBar}>
         <Text style={styles.summaryLabel}>Registrados en esta fecha</Text>
-        <Text style={styles.summaryValue}>{totalRegistered}</Text>
+        <Text style={styles.summaryValue}>{hasCompatibleDay ? totalRegistered : "-"}</Text>
       </View>
 
       {operationFeedback.message && shouldRenderAttendanceInlineFeedback(operationFeedback.phase) ? (
@@ -1091,6 +1095,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </Text>
       ) : null}
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
+      {visibleError && !isLoading ? <Pressable accessibilityRole="button" onPress={() => void loadDay()} style={styles.smallSecondaryButton}><Text style={styles.smallSecondaryText}>Reintentar</Text></Pressable> : null}
       {connectivityStatus !== "online" && !daySnapshotHydrated ? (
         <Text style={styles.offline}>Datos de este dia aun no disponibles sin conexion.</Text>
       ) : null}
@@ -1135,6 +1140,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           autoCapitalize="words"
           onChangeText={(value) => {
             setSearchText(value);
+            requestSequenceRef.current += 1;
+            setItems([]);
+            setIsSearching(Boolean(normalizeAttendanceSearch(value)));
             setSelectedItem(null);
             setConflict(null);
             setSuccessMessage(null);
@@ -1143,11 +1151,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           style={styles.searchInput}
           value={searchText}
         />
-        {isSearching ? <ActivityIndicator size="small" /> : null}
       </View>
 
-      {isLoading ? <ActivityIndicator /> : null}
 
+      {isLoading || isSearching ? <ReadLoadingIndicator mode={hasCompatibleDay && (!normalizedSearch || items.length > 0) ? "refresh" : "initial"} /> : null}
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
@@ -1224,7 +1231,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      {!normalizedSearch && !selectedItem ? <LatestAttendanceList latest={latest} /> : null}
+      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} /> : null}
 
       <ConflictModal
         conflict={conflict}

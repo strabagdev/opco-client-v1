@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
@@ -71,9 +72,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const previousScopeRef = useRef({ appViewId: appView.id, entityTypeId });
   const loadedScopeRef = useRef<string | null>(null);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const measuredOpeningScopeRef = useRef<string | null>(null);
 
   const canLoadMore = pagination ? pagination.page < pagination.totalPages : false;
+  const dataScopeKey = ownerKey && selectedContractId ? `${ownerKey}:${selectedContractId}:${entityTypeId}:${JSON.stringify(debouncedSearch)}` : null;
+  const hasCompatibleRecords = Boolean(dataScopeKey && loadedScope === dataScopeKey);
   const hasSyncIssues = recordsSyncSummary.failedCount > 0 || recordsSyncSummary.conflictCount > 0;
   const hasSyncActivity =
     recordsSyncSummary.pendingCount > 0 ||
@@ -152,7 +156,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       const activeContractId = selectedContractId;
       measurementOwnerKey = activeOwnerKey;
       measurementContractId = activeContractId;
-      const scopeKey = `${activeOwnerKey}:${activeContractId}:${entityTypeId}`;
+      const scopeKey = dataScopeKey!;
       const openingScopeKey = `${scopeKey}:${appView.id}`;
       const shouldMeasureOpening = shouldStartRecordsOpeningMeasurement(measuredOpeningScopeRef.current, openingScopeKey);
       if (shouldMeasureOpening) measuredOpeningScopeRef.current = openingScopeKey;
@@ -219,6 +223,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         setPagination(result.pagination);
         setIsOfflineData(result.offline);
         loadedScopeRef.current = scopeKey;
+        setLoadedScope(scopeKey);
         publishOpeningMeasurement({
           coverage: source === "remote" && !result.fromCache ? "complete" : measurement?.coverage ?? "unknown",
           preparationMs,
@@ -405,6 +410,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     definitionCache,
     entityTypeId,
     connectivityStatus,
+    dataScopeKey,
     ownerKey,
     recordsReconnectRefreshKey,
     refreshCurrentSyncTelemetry,
@@ -516,12 +522,13 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         debouncedSearch={debouncedSearch}
         error={error}
         isLoading={isLoading}
+        isRefreshing={isRefreshing}
         isLoadingMore={isLoadingMore}
         isOfflineData={isOfflineData}
-        items={listItems}
+        items={hasCompatibleRecords ? listItems : []}
         onLoadMore={loadMoreRecords}
         onRetry={() => setRetryCount((count) => count + 1)}
-        records={records}
+        records={hasCompatibleRecords ? records : []}
         appViewId={appView.id}
       />
     </ScrollView>
@@ -549,6 +556,7 @@ function RecordsListContent({
   debouncedSearch,
   error,
   isLoading,
+  isRefreshing,
   isLoadingMore,
   isOfflineData,
   items,
@@ -561,6 +569,7 @@ function RecordsListContent({
   debouncedSearch: string;
   error: string | null;
   isLoading: boolean;
+  isRefreshing: boolean;
   isLoadingMore: boolean;
   isOfflineData: boolean;
   items: ReturnType<typeof buildRecordListItem>[];
@@ -570,9 +579,10 @@ function RecordsListContent({
 }) {
   return (
     <>
-      {isLoading ? <ActivityIndicator /> : null}
+      {isLoading && records.length === 0 ? <ReadLoadingIndicator mode="initial" /> : null}
+      {isRefreshing && records.length > 0 ? <ReadLoadingIndicator mode="refresh" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      {error && records.length === 0 ? (
+      {error ? (
         <Pressable onPress={onRetry} style={styles.retryButton}>
           <Text style={styles.retryText}>Volver a cargar</Text>
         </Pressable>

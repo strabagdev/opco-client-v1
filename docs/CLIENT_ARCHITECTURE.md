@@ -47,6 +47,21 @@ The header status is one non-interactive icon-and-text indicator. On wide layout
 
 Durable pending work, retained errors, conflicts, and offline state remain explicit through their own static status/feedback and do not depend on animation alone. PANEL refreshes and AppView offline preparation are read/cache work, not pending-change sync, so they do not animate the global sync dot. Offline preparation remains observable in the existing PWA feedback and diagnostics, including its persisted status and current/last stage.
 
+### Screen Read Loading Presentation
+
+Screen read feedback is local to the renderer and is separate from header activity, offline preparation progress and write feedback. The shared `ReadLoadingIndicator` is indeterminate because these reads have no measurable item total. Initial load uses `Cargando…`; a same-scope refresh uses `Actualizando…` while compatible content remains mounted. Empty, offline-unavailable and error outcomes are terminal static states. Reduced-motion preference leaves the segment static, and accessible progress semantics expose the label without a fabricated percentage.
+
+| Surface | Compatibility key retained during refresh |
+| --- | --- |
+| Home | owner + contract |
+| RECORDS | owner + contract + entity + debounced search |
+| Attendance | selected date |
+| STATE_UPDATE | response date when the workflow is dated |
+| PANEL | dataset + normalized filters + search + page + page size |
+| REPORT | exact range/month or current-status search query |
+
+A scope change hides incompatible content before its request settles. Existing request sequence, cancellation or mounted guards own late-response rejection. The presentation layer does not issue requests and does not alter cache-first RECORDS, exact PANEL/REPORT snapshots, retry/timeout policy, prewarm, outbox or synchronization. Contextual write and load-more indicators remain attached to their controls; a pending write is never presented as read loading.
+
 A persisted offline-preparation `running` diagnostic may describe an interrupted prior runtime, so
 it is diagnostic evidence rather than proof of a currently active operation. Only the in-memory
 active-run set produces the loading message and spinner. Persisted `running` without an active run

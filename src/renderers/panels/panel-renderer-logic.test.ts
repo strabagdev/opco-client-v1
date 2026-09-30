@@ -662,7 +662,8 @@ describe("panel TABLE renderer structure", () => {
   it("renders KPI modules from server metrics with loading, error, and offline states", () => {
     expect(source).toContain("buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults)");
     expect(source).toContain("<PanelKpi");
-    expect(source).toContain("Cargando indicador...");
+    expect(source).toContain('<ReadLoadingIndicator mode="initial" />');
+    expect(source).toContain('<ReadLoadingIndicator mode="refresh" />');
     expect(source).toContain("Métrica no disponible.");
     expect(source).toContain("Datos guardados.");
     expect(source).not.toContain("pagination.total}");

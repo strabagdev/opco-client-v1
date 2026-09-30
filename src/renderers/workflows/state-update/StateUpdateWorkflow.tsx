@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
 import {
@@ -118,22 +119,23 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const requestSequenceRef = useRef(0);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
+  const visibleResponse = response && (!response.date || response.date === date) ? response : null;
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const currentStateUpdateSyncRunId =
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
     stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ??
     null;
 
-  const hasDate = Boolean(response?.dateFieldId ?? appView.config.dateFieldId);
+  const hasDate = Boolean(visibleResponse?.dateFieldId ?? appView.config.dateFieldId);
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
-  const submitLabel = response?.historyMode === "update-current" ? "Actualizar estado" : "Registrar cambio";
-  const latest = response?.latest ?? [];
-  const latestPagination = response?.latestPagination;
-  const unresolvedCount = response
-    ? readSummaryCount(response, "pendingCount") +
-      readSummaryCount(response, "failedCount") +
-      readSummaryCount(response, "conflictCount") +
-      readSummaryCount(response, "syncingCount")
+  const submitLabel = visibleResponse?.historyMode === "update-current" ? "Actualizar estado" : "Registrar cambio";
+  const latest = visibleResponse?.latest ?? [];
+  const latestPagination = visibleResponse?.latestPagination;
+  const unresolvedCount = visibleResponse
+    ? readSummaryCount(visibleResponse, "pendingCount") +
+      readSummaryCount(visibleResponse, "failedCount") +
+      readSummaryCount(visibleResponse, "conflictCount") +
+      readSummaryCount(visibleResponse, "syncingCount")
     : 0;
   const visibleError = hideStateUpdateTimeoutAfterConfirmedSync({
     error,
@@ -142,7 +144,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }) ? null : error;
   const operationFeedback = resolveStateUpdateOperationFeedback({
     connectivityStatus,
-    hasConflict: Boolean(conflict || readSummaryCount(response, "conflictCount") > 0),
+    hasConflict: Boolean(conflict || readSummaryCount(visibleResponse, "conflictCount") > 0),
     isAuthSessionRestoring,
     isReadinessChecking: isOperationalCoreReadinessChecking,
     isSaving,
@@ -155,7 +157,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   });
   const experienceErrorCode = refreshError
     ? "STATE_UPDATE_REFRESH_FAILED"
-    : error && !response
+    : error && !visibleResponse
       ? "STATE_UPDATE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
@@ -714,13 +716,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
   useExperienceOpeningTelemetry(appView, useMemo(() => ({
     errorCode: error && !isLoading ? "STATE_UPDATE_LOAD_FAILED" : null,
-    firstUseful: Boolean(response) && !isLoading,
-    processedCount: (response?.items.length ?? 0) + (response?.latest?.length ?? 0),
+    firstUseful: Boolean(visibleResponse) && !isLoading,
+    processedCount: (visibleResponse?.items.length ?? 0) + (visibleResponse?.latest?.length ?? 0),
     ready: !isLoading,
-    result: isLoading ? "in_progress" as const : error && !response ? "error" as const : "completed" as const,
-    shownCount: (response?.items.length ?? 0) + (response?.latest?.length ?? 0),
+    result: isLoading ? "in_progress" as const : error && !visibleResponse ? "error" as const : "completed" as const,
+    shownCount: (visibleResponse?.items.length ?? 0) + (visibleResponse?.latest?.length ?? 0),
     source: connectivityStatus === "offline" ? "local" as const : "remote" as const,
-  }), [connectivityStatus, error, isLoading, response]));
+  }), [connectivityStatus, error, isLoading, visibleResponse]));
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -730,7 +732,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
         <View style={styles.headerText}>
           <Text style={styles.title}>{appView.name}</Text>
-          <Text style={styles.meta}>{response?.targetEntityType.name ?? "Workflow"}</Text>
+          <Text style={styles.meta}>{visibleResponse?.targetEntityType.name ?? "Workflow"}</Text>
         </View>
       </View>
 
@@ -756,6 +758,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           autoCapitalize="words"
           onChangeText={(value) => {
             setSearchText(value);
+            requestSequenceRef.current += 1;
+            setItems([]);
+            setIsSearching(Boolean(normalizeStateUpdateSearch(value)));
             setSelectedItem(null);
             setConflict(null);
             setSuccessMessage(null);
@@ -764,11 +769,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           style={styles.searchInput}
           value={searchText}
         />
-        {isSearching ? <ActivityIndicator size="small" /> : null}
       </View>
 
-      {isLoading ? <ActivityIndicator /> : null}
 
+      {isLoading || isSearching ? <ReadLoadingIndicator mode={visibleResponse && (!normalizedSearch || items.length > 0) ? "refresh" : "initial"} /> : null}
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
@@ -783,17 +787,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       ) : null}
 
-      {selectedItem && response ? (
+      {selectedItem && visibleResponse ? (
         <View style={styles.editorPanel}>
           <View style={styles.subjectText}>
             <Text style={styles.panelName}>{selectedItem.subject.displayName}</Text>
-            <Text style={styles.statusMeta}>Actual: {formatCurrentState(response, selectedItem) ?? "Sin estado"}</Text>
+            <Text style={styles.statusMeta}>Actual: {formatCurrentState(visibleResponse, selectedItem) ?? "Sin estado"}</Text>
           </View>
 
           <View style={styles.form}>
             {hasDate ? (
               <View style={styles.fieldGroup}>
-                <Text style={styles.label}>{response.dateField?.name ?? "Campo de fecha"}</Text>
+                <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
                 <TextInput
                   autoCapitalize="none"
                   onChangeText={setDate}
@@ -803,7 +807,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
                 />
               </View>
             ) : null}
-            {response.stateFields.map((field) => (
+            {visibleResponse.stateFields.map((field) => (
               <StateFieldInput
                 field={field}
                 key={field.fieldId}
@@ -815,7 +819,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
               />
             ))}
 
-            {response.extraFields.map((field) => (
+            {visibleResponse.extraFields.map((field) => (
               <RecordFieldInput
                 error={extraErrors[field.key]}
                 field={field}
@@ -842,7 +846,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           latest={latest}
           onLoadMore={loadMoreLatest}
           pagination={latestPagination}
-          response={response}
+          response={visibleResponse}
         />
       ) : null}
 

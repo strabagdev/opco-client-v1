@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   View,
 } from "react-native";
 
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "@/lib/offline-panels";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
@@ -235,15 +235,17 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
           continue;
         }
 
+        const hasCompatiblePanel = Boolean(previous?.panel && previous.queryKey === queryKey);
+
         setDatasetStates((current) => ({
           ...current,
           [datasetId]: {
             error: null,
             fromCache: false,
             isLoading: true,
-            panel: current[datasetId]?.panel ?? null,
+            panel: hasCompatiblePanel ? previous?.panel ?? null : null,
             queryKey,
-            syncedAt: current[datasetId]?.syncedAt ?? null,
+            syncedAt: hasCompatiblePanel ? previous?.syncedAt ?? null : null,
           },
         }));
 
@@ -306,9 +308,9 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
               error: error instanceof Error ? error.message : "No fue posible cargar el dataset.",
               fromCache: false,
               isLoading: false,
-              panel: current[datasetId]?.panel ?? null,
+              panel: hasCompatiblePanel ? previous?.panel ?? null : null,
               queryKey,
-              syncedAt: current[datasetId]?.syncedAt ?? null,
+              syncedAt: hasCompatiblePanel ? previous?.syncedAt ?? null : null,
             },
           }));
         }
@@ -541,10 +543,9 @@ function PanelModule({
         />
       ) : (!currentState || currentState.isLoading) && !dataset ? (
         <View style={styles.stateBox}>
-          <ActivityIndicator />
-          <Text style={styles.stateText}>Cargando módulo...</Text>
+          <ReadLoadingIndicator mode="initial" />
         </View>
-      ) : currentState?.error ? (
+      ) : currentState?.error && !dataset ? (
         <View style={styles.stateBox}>
           <Text style={styles.stateText}>{currentState.error}</Text>
           <Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}>
@@ -553,10 +554,14 @@ function PanelModule({
         </View>
       ) : !dataset || !table ? (
         <PanelState message="Este módulo necesita configuración." />
-      ) : dataset.rows.length === 0 ? (
-        <PanelState message="No hay datos para mostrar." />
       ) : (
         <>
+          {currentState?.isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
+          {currentState?.error ? <View style={styles.inlineError}><Text style={styles.stateText}>{currentState.error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}><Text style={styles.actionButtonText}>Reintentar</Text></Pressable></View> : null}
+          {dataset.rows.length === 0 ? (
+        <PanelState message="No hay datos para mostrar." />
+          ) : (
+            <>
           <PanelTable table={table} />
           {tableConfig?.paginated !== false ? (
             <View style={styles.pagination}>
@@ -569,6 +574,8 @@ function PanelModule({
               </Pressable>
             </View>
           ) : null}
+            </>
+          )}
         </>
       )}
     </View>
@@ -594,16 +601,11 @@ function PanelKpi({
   onRetry(): void;
   title: string;
 }) {
-  if (isLoading) {
-    return (
-      <View style={styles.kpiCard}>
-        <ActivityIndicator />
-        <Text style={styles.stateText}>Cargando indicador...</Text>
-      </View>
-    );
+  if (isLoading && !kpi) {
+    return <View style={styles.kpiCard}><ReadLoadingIndicator mode="initial" /></View>;
   }
 
-  if (error) {
+  if (error && !kpi) {
     return (
       <View style={styles.kpiCard}>
         <Text style={styles.stateText}>{error}</Text>
@@ -624,6 +626,8 @@ function PanelKpi({
       accessibilityLabel={`${title}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}
       style={styles.kpiCard}
     >
+      {isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
+      {error ? <View style={styles.inlineError}><Text style={styles.stateText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}><Text style={styles.actionButtonText}>Reintentar</Text></Pressable></View> : null}
       <Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>
       {kpi.configurationIssue ? (
         <Text style={styles.kpiMeta}>{kpi.configurationIssue}</Text>
@@ -781,6 +785,7 @@ const styles = StyleSheet.create({
   horizontalScrollContent: {
     minWidth: "100%",
   },
+  inlineError: { alignItems: "center", gap: 8 },
   kpiCard: {
     borderColor: "#e5e7eb",
     borderRadius: 8,

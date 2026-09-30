@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,6 +7,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 
 import { ReportAppView, ReportResponse } from "@/lib/opco-api";
 import { loadReportWithOfflineCache } from "@/lib/offline-reports";
@@ -40,15 +40,19 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [report, setReport] = useState<ReportResponse | null>(null);
+  const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshCount, setRefreshCount] = useState(0);
   const isCurrentStatus = isCurrentStatusReport(appView.config);
+  const reportQuery = useMemo(() => isCurrentStatus ? { search: debouncedSearch } : range, [debouncedSearch, isCurrentStatus, range]);
+  const reportQueryKey = JSON.stringify(reportQuery);
+  const visibleReport = report && loadedQueryKey === reportQueryKey ? report : null;
   useExperienceActivityReporter(appView, {
     activeCount: Number(isLoading),
     errorCode: error ? "REPORT_READ_FAILED" : null,
-    result: error ? "error" : !isLoading && report ? "success" : null,
+    result: error ? "error" : !isLoading && visibleReport ? "success" : null,
   });
 
   useEffect(() => {
@@ -73,24 +77,21 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
 
       setIsLoading(true);
       setError(null);
-      setFromCache(false);
 
       try {
-        const query = isCurrentStatus
-          ? { search: debouncedSearch }
-          : range;
         const result = await loadReportWithOfflineCache({
           api,
           appViewId: appView.id,
           contractId: selectedContractId,
           ownerKey,
-          query,
+          query: reportQuery,
           store: definitionCache,
           token,
         });
 
         if (isMounted) {
           setReport(result.report);
+          setLoadedQueryKey(reportQueryKey);
           setFromCache(result.fromCache);
         }
       } catch (nextError) {
@@ -109,20 +110,20 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, debouncedSearch, definitionCache, isCurrentStatus, ownerKey, range, refreshCount, selectedContractId, token]);
+  }, [api, appView.id, definitionCache, ownerKey, refreshCount, reportQuery, reportQueryKey, selectedContractId, token]);
 
-  const table = useMemo(() => report ? buildReportTableModel(report) : null, [report]);
-  const matrix = useMemo(() => report ? buildReportMatrixModel(report) : null, [report]);
-  const currentStatus = useMemo(() => report ? buildReportCurrentStatusModel(report) : null, [report]);
+  const table = useMemo(() => visibleReport ? buildReportTableModel(visibleReport) : null, [visibleReport]);
+  const matrix = useMemo(() => visibleReport ? buildReportMatrixModel(visibleReport) : null, [visibleReport]);
+  const currentStatus = useMemo(() => visibleReport ? buildReportCurrentStatusModel(visibleReport) : null, [visibleReport]);
   useExperienceOpeningTelemetry(appView, useMemo(() => ({
     errorCode: error ? "REPORT_LOAD_FAILED" : null,
-    firstUseful: Boolean(report) && !error,
-    processedCount: report?.records.length ?? 0,
+    firstUseful: Boolean(visibleReport) && !error,
+    processedCount: visibleReport?.records.length ?? 0,
     ready: !isLoading,
     result: isLoading ? "in_progress" as const : error ? "error" as const : "completed" as const,
-    shownCount: report?.records.length ?? 0,
-    source: report ? (fromCache ? "local" as const : "remote" as const) : "unknown" as const,
-  }), [error, fromCache, isLoading, report]));
+    shownCount: visibleReport?.records.length ?? 0,
+    source: visibleReport ? (fromCache ? "local" as const : "remote" as const) : "unknown" as const,
+  }), [error, fromCache, isLoading, visibleReport]));
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -168,33 +169,30 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         </View>
       )}
 
-      {isLoading ? (
-        <View style={styles.stateBox}>
-          <ActivityIndicator />
-          <Text style={styles.stateText}>Cargando reporte...</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.stateBox}>
-          <Text style={styles.stateText}>{error}</Text>
-        </View>
-      ) : !report ||
-        (report.config.presentationMode === "TABLE" && !table) ||
-        (report.config.presentationMode === "MATRIX" && !matrix) ||
-        (isCurrentStatusReport(report.config) && !currentStatus) ? (
-        <View style={styles.stateBox}>
-          <Text style={styles.stateText}>Este reporte necesita configuración.</Text>
-        </View>
-      ) : report.records.length === 0 ? (
-        <View style={styles.stateBox}>
-          <Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text>
-        </View>
-      ) : isCurrentStatusReport(report.config) && currentStatus ? (
-        <CurrentStatusReport model={currentStatus} />
-      ) : report.config.presentationMode === "TABLE" && table ? (
-        <ReportTable table={table} />
-      ) : matrix ? (
-        <ReportMatrix matrix={matrix} />
-      ) : null}
+      {isLoading && !visibleReport ? (
+        <View style={styles.stateBox}><ReadLoadingIndicator mode="initial" /></View>
+      ) : error && !visibleReport ? (
+        <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View>
+      ) : !visibleReport ||
+        (visibleReport.config.presentationMode === "TABLE" && !table) ||
+        (visibleReport.config.presentationMode === "MATRIX" && !matrix) ||
+        (isCurrentStatusReport(visibleReport.config) && !currentStatus) ? (
+        <View style={styles.stateBox}><Text style={styles.stateText}>Este reporte necesita configuración.</Text></View>
+      ) : (
+        <>
+          {isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
+          {error ? <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View> : null}
+          {visibleReport.records.length === 0 ? (
+            <View style={styles.stateBox}><Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text></View>
+          ) : isCurrentStatusReport(visibleReport.config) && currentStatus ? (
+            <CurrentStatusReport model={currentStatus} />
+          ) : visibleReport.config.presentationMode === "TABLE" && table ? (
+            <ReportTable table={table} />
+          ) : matrix ? (
+            <ReportMatrix matrix={matrix} />
+          ) : null}
+        </>
+      )}
     </ScrollView>
   );
 }

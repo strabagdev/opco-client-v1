@@ -1,7 +1,6 @@
 import { Link, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +10,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
+import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
@@ -38,9 +38,14 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const [views, setViews] = useState<AppView[]>([]);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
+  const [isOfflineViews, setIsOfflineViews] = useState(false);
+  const [loadedViewsScope, setLoadedViewsScope] = useState<string | null>(null);
+  const [viewsRetryVersion, setViewsRetryVersion] = useState(0);
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const viewsScope = ownerKey && selectedContractId ? ownerKey + ":" + selectedContractId : null;
+  const hasCompatibleViews = Boolean(viewsScope && loadedViewsScope === viewsScope);
   const today = formatLocalDateInput(new Date());
   const currentMonthDates = useMemo(() => currentMonthDateKeys(new Date(`${today}T00:00:00`)), [today]);
 
@@ -161,6 +166,7 @@ export default function HomeScreen() {
 
       setIsLoadingViews(true);
       setError(null);
+      let remoteSettled = false;
 
       try {
         const data = await loadAppViewsWithCache({
@@ -168,10 +174,19 @@ export default function HomeScreen() {
           cache: definitionCache,
           contractId: selectedContractId,
           ownerKey,
+          onCached: (cached) => {
+            if (!isMounted || remoteSettled) return;
+            setLoadedViewsScope(viewsScope);
+            setViews(cached.views);
+            setIsOfflineViews(true);
+          },
           token,
         });
 
         if (isMounted) {
+          remoteSettled = true;
+          setLoadedViewsScope(viewsScope);
+          setIsOfflineViews(data.offline);
           setViews(data.views);
         }
 
@@ -208,7 +223,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token]);
+  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope]);
 
   useFocusEffect(useCallback(() => {
     if (views.length > 0) {
@@ -256,22 +271,22 @@ export default function HomeScreen() {
 
   const operationalContextSection = (
     <View style={styles.operationalContext}>
+      {!context && status !== "offline" ? <ReadLoadingIndicator mode="initial" /> : null}
       <View style={[styles.contextPair, isWideLayout ? styles.contextPairWide : null]}>
         <View style={styles.contextItem}>
           <Text style={styles.label}>Organizacion</Text>
           <Text style={styles.value}>
             {context?.organization.name ??
-              (status === "offline" ? "Contexto no disponible sin red" : "Cargando contexto...")}
+              (status === "offline" ? "Contexto no disponible sin red" : "-")}
           </Text>
         </View>
         <View style={styles.contextItem}>
           <Text style={styles.label}>Contrato</Text>
-          {!context && status !== "offline" ? <ActivityIndicator /> : null}
           {context?.contracts.length === 0 ? (
             <Text style={styles.empty}>No hay contratos activos para este usuario.</Text>
           ) : null}
           <Text style={styles.value}>
-            {selectedContract?.name ?? (context ? "Selecciona un contrato" : "Cargando contexto...")}
+            {selectedContract?.name ?? (context ? "Selecciona un contrato" : "-")}
           </Text>
         </View>
       </View>
@@ -284,12 +299,15 @@ export default function HomeScreen() {
 
   const experiencesSection = (
     <View style={styles.section}>
-      {isLoadingViews ? <ActivityIndicator /> : null}
+      {isLoadingViews && !hasCompatibleViews ? <ReadLoadingIndicator mode="initial" /> : null}
+      {isLoadingViews && hasCompatibleViews ? <ReadLoadingIndicator mode="refresh" /> : null}
+      {!isLoadingViews && isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      {!isLoadingViews && selectedContractId && views.length === 0 && !error ? (
+      {error ? <Pressable accessibilityRole="button" onPress={() => setViewsRetryVersion((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>Reintentar</Text></Pressable> : null}
+      {!isLoadingViews && hasCompatibleViews && selectedContractId && views.length === 0 && !error ? (
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
-      {experienceSections.map((section) => (
+      {(hasCompatibleViews ? experienceSections : []).map((section) => (
         <View key={section.id} style={styles.experienceGroup}>
           <Text style={styles.sectionTitle}>{section.title}</Text>
           <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
@@ -481,6 +499,17 @@ const styles = StyleSheet.create({
     color: "#587078",
     marginTop: 3,
   },
+  offlineText: { color: "#587078", fontSize: 13 },
+  retryButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 16,
+  },
+  retryText: { color: "#ffffff", fontWeight: "800" },
   operationalContext: {
     gap: 12,
   },
