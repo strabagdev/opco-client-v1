@@ -13,7 +13,8 @@ import {
   missingRequiredPanelFilters,
   normalizePanelFilters,
   panelDatasetQueryKey,
-  resolvePanelRendererRowHeight,
+  panelKpiValueFontSize,
+  panelKpiValueWebFontSize,
   panelTableColumnMinWidth,
   panelTableColumnWeight,
 } from "./panel-renderer-logic";
@@ -465,10 +466,10 @@ describe("panel module layout plan", () => {
 
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 8 });
 
-    expect(plan.rowHeight).toBe(120);
-    expect(plan.moduleStyles.kpi).toMatchObject({ height: 240, top: 0, width: "33.33333333333333%" });
-    expect(plan.moduleStyles.table).toMatchObject({ height: 720, top: 240, width: "100%" });
-    expect(plan.containerStyle).toMatchObject({ height: 960 });
+    expect(plan.rowHeight).toBe(60);
+    expect(plan.moduleStyles.kpi).toMatchObject({ height: 120, top: 0, width: "33.33333333333333%" });
+    expect(plan.moduleStyles.table).toMatchObject({ height: 360, top: 120, width: "100%" });
+    expect(plan.containerStyle).toMatchObject({ height: 480 });
   });
 
   it("gives a narrow TABLE its own minimum without desktop positioning", () => {
@@ -488,23 +489,23 @@ describe("panel module layout plan", () => {
 
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 92 });
 
-    expect(plan.rowHeight).toBe(120);
+    expect(plan.rowHeight).toBe(92);
     expect(plan.moduleStyles.total_documents).toMatchObject({
-      height: 240,
+      height: 184,
       left: "75%",
       position: "absolute",
-      top: 240,
+      top: 184,
       width: "25%",
     });
     expect(plan.moduleStyles.table).toMatchObject({
       left: "0%",
-      top: 480,
+      top: 368,
       width: "100%",
     });
     expect(Number(plan.moduleStyles.table?.top)).toBeGreaterThan(
       Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height) - 1,
     );
-    expect(plan.containerStyle).toMatchObject({ height: 1200, position: "relative", width: "100%" });
+    expect(plan.containerStyle).toMatchObject({ height: 920, position: "relative", width: "100%" });
   });
 
   it("keeps saved positions without compressing content when rowHeight is 6", () => {
@@ -512,28 +513,38 @@ describe("panel module layout plan", () => {
 
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 6 });
 
-    expect(plan.rowHeight).toBe(120);
+    expect(plan.rowHeight).toBe(60);
     expect(plan.moduleStyles.total_documents).toMatchObject({
-      height: 240,
+      height: 120,
       left: "75%",
       position: "absolute",
-      top: 240,
+      top: 120,
       width: "25%",
     });
     expect(plan.moduleStyles.table).toMatchObject({
       left: "0%",
-      top: 480,
+      top: 240,
       width: "100%",
     });
-    expect(Number(plan.moduleStyles.total_documents?.height)).toBeGreaterThanOrEqual(240);
+    expect(Number(plan.moduleStyles.total_documents?.height)).toBeGreaterThanOrEqual(120);
     expect(Number(plan.moduleStyles.table?.top)).toBe(
       Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height),
     );
-    expect(plan.containerStyle).toMatchObject({ height: 1200, position: "relative", width: "100%" });
+    expect(plan.containerStyle).toMatchObject({ height: 600, position: "relative", width: "100%" });
   });
 
-  it("uses the KPI visual minimum when the configured row height is too small", () => {
-    expect(resolvePanelRendererRowHeight(panelRegressionModules(), 92)).toBe(120);
+  it("uses the compact KPI minimum only when h=1 needs it", () => {
+    const compact = { ...kpiModule("compact", "records", "compact"), layout: { h: 1, w: 4, x: 0, y: 0 } };
+    const taller = { ...kpiModule("taller", "records", "taller"), layout: { h: 2, w: 4, x: 0, y: 1 } };
+
+    const compactPlan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules: [compact, taller], rowHeight: 92 });
+    const tallerPlan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules: [taller], rowHeight: 92 });
+
+    expect(compactPlan.rowHeight).toBe(120);
+    expect(compactPlan.moduleStyles.compact).toMatchObject({ height: 120, top: 0 });
+    expect(compactPlan.moduleStyles.taller).toMatchObject({ height: 240, top: 120 });
+    expect(tallerPlan.rowHeight).toBe(92);
+    expect(tallerPlan.moduleStyles.taller).toMatchObject({ height: 184, top: 92 });
   });
 
   it("keeps six two-column KPIs in one desktop row", () => {
@@ -568,13 +579,13 @@ describe("panel module layout plan", () => {
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 50 });
 
     expect(plan.modules.map((module) => module.id)).toEqual(["left_kpi", "right_kpi", "lower_kpi", "late_table"]);
-    expect(plan.rowHeight).toBe(240);
-    expect(plan.moduleStyles.lower_kpi).toMatchObject({ left: "33.33333333333333%", top: 1200, height: 240 });
-    expect(plan.moduleStyles.late_table).toMatchObject({ top: 1680, height: 960 });
+    expect(plan.rowHeight).toBe(120);
+    expect(plan.moduleStyles.lower_kpi).toMatchObject({ left: "33.33333333333333%", top: 600, height: 120 });
+    expect(plan.moduleStyles.late_table).toMatchObject({ top: 840, height: 480 });
     expect(modules).toEqual(original);
   });
 
-  it("reserves vertical space for tablet KPI labels, values, and updated-at text", () => {
+  it("keeps tablet KPI modules compact without overlapping the following TABLE", () => {
     const modules = [
       { ...kpiModule("total-count", "records", "wide_kpi"), layout: { h: 2, w: 3, x: 0, y: 0 } },
       { ...kpiModule("open-count", "records", "second_kpi"), layout: { h: 2, w: 3, x: 3, y: 0 } },
@@ -586,9 +597,9 @@ describe("panel module layout plan", () => {
 
     const plan = buildPanelModuleLayoutPlan({ columns: 12, mode: "desktop", modules, rowHeight: 92 });
 
-    expect(plan.rowHeight).toBe(120);
-    expect(plan.moduleStyles.total_documents).toMatchObject({ height: 240, left: "75%", top: 240, width: "25%" });
-    expect(plan.moduleStyles.table).toMatchObject({ top: 480 });
+    expect(plan.rowHeight).toBe(92);
+    expect(plan.moduleStyles.total_documents).toMatchObject({ height: 184, left: "75%", top: 184, width: "25%" });
+    expect(plan.moduleStyles.table).toMatchObject({ top: 368 });
     expect(Number(plan.moduleStyles.table?.top)).toBeGreaterThanOrEqual(
       Number(plan.moduleStyles.total_documents?.top) + Number(plan.moduleStyles.total_documents?.height),
     );
@@ -605,10 +616,10 @@ describe("panel module layout plan", () => {
 
     expect(legacy.moduleStyles.kpi_a).toEqual(auto.moduleStyles.kpi_a);
     expect(manual.moduleStyles.kpi_a).toEqual({
-      height: 240,
+      height: 180,
       left: "33.33333333333333%",
       position: "absolute",
-      top: 360,
+      top: 270,
       width: "33.33333333333333%",
     });
   });
@@ -626,6 +637,17 @@ describe("panel module layout plan", () => {
     expect(plan.moduleStyles.right).toMatchObject({ flexBasis: "100%", maxWidth: "100%", width: "100%" });
     expect(plan.moduleStyles.right).not.toHaveProperty("left");
     expect(plan.containerStyle).toEqual({});
+  });
+});
+
+describe("panel KPI value sizing", () => {
+  it("keeps short values large and reduces long signed, decimal, and percentage values within bounds", () => {
+    expect(panelKpiValueFontSize("42", 220)).toBe(38);
+    expect(panelKpiValueFontSize("-1.234,56", 220)).toBe(38);
+    expect(panelKpiValueFontSize("-123.456.789.012,345%", 220)).toBe(22);
+    expect(panelKpiValueFontSize("123456789012345678901234567890", 120)).toBe(22);
+    expect(panelKpiValueWebFontSize("42")).toBe("clamp(22px, 80.65cqw, 38px)");
+    expect(panelKpiValueWebFontSize("-123.456.789.012,345%")).toContain("cqw");
   });
 });
 
@@ -670,9 +692,9 @@ describe("panel TABLE renderer structure", () => {
   });
 
   it("shows only the module title for simple and composed KPI cards", () => {
-    expect(source).toContain('<Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>');
+    expect(source).toContain('<Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>');
     expect(source).toContain("title={moduleTitle}");
-    expect(source).toContain("<View\n      accessible\n      accessibilityLabel={`${title}: ${kpi.fullValue}");
+    expect(source).toContain("<ScrollView\n      accessible\n      accessibilityLabel={`${title}: ${kpi.fullValue}");
     expect(source).toContain('accessibilityLabel={`${title}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}');
     expect(source).not.toContain("styles.kpiLabel");
     expect(source).not.toContain("{kpi.label}</Text>");
@@ -683,26 +705,28 @@ describe("panel TABLE renderer structure", () => {
     const moduleTitleStyleEnd = source.indexOf("pagination: {", moduleTitleStyleStart);
     const moduleTitleStyle = source.slice(moduleTitleStyleStart, moduleTitleStyleEnd);
 
-    expect(source).toContain('<Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>');
+    expect(source).toContain('<Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>');
     expect(moduleTitleStyle).toContain("flexShrink: 1");
     expect(moduleTitleStyle).toContain("lineHeight: 21");
   });
 
-  it("gives the KPI value an explicit line box without hiding overflow", () => {
+  it("keeps KPI values complete, centered, and bounded by an internal horizontal viewport", () => {
     const kpiValueStyleStart = source.indexOf("kpiValue: {");
     const kpiValueStyleEnd = source.indexOf("module: {", kpiValueStyleStart);
     const kpiValueStyle = source.slice(kpiValueStyleStart, kpiValueStyleEnd);
 
-    expect(source).toContain("justifyContent: \"space-between\"");
-    expect(source).toContain("lineHeight: 21");
-    expect(source).toContain("lineHeight: 17");
-    expect(kpiValueStyle).toContain("fontSize: 34");
+    expect(source).toContain("panelKpiValueFontSize(kpi.value, valueWidth)");
+    expect(source).toContain("panelKpiValueWebFontSize(kpi.value)");
+    expect(source).toContain('containerType: "inline-size"');
+    expect(source).toContain("showsHorizontalScrollIndicator");
+    expect(source).toContain("onLayout={handleValueLayout}");
+    expect(source).toContain("style={styles.kpiValueViewport}");
+    expect(source).toContain("numberOfLines={1}");
     expect(kpiValueStyle).toContain("fontWeight: \"800\"");
-    expect(kpiValueStyle).toContain("lineHeight: 42");
-    expect(kpiValueStyle).toContain("flexShrink: 0");
-    expect(kpiValueStyle).not.toContain("overflow");
-    expect(source).toContain("<Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>");
-    expect(source).toContain("<Text style={styles.kpiMeta}>Actualizado {formatPanelKpiTimestamp(kpi.calculatedAt)}</Text>");
+    expect(kpiValueStyle).toContain("textAlign: \"center\"");
+    expect(kpiValueStyle).toContain("maxWidth: \"100%\"");
+    expect(source).not.toContain("formatPanelKpiTimestamp");
+    expect(source).not.toContain("Actualizado {formatPanelKpiTimestamp");
   });
 
   it("keeps late responses and dataset errors isolated", () => {

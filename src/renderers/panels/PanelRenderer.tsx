@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  LayoutChangeEvent,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -31,6 +33,8 @@ import {
   isPanelDatasetStateCurrent,
   missingRequiredPanelFilters,
   normalizePanelFilters,
+  panelKpiValueFontSize,
+  panelKpiValueWebFontSize,
   panelDatasetQueryKey,
 } from "./panel-renderer-logic";
 
@@ -512,9 +516,9 @@ function PanelModule({
   const moduleTitle = module.title ?? module.id;
 
   return (
-    <View style={styles.moduleContent}>
-      <View style={styles.moduleHeader}>
-        <Text numberOfLines={2} style={styles.moduleTitle}>{moduleTitle}</Text>
+    <View style={[styles.moduleContent, isKpi ? styles.kpiModuleContent : null]}>
+      <View style={[styles.moduleHeader, isKpi ? styles.kpiModuleHeader : null]}>
+        <Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>
         {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
       </View>
 
@@ -601,44 +605,79 @@ function PanelKpi({
   onRetry(): void;
   title: string;
 }) {
+  const [valueWidth, setValueWidth] = useState(0);
+
+  function handleValueLayout(event: LayoutChangeEvent) {
+    const nextWidth = Math.floor(event.nativeEvent.layout.width);
+    setValueWidth((current) => current === nextWidth ? current : nextWidth);
+  }
+
   if (isLoading && !kpi) {
-    return <View style={styles.kpiCard}><ReadLoadingIndicator mode="initial" /></View>;
+    return <View style={styles.kpiCard}><ReadLoadingIndicator compact mode="initial" /></View>;
   }
 
   if (error && !kpi) {
     return (
-      <View style={styles.kpiCard}>
+      <ScrollView
+        contentContainerStyle={styles.kpiStateContent}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator
+        style={styles.kpiStateViewport}
+      >
         <Text style={styles.stateText}>{error}</Text>
         <Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}>
           <Text style={styles.actionButtonText}>Reintentar</Text>
         </Pressable>
-      </View>
+      </ScrollView>
     );
   }
 
   if (!kpi) {
-    return <PanelState message="Este KPI necesita configuración." />;
+    return <View style={styles.kpiCard}><Text style={styles.stateText}>Este KPI necesita configuración.</Text></View>;
   }
 
+  const valueFontSize = panelKpiValueFontSize(kpi.value, valueWidth);
+  const webValueFontSize = panelKpiValueWebFontSize(kpi.value);
+  const valueTextStyle = Platform.OS === "web"
+    ? ({ fontSize: webValueFontSize, lineHeight: "calc(" + webValueFontSize + " * 1.16)" } as never)
+    : { fontSize: valueFontSize, lineHeight: Math.ceil(valueFontSize * 1.16) };
+
   return (
-    <View
+    <ScrollView
       accessible
       accessibilityLabel={`${title}: ${kpi.fullValue}${offline ? ". Datos guardados" : ""}`}
-      style={styles.kpiCard}
+      contentContainerStyle={styles.kpiCard}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator
+      style={styles.kpiCardViewport}
     >
       {isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
       {error ? <View style={styles.inlineError}><Text style={styles.stateText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}><Text style={styles.actionButtonText}>Reintentar</Text></Pressable></View> : null}
-      <Text numberOfLines={1} style={styles.kpiValue}>{kpi.value}</Text>
+      <View style={[styles.kpiValueArea, Platform.OS === "web" ? ({ containerType: "inline-size" } as never) : null]}>
+        <ScrollView
+          onLayout={handleValueLayout}
+          contentContainerStyle={styles.kpiValueContent}
+          horizontal
+          nestedScrollEnabled
+          showsHorizontalScrollIndicator
+          style={styles.kpiValueViewport}
+        >
+          <Text
+            numberOfLines={1}
+            style={[styles.kpiValue, valueTextStyle]}
+          >
+            {kpi.value}
+          </Text>
+        </ScrollView>
+      </View>
       {kpi.configurationIssue ? (
         <Text style={styles.kpiMeta}>{kpi.configurationIssue}</Text>
       ) : kpi.missing ? (
         <Text style={styles.kpiMeta}>Métrica no disponible.</Text>
       ) : offline ? (
         <Text style={styles.kpiMeta}>Datos guardados.</Text>
-      ) : kpi.calculatedAt ? (
-        <Text style={styles.kpiMeta}>Actualizado {formatPanelKpiTimestamp(kpi.calculatedAt)}</Text>
       ) : null}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -716,22 +755,6 @@ function configuredPageSize(appView: PanelAppView, panel: PanelResponse | null, 
   return configured && configured > 0 ? configured : defaultPageSizeForDataset(panel, datasetId);
 }
 
-function formatPanelKpiTimestamp(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  return date.toLocaleString("es-CL", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-}
-
 const styles = StyleSheet.create({
   actionButton: {
     alignItems: "center",
@@ -787,26 +810,64 @@ const styles = StyleSheet.create({
   },
   inlineError: { alignItems: "center", gap: 8 },
   kpiCard: {
-    borderColor: "#e5e7eb",
-    borderRadius: 8,
-    borderWidth: 1,
+    alignItems: "stretch",
+    flexGrow: 1,
+    gap: 4,
+    justifyContent: "center",
+    minHeight: 0,
+    minWidth: 0,
+  },
+  kpiCardViewport: {
     flex: 1,
-    gap: 8,
-    justifyContent: "space-between",
-    minHeight: 120,
-    padding: 16,
+    minHeight: 0,
   },
   kpiMeta: {
     color: "#6b7280",
     fontSize: 12,
     lineHeight: 17,
+    textAlign: "center",
+  },
+  kpiModuleContent: {
+    padding: 6,
+  },
+  kpiModuleHeader: {
+    marginBottom: 4,
+  },
+  kpiModuleTitle: {
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  kpiStateContent: {
+    alignItems: "center",
+    flexGrow: 1,
+    gap: 6,
+    justifyContent: "center",
+  },
+  kpiStateViewport: {
+    flex: 1,
+    minHeight: 0,
+  },
+  kpiValueArea: {
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 0,
+    minWidth: 0,
+  },
+  kpiValueContent: {
+    alignItems: "center",
+    flexGrow: 1,
+    justifyContent: "center",
+    minWidth: "100%",
   },
   kpiValue: {
     color: "#111827",
     flexShrink: 0,
-    fontSize: 34,
     fontWeight: "800",
-    lineHeight: 42,
+    textAlign: "center",
+  },
+  kpiValueViewport: {
+    alignSelf: "stretch",
+    maxWidth: "100%",
   },
   module: {
     padding: 6,

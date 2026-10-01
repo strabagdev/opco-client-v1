@@ -22,6 +22,13 @@ describe("read loading indicator integration", () => {
     expect(indicator).not.toContain("accessibilityValue");
   });
 
+  it("supports a compact initial state for constrained module surfaces", () => {
+    expect(indicator).toContain("compact?: boolean");
+    expect(indicator).toContain("mode === \"refresh\" ? styles.refreshContainer : compact");
+    expect(indicator).toContain("compactContainer");
+    expect(indicator).toContain("minHeight: 28");
+  });
+
   it("covers Home, route bootstrap, RECORDS, workflows, PANEL, and REPORT", () => {
     const files = [
       "app/(app)/index.tsx",

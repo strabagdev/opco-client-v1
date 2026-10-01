@@ -10,12 +10,13 @@ import {
 } from "react-native";
 
 type ReadLoadingIndicatorProps = {
+  compact?: boolean;
   mode: "initial" | "refresh";
 };
 
 const SEGMENT_RATIO = 0.32;
 
-export function ReadLoadingIndicator({ mode }: ReadLoadingIndicatorProps) {
+export function ReadLoadingIndicator({ compact = false, mode }: ReadLoadingIndicatorProps) {
   const [progress] = useState(() => new Animated.Value(0));
   const [reduceMotion, setReduceMotion] = useState(false);
   const [trackWidth, setTrackWidth] = useState(0);
@@ -80,7 +81,7 @@ export function ReadLoadingIndicator({ mode }: ReadLoadingIndicatorProps) {
       accessible
       style={[
         styles.container,
-        mode === "refresh" ? styles.refreshContainer : styles.initialContainer,
+        mode === "refresh" ? styles.refreshContainer : compact ? styles.compactContainer : styles.initialContainer,
       ]}
     >
       <View onLayout={handleTrackLayout} style={styles.track}>
@@ -104,6 +105,9 @@ const styles = StyleSheet.create({
   container: {
     alignSelf: "stretch",
     gap: 6,
+  },
+  compactContainer: {
+    minHeight: 28,
   },
   initialContainer: {
     justifyContent: "center",

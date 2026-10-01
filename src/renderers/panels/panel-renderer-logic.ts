@@ -47,9 +47,11 @@ export type PanelKpiModel = {
 type PanelLayoutStyleValue = number | string;
 
 const PANEL_MODULE_MIN_HEIGHT = 180;
-const PANEL_KPI_MODULE_MIN_HEIGHT = 240;
+const PANEL_KPI_MODULE_MIN_HEIGHT = 120;
 const PANEL_TABLE_MODULE_MIN_HEIGHT = 300;
 const PANEL_TABLE_DEFAULT_LAYOUT_HEIGHT = 6;
+const PANEL_KPI_MAX_FONT_SIZE = 38;
+const PANEL_KPI_MIN_FONT_SIZE = 22;
 
 export type PanelModuleLayoutMode = "desktop" | "mobile";
 
@@ -169,6 +171,31 @@ export function panelTableColumnMinWidth(fieldType: PanelField["type"]) {
   }
 
   return 144;
+}
+
+function panelKpiValueGlyphUnits(value: string) {
+  return Array.from(value).reduce((total, character) => {
+    if (character === " " || character === "." || character === "," || character === ":") return total + 0.32;
+    if (character === "-" || character === "+") return total + 0.48;
+    if (character === "%") return total + 0.82;
+    return total + 0.62;
+  }, 0);
+}
+
+export function panelKpiValueFontSize(value: string, availableWidth: number) {
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
+    return PANEL_KPI_MAX_FONT_SIZE;
+  }
+
+  const fittedSize = Math.floor((availableWidth - 8) / Math.max(1, panelKpiValueGlyphUnits(value)));
+
+  return Math.max(PANEL_KPI_MIN_FONT_SIZE, Math.min(PANEL_KPI_MAX_FONT_SIZE, fittedSize));
+}
+
+export function panelKpiValueWebFontSize(value: string) {
+  const containerRatio = (100 / Math.max(1, panelKpiValueGlyphUnits(value))).toFixed(2);
+
+  return "clamp(" + PANEL_KPI_MIN_FONT_SIZE + "px, " + containerRatio + "cqw, " + PANEL_KPI_MAX_FONT_SIZE + "px)";
 }
 
 export function displayPanelValue(
