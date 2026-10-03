@@ -93,7 +93,7 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & {
   } | null>;
   upsertEntityDefinition(contractId: string, entityTypeId: string, definition: EntityDefinition, syncedAt: string): Promise<void>;
 } & Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
-  Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "upsertStateUpdateSnapshot"> &
+  Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "markStateUpdateSnapshotCoverage" | "upsertStateUpdateSnapshot"> &
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export function prewarmAssignedAppViewsOnce(params: {
@@ -406,9 +406,10 @@ async function prewarmOneAppView({
       isStateUpdateCompatibleWorkflow(appView.config.workflowKey) &&
       appView.config.workflowKey === "state-update"
     ) {
+      const requestedDate = appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined;
       const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
         const workflow = await api.getStateUpdateWorkflow(token, contractId, appView.id, {
-          date: appView.config.dateFieldId ? formatLocalDateInput(new Date()) : undefined,
+          date: requestedDate,
         });
         const definition = await loadEntityDefinition(workflow.sourceEntityType.id);
 
@@ -430,10 +431,33 @@ async function prewarmOneAppView({
         ...telemetry.sourceRecordsFetch!,
         sourceRecordsCount: sourceRecords.pagination.total,
       };
-      telemetry.snapshot = {
-        ...telemetry.sourceRecordsFetch,
-        stage: "snapshot",
+      const snapshotPagination = response.latestPagination ?? {
+        hasMore: false,
+        page: 1,
+        pageSize: Math.max(1, response.latest?.length ?? 0),
+        total: response.latest?.length ?? 0,
       };
+      await measurePrewarmStage(telemetry, "snapshot", async () => {
+        await store.upsertStateUpdateSnapshot({
+          appViewId: appView.id,
+          complete: snapshotPagination.page === 1 && !snapshotPagination.hasMore,
+          contractId,
+          date: response.date ?? requestedDate,
+          items: response.items,
+          latest: response.latest ?? [],
+          ownerKey,
+          targetEntityTypeId: response.targetEntityType.id,
+        });
+        await store.markStateUpdateSnapshotCoverage({
+          appViewId: appView.id,
+          contractId,
+          date: response.date ?? requestedDate,
+          ownerKey,
+          pagination: snapshotPagination,
+          refreshedAt: lastPreparedAt,
+          targetEntityTypeId: response.targetEntityType.id,
+        });
+      });
 
       await measurePrewarmStage(telemetry, "sqliteWrite", () =>
         store.upsertAppViewDefinition(baseDefinitionInput({
@@ -966,9 +990,11 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     historyMode: response.historyMode,
     kind: "state-update",
     sourceEntityTypeId: response.sourceEntityType.id,
+    sourceEntityTypeName: response.sourceEntityType.name,
     stateFields: response.stateFields ?? [],
     subjectFieldId: response.subjectFieldId,
     targetEntityTypeId: response.targetEntityType.id,
+    targetEntityTypeName: response.targetEntityType.name,
     uniqueness: response.uniqueness,
   };
 }

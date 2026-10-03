@@ -13,7 +13,14 @@ import { CachedEntityRecord } from "./offline-records";
 import { AppView, AttendanceResponse, EntityDefinition, EntityRecord, OpcoNetworkError, StateUpdateResponse } from "./opco-api";
 import { emptySyncTelemetry, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope } from "./sync-telemetry";
 import { appViewsFixture, entityDefinitionFixture } from "../test/fixtures";
-import { AttendanceDaySnapshotHydration, AttendanceDaySnapshotScope, UpsertStateUpdateSnapshotInput } from "./state-update-offline";
+import {
+  AttendanceDaySnapshotHydration,
+  AttendanceDaySnapshotScope,
+  StateUpdateSnapshotCoverage,
+  StateUpdateSnapshotCoverageInput,
+  StateUpdateScope,
+  UpsertStateUpdateSnapshotInput,
+} from "./state-update-offline";
 import { currentMonthDateKeys } from "./attendance-snapshot-cache";
 
 describe("app view prewarm", () => {
@@ -764,6 +771,141 @@ describe("app view prewarm", () => {
     });
   });
 
+  it("persists the initial state-update snapshot before completing prewarm", async () => {
+    const stateUpdateView: AppView = {
+      config: {
+        historyMode: "append",
+        sourceEntityTypeId: "procedures",
+        stateFields: [{ fieldId: "field_status", required: true }],
+        subjectFieldId: "field_procedure",
+        targetEntityTypeId: "versions",
+        uniqueness: "subject",
+        workflowKey: "state-update",
+      },
+      icon: "workflow",
+      id: "view_state_update",
+      name: "Versionado Procedimientos",
+      slug: "versionado-procedimientos",
+      sortOrder: 5,
+      type: "WORKFLOW",
+    };
+    const api = {
+      getAttendanceWorkflow: vi.fn(),
+      getStateUpdateWorkflow: vi.fn(async () => ({
+        appView: {
+          id: stateUpdateView.id,
+          name: stateUpdateView.name,
+          slug: stateUpdateView.slug,
+        },
+        extraFields: [],
+        historyMode: "append",
+        items: [],
+        latest: [{
+          recordId: "version_1",
+          stateValues: [],
+          subject: { displayName: "Procedimiento de prueba", id: "procedure_1" },
+          updatedAt: "2026-10-02T12:00:00.000Z",
+        }],
+        sourceEntityType: { id: "procedures", name: "Procedimientos" },
+        stateFields: [],
+        subjectFieldId: "field_procedure",
+        summary: { totalRegistered: 1 },
+        targetEntityType: { id: "versions", name: "Versionado" },
+        uniqueness: "subject",
+      }) as StateUpdateResponse),
+      getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(async (_token, _contractId, _entityTypeId, query?: { page?: number; pageSize?: number }) => ({
+        pagination: { page: query?.page ?? 1, pageSize: query?.pageSize ?? 100, total: 1, totalPages: 1 },
+        records: [{
+          displayName: "Procedimiento de prueba",
+          id: "procedure_1",
+          updatedAt: "2026-10-02T11:00:00.000Z",
+          values: {},
+        }],
+      })),
+    };
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [stateUpdateView],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    expect(store.offlinePreparationDiagnostics).toMatchObject({
+      appViews: { completed: 1, failed: 0, total: 1 },
+      status: "completed",
+    });
+    expect(store.snapshots).toEqual([expect.objectContaining({
+      appViewId: "view_state_update",
+      complete: true,
+      contractId: "contract_1",
+      latest: [expect.objectContaining({ recordId: "version_1" })],
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "versions",
+    })]);
+    await expect(store.getStateUpdateSnapshotCoverage({
+      appViewId: "view_state_update",
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "versions",
+    })).resolves.toMatchObject({
+      status: "complete",
+      total: 1,
+    });
+    await expect(store.getAppViewDefinition("org_1:user_1", "contract_1", "view_state_update")).resolves.toMatchObject({
+      definition: {
+        sourceEntityTypeName: "Procedimientos",
+        targetEntityTypeName: "Versionado",
+      },
+    });
+  });
+
+  it("marks paginated state-update preparation partial and does not complete when snapshot persistence fails", async () => {
+    const stateUpdateView = stateUpdateAppViewFixture();
+    const api = stateUpdatePrewarmApi(stateUpdateView, {
+      hasMore: true,
+      page: 1,
+      pageSize: 20,
+      total: 21,
+    });
+
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [stateUpdateView],
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      store,
+      token: "token_1",
+    });
+
+    await expect(store.getStateUpdateSnapshotCoverage({
+      appViewId: stateUpdateView.id,
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "versions",
+    })).resolves.toMatchObject({ status: "partial" });
+
+    const failingStore = new MemoryPrewarmStore();
+    failingStore.failSnapshotUpsert = true;
+    await prewarmAssignedAppViewsOnce({
+      api,
+      appViews: [stateUpdateView],
+      contractId: "contract_2",
+      ownerKey: "org_1:user_1",
+      store: failingStore,
+      token: "token_1",
+    });
+
+    expect(failingStore.offlinePreparationDiagnostics).toMatchObject({
+      appViews: { completed: 1, failed: 1, total: 1 },
+      status: "failed",
+    });
+    expect(failingStore.coverage).toEqual(new Map());
+  });
+
   it("isolates definitions by owner and contract and reconciles revoked AppViews", async () => {
     const api = {
       getAttendanceWorkflow: vi.fn(async () => ({
@@ -819,6 +961,8 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
   records = new Map<string, CachedEntityRecord[]>();
   snapshots: UpsertStateUpdateSnapshotInput[] = [];
   attendanceHydration = new Map<string, AttendanceDaySnapshotHydration>();
+  coverage = new Map<string, StateUpdateSnapshotCoverage>();
+  failSnapshotUpsert = false;
   telemetry = new Map<string, SyncTelemetry>();
 
   async getOfflinePreparationDiagnostics(_ownerKey: string) {
@@ -935,9 +1079,26 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
   }
 
   async upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput) {
+    if (this.failSnapshotUpsert) {
+      throw new Error("snapshot write unavailable");
+    }
     this.snapshots.push(input);
 
     return { staleSyncedRemoved: input.complete ? 1 : 0 };
+  }
+
+  async getStateUpdateSnapshotCoverage(input: StateUpdateScope) {
+    return this.coverage.get(stateUpdateCoverageKey(input)) ?? null;
+  }
+
+  async markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverageInput) {
+    this.coverage.set(stateUpdateCoverageKey(input), {
+      downloadedThroughPage: input.pagination.page,
+      lastSuccessfulRefreshAt: input.refreshedAt ?? new Date().toISOString(),
+      pageSize: input.pagination.pageSize,
+      status: input.pagination.page === 1 && !input.pagination.hasMore ? "complete" : "partial",
+      total: input.pagination.total,
+    });
   }
 
   async getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope) {
@@ -987,6 +1148,58 @@ function telemetryKey(scope: SyncTelemetryScope) {
 
 function attendanceHydrationKey(scope: AttendanceDaySnapshotScope) {
   return `${scope.ownerKey}:${scope.contractId}:${scope.appViewId}:${scope.targetEntityTypeId}:${scope.date}`;
+}
+
+function stateUpdateCoverageKey(scope: StateUpdateScope) {
+  return `${scope.ownerKey}:${scope.contractId}:${scope.appViewId}:${scope.targetEntityTypeId}:${scope.date ?? "all"}`;
+}
+
+function stateUpdateAppViewFixture(): AppView {
+  return {
+    config: {
+      historyMode: "append",
+      sourceEntityTypeId: "procedures",
+      stateFields: [],
+      subjectFieldId: "field_procedure",
+      targetEntityTypeId: "versions",
+      uniqueness: "subject",
+      workflowKey: "state-update",
+    },
+    icon: "workflow",
+    id: "view_state_update_partial",
+    name: "Versionado Procedimientos",
+    slug: "versionado-procedimientos",
+    sortOrder: 5,
+    type: "WORKFLOW",
+  };
+}
+
+function stateUpdatePrewarmApi(
+  appView: AppView,
+  latestPagination: NonNullable<StateUpdateResponse["latestPagination"]>,
+) {
+  return {
+    getAttendanceWorkflow: vi.fn(),
+    getStateUpdateWorkflow: vi.fn(async () => ({
+      appView: { id: appView.id, name: appView.name, slug: appView.slug },
+      extraFields: [],
+      historyMode: "append" as const,
+      items: [],
+      latest: [],
+      latestPagination,
+      sourceEntityType: { id: "procedures", name: "Procedimientos" },
+      stateFields: [],
+      subjectFieldId: "field_procedure",
+      summary: { totalRegistered: latestPagination.total },
+      targetEntityType: { id: "versions", name: "Versionado" },
+      uniqueness: "subject" as const,
+    })),
+    getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+    getEntityRecords: vi.fn(async (_token, _contractId, _entityTypeId, query?: { page?: number; pageSize?: number }) => ({
+      pagination: { page: query?.page ?? 1, pageSize: query?.pageSize ?? 100, total: 0, totalPages: 1 },
+      records: [],
+    })),
+  };
 }
 
 function attendanceWorkflowResponse(date: string): AttendanceResponse {

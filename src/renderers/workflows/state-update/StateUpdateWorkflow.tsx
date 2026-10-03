@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -47,20 +47,27 @@ import {
   formatLocalDateInput,
   formatStateValueLabel,
   hasSuccessfulStateUpdateResult,
+  isStateUpdateVisualRequestCurrent,
   mergeStateUpdateLatestUpdates,
+  mergeStateUpdateResponseWithLocalConflicts,
   normalizeStateUpdateSearch,
+  resolveStateUpdateOfflineHistoryState,
   shouldSearchStateUpdateSubjects,
   STATE_UPDATE_SEARCH_DEBOUNCE_MS,
   StateUpdateFormValues,
   stateFieldType,
   stateUpdateLatestMatchesSearch,
+  stateUpdateConflictLatestItem,
+  stateUpdateResolutionFeedback,
+  stateUpdateOfflineHistoryMessage,
+  StateUpdateOfflineHistoryState,
 } from "@/renderers/workflows/state-update/state-update-workflow-logic";
 import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 import { shouldHandleStateUpdateRefresh } from "@/state/state-update-refresh";
-import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
+import { normalizeStateUpdateLogicalDate, type CachedStateUpdateRecord, type StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
 import { reportWriteFeedback } from "@/lib/write-feedback";
 import {
   createStateUpdateVisibleErrorDiagnostics,
@@ -76,6 +83,7 @@ import {
 } from "./state-update-operation-feedback";
 
 type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
+  durableRecord?: CachedStateUpdateRecord;
   subjectName: string;
 };
 
@@ -95,6 +103,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     selectedContractId,
     stateUpdateReconnectDiagnostics,
     stateUpdateReconnectRefreshKey,
+    syncPendingRecords,
     token,
   } = useSession();
   const [date, setDate] = useState(formatLocalDateInput(new Date()));
@@ -107,8 +116,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [extraValues, setExtraValues] = useState<RecordFormValues>({});
   const [extraErrors, setExtraErrors] = useState<RecordFormErrors>({});
   const [conflict, setConflict] = useState<ConflictState | null>(null);
+  const [durableConflicts, setDurableConflicts] = useState<CachedStateUpdateRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [resolutionFeedback, setResolutionFeedback] = useState<(ReturnType<typeof stateUpdateResolutionFeedback> & { scope: string }) | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
     useState<StateUpdateVisibleErrorDiagnostics | null>(null);
@@ -116,10 +127,20 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [offlineHistoryState, setOfflineHistoryState] = useState<StateUpdateOfflineHistoryState>(null);
   const requestSequenceRef = useRef(0);
+  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date]);
+  const resolutionScopeRef = useRef(resolutionScope);
+  useLayoutEffect(() => { resolutionScopeRef.current = resolutionScope; }, [resolutionScope]);
+  const resolutionInFlightRef = useRef(false);
+  const resolutionMountedRef = useRef(false);
+  useLayoutEffect(() => {
+    resolutionMountedRef.current = true;
+    return () => { resolutionMountedRef.current = false; };
+  }, []);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
-  const visibleResponse = response && (!response.date || response.date === date) ? response : null;
+  const visibleResponse = response && (!response.date || normalizeStateUpdateLogicalDate(response.date) === date) ? response : null;
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const currentStateUpdateSyncRunId =
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
@@ -211,7 +232,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
   }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
 
-  const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; search?: string; subjectRecordId?: string } = {}) => {
+  const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; requestId?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
       return false;
@@ -244,7 +265,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       targetEntityTypeId: definition.targetEntityTypeId,
     };
     const latestPageToLoad = query.page ?? 1;
-    const [summary, latestResult, localConflicts] = await Promise.all([
+    const [summary, latestResult, localConflicts, storedCoverage] = await Promise.all([
       definitionCache.getStateUpdateSummary(scope),
       definitionCache.listStateUpdateLatest({
         ...scope,
@@ -253,7 +274,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         search: query.search,
       }),
       definitionCache.listStateUpdateConflicts(scope),
+      definitionCache.getStateUpdateSnapshotCoverage(scope),
     ]);
+    const effectiveCoverage = resolveStateUpdateOfflineHistoryState({
+      cachedRecordCount: Math.max(latestResult.items.length, summary.totalRegistered),
+      storedCoverage: storedCoverage?.status,
+    });
     let nextItems: StateUpdateItem[] = [];
 
     if (sourceHydrated && query.search) {
@@ -271,6 +297,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           sourceEntityTypeId: definition.sourceEntityTypeId,
         })
         .then((results) => results.filter((item) => item.subject.id === query.subjectRecordId));
+    }
+
+    if (!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, query.requestId)) {
+      return false;
     }
 
     const nextResponse: StateUpdateResponse = {
@@ -299,7 +329,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       latestPagination: latestResult.pagination,
       sourceEntityType: {
         id: definition.sourceEntityTypeId,
-        name: definition.sourceEntityTypeId,
+        name: definition.sourceEntityTypeName ?? "Registros",
       },
       stateFields: definition.stateFields,
       subjectFieldId: definition.subjectFieldId,
@@ -312,18 +342,22 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       },
       targetEntityType: {
         id: definition.targetEntityTypeId,
-        name: definition.targetEntityTypeId,
+        name: definition.targetEntityTypeName ?? "Actualizaciones",
       },
       uniqueness: definition.uniqueness,
     };
+    const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query);
+    const nextVisibleResponse = mergeStateUpdateResponseWithLocalConflicts(nextResponse, visibleLocalConflicts);
     setResponse((current) => query.appendLatest && current
       ? {
-          ...nextResponse,
-          latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextResponse.latest ?? []),
+          ...nextVisibleResponse,
+          latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextVisibleResponse.latest ?? []),
         }
-      : nextResponse);
+      : nextVisibleResponse);
+    setDurableConflicts(visibleLocalConflicts);
     setItems(nextItems);
     setLatestPage(latestPageToLoad);
+    setOfflineHistoryState(effectiveCoverage);
 
     const hasCachedWorkflowData = sourceHydrated || (nextResponse.latest ?? []).length > 0 || summary.totalRegistered > 0;
 
@@ -332,8 +366,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         ? "No fue posible cargar la información. Reintentar"
         : "Abre este workflow con conexion para preparar sus datos sin conexion.");
       return false;
-    } else if (localConflicts.length > 0) {
-      setError(`${localConflicts.length} conflictos por resolver.`);
+    } else if (visibleLocalConflicts.length > 0) {
+      setError(`${visibleLocalConflicts.length} conflictos por resolver.`);
     }
 
     return true;
@@ -369,7 +403,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     try {
       if (!isOnline) {
-        await loadOfflineWorkflow(query);
+        await loadOfflineWorkflow({ ...query, requestId });
         return;
       }
 
@@ -381,33 +415,69 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         subjectRecordId: query.subjectRecordId,
       });
 
-      if (requestId !== requestSequenceRef.current) {
+      if (!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
 
+      const localConflicts = ownerKey
+        ? await definitionCache.listStateUpdateConflicts({
+            appViewId: appView.id,
+            contractId: selectedContractId,
+            date: normalizeStateUpdateLogicalDate(nextResponse.date),
+            ownerKey,
+            targetEntityTypeId: nextResponse.targetEntityType.id,
+          })
+        : [];
+
+      if (!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
+        return;
+      }
+
+      const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query);
+      const nextVisibleResponse = mergeStateUpdateResponseWithLocalConflicts(nextResponse, visibleLocalConflicts);
+
       setResponse((current) => query.appendLatest && current
         ? {
-            ...nextResponse,
-            latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextResponse.latest ?? []),
+            ...nextVisibleResponse,
+            latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextVisibleResponse.latest ?? []),
           }
-        : nextResponse);
-      setItems(nextResponse.items);
+        : nextVisibleResponse);
+      setDurableConflicts(visibleLocalConflicts);
+      setItems(nextVisibleResponse.items);
       setLatestPage(latestPageToLoad);
+      setOfflineHistoryState(null);
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
+        const pagination = nextResponse.latestPagination ?? {
+          hasMore: false,
+          page: latestPageToLoad,
+          pageSize: Math.max(1, nextResponse.latest?.length ?? 0),
+          total: nextResponse.latest?.length ?? 0,
+        };
         await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
+          complete: !query.search && !query.subjectRecordId && pagination.page === 1 && !pagination.hasMore,
           contractId: selectedContractId,
-          date: nextResponse.date,
+          date: normalizeStateUpdateLogicalDate(nextResponse.date),
           items: nextResponse.items,
           latest: nextResponse.latest ?? [],
           ownerKey,
           targetEntityTypeId: nextResponse.targetEntityType.id,
         });
+        if (!query.search && !query.subjectRecordId) {
+          await definitionCache.markStateUpdateSnapshotCoverage({
+            appViewId: appView.id,
+            contractId: selectedContractId,
+            date: normalizeStateUpdateLogicalDate(nextResponse.date),
+            ownerKey,
+            pagination,
+            targetEntityTypeId: nextResponse.targetEntityType.id,
+          });
+        }
       }
     } catch (nextError) {
-      if (requestId === requestSequenceRef.current) {
+      if (isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         recordVisibleError({
           error: nextError,
           operation,
@@ -415,7 +485,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         });
 
         if (isOnline && nextError instanceof OpcoNetworkError && isStateUpdateReadOperation(operation)) {
-          const loadedFromCache = await loadOfflineWorkflow({ ...query, fallbackReason: "network-load" });
+          const loadedFromCache = await loadOfflineWorkflow({ ...query, fallbackReason: "network-load", requestId });
 
           if (loadedFromCache) {
             setError(null);
@@ -431,7 +501,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         }
       }
     } finally {
-      if (requestId === requestSequenceRef.current) {
+      if (isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         setIsLoading(false);
         setIsSearching(false);
         setIsLoadingMore(false);
@@ -501,6 +571,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setError(null);
     setRefreshError(null);
     setSuccessMessage(null);
+    setResolutionFeedback(null);
     setStateValues(initialStateValues(response, item));
     setExtraValues(extraDefinition ? buildInitialFormValues(extraDefinition, item.current?.extraValues) : {});
     setExtraErrors({});
@@ -553,6 +624,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setError(null);
     setRefreshError(null);
     setSuccessMessage(null);
+    setResolutionFeedback(null);
 
     try {
       if (!isOnline) {
@@ -698,7 +770,134 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
+    if (conflict.durableRecord) {
+      await handleUseLocalConflictChange(conflict.durableRecord);
+      return;
+    }
+
     await saveSelected(true, conflict.existing.updatedAt);
+  }
+
+  function openDurableConflict(record: CachedStateUpdateRecord) {
+    setConflict(stateUpdateDurableConflictState(record));
+    setError(null);
+    setSuccessMessage(null);
+    setResolutionFeedback(null);
+  }
+
+  async function handleUseLocalConflictChange(record: CachedStateUpdateRecord) {
+    if (!ownerKey || !selectedContractId || !response || isSaving || resolutionInFlightRef.current) {
+      return;
+    }
+
+    resolutionInFlightRef.current = true;
+    const selectedScope = resolutionScope;
+    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === selectedScope;
+    requestSequenceRef.current += 1;
+    setIsSaving(true);
+    setError(null);
+    setRefreshError(null);
+    setSuccessMessage(null);
+    setResolutionFeedback(null);
+
+    try {
+      const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
+        conflictIdentity: record.conflictIdentity ?? "",
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date: hasDate ? date : undefined,
+        expectedUpdatedAt: record.conflictRemoteUpdatedAt,
+        extraValues: record.extraValues,
+        historyMode: response.historyMode,
+        localRecordId: record.localRecordId,
+        overwrite: true,
+        ownerKey,
+        stateFields: response.stateFields,
+        stateValues: record.stateValues,
+        subjectDisplayName: record.subject.displayName,
+        subjectRecordId: record.subject.id,
+        targetEntityTypeId: response.targetEntityType.id,
+        uniqueness: response.uniqueness,
+      });
+
+      let syncError: unknown;
+      if (isOnline) {
+        try { await syncPendingRecords(); } catch (error) { syncError = error; }
+      }
+      if (!isCurrent()) return;
+      await loadWorkflow({ operation: "refresh" });
+      if (!isCurrent()) return;
+      await refreshRecordsSyncSummary();
+      if (!isCurrent()) return;
+      const outcome = await definitionCache.getStateUpdateResolutionOutcome({
+        appViewId: appView.id, contractId: selectedContractId, ownerKey,
+        targetEntityTypeId: response.targetEntityType.id, date: hasDate ? date : undefined,
+        localRecordId: saved.localRecordId, clientRequestId: saved.clientRequestId!,
+      });
+      if (!isCurrent()) return;
+      setConflict(null);
+      setResolutionFeedback({ ...stateUpdateResolutionFeedback(outcome), scope: selectedScope });
+      if (outcome === "confirmed" || outcome === "pending") {
+        setSuccessMessage(outcome === "confirmed" ? "Cambio confirmado por Opco." : "Cambio guardado; envio pendiente.");
+        reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId,
+          kind: outcome === "confirmed" ? "server-confirmed" : "local-saved", ownerKey });
+      } else {
+        setError(outcome === "conflict" ? "Opco devolvio un nuevo conflicto. Revisa ambas versiones." :
+          outcome === "failed" ? "El envio del cambio fallo. La intencion se conserva." :
+            "La intencion seleccionada cambio durante la resolucion. Revisa el estado actual.");
+      }
+      if (syncError) recordVisibleError({ error: syncError, operation: "sync" });
+    } catch (nextError) {
+      if (!isCurrent()) return;
+      setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
+      recordVisibleError({ error: nextError, operation: "sync" });
+    } finally {
+      resolutionInFlightRef.current = false;
+      setIsSaving(false);
+    }
+  }
+
+  async function handleUseRemoteConflictChange(record: CachedStateUpdateRecord) {
+    if (!ownerKey || !selectedContractId || !response || isSaving || resolutionInFlightRef.current) {
+      return;
+    }
+
+    resolutionInFlightRef.current = true;
+    const selectedScope = resolutionScope;
+    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === selectedScope;
+    requestSequenceRef.current += 1;
+    setIsSaving(true);
+    setError(null);
+    setRefreshError(null);
+    setSuccessMessage(null);
+    setResolutionFeedback(null);
+
+    try {
+      await definitionCache.discardStateUpdateLocalChange({
+        localRecordId: record.localRecordId,
+        conflictIdentity: record.conflictIdentity ?? "",
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        date: hasDate ? date : undefined,
+        ownerKey,
+        subjectRecordId: record.subject.id,
+        targetEntityTypeId: response.targetEntityType.id,
+      });
+      if (!isCurrent()) return;
+      await refreshRecordsSyncSummary();
+      if (!isCurrent()) return;
+      setConflict(null);
+      setResolutionFeedback({ ...stateUpdateResolutionFeedback("local"), scope: selectedScope });
+      setSuccessMessage("Resolucion local guardada con el estado de Opco.");
+      await loadWorkflow({ operation: "refresh" });
+    } catch (nextError) {
+      if (!isCurrent()) return;
+      setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
+      recordVisibleError({ error: nextError, operation: "sync" });
+    } finally {
+      resolutionInFlightRef.current = false;
+      setIsSaving(false);
+    }
   }
 
   function loadMoreLatest() {
@@ -736,6 +935,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       </View>
 
+      {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
+        <Text style={resolutionFeedback.outcome === "conflict" || resolutionFeedback.outcome === "failed" || resolutionFeedback.outcome === "superseded"
+          ? styles.error : resolutionFeedback.outcome === "pending" ? styles.offline : styles.success}>
+          {resolutionFeedback.message}
+        </Text>
+      ) : null}
       {operationFeedback.message && shouldRenderStateUpdateInlineFeedback(operationFeedback.phase) ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}
@@ -753,6 +958,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </Text>
       ) : null}
 
+      {durableConflicts.length > 0 && visibleResponse ? (
+        <DurableConflictList
+          conflicts={durableConflicts}
+          extraFields={visibleResponse.extraFields}
+          fields={visibleResponse.stateFields}
+          isSaving={isSaving}
+          onUseLocal={openDurableConflict}
+          onUseRemote={(record) => void handleUseRemoteConflictChange(record)}
+        />
+      ) : null}
+
       <View style={styles.searchBlock}>
         <TextInput
           autoCapitalize="words"
@@ -764,6 +980,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             setSelectedItem(null);
             setConflict(null);
             setSuccessMessage(null);
+            setResolutionFeedback(null);
           }}
           placeholder="Buscar"
           style={styles.searchInput}
@@ -847,6 +1064,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           onLoadMore={loadMoreLatest}
           pagination={latestPagination}
           response={visibleResponse}
+          state={offlineHistoryState}
+          readFailed={Boolean(visibleError && !visibleResponse)}
         />
       ) : null}
 
@@ -860,6 +1079,38 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       />
     </ScrollView>
   );
+}
+
+function filterStateUpdateConflictsForQuery(
+  conflicts: CachedStateUpdateRecord[],
+  query: { search?: string; subjectRecordId?: string },
+) {
+  return conflicts.filter((record) => {
+    if (query.subjectRecordId && record.subject.id !== query.subjectRecordId) {
+      return false;
+    }
+
+    return !query.search || stateUpdateLatestMatchesSearch(stateUpdateConflictLatestItem(record), query.search);
+  });
+}
+
+function stateUpdateDurableConflictState(record: CachedStateUpdateRecord): ConflictState {
+  return {
+    durableRecord: record,
+    existing: {
+      extraValues: record.conflictRemoteExtraValues,
+      recordId: record.localRecordId,
+      stateValues: record.conflictRemoteStateValues ?? [],
+      updatedAt: record.conflictRemoteUpdatedAt ?? "",
+    },
+    requested: {
+      extraValues: record.extraValues,
+      stateValues: record.stateValues,
+    },
+    result: "CONFLICT",
+    subjectName: record.subject.displayName,
+    subjectRecordId: record.subject.id,
+  };
 }
 
 function initialStateValues(response: StateUpdateResponse | null, item: StateUpdateItem) {
@@ -911,17 +1162,28 @@ function LatestList({
   onLoadMore,
   pagination,
   response,
+  state,
+  readFailed,
 }: {
   isLoadingMore: boolean;
   latest: StateUpdateLatestItem[];
   onLoadMore(): void;
   pagination: StateUpdateResponse["latestPagination"] | undefined;
   response: StateUpdateResponse | null;
+  state: StateUpdateOfflineHistoryState;
+  readFailed: boolean;
 }) {
+  const statusMessage = stateUpdateOfflineHistoryMessage({
+    coverage: state,
+    hasItems: latest.length > 0,
+    readFailed,
+  });
+
   return (
     <View style={styles.latestBlock}>
       <Text style={styles.sectionTitle}>Últimas actualizaciones</Text>
-      {latest.length === 0 ? <Text style={styles.empty}>Sin actualizaciones</Text> : null}
+      {statusMessage ? <Text style={state === "partial" || state === "absent" ? styles.offline : styles.empty}>{statusMessage}</Text> : null}
+      {state === null && latest.length === 0 && !readFailed ? <Text style={styles.empty}>Sin actualizaciones</Text> : null}
       {latest.map((item) => (
         <View key={item.recordId} style={styles.latestRow}>
           <View style={styles.subjectText}>
@@ -1058,7 +1320,58 @@ function ConflictModal({
   );
 }
 
+function DurableConflictList({
+  conflicts,
+  extraFields,
+  fields,
+  isSaving,
+  onUseLocal,
+  onUseRemote,
+}: {
+  conflicts: CachedStateUpdateRecord[];
+  extraFields: EntityDefinition["fields"];
+  fields: StateUpdateField[];
+  isSaving: boolean;
+  onUseLocal(record: CachedStateUpdateRecord): void;
+  onUseRemote(record: CachedStateUpdateRecord): void;
+}) {
+  return (
+    <View style={styles.conflictList}>
+      <Text style={styles.sectionTitle}>Conflictos por resolver</Text>
+      {conflicts.map((record) => {
+        const rows = buildStateUpdateConflictRows(stateUpdateDurableConflictState(record), fields, extraFields);
+
+        return (
+          <View key={record.localRecordId} style={styles.conflictListRow}>
+            <Text style={styles.subjectName}>{record.subject.displayName}</Text>
+            {rows.map((row) => (
+              <View key={`${record.localRecordId}:${row.fieldType ?? "field"}:${row.fieldId}`}>
+                <Text style={styles.conflictLabel}>{row.label}</Text>
+                <Text style={styles.statusMeta}>En Opco: {row.existing ?? "Sin estado"}</Text>
+                <Text style={styles.statusMeta}>Tu cambio: {row.requested ?? "Sin estado"}</Text>
+              </View>
+            ))}
+            <View style={styles.conflictActions}>
+              <Pressable accessibilityRole="button" disabled={isSaving} onPress={() => onUseLocal(record)} style={styles.smallPrimaryButton}>
+                <Text style={styles.smallPrimaryText}>Usar mi cambio</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" disabled={isSaving} onPress={() => onUseRemote(record)} style={styles.smallSecondaryButton}>
+                <Text style={styles.smallSecondaryText}>Usar Opco</Text>
+              </Pressable>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  conflictActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
   conflictLabel: {
     color: "#0f3036",
     fontWeight: "800",
@@ -1068,6 +1381,17 @@ const styles = StyleSheet.create({
   },
   conflictRows: {
     gap: 10,
+  },
+  conflictList: {
+    gap: 10,
+  },
+  conflictListRow: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d7a72f",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    padding: 12,
   },
   conflictText: {
     color: "#0f3036",
@@ -1296,6 +1620,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   secondaryText: {
+    color: "#135d66",
+    fontWeight: "800",
+  },
+  smallPrimaryButton: {
+    alignItems: "center",
+    backgroundColor: "#135d66",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 12,
+  },
+  smallPrimaryText: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  smallSecondaryButton: {
+    alignItems: "center",
+    backgroundColor: "#eef4f4",
+    borderColor: "#b8c7ca",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 12,
+  },
+  smallSecondaryText: {
     color: "#135d66",
     fontWeight: "800",
   },

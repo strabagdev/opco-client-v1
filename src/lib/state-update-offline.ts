@@ -20,6 +20,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
 export type OfflineStateUpdatePayload = {
+  expectedRecordId?: string;
   appViewId: string;
   clientRequestId: string;
   date?: string;
@@ -72,6 +73,8 @@ export type StateUpdateSyncErrorDetails = {
 };
 
 export type OfflineStateUpdateValues = {
+  remoteRecordId?: string;
+  clientRequestId?: string;
   appViewId: string;
   date?: string;
   expectedUpdatedAt?: string | null;
@@ -82,6 +85,8 @@ export type OfflineStateUpdateValues = {
 };
 
 export type CachedStateUpdateRecord = {
+  clientRequestId?: string;
+  conflictIdentity?: string;
   attempts?: number;
   conflictRemoteExtraValues?: Record<string, EntityRecordValue>;
   conflictRemoteStateValues?: StateUpdateCurrentFieldValue[];
@@ -771,6 +776,17 @@ export type SaveStateUpdateLocallyInput = StateUpdateScope & {
   uniqueness: "none" | "subject" | "subject-date";
 };
 
+export type ResolveStateUpdateConflictWithLocalInput = SaveStateUpdateLocallyInput & {
+  localRecordId: string;
+  conflictIdentity: string;
+};
+
+export type DiscardStateUpdateConflictInput = StateUpdateScope & {
+  subjectRecordId: string;
+  localRecordId: string;
+  conflictIdentity: string;
+};
+
 export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
   search: string;
   sourceEntityTypeId: string;
@@ -786,6 +802,24 @@ export type StateUpdateSnapshotReconcileResult = {
   staleSyncedRemoved: number;
 };
 
+export type StateUpdateSnapshotCoverage = {
+  downloadedThroughPage: number;
+  lastSuccessfulRefreshAt: string;
+  pageSize: number;
+  status: "complete" | "partial";
+  total: number;
+};
+
+export type StateUpdateSnapshotCoverageInput = StateUpdateScope & {
+  pagination: {
+    hasMore: boolean;
+    page: number;
+    pageSize: number;
+    total: number;
+  };
+  refreshedAt?: string;
+};
+
 export type AttendanceDaySnapshotHydration = {
   lastSuccessfulRefreshAt: string;
 };
@@ -796,13 +830,15 @@ export type AttendanceDaySnapshotScope = StateUpdateScope & {
 
 export type StateUpdateOfflineStore = {
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
-  discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }): Promise<void>;
+  discardStateUpdateLocalChange(input: DiscardStateUpdateConflictInput): Promise<void>;
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
+  getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
   getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
   getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
+  getStateUpdateResolutionOutcome(input: StateUpdateScope & { localRecordId: string; clientRequestId: string }): Promise<"confirmed" | "pending" | "conflict" | "failed" | "superseded">;
   listStateUpdateConflicts(input: StateUpdateScope): Promise<CachedStateUpdateRecord[]>;
   listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }): Promise<{
     items: StateUpdateLatestItem[];
@@ -821,7 +857,9 @@ export type StateUpdateOfflineStore = {
   recordStateUpdateSessionTermination(ownerKey: string, event: StateUpdateSessionTerminationTelemetry): Promise<void>;
   recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry): Promise<void>;
   resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution): Promise<void>;
+  resolveStateUpdateConflictWithLocal(input: ResolveStateUpdateConflictWithLocalInput): Promise<CachedStateUpdateRecord>;
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
+  markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverageInput): Promise<void>;
   setStateUpdateSyncDiagnosticsTelemetry(ownerKey: string, telemetry: StateUpdateSyncDiagnosticsTelemetry): Promise<void>;
   searchStateUpdateSubjects(input: SearchStateUpdateSubjectsInput): Promise<StateUpdateItem[]>;
   upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult>;
@@ -837,6 +875,16 @@ export function isStateUpdateCompatibleWorkflow(workflowKey: unknown): workflowK
 
 export function createStateUpdateClientRequestId() {
   return createClientRequestId();
+}
+
+export function normalizeStateUpdateLogicalDate(value?: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value.trim());
+
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : value.trim();
 }
 
 export function resolveStateUpdateClientRequestId({
@@ -881,15 +929,18 @@ export function stateUpdateResultLocalRecordId(input: {
   return createStateUpdateLocalRecordId(input);
 }
 
-export function normalizeStateUpdateRecord(record: CachedEntityRecord): CachedStateUpdateRecord {
+export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientRequestId?: string): CachedStateUpdateRecord {
   const values = record.values as Record<string, EntityRecordValue> as OfflineStateUpdateValues;
   const conflictValues = record.conflictRemoteValues as Partial<OfflineStateUpdateValues> | null;
 
   return {
+    clientRequestId: clientRequestId ?? (typeof values.clientRequestId === "string" ? values.clientRequestId : undefined),
+    conflictIdentity: JSON.stringify([record.localId, record.serverId, record.values, record.conflictRemoteValues,
+      record.conflictRemoteUpdatedAt, clientRequestId ?? values.clientRequestId]),
     conflictRemoteExtraValues: conflictValues?.extraValues,
     conflictRemoteStateValues: conflictValues?.stateValues,
     conflictRemoteUpdatedAt: record.conflictRemoteUpdatedAt,
-    date: values.date,
+    date: normalizeStateUpdateLogicalDate(values.date),
     expectedUpdatedAt: values.expectedUpdatedAt,
     extraValues: values.extraValues,
     localRecordId: record.localId,

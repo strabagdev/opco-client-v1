@@ -85,6 +85,29 @@ describe("Attendance snapshot cache", () => {
     });
   });
 
+  it("marks a valid empty Attendance day as hydrated", async () => {
+    const store = {
+      markAttendanceDaySnapshotHydrated: vi.fn(async () => undefined),
+      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0 })),
+    };
+
+    const result = await cacheAttendanceRemoteSnapshot({
+      appViewId: "view_attendance",
+      config: { statusFieldId: "status_field" },
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      response: attendanceResponse(),
+      store,
+    });
+
+    expect(store.upsertStateUpdateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      complete: true,
+      items: [],
+    }));
+    expect(store.markAttendanceDaySnapshotHydrated).toHaveBeenCalledOnce();
+    expect(result.complete).toBe(true);
+  });
+
   it("treats only metadata with a timestamp as hydrated", () => {
     expect(hasSuccessfulAttendanceDayHydration(null)).toBe(false);
     expect(hasSuccessfulAttendanceDayHydration({ lastSuccessfulRefreshAt: "" })).toBe(false);

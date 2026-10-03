@@ -317,6 +317,65 @@ Current client representation preserves both state and extra differences when Op
 
 Conflict resolution semantics have not changed. The user still chooses the whole local intention or the remote Opco state; there is no field-by-field merge action yet.
 
+The generic renderer must project durable conflicts on top of a successful online read. It queries by
+`ownerKey + contractId + appViewId + targetEntityTypeId + logical date`, overlays the requested local state
+on matching visible subjects/latest rows, and retains the remote conflict snapshot for comparison. A GET,
+snapshot refresh, search, or reconnect does not discard a differing local intention or make a conflict
+eligible for automatic retry. The existing exact-match snapshot reconciliation can complete an intention
+already confirmed remotely. Request-sequence invalidation prevents an older online/offline read from republishing a conflict after
+an explicit resolution completes.
+
+Both durable actions use the selected `localRecordId` and a conflict identity containing its local/remote
+snapshot and outbox `clientRequestId`. Inside the shared SQLite transaction, they revalidate owner,
+contract, AppView, target entity, subject and exact logical date plus that identity. A replaced selection
+fails explicitly; it never falls back to the latest row for the same subject.
+
+`Usar Opco` restores the retained remote values/version/id and deletes only the selected outbox operation
+in one transaction. `Usar mi cambio` rewrites the selected row/outbox atomically as a new overwrite request,
+including append workflows, and then invokes shared sync **after** the commit. No SQLite transaction waits
+on network. Failed restoration or outbox rewrite rolls back all changes. The Attendance adapter carries
+this same selection identity for its shared remote-resolution action.
+
+STATE_UPDATE completion, conflict, retry and failure reread the durable operation identity in their write
+transaction. A late response for a superseded request does not overwrite values or consume its successor.
+New JSON metadata uses existing columns: snapshot `clientRequestId`, conflict `remoteRecordId` and overwrite
+outbox `expectedRecordId`. Wire serialization is unchanged. Completion rejects a different subject or,
+when the retained remote id is available, a different remote record. Historical conflicts without that id
+cannot reconstruct it retroactively; the existing server id is used when available. No migration is needed.
+
+After shared sync/refresh, `getStateUpdateResolutionOutcome` reads the selected row and outbox together.
+Remote confirmation requires the matching request marker, a synced row with remote id/version and no
+outbox for that row. Pending, new conflict, failed and superseded outcomes remain distinct; global sync
+completion is not a receipt for the selected intent. Scoped resolution feedback is shown even when another
+conflict remains, and mounted/scope guards suppress obsolete callbacks. `Usar Opco` reports local resolution,
+not a new remote write. A refresh of the same remote id/version/states/extras preserves the confirmation
+marker; an append row already linked to that exact remote is reused within its complete workflow scope.
+This does not change the cross-AppView SQLite uniqueness constraint.
+
+Attendance's durable `Usar mi cambio` action now reuses the same selected-conflict resolver, outcome
+reader and feedback mapping. It carries localRecordId/conflictIdentity and the full workflow/date scope;
+only the selected request's durable receipt permits server-confirmed feedback. Pending transport, new
+conflict, failed and superseded outcomes remain explicit even when another operation succeeds.
+Mounted/scope guards suppress obsolete feedback; the existing engine guards preserve a later edit.
+This does not change Attendance's other save/online-conflict paths or the shared sync engine.
+2026-10-03 evidence: ten actual-handler regressions fail against the previous source and pass now;
+83 focused tests pass. Chrome/CDP 9361 with real OPFS and local Core/PostgreSQL verified confirmation,
+blocked transport, a newer remote conflict and another successful operation while the selected one
+failed. Edition/late-response races remain controlled regressions. See STATUS.md for exact provenance,
+local database validation, cleanup and limits.
+
+
+Evidence for 2026-10-03: four initial persistence regressions failed before correction; seven actual
+renderer-handler tests also failed against the preserved initial source (including false server-confirmed
+feedback for pending/conflict/failed/superseded outcomes); the final focused run passed
+269 tests in ten affected files. The new Python-backed in-memory SQLite harness checks actual SQL/rollback
+through production persistence; it requires `python3` and is separate from Expo testing. Chrome/CDP 9351
+with a disposable profile, localhost-only synthetic API and real Expo OPFS/WASM checks both UI actions,
+exact append selection, rollback after outbox deletion, displayed latest/remote id, confirmation, new
+conflict and transport failure. Edition/late-response interleavings are controlled engine regressions;
+not every race was injected in Chrome. No Core, API, schema, dependency or configuration changed. No full
+suite, export, Playwright, commit, push or deploy. See `STATUS.md` for fixture details and remaining limits.
+
 ## Idempotency Errors
 
 Backend idempotency errors:
@@ -449,6 +508,7 @@ Reconnect detection is persisted when connectivity transitions from `offline` or
 | 16 | Conflict operation metadata and local conflict record are persisted atomically. | IMPLEMENTED |
 | 17 | Observation is represented only when `observationFieldId` exists. | IMPLEMENTED |
 | 18 | Conflict UI can present state and extra diffs when Core returns them. | IMPLEMENTED |
+| 19 | Successful reads preserve scoped durable conflicts and their explicit resolution actions. | IMPLEMENTED |
 
 ## State Update 1.0 Readiness
 

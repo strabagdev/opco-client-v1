@@ -188,7 +188,7 @@ flowchart TD
 | Auth/session | Login, refresh, restore, logout. | `opco-api.ts`, `session-logic.ts`, `token-storage.ts`. | Email/password, stored access token, refresh cookie/token. | Access token, offline session, anonymous state. | Web access token in localStorage; native tokens in SecureStore; ownerKey. | Operational Core auth endpoints. | Operational Core. | INVALID_CREDENTIALS, TOKEN_EXPIRED, refresh errors, NETWORK. |
 | Organization/contract selection | Select current contract from `/context` and persist it. | `contract-selection.ts`, `session-persistence.ts`, `SessionProvider`. | Contracts, persisted contract id. | Active contract id. | `selected_contract_id` in `app_metadata`. | SQLite, context. | Operational Core context online. | missing contract, SQLITE. |
 | AppView loading | Load assigned AppViews by contract with offline fallback. | `app-navigation-cache.ts`, `use-app-view.ts`, `app/(app)/index.tsx`. | `ownerKey`, `contractId`, token. | Sorted AppView list. | `app_views` snapshot. | API, SQLite. | Operational Core online. | NETWORK fallback, API auth/contract errors. |
-| AppView definition cache | Prepare runtime metadata for AppViews. | `app-view-definitions-cache.ts`, `app-view-prewarm.ts`, `local-db.ts`. | Assigned AppViews, entity/workflow API responses. | Prepared definitions and offline availability. | `app_view_definitions`, `entity_definitions`. | API, SQLite. | Operational Core online. | NETWORK, CONTRACT, SQLITE, partial preparation. |
+| AppView definition cache | Prepare runtime metadata for AppViews. | `app-view-definitions-cache.ts`, `app-view-prewarm.ts`, `local-db.ts`. | Assigned AppViews, entity/workflow API responses. | Prepared definitions and offline availability. | `app_view_definitions`, `entity_definitions`; STATE_UPDATE target coverage in `app_metadata`. | API, SQLite. | Operational Core online. | NETWORK, CONTRACT, SQLITE, partial preparation. |
 | Renderer registry | Choose renderer for an AppView. | `src/renderers/registry.ts`. | `AppView.type`, `config.workflowKey`. | React renderer component. | None. | Renderer modules, compatibility helper. | Code registry. | Unsupported renderer/workflow. |
 | RECORDS runtime | Generic list/detail/new/edit/conflict UI for dynamic records. | `src/renderers/records/**`, `offline-records.ts`. | Entity definition, records query, local pending rows. | Records UI, local writes, conflict UI. | Component state; `entity_records`; `pending_operations`. | API, SQLite, records sync. | Operational Core online; SQLite offline/pending. | NETWORK, API, CONFLICT, SQLITE, validation. |
 | STATE_UPDATE runtime | Generic workflow for operational state changes. | `StateUpdateWorkflow.tsx`, `state-update-offline.ts`, `state-update-sync.ts`. | Prepared AppView definition, subject/date/state/extras. | Remote or local state-update intent. | `entity_records`, `pending_operations`, diagnostics telemetry. | API, SQLite, sync. | Operational Core online; local intent until resolved. | CONFLICT, IDEMPOTENCY, NETWORK, TIMEOUT, SQLITE. |
@@ -647,7 +647,9 @@ Data cache:
 - RECORDS data is demand-cached on AppView load/refresh, not globally prewarmed.
 - State-update target data is hydrated from workflow GET responses.
 - Attendance prewarm additionally refreshes the source Personas entity because offline search needs local people, and hydrates complete remote snapshots for each date in the current month.
-- Generic state-update prewarm refreshes the source entity records for offline subject search.
+- Generic state-update prewarm refreshes the source entity records for offline subject search, persists
+  the initial `items/latest` target snapshot and preserves source/target display names. Snapshot rows are
+  persisted before target coverage is accredited.
 - Attendance monthly snapshot prewarm is explicitly concurrency-limited to 3 date requests and does not refetch source records per date.
 - Dates outside the current Attendance month are hydrated only when the user opens that date online; there is no automatic massive historical download.
 
@@ -660,12 +662,13 @@ Definition readiness and data readiness are separate:
 
 The global app shell communicates normal offline availability. Home omits per-experience `Disponible sin conexion` labels for `OFFLINE_READY`; it only shows per-experience exception labels such as `Configuracion disponible; datos aun no descargados` or `Requiere conexion para preparar datos`.
 
-Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker for entity datasets. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness. Attendance day snapshots additionally use `app_metadata` hydration keys with `lastSuccessfulRefreshAt` per owner/contract/AppView/target entity/date.
+Readiness uses existing `sync_telemetry.last_full_refresh_completed_at` as the durable hydration marker for entity datasets. A full successful refresh with zero remote records is data-ready because the empty snapshot is known. Search-only loads, partial pages, and failed/network refreshes do not create readiness. A later network prewarm failure does not clear previous data readiness. Attendance day snapshots additionally use `app_metadata` hydration keys with `lastSuccessfulRefreshAt` per owner/contract/AppView/target entity/date. Generic STATE_UPDATE uses `app_metadata` target-coverage entries scoped by fingerprinted owner, contract, AppView, target entity and logical date. Only an exhaustive first page (`hasMore = false`) is `complete`; paginated data is `partial`, and no marker is `absent`. Metadata is written only after its snapshot succeeds.
 
 Readiness scope:
 
 - RECORDS: `ownerKey + contractId + entityTypeId` through sync telemetry; Home resolves it per AppView.
-- STATE_UPDATE: `ownerKey + contractId + sourceEntityTypeId` for subject selection data.
+- STATE_UPDATE source: `ownerKey + contractId + sourceEntityTypeId` for subject selection data.
+- Generic STATE_UPDATE target: `ownerKey + contractId + appViewId + targetEntityTypeId + YYYY-MM-DD|all`; complete, partial and absent remain distinct from source readiness.
 - Attendance: STATE_UPDATE source hydration plus current-month snapshot status. `attendanceMonthStatus = complete` means every current-month date has a complete snapshot; `partial` means at least one date is hydrated and one or more are missing; `none` means no current-month date is hydrated. Home treats `complete` as offline-ready, `partial` as partial offline data, and `none` as data not yet available offline. The selected workflow date still uses its own daily hydration telemetry.
 
 An AppView can be available offline as a prepared definition while its data is still missing, but it must not be advertised as fully offline-ready until its renderer data requirement is satisfied.

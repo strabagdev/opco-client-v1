@@ -24,6 +24,7 @@ import {
   shouldRefreshAttendanceLatestAfterSync,
   shouldRenderAttendanceInlineFeedback,
   shouldSearchAttendancePeople,
+  shouldPublishAttendanceDay,
   shouldShowAttendanceStatusActions,
   shouldShowAttendanceSubtitle,
   shiftLocalDate,
@@ -166,6 +167,91 @@ describe("attendance workflow logic", () => {
 
     expect(isAttendanceRequestCurrent(secondDateRequest, firstDateRequest)).toBe(false);
     expect(isAttendanceRequestCurrent(secondDateRequest, secondDateRequest)).toBe(true);
+  });
+
+  it("publishes an Attendance day only after a valid read for the current full scope", () => {
+    const scope = {
+      appViewId: "attendance_view",
+      contractId: "contract_1",
+      date: "2026-10-03",
+      ownerKey: "user_1",
+      targetEntityTypeId: "attendance",
+    };
+
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 42,
+      currentScope: scope,
+      readResult: "remote",
+      requestId: 42,
+      requestedScope: scope,
+    })).toBe(true);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 42,
+      currentScope: scope,
+      readResult: "prepared-local",
+      requestId: 42,
+      requestedScope: scope,
+    })).toBe(true);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 42,
+      currentScope: scope,
+      readResult: "absent",
+      requestId: 42,
+      requestedScope: scope,
+    })).toBe(false);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 42,
+      currentScope: scope,
+      readResult: "failed",
+      requestId: 42,
+      requestedScope: scope,
+    })).toBe(false);
+  });
+
+  it("does not publish a late Attendance response into another day or context", () => {
+    const requestedScope = {
+      appViewId: "attendance_view",
+      contractId: "contract_1",
+      date: "2026-10-02",
+      ownerKey: "user_1",
+      targetEntityTypeId: "attendance",
+    };
+
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 42,
+      currentScope: { ...requestedScope, date: "2026-10-03" },
+      readResult: "remote",
+      requestId: 41,
+      requestedScope,
+    })).toBe(false);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 41,
+      currentScope: { ...requestedScope, ownerKey: "user_2" },
+      readResult: "prepared-local",
+      requestId: 41,
+      requestedScope,
+    })).toBe(false);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 41,
+      currentScope: { ...requestedScope, contractId: "contract_2" },
+      readResult: "prepared-local",
+      requestId: 41,
+      requestedScope,
+    })).toBe(false);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 41,
+      currentScope: { ...requestedScope, appViewId: "other_view" },
+      readResult: "prepared-local",
+      requestId: 41,
+      requestedScope,
+    })).toBe(false);
+    expect(shouldPublishAttendanceDay({
+      currentRequestId: 41,
+      currentScope: { ...requestedScope, targetEntityTypeId: "other_attendance" },
+      readResult: "prepared-local",
+      requestId: 41,
+      requestedScope,
+    })).toBe(false);
   });
 
   it("does not orphan Attendance loading when search, person, or refresh requests advance data freshness", () => {

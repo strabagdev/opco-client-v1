@@ -6,7 +6,7 @@ import {
   StateUpdateHistoryMode,
   StateUpdateUniqueness,
 } from "./opco-api";
-import { AttendanceDaySnapshotHydration, isStateUpdateCompatibleWorkflow } from "./state-update-offline";
+import { AttendanceDaySnapshotHydration, StateUpdateSnapshotCoverage, isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 import { SyncTelemetry } from "./sync-telemetry";
 import type { AttendanceMonthStatus } from "./attendance-snapshot-cache";
 
@@ -55,9 +55,11 @@ export type PreparedAppViewDefinition =
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
       sourceEntityTypeId: string;
+      sourceEntityTypeName?: string;
       stateFields: StateUpdateField[];
       subjectFieldId: string;
       targetEntityTypeId: string;
+      targetEntityTypeName?: string;
       uniqueness: StateUpdateUniqueness;
     }
   | {
@@ -103,6 +105,7 @@ export type AppViewOfflineReadiness = {
   offlineReady: boolean;
   reason: AppViewOfflineReadinessReason;
   sourceReady?: boolean;
+  stateUpdateCoverageStatus?: StateUpdateSnapshotCoverage["status"];
 };
 
 export function getWorkflowKey(appView: AppView) {
@@ -116,11 +119,13 @@ export function deriveOfflineAvailability({
   sourceTelemetry,
   attendanceDayHydration,
   attendanceMonthStatus,
+  stateUpdateCoverage,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
   attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
   attendanceMonthStatus?: AttendanceMonthStatus;
+  stateUpdateCoverage?: Pick<StateUpdateSnapshotCoverage, "status"> | null;
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): OfflineAvailability {
@@ -131,11 +136,8 @@ export function deriveOfflineAvailability({
     sourceTelemetry,
     attendanceDayHydration,
     attendanceMonthStatus,
+    stateUpdateCoverage,
   });
-
-  if (readiness.offlineReady) {
-    return "ready";
-  }
 
   if (readiness.reason === "unsupported") {
     return "unsupported";
@@ -147,6 +149,14 @@ export function deriveOfflineAvailability({
 
   if (readiness.attendanceMonthStatus === "partial") {
     return "data-partial";
+  }
+
+  if (readiness.stateUpdateCoverageStatus === "partial") {
+    return "data-partial";
+  }
+
+  if (readiness.offlineReady) {
+    return "ready";
   }
 
   if (readiness.definitionReady) {
@@ -163,11 +173,13 @@ export function getAppViewOfflineReadiness({
   sourceTelemetry,
   attendanceDayHydration,
   attendanceMonthStatus,
+  stateUpdateCoverage,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
   attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
   attendanceMonthStatus?: AttendanceMonthStatus;
+  stateUpdateCoverage?: Pick<StateUpdateSnapshotCoverage, "status"> | null;
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): AppViewOfflineReadiness {
@@ -237,12 +249,15 @@ export function getAppViewOfflineReadiness({
     const prepared = definition.definition;
 
     if (prepared.kind === "state-update") {
-      const dataReady = hasSuccessfulHydration(sourceTelemetry);
+      const sourceReady = hasSuccessfulHydration(sourceTelemetry);
+      const dataReady = sourceReady && Boolean(stateUpdateCoverage);
 
       return readiness({
         dataReady,
         definitionReady: true,
         reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
+        sourceReady,
+        stateUpdateCoverageStatus: stateUpdateCoverage?.status,
       });
     }
   }
@@ -271,6 +286,7 @@ function readiness({
   sourceReady,
   attendanceTodayReady,
   attendanceMonthStatus,
+  stateUpdateCoverageStatus,
 }: {
   attendanceMonthStatus?: AttendanceMonthStatus;
   attendanceTodayReady?: boolean;
@@ -278,6 +294,7 @@ function readiness({
   definitionReady: boolean;
   reason: AppViewOfflineReadinessReason;
   sourceReady?: boolean;
+  stateUpdateCoverageStatus?: StateUpdateSnapshotCoverage["status"];
 }): AppViewOfflineReadiness {
   const result: AppViewOfflineReadiness = {
     dataReady,
@@ -296,6 +313,11 @@ function readiness({
 
   if (sourceReady !== undefined) {
     result.sourceReady = sourceReady;
+  }
+
+
+  if (stateUpdateCoverageStatus !== undefined) {
+    result.stateUpdateCoverageStatus = stateUpdateCoverageStatus;
   }
 
   return result;

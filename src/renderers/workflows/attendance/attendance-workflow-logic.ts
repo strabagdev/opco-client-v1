@@ -15,6 +15,16 @@ export const ATTENDANCE_SEARCH_DEBOUNCE_MS = 300;
 // Mirrors the backend Attendance latest take=10 contract used to infer full-day snapshots.
 export const ATTENDANCE_LATEST_LIMIT = 10;
 
+export type AttendanceDayScope = {
+  appViewId: string;
+  contractId: string;
+  date: string;
+  ownerKey: string;
+  targetEntityTypeId: string;
+};
+
+export type AttendanceDayReadResult = "absent" | "failed" | "prepared-local" | "remote";
+
 export function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -72,6 +82,29 @@ export function shouldFinishAttendanceVisualRequest({
 
 export function isAttendanceRequestCurrent(currentRequestId: number, requestId: number) {
   return currentRequestId === requestId;
+}
+
+export function shouldPublishAttendanceDay({
+  currentRequestId,
+  currentScope,
+  readResult,
+  requestId,
+  requestedScope,
+}: {
+  currentRequestId: number;
+  currentScope: AttendanceDayScope | null;
+  readResult: AttendanceDayReadResult;
+  requestId: number;
+  requestedScope: AttendanceDayScope;
+}) {
+  return currentRequestId === requestId &&
+    readResult !== "absent" &&
+    readResult !== "failed" &&
+    currentScope?.ownerKey === requestedScope.ownerKey &&
+    currentScope.contractId === requestedScope.contractId &&
+    currentScope.appViewId === requestedScope.appViewId &&
+    currentScope.targetEntityTypeId === requestedScope.targetEntityTypeId &&
+    currentScope.date === requestedScope.date;
 }
 
 export function shouldRefreshAttendanceLatestAfterSync(

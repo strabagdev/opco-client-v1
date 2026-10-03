@@ -70,7 +70,7 @@ describe("AppView offline readiness", () => {
     }).offlineReady).toBe(true);
   });
 
-  it("requires source hydration for generic state-update readiness", () => {
+  it("requires source hydration and target snapshot coverage for generic state-update readiness", () => {
     const stateUpdateView: AppView = {
       config: {
         sourceEntityTypeId: "entity_assets",
@@ -101,9 +101,26 @@ describe("AppView offline readiness", () => {
       definition: stateUpdateDefinition(stateUpdateView, "entity_assets"),
       sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
     })).toMatchObject({
+      dataReady: false,
+      offlineReady: false,
+      sourceReady: true,
+    });
+    expect(getAppViewOfflineReadiness({
+      appView: stateUpdateView,
+      definition: stateUpdateDefinition(stateUpdateView, "entity_assets"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+      stateUpdateCoverage: { status: "complete" },
+    })).toMatchObject({
       dataReady: true,
       offlineReady: true,
+      stateUpdateCoverageStatus: "complete",
     });
+    expect(deriveOfflineAvailability({
+      appView: stateUpdateView,
+      definition: stateUpdateDefinition(stateUpdateView, "entity_assets"),
+      sourceTelemetry: { lastFullRefreshCompletedAt: hydratedAt },
+      stateUpdateCoverage: { status: "partial" },
+    })).toBe("data-partial");
   });
 
   it("does not treat Attendance as ready when only its source records are hydrated", () => {

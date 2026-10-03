@@ -70,11 +70,12 @@ describe("read loading indicator integration", () => {
 
     expect(home).toContain("!isMounted || remoteSettled");
     expect(home).toContain("loadedViewsScope === viewsScope");
+    expect(home).toContain("getStateUpdateSnapshotCoverage");
     expect(records).toContain("JSON.stringify(debouncedSearch)");
     expect(attendance).toContain("loadedDate === date");
     expect(attendance).toContain("isAttendanceRequestCurrent");
-    expect(stateUpdate).toContain("response.date === date");
-    expect(stateUpdate).toContain("requestId !== requestSequenceRef.current");
+    expect(stateUpdate).toContain("normalizeStateUpdateLogicalDate(response.date) === date");
+    expect(stateUpdate).toContain("!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)");
     expect(panel).toContain("requestSeq.current !== seq");
     expect(panel).toContain("previous.queryKey === queryKey");
     expect(report).toContain("loadedQueryKey === reportQueryKey");

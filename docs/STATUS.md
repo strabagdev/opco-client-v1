@@ -1,5 +1,638 @@
 # Current Status
 
+## Cierre Final Del Lote De 25 Archivos 2026-10-03
+
+**Listo para publicacion este lote especifico; la auditoria general permanece abierta.**
+Revision final del diff acumulado en `main`: **25 paths pendientes, 22 modificados y tres nuevos**,
+sin cambios staged. Alcance confirmado: preparacion y lectura offline STATE_UPDATE, cobertura target
+completa/parcial/ausente, conflictos visibles y resolucion por identidad durable con restauracion/outbox
+atomicas, proteccion ante respuestas de requests sustituidos, carga coherente Attendance y feedback por
+intencion seleccionada en ambos renderers, con sus pruebas y documentacion. No se amplio implementacion.
+Este cierre modifica exclusivamente STATUS; conserva los otros 24 archivos pendientes byte a byte.
+Sin cambios Core/API/wire, esquema/migraciones, dependencias, configuracion ni datos productivos.
+
+### Checks Finales Del Arbol Acumulado
+
+- `npm test -- --maxWorkers=2`: PASS, **890/890 tests, 74/74 archivos**, maximo dos workers.
+- `npm run typecheck`: PASS.
+- `npm run lint`: PASS, cero errores; dos warnings preexistentes `no-require-imports` en
+  `src/sync/records-sync.local-db-regression.test.ts:182-183`, fuera del diff del lote.
+- `npm run build`: PASS, export web con worker/WASM SQLite y service worker generado.
+- `git diff --check`: PASS tras actualizar este cierre.
+
+No hay checks fallidos ni bloqueos concretos de este lote. El build uso la configuracion local existente
+sin modificarla; `dist` permanece ignorado y no se incluye. Inventario y revision de contenido sin secretos,
+configuracion local, fixtures externos, bases, logs, exportaciones ni artefactos incluidos. Los valores
+sinteticos embebidos en tests y SQLite `:memory:` son arneses de prueba, no datos reales ni archivos de DB.
+Documentacion del lote: `CLIENT_ARCHITECTURE.md`, `STATE_UPDATE.md`, `OFFLINE_FIRST_AUDIT.md` y `STATUS.md`;
+solo este ultimo se actualizo durante el cierre. Sin commit, push ni deploy.
+
+### Evidencia Reutilizada Y Limites
+
+No se abrio Chrome, no se uso Playwright y no se agregaron escenarios. No hubo cambio funcional ni fallo
+que invalidara la evidencia vigente. Se conserva su procedencia detallada en las secciones siguientes:
+
+- **CDP 9351: API sintetica local, OPFS/WASM real**, Metro con bundle nuevo. Acredita los recorridos del
+  renderer generico, seleccion exacta append, rollback, latest/remote id en esos fixtures, confirmacion,
+  nuevo conflicto y transporte fallido. No acredita Core/PostgreSQL ni diagnostica la anomalia `latest`
+  observada con Core anteriormente.
+- **CDP 9361: Core real local y PostgreSQL de desarrollo, OPFS/WASM real**, Metro con bundle nuevo.
+  Acredita exclusivamente el handler durable Attendance `Usar mi cambio`: confirmacion seleccionada,
+  transporte bloqueado, nueva version conflictiva y otra operacion exitosa mientras la seleccionada falla.
+  No hubo respuestas API simuladas en ese recorrido ni datos productivos; se mantiene la limpieza y
+  validacion de destino documentadas. No extiende garantias al modal de escritura online u otros saves.
+- **Carreras cubiertas solo automaticamente:** nueva edicion durable durante red retenida y respuestas
+  anteriores complete/conflict/retry/failure, con SQLite real en memoria; guards de scope/desmontaje y
+  feedback del handler con colaboradores controlados. No se inyectaron esas carreras en Chrome.
+- Ambos recorridos usaron Metro de desarrollo; **el export de este cierre no se probo en navegador**.
+  No se acredita identidad byte a byte entre bundles historicos y export. Transporte bloqueado no es wifi
+  fisico; cuota/fallo fisico OPFS, nativo, multi-tab y todas las combinaciones extra siguen sin acreditarse.
+
+Permanecen abiertos y fuera del lote: causa productiva de `Error finalizing statement`, restriccion SQLite
+entre AppViews, contenido retenido, resumen RECORDS contaminado, bloqueo OPFS, formato REPORT, anomalia
+`latest` con Core y cobertura offline restante. No se incorporan ni se declaran corregidos esos hallazgos.
+Este cierre reemplaza los conteos y checks historicos inferiores; la etapa Attendance posterior reemplaza
+el antiguo limite sobre su handler durable `Usar mi cambio`, sin cerrar la auditoria general.
+
+### Inventario Final Exacto (25 Paths)
+
+- `app/(app)/index.tsx`
+- `docs/CLIENT_ARCHITECTURE.md`
+- `docs/OFFLINE_FIRST_AUDIT.md`
+- `docs/STATE_UPDATE.md`
+- `docs/STATUS.md`
+- `src/components/read-loading-indicator.test.ts`
+- `src/lib/app-view-definitions-cache.test.ts`
+- `src/lib/app-view-definitions-cache.ts`
+- `src/lib/app-view-prewarm.test.ts`
+- `src/lib/app-view-prewarm.ts`
+- `src/lib/attendance-offline.ts`
+- `src/lib/attendance-snapshot-cache.test.ts`
+- `src/lib/local-db.test.ts`
+- `src/lib/local-db.ts`
+- `src/lib/state-update-conflict-resolution.test.ts` (nuevo)
+- `src/lib/state-update-offline.test.ts`
+- `src/lib/state-update-offline.ts`
+- `src/renderers/workflows/attendance/AttendanceWorkflow.tsx`
+- `src/renderers/workflows/attendance/attendance-conflict-handlers.test.ts` (nuevo)
+- `src/renderers/workflows/attendance/attendance-workflow-logic.test.ts`
+- `src/renderers/workflows/attendance/attendance-workflow-logic.ts`
+- `src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`
+- `src/renderers/workflows/state-update/state-update-conflict-handlers.test.ts` (nuevo)
+- `src/renderers/workflows/state-update/state-update-workflow-logic.test.ts`
+- `src/renderers/workflows/state-update/state-update-workflow-logic.ts`
+
+
+## Attendance: Feedback De Usar Mi Cambio 2026-10-03
+
+Correccion exclusiva del handler de conflicto durable de Attendance. Se preservaron los 24 archivos
+pendientes de `main`; ahora hay **25 paths pendientes** por el nuevo test del handler. No se cambio el
+motor sync, Core/API/wire, esquema/migraciones, dependencias, configuracion ni otros pendientes.
+
+Causa: el handler guardaba con el metodo generico y anunciaba `server-confirmed` al terminar el ciclo
+global, sin leer el resultado de la intencion elegida. Ahora reutiliza
+`resolveStateUpdateConflictWithLocal`, `getStateUpdateResolutionOutcome` y `stateUpdateResolutionFeedback`
+existentes. Valida localRecordId/conflictIdentity y owner+contrato+AppView+target+sujeto+fecha dentro de la
+resolucion durable; la red se espera despues del commit. Solo un recibo del request seleccionado permite
+confirmacion. Pendiente, nuevo conflicto, fallo y request sustituido permanecen distintos. El feedback
+scoped sigue visible aunque otro conflicto/resumen global tenga prioridad. Scope/montaje y single-flight
+impiden callbacks obsoletos; comenzar otra edicion limpia el feedback previo. La proteccion de valores/
+outbox ante respuestas tardias se reutiliza del engine existente, sin modificarlo.
+
+Evidencia automatizada: **83/83 tests en siete archivos afectados**, con maximo dos workers, incluidos
+10 tests nuevos que ejecutan el handler real extraido por AST, sin copiar su implementacion.
+Los **10/10 fallan contra la copia anterior**: otra operacion finalizada no confirma failed/pending/
+conflict/superseded, transporte rechazado aun consulta el recibo, confirmacion seleccionada, offline,
+edicion posterior durante sync retenido y salida de scope/desmontaje. Las regresiones compartidas de
+SQLite real en memoria comprueban que una nueva edicion durable se guarda durante red retenida y que
+completion/conflict/retry/failure anteriores no la consumen. El test del handler usa colaboradores
+controlados; no acredita por si solo OPFS. Typecheck PASS; lint PASS, cero errores y dos warnings RECORDS
+preexistentes en `records-sync.local-db-regression.test.ts:182-183`; `git diff --check` PASS final.
+Sin suite completa, build/export, Playwright, commit, push ni deploy en esta etapa.
+
+### Chrome/CDP, OPFS Y Core Reales
+
+Chrome de Windows/CDP **9361**, perfil exclusivo `opco-attendance-feedback-9361`. Client servido desde
+**Metro 19361**, iniciado despues de guardar el handler con `--clear --localhost`, cache vacia y bundle
+nuevo de 2812 modulos; worker SQLite de 16 modulos. Proxy **localhost 19362** agrega COOP/COEP y sustituye
+solo la URL de API virtual de `.env.local` por **Core real localhost 19360**, sin alterar handlers/SQL.
+Se inspecciono `config.apiUrl` efectivo: `http://localhost:19360`. No se genero export ni se uso el `dist`
+existente. No se simularon respuestas API. Core se sirvio mediante `next start --hostname 127.0.0.1
+--port 19360`, artefacto `.next` local existente con BUILD_ID `TLmF-2kT2X3XkTwe9NkWO`.
+
+DATABASE_URL se cargo **exclusivamente de operational-core/.env.local**, se valido hostname `127.0.0.1`,
+puerto `5432`, database `opco_development` y usuario `opco_dev`, y se paso explicitamente al proceso Core
+y a cada PrismaClient de fixture/lectura/limpieza. PostgreSQL confirmo `current_user=opco_dev`,
+`current_database=opco_development`, `inet_server_addr=127.0.0.1`, puerto 5432. No se mostro la URL/secreto.
+Fixture minimo aislado: organizacion/usuario/app externa/contrato propios, una AppView Attendance,
+source con dos personas y target con relacion/fecha/SELECT PRESENTE-AUSENTE; sin observacion ni contexto.
+Login y conflictos se obtuvieron de Core real. Los helpers sembraron la intencion mediante los metodos
+reales del singleton, sin escribir outbox por SQL directo. OPFS/WASM real: `crossOriginIsolated=true`,
+`storageState.status=ready`; se leyeron pasivamente valores, server_id y outbox del fixture.
+
+| Recorrido afectado | Feedback observado | Resultado real seleccionado |
+| --- | --- | --- |
+| Overwrite aceptado | `Cambio confirmado por Opco.` | Persona 1, remoto `cmusn8eez0007vqn9dkysz2o9`: PostgreSQL AUSENTE y relacion correcta; misma fila OPFS synced, request confirmado y outbox ausente. |
+| Transporte STATE_UPDATE bloqueado por CDP | `Cambio guardado; envio pendiente.` | OPFS pending_update/OpcoNetworkError y outbox conservada; PostgreSQL mantuvo PRESENTE/version anterior. Bloqueo retirado al terminar. |
+| Version remota cambio despues de elegir conflicto | `Opco devolvio un nuevo conflicto. Revisa ambas versiones.` | Core devolvio CONFLICT real; fila/outbox continuaron conflictivas; no overwrite silencioso ni confirmacion. |
+| Otra operacion exitosa y seleccionada rechazada | `El envio del cambio fallo. La intencion se conserva.` | Se desactivo temporalmente solo la opcion AUSENTE del fixture: Persona 1 quedo failed con su outbox y remoto PRESENTE sin cambio. Persona 2 quedo synced, sin su outbox y remoto PRESENTE `cmusnkmjz001mvqn9hgk1t6f2`. Se restauro la opcion. |
+
+Limites: edicion posterior/respuesta tardia y salida de scope son regresiones controladas, no carreras
+inyectadas en Chrome en esta etapa. Transporte bloqueado no representa wifi fisico ni cuota/fallo OPFS.
+No se acreditan nativo, multi-tab, todas las combinaciones de campos extra ni otros caminos de guardado
+Attendance. El recorrido solo valida este handler durable; no extiende garantias al modal de conflicto
+de escritura online ni cambia su comportamiento. Los errores iniciales de formato del helper de POST se
+corrigieron en el helper temporal antes de los escenarios; no son reparaciones del producto.
+
+Limpieza: fixture/usuario propios y sus registros, relaciones, accesos, tokens/idempotencia/auditoria
+eliminados; perfil exclusivo eliminado (Test-Path false); solo Core 19360, Metro 19361, proxy 19362 y
+Chrome 9361 propios cerrados. Helpers y credenciales temporales retirados de /tmp. Sin configuracion,
+secretos, bases, logs ni artefactos en el diff; `dist` permanece ignorado. Core worktree sin cambios.
+
+Archivos de esta etapa: `src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, nuevo
+`src/renderers/workflows/attendance/attendance-conflict-handlers.test.ts`, `docs/STATE_UPDATE.md`,
+`docs/STATUS.md` y `docs/OFFLINE_FIRST_AUDIT.md`.
+**La auditoria general sigue abierta**: finalizacion productiva, restriccion entre AppViews, contenido
+retenido, resumen RECORDS, bloqueo OPFS, formato REPORT y cobertura offline restante no se modifican.
+Los conteos y el limite Attendance de las secciones inferiores corresponden a etapas historicas;
+esta seccion reemplaza exclusivamente ese limite para Usar mi cambio del conflicto durable.
+
+
+## Cierre Tecnico Acumulado Final 2026-10-03
+
+Revision del diff completo en `main`: **24 archivos pendientes, 22 modificados y dos nuevos**, nada
+staged. Este cierre solo actualiza STATUS y OFFLINE_FIRST_AUDIT; preserva toda la implementacion y pruebas
+pendientes. Alcance confirmado: preparacion/lectura offline STATE_UPDATE, conflictos visibles online,
+resolucion por identidad durable, restauracion/outbox atomicas, feedback por intencion del renderer
+generico y carga coherente Attendance, con pruebas/documentacion. Sin cambios Core/API/wire, esquema,
+migraciones, dependencias o configuracion. **La auditoria general permanece abierta.**
+
+- Checks sobre el arbol acumulado: `npm test -- --maxWorkers=2` **880/880 tests, 73/73 archivos**;
+  `npm run typecheck` PASS; `npm run lint` PASS, cero errores y dos warnings preexistentes
+  `no-require-imports` en `src/sync/records-sync.local-db-regression.test.ts:182-183`;
+  `npm run build` PASS (export web, worker/WASM SQLite y service worker);
+  `git diff --check` PASS tras documentacion. Ninguna regresion nueva ni reparacion de implementacion.
+- Consumidores del adapter: `app-view-prewarm.ts` usa `attendanceStateFields`, sin cambios;
+  AttendanceWorkflow usa conversion de items/latest/statuses y, en las dos lecturas locales de conflictos,
+  `stateUpdateConflictToAttendanceRecord`. La unica adicion del adapter es `conflictIdentity`; conserva
+  ids/options, labels, observacion opcional, contexto y estados previos. Su accion `Usar Opco` transmite
+  esa identidad y localRecordId al metodo compartido. Los tests Attendance/prewarm existentes pasan.
+  Limite previo: `Usar mi cambio` de Attendance sigue usando save generico y feedback basado en el ciclo
+  global; no recibe automaticamente la comprobacion por intencion ni los guards visuales de resolucion
+  del renderer generico. No se declara corregido ni se amplia aqui ese camino.
+- Proteccion comprobada en codigo y regresiones: seleccion validada por owner/contrato/AppView/target/
+  sujeto/fecha/localRecordId/snapshot/request; respuestas antiguas complete/conflict/retry/failure no
+  escriben sobre el request sucesor. Una edicion durable completa mientras el POST sigue retenido.
+  Restauracion y outbox se confirman o revierten juntas mediante el coordinador existente. Los callbacks
+  transaccionales contienen solo SQLite/calculo local; sync y GET se esperan despues del commit.
+  Aislamiento logico no resuelve el indice `server_id` compartido entre AppViews ni contenido retenido.
+
+Procedencia de la ultima evidencia Chrome (CDP 9351): **Metro de desarrollo**, no export. Se cerro el
+Chrome anterior y se reinicio Metro con `EXPO_OFFLINE=1 EXPO_NO_DOTENV=1`, override de API local, `CI=1`
+y `npx expo start --web --clear --localhost --port 19351`. El registro de ejecucion muestra cache vacia
+y compilacion nueva de entry (2812 modulos) y worker (16). El guard de montaje se guardo a las 03:06:26;
+la primera navegacion del Chrome nuevo a `http://localhost:19352/view/view` fue a las 03:06:53, antes de
+los escenarios finales. El proxy localhost 19352 agregaba COOP/COEP y sustituia solamente la URL de API
+del bundle por el fixture localhost 19350; no sustituia handlers ni SQL. Se inspecciono la URL de runtime.
+El DOM mostro los mensajes nuevos de esta implementacion y OPFS verifico sus identidades/rollback;
+esto acredita el codigo funcional actual. Despues solo se quitaron un setter duplicado y espacios SQL,
+y se agregaron pruebas; no cambio comportamiento. No se retuvo un hash del bundle historico ni se afirma
+identidad byte a byte con el export. El build de este cierre genero `dist` actualizado, pero **ese export
+no fue el artefacto usado por Chrome**. No se repitieron escenarios de navegador ya acreditados.
+
+`latest` posconflicto queda **verificado solo** para los fixtures de contrato del recorrido 9351:
+`Usar Opco` mostro `remote-c` / `Estado remoto` manteniendo el otro append conflictivo;
+`Usar mi cambio` mostro `remote-b` / `Cambio local`, confirmacion y outbox seleccionada ausente.
+Nuevo conflicto y socket POST cerrado mostraron respectivamente conflicto conservado y envio pendiente,
+sin confirmacion falsa. Se compararon DOM, filas OPFS y registro remoto del servidor sintetico; no es
+validacion Core/PostgreSQL. La anomalia `latest` del fixture Core anterior sigue sin diagnostico.
+Las carreras de nueva edicion/respuesta tardia son regresiones del engine/SQLite real en memoria, no
+recorridos nuevos de Chrome; cuota/fallo fisico OPFS, nativo y multi-tab no estan acreditados.
+
+Higiene: solo los 24 paths inventariados; sin secretos, configuracion local, fixtures externos, DB, logs
+ni artefactos generados. Los datos sinteticos y el script SQLite en memoria de las regresiones son codigo
+de prueba, no bases/exportaciones. `dist`, `.env`, `.env.local`, `.expo` y `node_modules` siguen ignorados.
+El build usa la configuracion local existente, sin modificarla. El perfil CDP 9351 y fixtures/procesos de
+ese recorrido ya se eliminaron en la etapa anterior; este cierre no inicia ni elimina otros servidores.
+Sin produccion, commit, push ni deploy.
+
+Permanecen abiertos: causa productiva de `Error finalizing statement`, restriccion SQLite entre AppViews,
+contenido retenido, resumen RECORDS contaminado, bloqueo OPFS, formato REPORT y cobertura offline restante.
+No hay bloqueo de checks de este cierre; esos pendientes y el limite Attendance arriba no se cierran.
+Las secciones inferiores registran etapas historicas y sus conteos (21 archivos/850 tests o 269 focalizados);
+el inventario y checks actuales son los de esta seccion.
+
+### Inventario Final Exacto
+
+- `app/(app)/index.tsx`
+- `docs/CLIENT_ARCHITECTURE.md`
+- `docs/OFFLINE_FIRST_AUDIT.md`
+- `docs/STATE_UPDATE.md`
+- `docs/STATUS.md`
+- `src/components/read-loading-indicator.test.ts`
+- `src/lib/app-view-definitions-cache.test.ts`
+- `src/lib/app-view-definitions-cache.ts`
+- `src/lib/app-view-prewarm.test.ts`
+- `src/lib/app-view-prewarm.ts`
+- `src/lib/attendance-offline.ts`
+- `src/lib/attendance-snapshot-cache.test.ts`
+- `src/lib/local-db.test.ts`
+- `src/lib/local-db.ts`
+- `src/lib/state-update-conflict-resolution.test.ts` (nuevo)
+- `src/lib/state-update-offline.test.ts`
+- `src/lib/state-update-offline.ts`
+- `src/renderers/workflows/attendance/AttendanceWorkflow.tsx`
+- `src/renderers/workflows/attendance/attendance-workflow-logic.test.ts`
+- `src/renderers/workflows/attendance/attendance-workflow-logic.ts`
+- `src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`
+- `src/renderers/workflows/state-update/state-update-conflict-handlers.test.ts` (nuevo)
+- `src/renderers/workflows/state-update/state-update-workflow-logic.test.ts`
+- `src/renderers/workflows/state-update/state-update-workflow-logic.ts`
+
+## Resolucion Exacta Y Atomica De Conflictos STATE_UPDATE 2026-10-03
+
+Etapa acotada a los tres limites demostrados de resolucion; **la auditoria general sigue abierta**.
+Se conservaron los 21 archivos inicialmente pendientes de `main`, sin stage, commit, push ni deploy.
+Esta etapa modifica 12 archivos; agrega el test de resolucion y toca `attendance-offline.ts` para
+transportar la identidad seleccionada en el adapter que comparte `Usar Opco`.
+
+- Causa confirmada antes de editar: `discardStateUpdateLocalChange` encontraba la fila mas reciente por
+  sujeto, sin recibir el `localRecordId` seleccionado; eliminaba outbox y restauraba valores en statements
+  independientes. El renderer anunciaba `server-confirmed` despues del sync global sin comprobar la
+  intencion elegida. Las finalizaciones de STATE_UPDATE tampoco comprobaban si el request durable habia
+  cambiado mientras llegaba la respuesta.
+- Cuatro regresiones fallaron con la implementacion inicial: append equivocado, outbox perdida al fallar
+  la restauracion, seleccion obsoleta aceptada y respuesta tardia consumiendo otra intencion. Las siete pruebas
+  de los handlers reales tambien fallaron (7/7) contra la copia inicial: cuatro anunciaban confirmacion
+  para pending/conflict/failed/superseded, una no consultaba recibo, otra omitia identidad seleccionada y
+  otra publicaba feedback despues de abandonar el scope. Las pruebas posteriores demostraron duplicacion de la fila append al releer su remoto y perdida de la
+  identidad de confirmacion al refrescar; otra regresion rechazo la confirmacion de un registro remoto
+  diferente. No se corrigieron los demas pendientes de la auditoria.
+- Ambas acciones validan `localRecordId`, owner, contrato, AppView, target, sujeto, fecha logica y una
+  identidad de los valores/snapshot de conflicto y `clientRequestId` de outbox, dentro del coordinador
+  compartido. `Usar Opco` restaura el snapshot/identidad remotos y elimina solo la operacion seleccionada
+  en una transaccion. `Usar mi cambio` reescribe esa fila/outbox atomicamente con un request nuevo para el
+  overwrite. La red ocurre despues del commit, nunca dentro de la transaccion.
+- Confirmacion, nuevo conflicto, fallo y retry releen identidad durable dentro de sus transacciones:
+  una respuesta anterior no consume ni reemplaza la nueva edicion. El resultado visible consulta la fila
+  y outbox exactas despues del sync/refresh: resolucion local, envio pendiente, confirmacion remota,
+  nuevo conflicto, fallo o seleccion sustituida. Otro conflicto y el resumen global no ocultan ese
+  feedback. El montaje y scope vigentes impiden feedback de una resolucion visual obsoleta.
+- Metadata interna agregada al JSON existente: `clientRequestId` de snapshot, `remoteRecordId` del
+  conflicto y `expectedRecordId` de overwrite. No hay cambio de Core, wire/API, esquema/migraciones,
+  dependencias ni configuracion. La relectura reutiliza un append confirmado solo si coinciden remoto,
+  owner, contrato, target, AppView, sujeto y fecha; la marca de request se conserva solo para la misma
+  version remota y estados/extras compatibles. Esto no resuelve el indice compartido entre AppViews.
+- Automatizacion final: **269/269 pruebas, 10 archivos afectados**; 23 regresiones de SQLite/engine en
+  `state-update-conflict-resolution.test.ts` y siete pruebas de los handlers reales del renderer. El nuevo arnes ejecuta SQL y
+  rollback con SQLite real en memoria mediante `python3`, sin librerias/dependencias nuevas; atraviesa
+  el singleton/coordinador de produccion, pero no representa Expo/OPFS. Incluye ambas acciones, dos append
+  del mismo sujeto, rollback en ambos caminos, scope completo, red caida, nuevo conflicto, fallo, remoto
+  incorrecto y respuesta tardia tras guardar una edicion real mientras la red sigue retenida.
+- Chrome/CDP **9351**, perfil exclusivo temporal, Client/Metro **19351**, proxy localhost **19352**,
+  API sintetica localhost **19350**, Expo SQLite OPFS/WASM real y `crossOriginIsolated=true`.
+  Dos append del mismo sujeto sobrevivieron cierre/reapertura. `Usar Opco` sobre el mas antiguo dejo solo
+  la otra outbox/conflicto, mostro la resolucion local junto al conflicto restante y mostro `remote-c` /
+  `Estado remoto` en latest. Fallo inyectado tras DELETE y antes de restauracion: comparacion integral
+  de `entity_records` y `pending_operations` antes/despues identica, rollback completo.
+  `Usar mi cambio` uso la fila append elegida, envio un overwrite con version esperada/request nuevo,
+  mostro `Cambio confirmado por Opco`, latest `Cambio local`, server id `remote-b` y outbox cero.
+  Respuesta `CONFLICT` valida mantuvo la intencion, actualizo la version remota y mostro nuevo conflicto;
+  cierre del socket del POST dejo `pending_update` / `OpcoNetworkError` y `Cambio guardado; envio pendiente`,
+  sin confirmacion remota. Una respuesta sintetica CONFLICT mal formada durante preparacion del fixture
+  quedo como fallo explicito con outbox conservada; el fixture se corrigio y se repitio el caso valido.
+- Aislamiento del navegador: solo datos sinteticos en un perfil nuevo. La URL virtual de Metro tomaba
+  `.env.local` pese al override CLI: se inspecciono y el proxy sirvio una copia temporal del bundle con
+  la URL de API sustituida por el fixture; no se edito ese archivo ni configuracion. La primera tentativa
+  de bootstrap al destino local previo no obtuvo contexto/datos; no se uso Core para crear o modificar
+  fixtures. No hubo acceso a produccion. No se genero export, screenshot ni se uso Playwright.
+- Limites: el recorrido usa una API local de contrato controlado, no valida Core/PostgreSQL ni movil,
+  multi-tab, cuota o fallo fisico del almacenamiento. Las carreras de edicion/respuesta se verifican con
+  regresiones controladas; no se inyectaron todas en Chrome. Conflictos historicos sin remoto retenido
+  no adquieren retroactivamente su id: el guard adicional del remoto usa el id del snapshot nuevo o el
+  server id existente cuando disponible. La navegacion completa reprodujo `ACCESS_HANDLE_BUSY` conocido;
+  se cerro/reabrio solo el perfil de prueba sin reset, conservando OPFS. Ese limite sigue abierto.
+- Checks de esta etapa: typecheck, lint (cero errores; los dos warnings RECORDS conocidos) y
+  `git diff --check` pasan. Sin suite completa ni build/export. Se eliminaron unicamente los fixtures,
+  perfil y procesos creados para esta prueba; los demas archivos pendientes permanecen intactos.
+
+Archivos de esta etapa: `src/lib/local-db.ts`, `src/lib/local-db.test.ts`,
+`src/lib/state-update-offline.ts`, `src/lib/state-update-conflict-resolution.test.ts`,
+`src/lib/attendance-offline.ts`, `src/renderers/workflows/attendance/AttendanceWorkflow.tsx`,
+`src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`,
+`src/renderers/workflows/state-update/state-update-workflow-logic.ts`,
+`src/renderers/workflows/state-update/state-update-conflict-handlers.test.ts`,
+`docs/STATUS.md`, `docs/STATE_UPDATE.md` y `docs/OFFLINE_FIRST_AUDIT.md`.
+
+
+## Cierre Técnico Acumulado 2026-10-03
+
+Cierre acotado de revisión y checks; **la auditoría general permanece abierta**.
+
+- Revisión del diff completo: limitado a preparación/lectura offline STATE_UPDATE, proyección y resolución
+  de conflictos durables, publicación coherente del día Attendance, sus pruebas y documentación. No se
+  encontraron cambios ajenos. Los 21 archivos iniciales siguen pendientes en `main`; nada staged.
+- Verificación acumulada: `npm test -- --maxWorkers=2`: **850/850 tests, 71/71 archivos**;
+  `npm run typecheck`: **PASS**; `npm run lint`: **PASS**, cero errores y dos warnings conocidos
+  `no-require-imports` en `records-sync.local-db-regression.test.ts:182-183`, fuera del diff;
+  `npm run build`: **PASS**, export Web, worker/WASM SQLite y generación del service worker;
+  `git diff --check`: **PASS**, después de actualizar la documentación.
+- La primera suite dio 849 aprobados y un fallo textual en `read-loading-indicator.test.ts`: esperaba
+  la comparación inline reemplazada por el guard `isStateUpdateVisualRequestCurrent`. Este cierre sólo
+  actualizó esa expectativa y documentación; no amplió implementación. La segunda suite completa pasó.
+- Persistencia compartida revisada en código y suite: cobertura target y conflictos usan owner, contrato,
+  AppView, target y fecha lógica; escrituras locales reutilizan `entity_records`/`pending_operations` y el
+  singleton/coordinador; limpieza por ausencia afecta sólo `synced` en snapshots completos. Intención
+  pendiente no coincidente se conserva; la reconciliación exacta existente puede completar una intención
+  ya confirmada remotamente. Fechas ISO anteriores se consultan por prefijo; definiciones sin nombres
+  tienen fallback neutral; filas sin marcador son parciales y vacío sin marcador es ausente. Estos checks
+  usan dobles SQLite/API y no acreditan todas las restricciones del motor OPFS real.
+- Evidencia Chrome/OPFS reutilizada: STATE_UPDATE preparación CDP 9340, conflicto durable 9342 y
+  Attendance 9343/9345, descritas abajo/en STATUS. No se repitió navegador ni se usó Playwright: el fallo
+  nuevo fue de una expectativa textual y no mostró regresión del runtime. No se accedió a Core ni datos.
+- Higiene: `dist`, `.env`, `.env.local`, `.expo` y `node_modules` permanecen ignorados; no hay configuración,
+  secretos, DB, logs, exportaciones reales, fixtures externos ni artefactos en el diff. Los helpers/datos
+  sintéticos dentro de tests son cobertura unitaria existente en estos 21 archivos, no fixtures de Core.
+  El build usa la configuración local existente sin modificarla; su export no acredita una publicación.
+- Sin cambios de Core, datos, esquema/migraciones, dependencias o configuración. Sin commit, push o deploy.
+
+### Pendientes Y Límites
+
+1. **Causa productiva de `Error finalizing statement`**: falta diagnóstico seguro del incidente original;
+   la colisión sintética no identifica su causa.
+2. **Restricción SQLite entre AppViews que comparten registros**: colisión `server_id` reproducida en
+   OPFS, todavía sin corrección; el scope lógico no elimina el índice compartido.
+3. **Contenido retenido al cambiar de AppView**: reproducción vigente; falta scope visual por AppView.
+4. **`latest` después de resolver conflicto STATE_UPDATE**: la anomalia del fixture Core anterior sigue
+   sin diagnostico. El recorrido CDP 9351 verifica latest exclusivamente para remote-b/remote-c con
+   servidor sintetico y OPFS real; no acredita universalmente las respuestas Core.
+5. **Resumen RECORDS contaminado**, **bloqueo OPFS** y **formato REPORT `[object Object]`**: reproducidos,
+   pendientes de correcciones separadas.
+6. **Cobertura offline de las demás experiencias**: RECORDS depende de full refresh; PANEL/REPORT de
+   queries visitadas; Attendance de fecha/cobertura. No se declara garantía global, nativa ni multi-tab.
+
+Limites historicos del cierre anterior, corregidos en la etapa de resolucion exacta/atomica descrita arriba:
+
+- `Usar Opco` llama `discardStateUpdateLocalChange` por sujeto/scope; el helper selecciona la fila más
+  reciente y no recibe el `localRecordId` mostrado. Con varios append del mismo sujeto no queda acreditado
+  que descarte exactamente el conflicto elegido. Además borra outbox y restaura fila en statements
+  separados: fallo entre ambos no está cubierto como resolución atómica.
+- `handleUseLocalConflictChange` emite `Conflicto resuelto`/`server-confirmed` tras `syncPendingRecords()`
+  global sin verificar el estado terminal de la fila elegida. Una corrida finalizada no prueba por sí sola
+  que esa intención haya sido confirmada; falta cobertura de nuevo conflicto/fallo en ese paso.
+
+Estos límites impiden declarar resolución universal de conflictos. El recorrido Chrome existente sólo
+acredita el caso exitoso descrito; se conservan explícitamente las diferencias frente al alcance esperado.
+
+### Inventario Exacto (21 Archivos Pendientes)
+
+- `app/(app)/index.tsx`
+- `docs/CLIENT_ARCHITECTURE.md`
+- `docs/OFFLINE_FIRST_AUDIT.md`
+- `docs/STATE_UPDATE.md`
+- `docs/STATUS.md`
+- `src/components/read-loading-indicator.test.ts`
+- `src/lib/app-view-definitions-cache.test.ts`
+- `src/lib/app-view-definitions-cache.ts`
+- `src/lib/app-view-prewarm.test.ts`
+- `src/lib/app-view-prewarm.ts`
+- `src/lib/attendance-snapshot-cache.test.ts`
+- `src/lib/local-db.test.ts`
+- `src/lib/local-db.ts`
+- `src/lib/state-update-offline.test.ts`
+- `src/lib/state-update-offline.ts`
+- `src/renderers/workflows/attendance/AttendanceWorkflow.tsx`
+- `src/renderers/workflows/attendance/attendance-workflow-logic.test.ts`
+- `src/renderers/workflows/attendance/attendance-workflow-logic.ts`
+- `src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`
+- `src/renderers/workflows/state-update/state-update-workflow-logic.test.ts`
+- `src/renderers/workflows/state-update/state-update-workflow-logic.ts`
+
+## Attendance Initial Day Publication Fix 2026-10-03
+
+- Demonstrated cause corrected: both initial-load branches hydrated Attendance data without publishing
+  `loadedDate`, while the explicit retry path wrote `loadedDate` from `finally` even after a failed read.
+  Since `hasCompatibleDay` requires exact date equality, a valid prepared day kept its total, latest rows
+  and day-dependent interaction inaccessible.
+- Attendance now publishes the snapshot data and logical date from the same completed read. A remote
+  response is publishable after its cache/local overlay succeeds; an offline response is publishable only
+  when the exact day hydration marker exists. Absence and read failure never accredit a day. Publication
+  additionally requires the current request and full owner, contract, AppView, target-entity and date
+  scope, so an inverse-order response cannot replace the selected day. Existing local overlays, conflicts
+  and write controls remain on the shared STATE_UPDATE storage/runtime.
+- Automated evidence: 57 focused tests pass across Attendance logic/component, snapshot cache and prewarm.
+  The new regressions cover remote and prepared-local success, valid empty hydration, absent/failure, and
+  stale request/date/user/contract/AppView/target scopes. Existing local-DB tests cover persistence and
+  reopening of the scoped hydration marker. Typecheck passes; lint has zero errors and only the two known
+  `no-require-imports` warnings outside this scope. Final `git diff --check` is recorded below after docs.
+- Real browser evidence: Windows Chrome 153 used CDP ports 9343/9345, disposable profiles, the generated
+  local Web shell, real Expo SQLite OPFS/WASM, Core local and the explicitly verified PostgreSQL target
+  `opco_dev@127.0.0.1:5432/opco_development`. First online opening showed date `2026-10-03`, total `1` and
+  the prepared row. In a fresh profile, prewarm reached `Listo`; CDP then kept `navigator.onLine=false`
+  throughout the first Attendance visit, which showed `Sin conexión`, total `1`, the row/state and search
+  control. Closing Chrome and reopening from `about:blank` with the network cut before navigation produced
+  the same visible result under a controlling service worker with OPFS available. No screenshot was taken.
+- Evidence limits remain explicit: inverse-order responses and read failure are controlled regressions,
+  not injected browser failures. The separate STATE_UPDATE post-conflict `latest` browser limitation stays
+  open; this stage does not alter generic STATE_UPDATE, RECORDS, REPORT, OPFS recovery or sync behavior.
+
+## STATE_UPDATE Durable Conflict Visibility Fix 2026-10-02
+
+- Demonstrated cause corrected: a successful online `GET workflow/state-update` replaced the renderer's
+  response and remote summary before consulting the durable local conflict. SQLite correctly retained the
+  `conflict` record, remote snapshot and outbox operation, but the generic STATE_UPDATE renderer lost its
+  warning and resolution entry points until it was offline again.
+- Online and offline reads now query conflicts with the complete existing scope (owner, contract, AppView,
+  target entity and logical date), overlay the local requested version on the compatible remote response,
+  and retain the remote version for comparison. Searches/subject loads filter only presentation inside that
+  already-scoped set. A successful GET does not discard differing local intent or retry a conflict; existing exact-match
+  snapshot reconciliation remains available.
+- The generic renderer exposes the existing whole-intent choices `Usar mi cambio` and `Usar Opco`.
+  Choosing local validates the exact conflicting row and reuses its `localRecordId` and outbox identity,
+  including append workflows, while creating the required new semantic request id for overwrite. Choosing
+  Opco resolves by subject within that scope; exact append-row selection remains limited as noted above. Both paths invalidate older visual reads before publishing
+  their result, so a late callback cannot restore a conflict already resolved.
+- Automated evidence: the focused run passed 179 tests across four files. Regressions cover remote/local
+  projection without duplicate latest rows, no-conflict behavior, late-request invalidation, complete
+  conflict query scope, reuse of an append conflict's record/outbox identity, persistence normalization and
+  the unchanged sync-engine rule that conflicts are terminal until explicit action. Typecheck passed; lint
+  completed with zero errors and the two pre-existing `no-require-imports` warnings in the RECORDS local-DB
+  regression. Final `git diff --check` is recorded after this documentation update.
+- Real browser evidence: Windows Chrome 153 used CDP port 9342, an exclusive disposable profile and real
+  Expo SQLite OPFS/WASM against Client `localhost:3003`, Core `localhost:3000`, and the explicitly verified
+  local PostgreSQL destination. A synthetic STATE_UPDATE was saved as `En espera` during a persistent CDP
+  network cut while Core independently acquired `Operativo`. Reconnect produced a real conflict; the online
+  GET then kept both versions and both actions visible. Full Chrome close/reopen preserved the conflict.
+  A separate PANEL remained usable and did not show the renderer conflict. Explicit `Usar mi cambio` showed
+  both versions in the confirmation modal, completed the overwrite, removed the warning, and left one remote
+  target record; a later reload did not restore or resend the conflict. No screenshot was taken.
+- Browser-evidence limit: the concurrent target inserted directly for this synthetic conflict was not
+  returned in the fixture's `latest` list after resolution, although PostgreSQL confirmed the final
+  `waiting` value, one target record and exactly the conflict probe plus explicit overwrite requests.
+  This stage therefore does not claim a real-browser check of post-resolution latest rendering; the
+  unchanged no-conflict response path and overlay de-duplication are covered automatically. The fixture
+  artifact was not investigated further because that would expand beyond durable conflict visibility.
+- Scope limits remain separate: Attendance's initial-day visibility, the RECORDS summary contamination,
+  induced cross-AppView SQLite restriction, retained content between AppViews, REPORT formatting and the
+  production `Error finalizing statement` incident are not changed or declared resolved here. The local
+  export was generated only because OPFS validation required the current bundle; `dist` remains ignored.
+
+## STATE_UPDATE Offline Preparation Fix 2026-10-02
+
+- Demonstrated cause corrected: generic STATE_UPDATE prewarm fetched the initial `items/latest` response
+  but discarded it, saved only source records/definition, and declared success. Offline reads then used
+  source hydration as sufficient readiness, so a never-downloaded target snapshot appeared as a valid
+  empty history. Date-scoped snapshots also compared stored ISO dates with a `YYYY-MM-DD` query by exact
+  JSON string equality.
+- Generic prewarm now persists the initial target snapshot before writing scoped coverage metadata. The
+  metadata reuses `app_metadata`, keyed by fingerprinted owner plus contract, AppView, target entity and
+  logical date; no migration was added. A first page is `complete` only when Core reports no following
+  page. Any paginated first page is `partial`, and a snapshot/metadata persistence failure leaves the run
+  failed instead of accrediting complete coverage. Existing mismatched pending local intent is still not
+  overwritten by remote snapshots.
+- STATE_UPDATE logical dates are canonicalized to `YYYY-MM-DD` for new local writes, snapshot identities
+  and reads. Existing ISO-valued snapshots remain queryable with a prefix comparison and are normalized
+  only when exposed as workflow dates; audit/version timestamps remain unchanged.
+- Prepared definitions now retain source and target display names. Older definitions remain readable and
+  use neutral `Registros` / `Actualizaciones` labels instead of exposing technical ids. Older snapshots
+  with rows but no coverage marker are conservatively presented as partial; an unmarked empty cache is
+  absent, not a confirmed empty result.
+- UI semantics: complete + zero rows shows `Sin actualizaciones`; absent shows
+  `Información no disponible sin conexión.`; partial coverage is explicit; a SQLite read failure remains
+  an error and never falls through to the empty label. Home consumes the same target coverage marker, so
+  source hydration alone no longer advertises generic STATE_UPDATE as offline-ready.
+- Automated evidence: 194 focused tests passed across seven files. Coverage includes initial prewarm
+  persistence, names, complete/partial metadata, failed snapshot persistence, owner/contract/AppView/date
+  scoping, pending-intent preservation, ISO/date-only compatibility, prepared empty versus absent/legacy
+  partial presentation, selection guards and loading integration. Typecheck and lint passed; final
+  `git diff --check` passed.
+- Technical close: the complete suite passed 842 tests across 71 files with at most two workers, the web
+  build passed, and final `git diff --check` passed. Typecheck, lint and the Chrome/OPFS walkthrough were
+  reused because their corresponding implementation remained unchanged. The build produced only ignored
+  local `dist`; no secret, local configuration, fixture, database, log or generated artifact is tracked.
+  Shared STATE_UPDATE storage continues to preserve pending local intent, and the full suite found no
+  Attendance or other-renderer regression. No outbox/sync engine, SQLite schema, API, dependency or Core
+  file changed.
+- Real browser evidence: Windows Chrome 153 used CDP port 9340, an exclusive disposable profile and real
+  Expo SQLite OPFS/WASM against Client `localhost:8081`, Core `localhost:3000`, and the explicitly verified
+  local PostgreSQL destination. A synthetic dated STATE_UPDATE AppView with one subject/update completed
+  prewarm. Its first visit occurred after CDP had switched offline and showed the human target name and
+  prepared record, with no technical-id subtitle, absent/partial warning or read error. An online visit
+  followed by offline reopen also showed the record. After fully restarting Chrome with the same profile,
+  the STATE_UPDATE endpoint was blocked before Home loaded; switching offline and opening the AppView still
+  showed the persisted record/name without error, proving the result came from retained OPFS rather than a
+  second workflow refresh. No screenshot was taken.
+- Scope limits remain explicit and separate: this does not diagnose or resolve the production `Error
+  finalizing statement` incident; the induced SQLite restriction between AppViews remains pending; and
+  incompatible content retained when changing AppView remains pending. A hard offline navigation directly from `about:blank`
+  cannot load the development shell; restart persistence was therefore tested by loading the local shell
+  while blocking STATE_UPDATE network reads, then switching offline before opening the experience.
+
+## STATE_UPDATE Offline Coverage Diagnostic 2026-10-02
+
+- Renderer confirmed from the exact labels `Últimas actualizaciones` and `Sin actualizaciones`:
+  `WORKFLOW` with `config.workflowKey = state-update`, rendered by `StateUpdateWorkflow`. The title is
+  `appView.name`; online the subtitle is `targetEntityType.name`, while the prepared offline definition
+  stores only entity ids and reconstructs that subtitle with `targetEntityTypeId`. This explains the
+  technical identifier reported under `Versionado Procedimientos` without inferring its type from its name.
+- `10/10` means ten AppViews reached a terminal prewarm result. `completed` counts every AppView with
+  `appViewCompletedAt`, including `success`, `skipped`, and `failed`; the run status is `completed` only
+  when none has result `failed`, but `skipped` remains terminal. It does not mean ten experiences have all
+  resources needed by their initial offline renderer.
+- Coverage by renderer is intentionally different. RECORDS prewarms its definition only and remains
+  demand-cached until a successful full records refresh. Attendance stores its definition, fully paginates
+  source records, and attempts each current-month daily snapshot; individual day failures are swallowed, so
+  the AppView run can succeed while Home readiness reports a partial month. Generic STATE_UPDATE stores its
+  definition and fully paginates source records, but currently discards the initial workflow `items/latest`
+  response and has no target-snapshot hydration marker. REPORT and PANEL query snapshots are exact-query,
+  demand-cached resources and their prewarm branch is `skipped`; BOARD, DASHBOARD and unsupported workflows
+  are also terminal `skipped` definitions rather than offline data preparation.
+- Demonstrated prewarm gap: the generic STATE_UPDATE branch calls Core and receives its initial latest page,
+  hydrates every source-record page, saves the prepared definition, then returns `success` without calling
+  `upsertStateUpdateSnapshot`. Its readiness check requires only successful source hydration. Therefore an
+  absent target snapshot is classified as ready and the renderer treats `sourceHydrated` as sufficient to
+  return a response whose empty local target query renders `Sin actualizaciones`. There is no generic marker
+  that can distinguish a valid remote zero, never downloaded target data, or a partial first page.
+- Focused automated reproduction passed in `app-view-prewarm.test.ts`: a response with one real latest item
+  finishes `completed 1/1`, `failed 0`, hydrates its source record, and leaves zero target snapshots/records.
+  This is a controlled store/API characterization, not SQLite evidence.
+- Real local browser reproduction used Windows Chrome 153 through CDP port 9339, an exclusive disposable
+  profile, Expo Web through a temporary Windows TCP proxy at `localhost:3004`, Core local only, and the
+  explicitly verified `.env.local` PostgreSQL target `opco_dev@127.0.0.1:5432/opco_development`. One
+  synthetic STATE_UPDATE AppView, two synthetic source subjects and one synthetic target update were used.
+  Prewarm ended `completed 3/3`, `failed 0`, in 486 ms. Before that AppView had ever been opened, persistent
+  CDP offline mode showed its target entity id and `Sin actualizaciones`; searching still returned both
+  subjects as `Sin estado`. This proves source coverage while target history remained absent.
+- Visiting the same AppView online showed the human target name and the synthetic latest update, and saved
+  one local `synced` workflow record. A later offline open still showed `Sin actualizaciones`. Safe local
+  diagnostics exposed the second defect: the snapshot record date was
+  `2026-10-02T00:00:00.000Z`, while STATE_UPDATE's offline scope is the canonical date-only
+  `2026-10-02`; `listStateUpdateLatest` and subject lookup compare the JSON strings strictly. Thus even a
+  visited date-scoped snapshot is not selected offline. No normal empty-state evidence can currently
+  distinguish this mismatch from an actual remote zero.
+- Separate finalization reproduction: an earlier comparison fixture temporarily assigned two synthetic
+  AppViews to the same target record. The second online snapshot necessarily reused the same remote
+  `server_id` under another AppView-specific local id, conflicting with the unique local server identity.
+  The coordinator recorded `transaction:attendance-snapshot` as `error`, but Expo exposed only
+  `Error finalizing statement`; the original SQLite code/context was lost. The previous AppView response
+  remained visible under the new title because STATE_UPDATE response state is not scoped to `appView.id`,
+  and opening telemetry classified that retained response as completed, so the header returned to `Listo`.
+  This is real OPFS evidence for context loss and incompatible retained content, but it was induced by the
+  duplicate fixture and does not prove that the reported production AppView has a duplicate target view.
+- Minimum correction proposed for a later implementation stage: persist generic STATE_UPDATE's initial
+  response during prewarm; normalize snapshot dates to canonical `YYYY-MM-DD`; store a scoped target
+  hydration marker that distinguishes complete, partial and absent coverage using server pagination; and
+  preserve source/target display names in the prepared definition. Readiness and offline empty UI should
+  consume that marker without deleting prior valid snapshots. The cross-AppView retained response and
+  preservation of the primary SQLite error should be regression-tested as a separate bounded correction.
+- Data risk and missing incident evidence: these paths write only local definitions/cache snapshots and do
+  not mutate outbox or Core records. The failed synthetic transaction rolled back and no pending intent was
+  at risk. To correlate the user's incident, capture while visible: PWA preparation status/counts, the safe
+  SQLite `Ultimas` line, STATE_UPDATE `Last visible UI error`, and the affected local-record date/AppView
+  fingerprint. Also confirm whether another AppView shares the same target entity/records. Do not export
+  OPFS, response bodies, tokens, credentials, names, or record values.
+
+## Initial SQLite Finalization Diagnostic 2026-10-02
+
+- Reported incident: Client showed `Error finalizing statement` in `Versionado Procedimientos` while
+  search contained `tolva`, rows remained visible and the global header said `Listo`. This initial pass
+  did not have the later exact labels; the renderer is now confirmed as STATE_UPDATE in the diagnostic
+  above. Production and the user's SQLite/OPFS storage were not accessed.
+- Confirmed path and context loss: REPORT calls Core, awaits `upsertReportSnapshot`, and on any error
+  awaits `getReportSnapshot` before rethrowing. A failure in that fallback read replaces the original
+  request/write error. PANEL has the same unguarded fallback pattern. Expo SQLite 57 shorthand methods
+  prepare, execute/read and then await `finalizeAsync` in `finally`; on Web the worker emits only
+  `Error finalizing statement` when `sqlite3_finalize` is not `SQLITE_OK`. A finalization rejection can
+  therefore replace the preceding execute/constraint/I/O error before Client receives it. The shared
+  coordinator records only operation name, duration and `error` status, not the underlying SQLite
+  result or chained cause.
+- Coordination: all normal Client reads, writes and transactions use the singleton coordinated
+  connection. Search, snapshot persistence and offline preparation are queued, and a failed operation
+  does not stop the queue. A search started while an earlier REPORT request remained pending completed
+  independently in the controlled test; exact query keys and mounted/request guards prevent an older
+  selection from becoming current. Concurrency alone did not reproduce a finalization failure.
+- Focused evidence: a temporary Vitest diagnostic plus existing REPORT/coordinator tests passed 7
+  selected tests across 3 files. With controlled API/store/statement doubles it reproduced (a) a
+  finalize rejection replacing an execute rejection, (b) a prior same-query REPORT snapshot remaining
+  available when refresh persistence fails, and (c) a `tolva` search finishing while an older request
+  remains in flight. These are mocks, not SQLite/OPFS evidence. A follow-up attempt to import the real
+  Expo `SQLiteDatabase` class in Vitest stopped before test collection because the Node harness does not
+  transform React Native Flow; it neither confirms nor rejects the browser incident. The historical
+  2026-09-23 OPFS reproduction proves this generic message previously hid a unique-index failure, but
+  it does not identify the cause of this incident.
+- Visible rows and header: the later STATE_UPDATE OPFS reproduction showed that response state can survive
+  an AppView id change. Opening telemetry reports `completed` when that retained response exists even if
+  the new read fails, which allows the header to return to `Listo`. This explains the combination locally,
+  but the duplicate-target fixture induced that failure and does not identify the user's primary error.
+- Data risk: the demonstrated paths are reads and cache/snapshot writes; no outbox mutation, remote
+  write or destructive reconciliation is initiated by REPORT/PANEL search. Previously valid snapshots
+  and visible in-memory rows remain usable. The unknown original SQLite failure could still mean that
+  the newest read snapshot was not persisted; reset or cache deletion is not an appropriate diagnostic.
+- Minimum incident evidence is now STATE_UPDATE-specific: copy the PWA preparation rows, safe coordinator
+  `Ultimas` line, `Last visible UI error`, and affected local-record date/AppView fingerprint while the
+  error is present. Retain only browser-console stack frames and Network method, route template, status and
+  request id; do not copy response bodies, query values, tokens or database files.
+
 ## PANEL KPI Compact Presentation 2026-09-30
 
 - Cause and geometry: KPI modules had a 240 px visual minimum, while the module shell added 6 px outer padding, 12 px content padding and a second bordered KPI card with 16 px padding and its own 120 px minimum. The repeated calculated-at line consumed another row. Because PANEL derives one shared effective row unit before applying persisted `x/y/w/h`, an `h=1` KPI raised that unit to 240 px and enlarged neighboring modules.

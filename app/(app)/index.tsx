@@ -134,6 +134,18 @@ export default function HomeScreen() {
               })
             )))
           : undefined;
+        const stateUpdateCoverage = appView.type === "WORKFLOW" &&
+          appView.config.workflowKey === "state-update" &&
+          definition?.definition.kind === "state-update" &&
+          targetEntityTypeId
+          ? await definitionCache.getStateUpdateSnapshotCoverage({
+              appViewId: appView.id,
+              contractId: selectedContractId,
+              date: definition.definition.dateFieldId ? today : undefined,
+              ownerKey,
+              targetEntityTypeId,
+            })
+          : null;
 
         return [appView.id, deriveOfflineAvailability({
           attendanceDayHydration,
@@ -142,6 +154,7 @@ export default function HomeScreen() {
           definition,
           recordsTelemetry,
           sourceTelemetry,
+          stateUpdateCoverage,
         })] as const;
       }));
 

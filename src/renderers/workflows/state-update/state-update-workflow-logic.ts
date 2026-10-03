@@ -10,6 +10,7 @@ import {
   StateUpdateOption,
   StateUpdateResponse,
 } from "@/lib/opco-api";
+import type { CachedStateUpdateRecord } from "@/lib/state-update-offline";
 
 export const STATE_UPDATE_SEARCH_DEBOUNCE_MS = 300;
 
@@ -20,6 +21,106 @@ export type StateUpdateLatestRow = {
   label: string;
   value: string;
 };
+
+export type StateUpdateOfflineHistoryState = "absent" | "complete" | "partial" | null;
+
+export function isStateUpdateVisualRequestCurrent(activeRequestId: number, requestId: number | undefined) {
+  return requestId === undefined || activeRequestId === requestId;
+}
+
+export function mergeStateUpdateResponseWithLocalConflicts(
+  response: StateUpdateResponse,
+  conflicts: CachedStateUpdateRecord[],
+): StateUpdateResponse {
+  if (conflicts.length === 0) {
+    return response;
+  }
+
+  const conflictsBySubject = new Map(conflicts.map((record) => [record.subject.id, record]));
+  const localLatest = conflicts.map(stateUpdateConflictLatestItem);
+  const remoteLatest = (response.latest ?? []).filter((item) => !conflicts.some((record) =>
+    stateUpdateConflictReplacesLatest(response, record, item)));
+
+  return {
+    ...response,
+    items: response.items.map((item) => {
+      const local = conflictsBySubject.get(item.subject.id);
+
+      if (!local) {
+        return item;
+      }
+
+      return {
+        ...item,
+        current: {
+          extraValues: local.extraValues,
+          recordId: local.localRecordId,
+          stateValues: local.stateValues,
+          updatedAt: local.updatedAt ?? item.current?.updatedAt ?? "",
+        },
+      };
+    }),
+    latest: mergeStateUpdateLatestUpdates(localLatest, remoteLatest),
+    summary: {
+      ...response.summary,
+      conflictCount: conflicts.length,
+    },
+  };
+}
+
+function stateUpdateConflictReplacesLatest(
+  response: StateUpdateResponse,
+  conflict: CachedStateUpdateRecord,
+  item: StateUpdateLatestItem,
+) {
+  if (response.uniqueness === "none" || item.subject.id !== conflict.subject.id) {
+    return false;
+  }
+
+  if (response.uniqueness === "subject-date") {
+    return (item.date ?? response.date ?? null)?.slice(0, 10) === (conflict.date ?? response.date ?? null)?.slice(0, 10);
+  }
+
+  return true;
+}
+
+export function stateUpdateConflictLatestItem(record: CachedStateUpdateRecord): StateUpdateLatestItem {
+  return {
+    date: record.date ?? null,
+    extraValues: record.extraValues,
+    recordId: record.localRecordId,
+    stateValues: record.stateValues,
+    subject: record.subject,
+    updatedAt: record.updatedAt ?? record.conflictRemoteUpdatedAt ?? "",
+  };
+}
+
+export function resolveStateUpdateOfflineHistoryState({
+  cachedRecordCount,
+  storedCoverage,
+}: {
+  cachedRecordCount: number;
+  storedCoverage?: Exclude<StateUpdateOfflineHistoryState, "absent" | null> | null;
+}): Exclude<StateUpdateOfflineHistoryState, null> {
+  return storedCoverage ?? (cachedRecordCount > 0 ? "partial" : "absent");
+}
+
+export function stateUpdateOfflineHistoryMessage({
+  coverage,
+  hasItems,
+  readFailed,
+}: {
+  coverage: StateUpdateOfflineHistoryState;
+  hasItems: boolean;
+  readFailed: boolean;
+}) {
+  if (readFailed) return null;
+  if (coverage === "absent") return "Información no disponible sin conexión.";
+  if (coverage === "partial") return "Cobertura offline parcial. Se muestran las actualizaciones preparadas.";
+  if (coverage === "complete" && !hasItems) return "Sin actualizaciones";
+
+  return null;
+}
 
 export function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
@@ -792,4 +893,16 @@ function normalizeExtraConflictValue(value: EntityRecordValue | undefined): unkn
 
 function fallbackFieldLabel(fieldId: string) {
   return `Campo ${fieldId.slice(0, 8)}`;
+}
+
+export function stateUpdateResolutionFeedback(outcome: "local" | "confirmed" | "pending" | "conflict" | "failed" | "superseded") {
+  const messages = {
+    local: "Resolucion local guardada con el estado de Opco.",
+    confirmed: "Cambio confirmado por Opco.",
+    pending: "Cambio guardado; envio pendiente.",
+    conflict: "Opco devolvio un nuevo conflicto. Revisa ambas versiones.",
+    failed: "El envio del cambio fallo. La intencion se conserva.",
+    superseded: "La intencion seleccionada cambio durante la resolucion. Revisa el estado actual.",
+  };
+  return { message: messages[outcome], outcome };
 }

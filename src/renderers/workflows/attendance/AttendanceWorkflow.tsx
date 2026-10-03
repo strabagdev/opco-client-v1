@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -53,6 +53,7 @@ import {
   normalizeAttendanceSearch,
   sanitizeAttendanceContextSelections,
   shouldFinishAttendanceVisualRequest,
+  shouldPublishAttendanceDay,
   shouldRefreshAttendanceLatestAfterSync,
   shouldRenderAttendanceInlineFeedback,
   shouldSearchAttendancePeople,
@@ -76,6 +77,7 @@ import {
   StateUpdateVisibleErrorOperation,
 } from "../state-update/state-update-operation-feedback";
 import type { StateUpdateVisibleErrorResolution } from "@/lib/state-update-offline";
+import { stateUpdateResolutionFeedback } from "../state-update/state-update-workflow-logic";
 import { reportWriteFeedback } from "@/lib/write-feedback";
 
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
@@ -125,6 +127,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [resolutionFeedback, setResolutionFeedback] = useState<(ReturnType<typeof stateUpdateResolutionFeedback> & { scope: string }) | null>(null);
+  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date]);
+  const resolutionScopeRef = useRef(resolutionScope);
+  const resolutionInFlightRef = useRef(false);
+  const resolutionMountedRef = useRef(false);
+  useLayoutEffect(() => { resolutionScopeRef.current = resolutionScope; }, [resolutionScope]);
+  useLayoutEffect(() => {
+    resolutionMountedRef.current = true;
+    return () => { resolutionMountedRef.current = false; };
+  }, []);
   const requestSequenceRef = useRef(0);
   const loadingRequestRef = useRef<number | null>(null);
   const searchingRequestRef = useRef<number | null>(null);
@@ -134,6 +146,17 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const screenTitle = "Registro de Asistencia";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const hasCompatibleDay = loadedDate === date;
+  const attendanceDayScope = useMemo(() => ownerKey && selectedContractId ? {
+    appViewId: appView.id,
+    contractId: selectedContractId,
+    date,
+    ownerKey,
+    targetEntityTypeId: appView.config.targetEntityTypeId,
+  } : null, [appView.config.targetEntityTypeId, appView.id, date, ownerKey, selectedContractId]);
+  const attendanceDayScopeRef = useRef(attendanceDayScope);
+  useEffect(() => {
+    attendanceDayScopeRef.current = attendanceDayScope;
+  }, [attendanceDayScope]);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const showSubtitle = shouldShowAttendanceSubtitle({ subtitle: appView.name, title: screenTitle });
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
@@ -263,6 +286,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
+    const requestedScope = {
+      appViewId: appView.id,
+      contractId: selectedContractId,
+      date,
+      ownerKey,
+      targetEntityTypeId: appView.config.targetEntityTypeId,
+    };
+    const effectiveRequestId = requestId ?? requestSequenceRef.current;
+
     const [summary, localLatest, conflicts, dayHydration] = await Promise.all([
       definitionCache.getStateUpdateSummary({
         appViewId: appView.id,
@@ -294,7 +326,24 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }),
     ]);
 
-    if (requestId !== undefined && !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+    const snapshotHydrated = hasSuccessfulAttendanceDayHydration(dayHydration);
+    const readResult = remoteSnapshot ? "remote" : snapshotHydrated ? "prepared-local" : "absent";
+    const publishDay = shouldPublishAttendanceDay({
+      currentRequestId: requestSequenceRef.current,
+      currentScope: attendanceDayScopeRef.current,
+      readResult,
+      requestId: effectiveRequestId,
+      requestedScope,
+    });
+
+    if (!publishDay && (
+      !isAttendanceRequestCurrent(requestSequenceRef.current, effectiveRequestId) ||
+      attendanceDayScopeRef.current?.ownerKey !== requestedScope.ownerKey ||
+      attendanceDayScopeRef.current.contractId !== requestedScope.contractId ||
+      attendanceDayScopeRef.current.appViewId !== requestedScope.appViewId ||
+      attendanceDayScopeRef.current.targetEntityTypeId !== requestedScope.targetEntityTypeId ||
+      attendanceDayScopeRef.current.date !== requestedScope.date
+    )) {
       return;
     }
 
@@ -305,7 +354,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setTotalRegistered(Math.max(summary.totalRegistered, remoteSnapshot?.totalRegistered ?? 0));
     setPendingCount(summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount);
     setLocalConflicts(conflicts.map((record) => stateUpdateConflictToAttendanceRecord(record, appView.config.statusFieldId, appView.config.observationFieldId)));
-    setDaySnapshotHydrated(hasSuccessfulAttendanceDayHydration(dayHydration));
+    setDaySnapshotHydrated(snapshotHydrated);
+    setLoadedDate((current) => publishDay ? requestedScope.date : current === requestedScope.date ? null : current);
     return summary.pendingCount + summary.failedCount + summary.conflictCount + summary.syncingCount;
   }, [appView.config.observationFieldId, appView.config.statusFieldId, appView.config.targetEntityTypeId, appView.id, date, definitionCache, ownerKey, selectedContractId]);
 
@@ -376,6 +426,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
+    setResolutionFeedback(null);
     setSearchText("");
     setItems([]);
     setSelectedItem(null);
@@ -466,7 +517,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
-      if (isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) setLoadedDate(date);
       finishLoadingRequest(requestId);
     }
   }, [api, appView.id, applyAttendanceResponse, beginLoadingRequest, cacheAttendanceOnlineResponse, clearVisibleError, date, finishLoadingRequest, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
@@ -653,45 +703,65 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      const requestId = beginLoadingRequest();
+
       if (connectivityStatus !== "online") {
-        if (ownerKey) {
-          const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
-          const sourceDefinition = await definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId);
-          const sourceTelemetry = await definitionCache.getSyncTelemetry({
-            contractId: selectedContractId,
-            entityTypeId: appView.config.sourceEntityTypeId,
-            ownerKey,
-          });
-          const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
+        try {
+          if (ownerKey) {
+            const [prepared, sourceDefinition, sourceTelemetry] = await Promise.all([
+              definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id),
+              definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId),
+              definitionCache.getSyncTelemetry({
+                contractId: selectedContractId,
+                entityTypeId: appView.config.sourceEntityTypeId,
+                ownerKey,
+              }),
+            ]);
 
-          if (prepared?.definition.kind === "attendance") {
-            setStatuses(prepared.definition.statuses);
+            if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+              return;
+            }
+
+            const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
+
+            if (prepared?.definition.kind === "attendance") {
+              setStatuses(prepared.definition.statuses);
+            }
+
+            if (prepared?.definition.kind === "state-update") {
+              setStatuses(attendanceStatusesFromStateFields(
+                prepared.definition.stateFields,
+                appView.config.statusFieldId,
+                appView.config.defaultCheckInOptionId,
+              ));
+              setContextFields(attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []));
+            }
+
+            if (!prepared || prepared.status !== "ready" || !sourceDefinition || !sourceHydrated) {
+              setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
+            } else {
+              setError(null);
+            }
+
+            await refreshLocalDayState(undefined, requestId);
           }
 
-          if (prepared?.definition.kind === "state-update") {
-            setStatuses(attendanceStatusesFromStateFields(
-              prepared.definition.stateFields,
-              appView.config.statusFieldId,
-              appView.config.defaultCheckInOptionId,
-            ));
-            setContextFields(attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []));
+          if (isMounted && isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+            setItems([]);
           }
-
-          if (!prepared || prepared.status !== "ready" || !sourceDefinition || !sourceHydrated) {
-            setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
-          } else {
-            setError(null);
+        } catch (nextError) {
+          if (isMounted && isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+            setError(nextError instanceof Error ? nextError.message : "No fue posible leer la asistencia preparada.");
+            recordVisibleError({ error: nextError, operation: "load-day" });
           }
-
-          await refreshLocalDayState();
+        } finally {
+          if (isMounted) {
+            finishLoadingRequest(requestId);
+          }
         }
-
-        setItems([]);
-        setIsLoading(false);
         return;
       }
 
-      const requestId = beginLoadingRequest();
       setError(null);
       setRefreshError(null);
       setSuccessMessage(null);
@@ -773,6 +843,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [searchPeople, searchText]);
 
   async function selectPerson(item: AttendanceItem) {
+    setResolutionFeedback(null);
     setSelectedItem(item);
     setObservation(item.attendance?.observation ?? "");
     setObservationExpanded(false);
@@ -942,11 +1013,17 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function handleUseLocalConflictChange(record: CachedAttendanceRecord) {
-    if (!ownerKey || !selectedContractId || !record.statusOptionId || isSaving) {
+    if (!ownerKey || !selectedContractId || !record.statusOptionId || isSaving || resolutionInFlightRef.current) {
       return;
     }
 
+    resolutionInFlightRef.current = true;
+    const selectedScope = resolutionScope;
+    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === selectedScope;
+    requestSequenceRef.current += 1;
     setIsSaving(true);
+    setSuccessMessage(null);
+    setResolutionFeedback(null);
     setError(null);
     setRefreshError(null);
 
@@ -959,7 +1036,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         statusOptionId: record.statusOptionId,
       }, appView.config, contextFields);
 
-      await definitionCache.saveStateUpdateLocally({
+      const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
+        localRecordId: record.localRecordId,
+        conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
         contractId: selectedContractId,
         date,
@@ -976,21 +1055,41 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         uniqueness: "subject-date",
       });
 
+      let syncError: unknown;
       if (isOnline) {
-        await syncPendingRecords();
+        try { await syncPendingRecords(); } catch (error) { syncError = error; }
       }
-
+      if (!isCurrent()) return;
       await refreshLocalDayState();
+      if (!isCurrent()) return;
       await refreshRecordsSyncSummary();
-      clearVisibleError();
-      reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: isOnline ? "server-confirmed" : "local-saved", ownerKey });
+      if (!isCurrent()) return;
+      const outcome = await definitionCache.getStateUpdateResolutionOutcome({
+        appViewId: appView.id, contractId: selectedContractId, date, ownerKey,
+        targetEntityTypeId: appView.config.targetEntityTypeId,
+        localRecordId: saved.localRecordId, clientRequestId: saved.clientRequestId!,
+      });
+      if (!isCurrent()) return;
+      const feedback = stateUpdateResolutionFeedback(outcome);
+      setResolutionFeedback({ ...feedback, scope: selectedScope });
+      if (outcome === "confirmed" || outcome === "pending") {
+        clearVisibleError();
+        setSuccessMessage(feedback.message);
+        reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId,
+          kind: outcome === "confirmed" ? "server-confirmed" : "local-saved", ownerKey });
+      } else {
+        setError(feedback.message);
+      }
+      if (syncError) recordVisibleError({ error: syncError, operation: "sync" });
     } catch (nextError) {
+      if (!isCurrent()) return;
       setError(nextError instanceof Error ? nextError.message : "No fue posible resolver el conflicto.");
       recordVisibleError({
         error: nextError,
         operation: "sync",
       });
     } finally {
+      resolutionInFlightRef.current = false;
       setIsSaving(false);
     }
   }
@@ -1006,6 +1105,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     try {
       await definitionCache.discardStateUpdateLocalChange({
+        localRecordId: record.localRecordId,
+        conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
         contractId: selectedContractId,
         date,
@@ -1089,6 +1190,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <Text style={styles.summaryValue}>{hasCompatibleDay ? totalRegistered : "-"}</Text>
       </View>
 
+      {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
+        <Text style={resolutionFeedback.outcome === "conflict" || resolutionFeedback.outcome === "failed" || resolutionFeedback.outcome === "superseded"
+          ? styles.error : resolutionFeedback.outcome === "pending" ? styles.offline : styles.success}>
+          {resolutionFeedback.message}
+        </Text>
+      ) : null}
       {operationFeedback.message && shouldRenderAttendanceInlineFeedback(operationFeedback.phase) ? (
         <Text style={operationFeedback.phase === "FAILED" || operationFeedback.phase === "UNRESOLVED_ERROR" ? styles.error : operationFeedback.phase === "SUCCESS" ? styles.success : styles.offline}>
           {operationFeedback.message}

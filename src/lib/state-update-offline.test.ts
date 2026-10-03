@@ -10,6 +10,7 @@ import {
   mergeStateUpdateReconnectPreflightTelemetryPatch,
   mergeStateUpdateSyncDiagnosticsTelemetry,
   normalizeStateUpdateSyncErrorDetails,
+  normalizeStateUpdateLogicalDate,
   normalizeStateUpdateRecord,
   stateUpdateIntentsEqual,
   stateUpdateRemoteItemMatchesPayload,
@@ -366,6 +367,12 @@ describe("state-update exact intention matching", () => {
     expect(isValidStateUpdateRemoteUpdatedAt("2026-08-27T10:00:00.000Z")).toBe(true);
     expect(isValidStateUpdateRemoteUpdatedAt("2026-08-27")).toBe(false);
   });
+
+  it("normalizes only the logical date prefix without timezone conversion", () => {
+    expect(normalizeStateUpdateLogicalDate("2026-10-02")).toBe("2026-10-02");
+    expect(normalizeStateUpdateLogicalDate("2026-10-02T23:30:00-03:00")).toBe("2026-10-02");
+    expect(normalizeStateUpdateLogicalDate(undefined)).toBeUndefined();
+  });
 });
 
 describe("state-update conflict normalization", () => {
@@ -375,7 +382,7 @@ describe("state-update conflict normalization", () => {
       conflictRemoteUpdatedAt: "2026-08-27T12:00:00.000Z",
       conflictRemoteValues: {
         appViewId: "view_attendance",
-        date: "2026-08-27",
+        date: "2026-08-27T00:00:00.000Z",
         extraValues: { shift_field: "turno_b" },
         stateValues: [{ fieldId: "status", label: "Ausente", optionId: "absent" }],
         subjectDisplayName: "Persona 1",
@@ -390,7 +397,7 @@ describe("state-update conflict normalization", () => {
       updatedAt: "2026-08-27T10:00:00.000Z",
       values: {
         appViewId: "view_attendance",
-        date: "2026-08-27",
+        date: "2026-08-27T00:00:00.000Z",
         extraValues: { shift_field: "turno_a" },
         stateValues: [{ fieldId: "status", label: "Presente", optionId: "present" }],
         subjectDisplayName: "Persona 1",
@@ -400,6 +407,7 @@ describe("state-update conflict normalization", () => {
       conflictRemoteExtraValues: { shift_field: "turno_b" },
       conflictRemoteStateValues: [{ fieldId: "status", label: "Ausente", optionId: "absent" }],
       extraValues: { shift_field: "turno_a" },
+      date: "2026-08-27",
       syncStatus: "conflict",
     });
   });

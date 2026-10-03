@@ -12,7 +12,7 @@ import {
 } from "./local-db";
 import { PendingOperation } from "./offline-records";
 import { EntityDefinition, EntityField } from "./opco-api";
-import { STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
+import { normalizeStateUpdateRecord, STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
 
 const sqliteMock = vi.hoisted(() => ({
   deleteDatabaseAsync: vi.fn(),
@@ -339,6 +339,75 @@ describe("local database singleton", () => {
     })).resolves.toEqual({
       lastSuccessfulRefreshAt: "2026-08-31T12:00:00.000Z",
     });
+  });
+
+  it("persists STATE_UPDATE snapshot coverage by owner, contract, AppView, target, and logical date", async () => {
+    const store = getLocalDatabase();
+
+    await store.markStateUpdateSnapshotCoverage({
+      appViewId: "view_versioning",
+      contractId: "contract_1",
+      date: "2026-10-02T00:00:00.000Z",
+      ownerKey: "org_1:user_1",
+      pagination: { hasMore: false, page: 1, pageSize: 20, total: 0 },
+      refreshedAt: "2026-10-02T12:00:00.000Z",
+      targetEntityTypeId: "versions",
+    });
+
+    const metadataCall = db.runAsync.mock.calls.find(
+      (call) => call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+        typeof call[1] === "string" &&
+        call[1].startsWith("state_update_snapshot_coverage:"),
+    );
+    expect(metadataCall?.[1]).toContain("contract_1:view_versioning:versions:2026-10-02");
+    expect(metadataCall?.[1]).not.toContain("org_1:user_1");
+    expect(JSON.parse(String(metadataCall?.[2]))).toEqual({
+      downloadedThroughPage: 1,
+      lastSuccessfulRefreshAt: "2026-10-02T12:00:00.000Z",
+      pageSize: 20,
+      status: "complete",
+      total: 0,
+    });
+  });
+
+  it("keeps non-contiguous STATE_UPDATE coverage partial", async () => {
+    const store = getLocalDatabase();
+
+    await store.markStateUpdateSnapshotCoverage({
+      appViewId: "view_versioning",
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      pagination: { hasMore: false, page: 3, pageSize: 20, total: 41 },
+      targetEntityTypeId: "versions",
+    });
+
+    const metadataCall = db.runAsync.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1].startsWith("state_update_snapshot_coverage:"),
+    );
+    expect(JSON.parse(String(metadataCall?.[2]))).toMatchObject({
+      downloadedThroughPage: 0,
+      status: "partial",
+      total: 41,
+    });
+  });
+
+  it("isolates STATE_UPDATE coverage metadata between AppViews", async () => {
+    const store = getLocalDatabase();
+    const shared = {
+      contractId: "contract_1",
+      ownerKey: "org_1:user_1",
+      pagination: { hasMore: false, page: 1, pageSize: 20, total: 0 },
+      targetEntityTypeId: "versions",
+    };
+
+    await store.markStateUpdateSnapshotCoverage({ ...shared, appViewId: "view_a" });
+    await store.markStateUpdateSnapshotCoverage({ ...shared, appViewId: "view_b" });
+
+    const keys = db.runAsync.mock.calls
+      .map((call) => call[1])
+      .filter((key): key is string => typeof key === "string" && key.startsWith("state_update_snapshot_coverage:"));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
   });
 
   it("hydrates offline preparation diagnostics from app_metadata", async () => {
@@ -1651,7 +1720,7 @@ describe("local database singleton", () => {
     expect(result.staleSyncedRemoved).toBe(6);
     expect(deleteCall?.[0]).toContain("sync_status = 'synced'");
     expect(deleteCall?.[0]).toContain("json_extract(values_json, '$.appViewId') = ?");
-    expect(deleteCall?.[0]).toContain("json_extract(values_json, '$.date') = ?");
+    expect(deleteCall?.[0]).toContain("substr(json_extract(values_json, '$.date'), 1, 10) = ?");
     expect(deleteCall?.[0]).toContain("local_id NOT IN (?)");
     expect(deleteCall?.[0]).toContain("server_id NOT IN (?)");
     expect(deleteCall).toEqual([
@@ -1923,10 +1992,9 @@ describe("local database singleton", () => {
   });
 
   it("marks the associated local STATE_UPDATE record as synced when a pending operation completes", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 0 });
     const store = getLocalDatabase();
 
-    await store.completeStateUpdateOperation({
+    const operation: PendingOperation = {
       attempts: 1,
       clientRequestId: "client-request-id-current-1",
       contractId: "contract_real_1",
@@ -1950,7 +2018,10 @@ describe("local database singleton", () => {
       },
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
-    }, {
+    };
+    mockCurrentStateUpdateOperation(operation);
+
+    await store.completeStateUpdateOperation(operation, {
       recordId: "attendance_remote_1",
       result: "CREATED",
       subjectRecordId: "person_real_1",
@@ -1980,10 +2051,9 @@ describe("local database singleton", () => {
   });
 
   it("keeps every effective state value when completing a generic multi-field STATE_UPDATE", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 0 });
     const store = getLocalDatabase();
 
-    await store.completeStateUpdateOperation({
+    const operation: PendingOperation = {
       attempts: 1,
       clientRequestId: "client-request-id-versioning-1",
       contractId: "contract_real_1",
@@ -2009,7 +2079,10 @@ describe("local database singleton", () => {
       },
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
-    }, {
+    };
+    mockCurrentStateUpdateOperation(operation);
+
+    await store.completeStateUpdateOperation(operation, {
       recordId: "versioning_remote_1",
       result: "CREATED",
       subjectRecordId: "procedure_1",
@@ -2026,10 +2099,9 @@ describe("local database singleton", () => {
   });
 
   it("keeps scalar state values when completing a generic STATE_UPDATE", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 0 });
     const store = getLocalDatabase();
 
-    await store.completeStateUpdateOperation({
+    const operation: PendingOperation = {
       attempts: 1,
       clientRequestId: "client-request-id-condition-1",
       contractId: "contract_real_1",
@@ -2055,7 +2127,10 @@ describe("local database singleton", () => {
       },
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
-    }, {
+    };
+    mockCurrentStateUpdateOperation(operation);
+
+    await store.completeStateUpdateOperation(operation, {
       recordId: "equipment_event_remote_1",
       result: "UPDATED",
       subjectRecordId: "equipment_1",
@@ -2072,6 +2147,7 @@ describe("local database singleton", () => {
   });
 
   it("commits STATE_UPDATE conflict metadata and local record status as one transaction", async () => {
+    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
     const store = getLocalDatabase();
 
     await store.markStateUpdateOperationConflict(
@@ -2098,7 +2174,90 @@ describe("local database singleton", () => {
     ]);
   });
 
+  it("reads STATE_UPDATE conflicts only from the complete visible scope", async () => {
+    db.getAllAsync.mockResolvedValue([]);
+    const store = getLocalDatabase();
+
+    await store.listStateUpdateConflicts({
+      appViewId: "view_state_1",
+      contractId: "contract_1",
+      date: "2026-10-02T23:30:00.000Z",
+      ownerKey: "org_1:user_1",
+      targetEntityTypeId: "target_1",
+    });
+
+    const conflictRead = db.getAllAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'conflict'"));
+
+    expect(conflictRead).toEqual([
+      expect.stringContaining("json_extract(values_json, '$.appViewId') = ?"),
+      "org_1:user_1",
+      "contract_1",
+      "target_1",
+      "view_state_1",
+      "2026-10-02",
+      "2026-10-02",
+    ]);
+  });
+
+  it("resolves an append STATE_UPDATE conflict through its existing record and outbox identity", async () => {
+    const localRecordId = "state_update_view_versioning_existing_conflict";
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM pending_operations")) {
+        return stateUpdatePendingOperationRow({
+          client_request_id: "conflict-request-1",
+          entity_type_id: "versioning",
+          local_record_id: localRecordId,
+          payload_json: JSON.stringify({
+            ...stateUpdatePendingOperation().payload,
+            appViewId: "view_versioning",
+            clientRequestId: "conflict-request-1",
+            historyMode: "append",
+            subjectDisplayName: "Procedimiento procedure_1",
+            subjectRecordId: "procedure_1",
+            uniqueness: "subject",
+          }),
+        });
+      }
+
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          entity_type_id: "versioning",
+          local_id: localRecordId,
+          sync_status: "conflict",
+          values_json: JSON.stringify({
+            appViewId: "view_versioning",
+            stateValues: [{ fieldId: "status_field", label: "En revision", optionId: "status_review" }],
+            subjectDisplayName: "Procedimiento procedure_1",
+            subjectRecordId: "procedure_1",
+          }),
+        });
+      }
+
+      return null;
+    });
+    const store = getLocalDatabase();
+
+    const selected = await store.getCachedRecord({ contractId: "contract_1", entityTypeId: "versioning",
+      ownerKey: "org_1:user_1", recordId: localRecordId });
+    await store.resolveStateUpdateConflictWithLocal({
+      ...stateUpdateMultiStateSaveInput("procedure_1"),
+      conflictIdentity: normalizeStateUpdateRecord(selected!, "conflict-request-1").conflictIdentity!,
+      expectedUpdatedAt: "2026-10-02T12:00:00.000Z",
+      localRecordId,
+      overwrite: true,
+    });
+
+    const recordWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO entity_records"));
+    const operationWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+
+    expect(recordWrite?.[1]).toBe(localRecordId);
+    expect(operationWrite?.[7]).toBe(localRecordId);
+    expect(operationWrite?.[1]).toBe(`state_update_${localRecordId}`);
+    expect(String(operationWrite?.[9])).toContain('"overwrite":true');
+  });
+
   it("does not leave STATE_UPDATE conflict half-applied when the local record conflict write fails inside the transaction", async () => {
+    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("state update conflict record failed");
       throw new Error("state update conflict record failed");
@@ -2125,6 +2284,7 @@ describe("local database singleton", () => {
   });
 
   it("does not apply STATE_UPDATE conflict record changes when the pending operation write fails first", async () => {
+    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("state update conflict pending failed");
       throw new Error("state update conflict pending failed");
@@ -2205,6 +2365,29 @@ describe("local database singleton", () => {
     });
   });
 
+  it("writes STATE_UPDATE logical dates as YYYY-MM-DD", async () => {
+    db.getFirstAsync.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM entity_records")) {
+        return stateUpdateEntityRecordRow({
+          local_id: "state_update_view_attendance_2026-08-26_person_a",
+          sync_status: "pending_create",
+        });
+      }
+
+      return null;
+    });
+
+    await getLocalDatabase().saveStateUpdateLocally({
+      ...stateUpdateSaveInput("person_a"),
+      date: "2026-08-26T00:00:00.000Z",
+    });
+
+    const recordWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO entity_records"));
+    const outboxWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pending_operations"));
+    expect(JSON.parse(String(recordWrite?.[7]))).toMatchObject({ date: "2026-08-26" });
+    expect(JSON.parse(String(outboxWrite?.[9]))).toMatchObject({ date: "2026-08-26" });
+  });
+
   it("lists cached STATE_UPDATE latest updates with search, default page size, and pagination metadata", async () => {
     db.getFirstAsync.mockResolvedValue({ total: 25 });
     db.getAllAsync.mockResolvedValue([
@@ -2214,7 +2397,7 @@ describe("local database singleton", () => {
         sync_status: "synced",
         values_json: JSON.stringify({
           appViewId: "view_versioning",
-          date: "2026-08-27",
+          date: "2026-08-27T00:00:00.000Z",
           extraValues: { version_field: "2" },
           stateValues: [{ fieldId: "status_field", label: "Publicado", optionId: "status_published" }],
           subjectDisplayName: "Procedimiento A",
@@ -2360,7 +2543,7 @@ describe("local database singleton", () => {
     });
 
     const datedCalls = db.getAllAsync.mock.calls.slice(-2);
-    expect(datedCalls[0]?.[0]).toContain("json_extract(values_json, '$.date') = ?");
+    expect(datedCalls[0]?.[0]).toContain("substr(json_extract(values_json, '$.date'), 1, 10) = ?");
     expect(datedCalls[0]?.slice(1, 7)).toEqual([
       "org_1:user_1",
       "contract_real_1",
@@ -3901,4 +4084,14 @@ function openingMeasurement() {
     startedAt: "2026-09-17T12:00:00.000Z",
     timeToFirstRowsMs: 14,
   };
+}
+
+function mockCurrentStateUpdateOperation(operation: PendingOperation) {
+  db.getFirstAsync.mockImplementation(async (sql: string) => sql.includes("FROM pending_operations") ? {
+    id: operation.id, owner_key: operation.ownerKey, contract_id: operation.contractId,
+    entity_type_id: operation.entityTypeId, local_record_id: operation.localRecordId,
+    operation: operation.operation, client_request_id: operation.clientRequestId,
+    payload_json: JSON.stringify(operation.payload), attempts: operation.attempts,
+    created_at: operation.createdAt, updated_at: operation.updatedAt,
+  } : null);
 }

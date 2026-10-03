@@ -11,6 +11,8 @@ import {
   OfflineStateUpdatePayload,
   OfflineStateUpdateValues,
   resolveStateUpdateClientRequestId,
+  ResolveStateUpdateConflictWithLocalInput,
+  DiscardStateUpdateConflictInput,
   SaveStateUpdateLocallyInput,
   SearchStateUpdateSubjectsInput,
   AttendanceDaySnapshotHydration,
@@ -24,6 +26,8 @@ import {
   STATE_UPDATE_RECONNECT_RUN_HISTORY_LIMIT,
   STATE_UPDATE_REQUEST_HISTORY_LIMIT,
   StateUpdateScope,
+  StateUpdateSnapshotCoverage,
+  StateUpdateSnapshotCoverageInput,
   StateUpdateSessionTerminationTelemetry,
   StateUpdateSnapshotReconcileResult,
   StateUpdateVisibleErrorResolution,
@@ -31,6 +35,7 @@ import {
   stateUpdateRemoteItemMatchesPayload,
   stateUpdateRecordToItem,
   UpsertStateUpdateSnapshotInput,
+  normalizeStateUpdateLogicalDate,
 } from "./state-update-offline";
 import {
   AppViewDefinitionCache,
@@ -69,7 +74,7 @@ import {
   fingerprintRecordsScope,
   normalizeRecordValuesForPersistence,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, PanelResponse, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, OpcoApiError, PanelResponse, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -93,6 +98,7 @@ const SELECTED_CONTRACT_ID_KEY = "selected_contract_id";
 const OFFLINE_PREPARATION_DIAGNOSTICS_KEY = "offline_preparation_diagnostics";
 const ATTENDANCE_CONTEXT_SELECTION_KEY = "attendance_context_selection";
 const ATTENDANCE_DAY_SNAPSHOT_HYDRATION_KEY = "attendance_day_snapshot_hydration";
+const STATE_UPDATE_SNAPSHOT_COVERAGE_KEY = "state_update_snapshot_coverage";
 const STATE_UPDATE_SYNC_DIAGNOSTICS_KEY = "state_update_sync_diagnostics";
 const RECORDS_OPENING_HISTORY_KEY = "records_opening_history";
 const SCHEMA_VERSION_KEY = "schema_version";
@@ -162,6 +168,7 @@ export type LocalDatabase = AppNavigationCache &
   RecordsSyncStore &
   StateUpdateSyncStore & {
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
+  getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
@@ -169,6 +176,7 @@ export type LocalDatabase = AppNavigationCache &
   getReportSnapshot(input: ReportSnapshotScope): Promise<CachedReportSnapshot | null>;
   setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
+  markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverageInput): Promise<void>;
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
   getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics;
@@ -236,9 +244,11 @@ export function getLocalDatabase(): LocalDatabase {
     getSyncTelemetry,
 	    getEntityDefinition,
 	    getAttendanceDaySnapshotHydration,
+	    getStateUpdateSnapshotCoverage,
 	    getOfflinePreparationDiagnostics,
     getAttendanceContextSelection,
     listStateUpdateConflicts,
+    getStateUpdateResolutionOutcome,
     listAppViewDefinitions,
     getSelectedContractId,
     getSQLiteCoordinatorDiagnostics,
@@ -272,7 +282,9 @@ export function getLocalDatabase(): LocalDatabase {
     retryStateUpdateOperation,
 	    resolveStateUpdateVisibleErrorEvent,
 	    markAttendanceDaySnapshotHydrated,
+	    markStateUpdateSnapshotCoverage,
 	    discardStateUpdateLocalChange,
+    resolveStateUpdateConflictWithLocal,
     saveStateUpdateLocally,
     searchStateUpdateSubjects,
     setSelectedContractId,
@@ -2663,74 +2675,120 @@ async function clearOrphanedFailedRecordNotice({
   return record;
 }
 
-async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
+async function saveStateUpdateLocally(rawInput: SaveStateUpdateLocallyInput) {
+  return saveStateUpdateLocallyWithRecordId(rawInput);
+}
+
+async function resolveStateUpdateConflictWithLocal(input: ResolveStateUpdateConflictWithLocalInput) {
+  return saveStateUpdateLocallyWithRecordId(input, input.localRecordId, input.conflictIdentity);
+}
+
+async function readSelectedStateUpdateConflict(db: SQLite.SQLiteDatabase, input: DiscardStateUpdateConflictInput) {
+  const existing = await getCachedRecordFromDatabase(db, {
+    contractId: input.contractId, entityTypeId: input.targetEntityTypeId,
+    ownerKey: input.ownerKey, recordId: input.localRecordId,
+  });
+  const operation = await getStateUpdatePendingOperation(db, input.ownerKey, input.localRecordId);
+  const values = existing?.values as OfflineStateUpdateValues | undefined;
+  if (!existing || existing.localId !== input.localRecordId || existing.syncStatus !== "conflict" ||
+      values?.appViewId !== input.appViewId || values?.subjectRecordId !== input.subjectRecordId ||
+      normalizeStateUpdateLogicalDate(values?.date) !== normalizeStateUpdateLogicalDate(input.date) ||
+      !operation || operation.contractId !== input.contractId || operation.entityTypeId !== input.targetEntityTypeId ||
+      !input.conflictIdentity || normalizeStateUpdateRecord(existing, operation.clientRequestId).conflictIdentity !== input.conflictIdentity) {
+    throw new Error("El conflicto seleccionado cambio. Actualiza y vuelve a elegir la intencion.");
+  }
+  return { existing, operation };
+}
+
+async function saveStateUpdateLocallyWithRecordId(
+  rawInput: SaveStateUpdateLocallyInput,
+  resolvedLocalRecordId?: string,
+  conflictIdentity?: string,
+) {
+  const input = {
+    ...rawInput,
+    date: normalizeStateUpdateLogicalDate(rawInput.date),
+  };
   const db = await getDatabase();
   const now = new Date().toISOString();
-  const localRecordId = createStateUpdateLocalRecordId(input);
-  const existingRecord = await getCachedRecord({
-    contractId: input.contractId,
-    entityTypeId: input.targetEntityTypeId,
-    ownerKey: input.ownerKey,
-    recordId: localRecordId,
-  });
-  const existingOperation = input.historyMode === "update-current"
-    ? await db.getFirstAsync<PendingOperationRow>(
-        `
-          SELECT *
-          FROM pending_operations
-          WHERE owner_key = ?
-            AND contract_id = ?
-            AND entity_type_id = ?
-            AND local_record_id = ?
-            AND operation = ?
-          LIMIT 1
-        `,
-        input.ownerKey,
-        input.contractId,
-        input.targetEntityTypeId,
-        localRecordId,
-        STATE_UPDATE_OPERATION,
-      )
-    : null;
-  const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
-  const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
-  const values: OfflineStateUpdateValues = {
-    appViewId: input.appViewId,
-    date: input.date,
-    expectedUpdatedAt,
-    extraValues: input.extraValues,
-    stateValues,
-    subjectDisplayName: input.subjectDisplayName,
-    subjectRecordId: input.subjectRecordId,
-  };
-  const nextPayload: OfflineStateUpdatePayload = {
-    appViewId: input.appViewId,
-    clientRequestId: existingOperation?.client_request_id ?? "",
-    date: input.date,
-    expectedUpdatedAt,
-    extraValues: input.extraValues,
-    historyMode: input.historyMode,
-    overwrite: input.overwrite,
-    stateValues,
-    subjectDisplayName: input.subjectDisplayName,
-    subjectRecordId: input.subjectRecordId,
-    uniqueness: input.uniqueness,
-  };
-  const existingPayload = existingOperation
-    ? parsePendingStateUpdatePayload(existingOperation.payload_json)
-    : null;
-  const clientRequestId = resolveStateUpdateClientRequestId({
-    existingClientRequestId: existingOperation?.client_request_id,
-    existingPayload,
-    nextPayload,
-  });
-  const payload: OfflineStateUpdatePayload = {
-    ...nextPayload,
-    clientRequestId,
-  };
-  const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
-
+  const localRecordId = resolvedLocalRecordId ?? createStateUpdateLocalRecordId(input);
+  let saved: ReturnType<typeof normalizeStateUpdateRecord> | undefined;
   await db.withTransactionAsync(async (transaction) => {
+    if (resolvedLocalRecordId) {
+      await readSelectedStateUpdateConflict(transaction, { ...input, localRecordId, conflictIdentity: conflictIdentity ?? "" });
+    }
+    const existingRecord = await getCachedRecordFromDatabase(transaction, {
+      contractId: input.contractId,
+      entityTypeId: input.targetEntityTypeId,
+      ownerKey: input.ownerKey,
+      recordId: localRecordId,
+    });
+    const existingOperation = resolvedLocalRecordId || input.historyMode === "update-current"
+      ? await transaction.getFirstAsync<PendingOperationRow>(
+          `
+            SELECT *
+            FROM pending_operations
+            WHERE owner_key = ?
+              AND contract_id = ?
+              AND entity_type_id = ?
+              AND local_record_id = ?
+              AND operation = ?
+            LIMIT 1
+          `,
+          input.ownerKey,
+          input.contractId,
+          input.targetEntityTypeId,
+          localRecordId,
+          STATE_UPDATE_OPERATION,
+        )
+      : null;
+    const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
+    const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
+    const values: OfflineStateUpdateValues = {
+      appViewId: input.appViewId,
+      date: input.date,
+      expectedUpdatedAt,
+      extraValues: input.extraValues,
+      stateValues,
+      subjectDisplayName: input.subjectDisplayName,
+      subjectRecordId: input.subjectRecordId,
+    };
+    const nextPayload: OfflineStateUpdatePayload = {
+      expectedRecordId: resolvedLocalRecordId
+        ? (existingRecord?.conflictRemoteValues as OfflineStateUpdateValues | null)?.remoteRecordId ?? existingRecord?.serverId ?? undefined
+        : undefined,
+      appViewId: input.appViewId,
+      clientRequestId: existingOperation?.client_request_id ?? "",
+      date: input.date,
+      expectedUpdatedAt,
+      extraValues: input.extraValues,
+      historyMode: input.historyMode,
+      overwrite: input.overwrite,
+      stateValues,
+      subjectDisplayName: input.subjectDisplayName,
+      subjectRecordId: input.subjectRecordId,
+      uniqueness: input.uniqueness,
+    };
+    const existingPayload = existingOperation
+      ? parsePendingStateUpdatePayload(existingOperation.payload_json)
+      : null;
+
+    if (resolvedLocalRecordId && !existingOperation) {
+      throw new Error("La operacion del conflicto ya no esta disponible.");
+    }
+    const clientRequestId = resolveStateUpdateClientRequestId({
+      existingClientRequestId: resolvedLocalRecordId ? undefined : existingOperation?.client_request_id,
+      existingPayload: resolvedLocalRecordId ? null : existingPayload,
+      nextPayload,
+    });
+    const payload: OfflineStateUpdatePayload = {
+      ...nextPayload,
+      clientRequestId,
+    };
+    const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
+
+    // Persist request identity in the existing JSON snapshot, without a schema change.
+    values.clientRequestId = clientRequestId;
     await transaction.runAsync(
       `
         INSERT INTO entity_records (
@@ -2784,20 +2842,17 @@ async function saveStateUpdateLocally(input: SaveStateUpdateLocallyInput) {
       serverRecordId: existingRecord?.serverId ?? null,
       timestamp: now,
     });
+    const record = await getCachedRecordFromDatabase(transaction, {
+      contractId: input.contractId,
+      entityTypeId: input.targetEntityTypeId,
+      ownerKey: input.ownerKey,
+      recordId: localRecordId,
+    });
+
+    if (!record) throw new Error("No fue posible leer el cambio de estado local guardado.");
+    saved = normalizeStateUpdateRecord(record, clientRequestId);
   }, "transaction:state-update-save");
-
-  const saved = await getCachedRecord({
-    contractId: input.contractId,
-    entityTypeId: input.targetEntityTypeId,
-    ownerKey: input.ownerKey,
-    recordId: localRecordId,
-  });
-
-  if (!saved) {
-    throw new Error("No fue posible leer el cambio de estado local guardado.");
-  }
-
-  return normalizeStateUpdateRecord(saved);
+  return saved!;
 }
 
 async function searchStateUpdateSubjects({
@@ -2843,9 +2898,10 @@ async function searchStateUpdateSubjects({
   return results;
 }
 
-async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date, items, latest = [], ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
+async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date: rawDate, items, latest = [], ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
+  const date = normalizeStateUpdateLogicalDate(rawDate);
   let staleSyncedRemoved = 0;
   let reconciledFromSnapshot = false;
 
@@ -2857,7 +2913,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         stateValues: item.stateValues ?? [],
         updatedAt: item.updatedAt,
       },
-      date: item.date ?? date,
+      date: normalizeStateUpdateLogicalDate(item.date) ?? date,
       subject: item.subject,
     }));
     const currentItems = [
@@ -2870,19 +2926,33 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         continue;
       }
 
-      const localRecordId = createStateUpdateLocalRecordId({
+      let localRecordId = createStateUpdateLocalRecordId({
         appViewId,
         date: item.date,
         historyMode: "update-current",
         subjectRecordId: item.subject.id,
         uniqueness: item.date ? "subject-date" : "subject",
       });
-      const existing = await getCachedRecordFromDatabase(transaction, {
+      let existing = await getCachedRecordFromDatabase(transaction, {
         contractId,
         entityTypeId: targetEntityTypeId,
         ownerKey,
         recordId: localRecordId,
       });
+
+      // A resolved append intent keeps its durable row when latest reads that exact remote record.
+      if (!existing || existing.serverId !== item.current.recordId) {
+        const remoteRecord = await getCachedRecordFromDatabase(transaction, {
+          contractId, entityTypeId: targetEntityTypeId, ownerKey, recordId: item.current.recordId,
+        });
+        const remoteValues = remoteRecord?.values as OfflineStateUpdateValues | undefined;
+        if (remoteRecord?.syncStatus === "synced" && remoteValues?.appViewId === appViewId &&
+            remoteValues.subjectRecordId === item.subject.id &&
+            normalizeStateUpdateLogicalDate(remoteValues.date) === normalizeStateUpdateLogicalDate(item.date)) {
+          existing = remoteRecord;
+          localRecordId = remoteRecord.localId;
+        }
+      }
 
       if (existing && existing.syncStatus !== "synced") {
         const pendingOperation = await getStateUpdatePendingOperation(transaction, ownerKey, existing.localId);
@@ -2914,6 +2984,13 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         subjectDisplayName: item.subject.displayName,
         subjectRecordId: item.subject.id,
       };
+
+      const previousValues = existing?.values as OfflineStateUpdateValues | undefined;
+      if (existing?.syncStatus === "synced" && existing.serverId === item.current.recordId &&
+          existing.remoteUpdatedAt === item.current.updatedAt && previousValues?.clientRequestId &&
+          stateUpdateRemoteItemMatchesPayload(item, previousValues as OfflineStateUpdatePayload)) {
+        values.clientRequestId = previousValues.clientRequestId;
+      }
 
       await transaction.runAsync(
         `
@@ -3014,7 +3091,7 @@ async function deleteStaleSyncedStateUpdateRecords({
         AND entity_type_id = ?
         AND sync_status = 'synced'
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
         ${keepLocalClause}
         ${keepRemoteClause}
     `,
@@ -3033,6 +3110,7 @@ async function deleteStaleSyncedStateUpdateRecords({
 
 async function getStateUpdateSummary(input: StateUpdateScope): Promise<import("./state-update-offline").StateUpdateSummary> {
   const db = await getDatabase();
+  const date = normalizeStateUpdateLogicalDate(input.date);
   const rows = await db.getAllAsync<{ sync_status: RecordSyncStatus; total: number }>(
     `
       SELECT sync_status, COUNT(*) AS total
@@ -3041,13 +3119,15 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
       GROUP BY sync_status
     `,
     input.ownerKey,
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
+    date ?? null,
+    date ?? null,
   );
   const count = (statuses: RecordSyncStatus[]) =>
     rows
@@ -3065,6 +3145,7 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
 
 async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }) {
   const db = await getDatabase();
+  const date = normalizeStateUpdateLogicalDate(input.date);
   const page = input.page && input.page > 0 ? input.page : 1;
   const pageSize = input.pageSize && input.pageSize > 0 ? input.pageSize : 20;
   const offset = (page - 1) * pageSize;
@@ -3078,15 +3159,15 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
     `,
     input.ownerKey,
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
-    input.date ?? null,
-    input.date ?? null,
+    date ?? null,
+    date ?? null,
     searchPattern,
     searchPattern,
   );
@@ -3098,7 +3179,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
       ORDER BY cached_at DESC, local_id ASC
       LIMIT ? OFFSET ?
@@ -3107,8 +3188,8 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
-    input.date ?? null,
-    input.date ?? null,
+    date ?? null,
+    date ?? null,
     searchPattern,
     searchPattern,
     pageSize,
@@ -3143,27 +3224,57 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
 
 async function listStateUpdateConflicts(input: StateUpdateScope) {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<EntityRecordRow>(
+  const date = normalizeStateUpdateLogicalDate(input.date);
+  const rows = await db.getAllAsync<EntityRecordRow & { selected_client_request_id: string }>(
     `
-      SELECT *
+      SELECT entity_records.*, (SELECT client_request_id FROM pending_operations
+        WHERE pending_operations.owner_key = entity_records.owner_key
+          AND pending_operations.contract_id = entity_records.contract_id
+          AND pending_operations.entity_type_id = entity_records.entity_type_id
+          AND pending_operations.local_record_id = entity_records.local_id
+          AND operation = 'STATE_UPDATE' LIMIT 1) AS selected_client_request_id
       FROM entity_records
       WHERE owner_key = ?
         AND contract_id = ?
         AND entity_type_id = ?
         AND sync_status = 'conflict'
         AND json_extract(values_json, '$.appViewId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
       ORDER BY cached_at DESC, display_name ASC
     `,
     input.ownerKey,
     input.contractId,
     input.targetEntityTypeId,
     input.appViewId,
-    input.date ?? null,
-    input.date ?? null,
+    date ?? null,
+    date ?? null,
   );
 
-  return rows.map((row) => normalizeStateUpdateRecord(mapRecordRow(row)));
+  return rows.map((row) => normalizeStateUpdateRecord(mapRecordRow(row), row.selected_client_request_id));
+}
+
+async function getStateUpdateResolutionOutcome(input: StateUpdateScope & { localRecordId: string; clientRequestId: string }) {
+  const db = await getDatabase();
+  let outcome: "confirmed" | "pending" | "conflict" | "failed" | "superseded" = "superseded";
+  await db.withTransactionAsync(async (transaction) => {
+    const record = await getCachedRecordFromDatabase(transaction, {
+      ownerKey: input.ownerKey, contractId: input.contractId,
+      entityTypeId: input.targetEntityTypeId, recordId: input.localRecordId,
+    });
+    const operation = await getStateUpdatePendingOperation(transaction, input.ownerKey, input.localRecordId);
+    const values = record?.values as OfflineStateUpdateValues | undefined;
+    if (!record || record.localId !== input.localRecordId || values?.appViewId !== input.appViewId ||
+        normalizeStateUpdateLogicalDate(values.date) !== normalizeStateUpdateLogicalDate(input.date) ||
+        values.clientRequestId !== input.clientRequestId ||
+        (operation && (operation.clientRequestId !== input.clientRequestId || operation.contractId !== input.contractId ||
+          operation.entityTypeId !== input.targetEntityTypeId))) return;
+    if (!operation) {
+      if (record.syncStatus === "synced" && record.serverId && record.remoteUpdatedAt) outcome = "confirmed";
+      return;
+    }
+    outcome = record.syncStatus === "conflict" ? "conflict" : record.syncStatus === "failed" ? "failed" : "pending";
+  }, "transaction:state-update-resolution-result");
+  return outcome;
 }
 
 async function preparePendingUpdateCommand(
@@ -3588,9 +3699,15 @@ async function completeStateUpdateOperationInTransaction(
   operation: PendingOperation,
   result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>,
 ) {
+  if (!await isCurrentStateUpdateOperation(db, operation)) return;
   const payload = operation.payload as OfflineStateUpdatePayload;
+  if (result.subjectRecordId !== payload.subjectRecordId ||
+      (payload.expectedRecordId && result.recordId !== payload.expectedRecordId)) {
+    throw new OpcoApiError("Opco devolvio un registro distinto de la intencion seleccionada.", "STATE_UPDATE_RESULT_IDENTITY_MISMATCH", 422);
+  }
   const now = new Date().toISOString();
   const values: OfflineStateUpdateValues = {
+    clientRequestId: operation.clientRequestId,
     appViewId: payload.appViewId,
     date: payload.date,
     expectedUpdatedAt: null,
@@ -3643,13 +3760,10 @@ async function retryStateUpdateOperation(operation: PendingOperation, code: stri
   const db = await getDatabase();
   const payload = operation.payload as OfflineStateUpdatePayload;
 
-  await setOperationError(
-    db,
-    operation,
-    code,
-    message,
-    payload.expectedUpdatedAt || operation.serverRecordId ? "pending_update" : "pending_create",
-  );
+  await db.withTransactionAsync(async (transaction) => {
+    await setOperationError(transaction, operation, code, message,
+      payload.expectedUpdatedAt || operation.serverRecordId ? "pending_update" : "pending_create");
+  }, "transaction:state-update-retry");
 }
 
 async function retryFailedStateUpdateOperations({
@@ -3719,7 +3833,9 @@ async function failPendingOperation(operation: PendingOperation, code: string, m
 async function failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null) {
   const db = await getDatabase();
 
-  await setOperationError(db, operation, code, message, "failed", details, httpStatus);
+  await db.withTransactionAsync(async (transaction) => {
+    await setOperationError(transaction, operation, code, message, "failed", details, httpStatus);
+  }, "transaction:state-update-fail");
 }
 
 async function readRecordRemoteUpdatedAt(operation: PendingOperation) {
@@ -3793,6 +3909,7 @@ async function markStateUpdateOperationConflict(
   const now = new Date().toISOString();
   const payload = operation.payload as OfflineStateUpdatePayload;
   const remoteValues: OfflineStateUpdateValues = {
+    remoteRecordId: result.existing.recordId,
     appViewId: payload.appViewId,
     date: payload.date,
     expectedUpdatedAt: result.existing.updatedAt,
@@ -3803,6 +3920,7 @@ async function markStateUpdateOperationConflict(
   };
 
   await db.withTransactionAsync(async (transaction) => {
+    if (!await isCurrentStateUpdateOperation(transaction, operation)) return;
     await transaction.runAsync(
       `
         UPDATE pending_operations
@@ -3837,50 +3955,45 @@ async function markStateUpdateOperationConflict(
   }, "transaction:state-update-conflict");
 }
 
-async function discardStateUpdateLocalChange(input: StateUpdateScope & { subjectRecordId: string }) {
+async function discardStateUpdateLocalChange(input: DiscardStateUpdateConflictInput) {
   const db = await getDatabase();
-  const existing = await findStateUpdateRecordForSubject(input);
+  await db.withTransactionAsync(async (transaction) => {
+    const { existing, operation } = await readSelectedStateUpdateConflict(transaction, input);
 
-  if (!existing) {
-    return;
-  }
+    const conflictValues = existing.conflictRemoteValues as Record<string, EntityRecordValue> | null;
 
-  const conflictValues = existing.conflictRemoteValues as Record<string, EntityRecordValue> | null;
+    await transaction.runAsync(
+      `DELETE FROM pending_operations WHERE id = ? AND client_request_id = ? AND operation = ?`,
+      operation.id, operation.clientRequestId, STATE_UPDATE_OPERATION,
+    );
 
-  await db.runAsync(
-    `
-      DELETE FROM pending_operations
-      WHERE owner_key = ? AND local_record_id = ? AND operation = ?
-    `,
-    input.ownerKey,
-    existing.localId,
-    STATE_UPDATE_OPERATION,
-  );
+    if (!conflictValues) {
+      await transaction.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
+      return;
+    }
 
-  if (!conflictValues) {
-    await db.runAsync(`DELETE FROM entity_records WHERE local_id = ?`, existing.localId);
-    return;
-  }
-
-  await db.runAsync(
-    `
-      UPDATE entity_records
-      SET values_json = ?,
-          remote_updated_at = ?,
-          cached_at = ?,
-          sync_status = 'synced',
-          sync_error_code = NULL,
-          sync_error_message = NULL,
-          conflict_remote_values_json = NULL,
-          conflict_remote_display_name = NULL,
-          conflict_remote_updated_at = NULL
-      WHERE local_id = ?
-    `,
-    JSON.stringify(conflictValues),
-    existing.conflictRemoteUpdatedAt ?? null,
-    new Date().toISOString(),
-    existing.localId,
-  );
+    await transaction.runAsync(
+      `
+        UPDATE entity_records
+        SET values_json = ?,
+            server_id = COALESCE(?, server_id),
+            remote_updated_at = ?,
+            cached_at = ?,
+            sync_status = 'synced',
+            sync_error_code = NULL,
+            sync_error_message = NULL,
+            conflict_remote_values_json = NULL,
+            conflict_remote_display_name = NULL,
+            conflict_remote_updated_at = NULL
+        WHERE local_id = ?
+      `,
+      JSON.stringify(conflictValues),
+      typeof conflictValues.remoteRecordId === "string" ? conflictValues.remoteRecordId : null,
+      existing.conflictRemoteUpdatedAt ?? null,
+      new Date().toISOString(),
+      existing.localId,
+    );
+  }, "transaction:state-update-resolve-remote");
 }
 
 async function retryFailedRecord({
@@ -4512,6 +4625,7 @@ async function upsertStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, {
 
 async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subjectRecordId: string }) {
   const db = await getDatabase();
+  const date = normalizeStateUpdateLogicalDate(input.date);
   const row = await db.getFirstAsync<EntityRecordRow>(
     `
       SELECT *
@@ -4521,7 +4635,7 @@ async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subje
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
         AND json_extract(values_json, '$.subjectRecordId') = ?
-        AND (? IS NULL OR json_extract(values_json, '$.date') = ?)
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
       ORDER BY cached_at DESC
       LIMIT 1
     `,
@@ -4530,8 +4644,8 @@ async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subje
     input.targetEntityTypeId,
     input.appViewId,
     input.subjectRecordId,
-    input.date ?? null,
-    input.date ?? null,
+    date ?? null,
+    date ?? null,
   );
 
   return row ? mapRecordRow(row) : null;
@@ -4546,6 +4660,7 @@ async function setOperationError(
   details?: unknown,
   httpStatus?: number | null,
 ) {
+  if (operation.operation === STATE_UPDATE_OPERATION && !await isCurrentStateUpdateOperation(db, operation)) return;
   let payload = operation.payload;
 
   if (operation.operation !== STATE_UPDATE_OPERATION) {
@@ -4612,6 +4727,13 @@ async function setOperationError(
     message,
     operation.localRecordId,
   );
+}
+
+async function isCurrentStateUpdateOperation(db: SQLite.SQLiteDatabase, operation: PendingOperation) {
+  const current = await readPendingOperationInTransaction(db, operation.id);
+  return Boolean(current && current.operation === STATE_UPDATE_OPERATION && current.ownerKey === operation.ownerKey &&
+    current.contractId === operation.contractId && current.entityTypeId === operation.entityTypeId &&
+    current.localRecordId === operation.localRecordId && current.clientRequestId === operation.clientRequestId);
 }
 
 async function readPendingOperationInTransaction(db: SQLite.SQLiteDatabase, operationId: string) {
@@ -5397,6 +5519,16 @@ async function getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotSco
   return parseAttendanceDaySnapshotHydration(row.value);
 }
 
+async function getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_metadata WHERE key = ? LIMIT 1`,
+    stateUpdateSnapshotCoverageKey(input),
+  );
+
+  return row?.value ? parseStateUpdateSnapshotCoverage(row.value) : null;
+}
+
 async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }) {
   const db = await getDatabase();
   const refreshedAt = input.refreshedAt ?? new Date().toISOString();
@@ -5405,6 +5537,32 @@ async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotSco
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
     attendanceDaySnapshotHydrationKey(input),
     JSON.stringify({ lastSuccessfulRefreshAt: refreshedAt }),
+  );
+  notifyLocalDatabaseCacheChangeListeners();
+}
+
+async function markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverageInput) {
+  const db = await getDatabase();
+  const current = await getStateUpdateSnapshotCoverage(input);
+  const page = Math.max(1, input.pagination.page);
+  const continuesExistingCoverage = page === 1 || current?.downloadedThroughPage === page - 1;
+  const downloadedThroughPage = page === 1
+    ? 1
+    : continuesExistingCoverage
+      ? page
+      : current?.downloadedThroughPage ?? 0;
+  const coverage: StateUpdateSnapshotCoverage = {
+    downloadedThroughPage,
+    lastSuccessfulRefreshAt: input.refreshedAt ?? new Date().toISOString(),
+    pageSize: input.pagination.pageSize,
+    status: page === 1 && !input.pagination.hasMore ? "complete" : "partial",
+    total: input.pagination.total,
+  };
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    stateUpdateSnapshotCoverageKey(input),
+    JSON.stringify(coverage),
   );
   notifyLocalDatabaseCacheChangeListeners();
 }
@@ -5670,6 +5828,23 @@ function attendanceDaySnapshotHydrationKey({
   ].join(":");
 }
 
+function stateUpdateSnapshotCoverageKey({
+  appViewId,
+  contractId,
+  date,
+  ownerKey,
+  targetEntityTypeId,
+}: StateUpdateScope) {
+  return [
+    STATE_UPDATE_SNAPSHOT_COVERAGE_KEY,
+    fingerprintDiagnosticValue(ownerKey),
+    contractId,
+    appViewId,
+    targetEntityTypeId,
+    normalizeStateUpdateLogicalDate(date) ?? "all",
+  ].join(":");
+}
+
 function offlinePreparationDiagnosticsKey(ownerKey: string) {
   return `${OFFLINE_PREPARATION_DIAGNOSTICS_KEY}:${fingerprintDiagnosticValue(ownerKey)}`;
 }
@@ -5684,6 +5859,32 @@ function parseAttendanceDaySnapshotHydration(value: string): AttendanceDaySnapsh
     }
 
     return { lastSuccessfulRefreshAt };
+  } catch {
+    return null;
+  }
+}
+
+function parseStateUpdateSnapshotCoverage(value: string): StateUpdateSnapshotCoverage | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<StateUpdateSnapshotCoverage>;
+
+    if (
+      (parsed.status !== "complete" && parsed.status !== "partial") ||
+      typeof parsed.lastSuccessfulRefreshAt !== "string" ||
+      typeof parsed.downloadedThroughPage !== "number" ||
+      typeof parsed.pageSize !== "number" ||
+      typeof parsed.total !== "number"
+    ) {
+      return null;
+    }
+
+    return {
+      downloadedThroughPage: parsed.downloadedThroughPage,
+      lastSuccessfulRefreshAt: parsed.lastSuccessfulRefreshAt,
+      pageSize: parsed.pageSize,
+      status: parsed.status,
+      total: parsed.total,
+    };
   } catch {
     return null;
   }

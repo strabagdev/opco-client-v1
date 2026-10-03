@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CachedStateUpdateRecord } from "@/lib/state-update-offline";
 import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField, StateUpdateResponse } from "@/lib/opco-api";
 import {
   buildEffectiveStateSnapshot,
@@ -8,9 +9,71 @@ import {
   defaultStateValues,
   formValueFromStateValue,
   formatStateValueLabel,
+  isStateUpdateVisualRequestCurrent,
   mergeStateUpdateLatestUpdates,
+  mergeStateUpdateResponseWithLocalConflicts,
+  resolveStateUpdateOfflineHistoryState,
+  stateUpdateOfflineHistoryMessage,
   stateUpdateLatestMatchesSearch,
 } from "./state-update-workflow-logic";
+
+describe("state-update durable conflict projection", () => {
+  it("keeps a scoped local conflict visible after a successful remote refresh", () => {
+    const remote: StateUpdateResponse = {
+      appView: { id: "view_1", name: "Estados", slug: "estados" },
+      extraFields: [],
+      historyMode: "update-current",
+      items: [{
+        current: {
+          recordId: "remote_1",
+          stateValues: [{ fieldId: "status_field", label: "Operativo", optionId: "operational" }],
+          updatedAt: "2026-10-02T12:00:00.000Z",
+        },
+        subject: { displayName: "Equipo 1", id: "subject_1" },
+      }],
+      latest: [{
+        recordId: "remote_1",
+        stateValues: [{ fieldId: "status_field", label: "Operativo", optionId: "operational" }],
+        subject: { displayName: "Equipo 1", id: "subject_1" },
+        updatedAt: "2026-10-02T12:00:00.000Z",
+      }],
+      sourceEntityType: { id: "source_1", name: "Equipos" },
+      stateFields,
+      subjectFieldId: "subject_field",
+      summary: { conflictCount: 0, totalRegistered: 1 },
+      targetEntityType: { id: "target_1", name: "Estados" },
+      uniqueness: "subject",
+    };
+    const conflict: CachedStateUpdateRecord = {
+      conflictRemoteStateValues: [{ fieldId: "status_field", label: "Operativo", optionId: "operational" }],
+      conflictRemoteUpdatedAt: "2026-10-02T12:00:00.000Z",
+      localRecordId: "state_update_view_1_current_subject_1",
+      stateValues: [{ fieldId: "status_field", label: "En espera", optionId: "waiting" }],
+      subject: { displayName: "Equipo 1", id: "subject_1" },
+      syncStatus: "conflict",
+      updatedAt: "2026-10-02T11:55:00.000Z",
+    };
+
+    const merged = mergeStateUpdateResponseWithLocalConflicts(remote, [conflict]);
+
+    expect(merged.summary).toMatchObject({ conflictCount: 1, totalRegistered: 1 });
+    expect(merged.items[0].current?.stateValues[0].label).toBe("En espera");
+    expect(merged.latest).toHaveLength(1);
+    expect(merged.latest?.[0].stateValues?.[0].label).toBe("En espera");
+    expect(conflict.conflictRemoteStateValues?.[0].label).toBe("Operativo");
+  });
+
+  it("leaves responses without local conflicts unchanged", () => {
+    const remote = { summary: { conflictCount: 0, totalRegistered: 0 } } as unknown as StateUpdateResponse;
+
+    expect(mergeStateUpdateResponseWithLocalConflicts(remote, [])).toBe(remote);
+  });
+
+  it("rejects a conflict read completed after its request was invalidated", () => {
+    expect(isStateUpdateVisualRequestCurrent(7, 6)).toBe(false);
+    expect(isStateUpdateVisualRequestCurrent(7, 7)).toBe(true);
+  });
+});
 
 const stateFields: StateUpdateField[] = [{
   fieldId: "status_field",
@@ -79,6 +142,46 @@ const multiStateFields: StateUpdateField[] = [
     required: true,
   },
 ];
+
+describe("state-update offline history presentation", () => {
+  it("distinguishes a prepared empty snapshot from absent and legacy partial coverage", () => {
+    expect(resolveStateUpdateOfflineHistoryState({
+      cachedRecordCount: 0,
+      storedCoverage: "complete",
+    })).toBe("complete");
+    expect(resolveStateUpdateOfflineHistoryState({
+      cachedRecordCount: 0,
+      storedCoverage: null,
+    })).toBe("absent");
+    expect(resolveStateUpdateOfflineHistoryState({
+      cachedRecordCount: 1,
+      storedCoverage: null,
+    })).toBe("partial");
+  });
+
+  it("distinguishes prepared empty, absent, partial, and failed reads", () => {
+    expect(stateUpdateOfflineHistoryMessage({
+      coverage: "complete",
+      hasItems: false,
+      readFailed: false,
+    })).toBe("Sin actualizaciones");
+    expect(stateUpdateOfflineHistoryMessage({
+      coverage: "absent",
+      hasItems: false,
+      readFailed: false,
+    })).toBe("Información no disponible sin conexión.");
+    expect(stateUpdateOfflineHistoryMessage({
+      coverage: "partial",
+      hasItems: true,
+      readFailed: false,
+    })).toContain("Cobertura offline parcial");
+    expect(stateUpdateOfflineHistoryMessage({
+      coverage: "complete",
+      hasItems: false,
+      readFailed: true,
+    })).toBeNull();
+  });
+});
 
 const scalarStateFields: StateUpdateField[] = [
   {

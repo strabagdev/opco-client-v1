@@ -14,6 +14,7 @@ import { CachedStateUpdateRecord } from "./state-update-offline";
 export type AttendanceSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
 export type CachedAttendanceRecord = {
+  conflictIdentity?: string;
   attempts?: number;
   conflictRemoteStatusLabel?: string | null;
   conflictRemoteStatusOptionId?: string | null;
@@ -125,6 +126,7 @@ export function stateUpdateConflictToAttendanceRecord(
   const remoteStatus = record.conflictRemoteStateValues?.find((value) => value.fieldId === statusFieldId);
 
   return {
+    conflictIdentity: record.conflictIdentity,
     attempts: record.attempts,
     conflictRemoteStatusLabel: remoteStatus?.label ?? null,
     conflictRemoteStatusOptionId: remoteStatus?.optionId ?? null,
