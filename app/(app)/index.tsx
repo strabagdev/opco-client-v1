@@ -12,7 +12,7 @@ import {
 import { AppIcon } from "@/components/app-icon";
 import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
 import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
-import { deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
+import { buildStateUpdateCoverageScope, deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
 import { subscribeHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
@@ -138,13 +138,12 @@ export default function HomeScreen() {
           appView.config.workflowKey === "state-update" &&
           definition?.definition.kind === "state-update" &&
           targetEntityTypeId
-          ? await definitionCache.getStateUpdateSnapshotCoverage({
+          ? await definitionCache.getStateUpdateSnapshotCoverage(buildStateUpdateCoverageScope({
               appViewId: appView.id,
               contractId: selectedContractId,
-              date: definition.definition.dateFieldId ? today : undefined,
+              date: today,
               ownerKey,
-              targetEntityTypeId,
-            })
+            }, definition.definition))
           : null;
 
         return [appView.id, deriveOfflineAvailability({

@@ -334,3 +334,19 @@ function readiness({
 
   return result;
 }
+
+/** Shared coverage scope for Home, workflow and read-only diagnostics. */
+export function buildStateUpdateCoverageScope(
+  context: { appViewId: string; contractId: string; ownerKey: string; date?: string },
+  definition: Pick<Extract<PreparedAppViewDefinition, { kind: "state-update" }>,
+    "dateFieldId" | "historyMode" | "uniqueness" | "targetEntityTypeId">,
+) {
+  return {
+    ...context,
+    date: definition.dateFieldId ? context.date : undefined,
+    dateFieldId: definition.dateFieldId,
+    historyMode: definition.historyMode,
+    uniqueness: definition.uniqueness,
+    targetEntityTypeId: definition.targetEntityTypeId,
+  };
+}

@@ -1,3 +1,4 @@
+import { copyStateUpdateDiagnosticsWithCoverage } from "./state-update-coverage-copy";
 import {
   createContext,
   PropsWithChildren,
@@ -939,6 +940,7 @@ export function StateUpdateDiagnosticsPanel({
   reconnect,
   run,
   variant = "overlay",
+  visibleAppViewId = null,
 }: {
   diagnostics: StateUpdateOutboxDiagnostics | null;
   error: string | null;
@@ -949,7 +951,9 @@ export function StateUpdateDiagnosticsPanel({
   reconnect: StateUpdateReconnectDiagnostics;
   run: StateUpdateDiagnosticRun | null;
   variant?: "embedded" | "overlay";
+  visibleAppViewId?: string | null;
 }) {
+  const { definitionCache, ownerKey, selectedContractId } = useSession();
   const [copyState, setCopyState] = useState<StateUpdateDiagnosticsCopyState>("idle");
   const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const summary = diagnostics?.summary;
@@ -1223,7 +1227,17 @@ export function StateUpdateDiagnosticsPanel({
     }
 
     try {
-      await copyTextToClipboard(copyText);
+      const now = new Date();
+      const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      await copyStateUpdateDiagnosticsWithCoverage({
+        copyText,
+        copyToClipboard: copyTextToClipboard,
+        store: definitionCache,
+        ownerKey,
+        contractId: selectedContractId,
+        visibleAppViewId,
+        homeDate: localToday,
+      });
       setCopyState("success");
       copyResetTimeout.current = setTimeout(() => {
         setCopyState("idle");

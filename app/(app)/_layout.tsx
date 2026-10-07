@@ -536,6 +536,7 @@ export default function AppLayout() {
               ) : null}
               {selectedDiagnosticsTab === "state-update" ? (
                 <StateUpdateDiagnosticsPanel
+                  visibleAppViewId={/^\/view\/[^/]+\/?$/.test(pathname) ? visibleAppViewId : null}
                   diagnostics={diagnosticsStateUpdate.diagnostics}
                   error={diagnosticsStateUpdate.error}
                   isSyncing={diagnosticsStateUpdate.isSyncing}

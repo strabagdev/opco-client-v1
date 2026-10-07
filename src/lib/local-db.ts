@@ -5390,7 +5390,7 @@ function abbreviateDiagnosticValue(value: string | null) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function fingerprintDiagnosticValue(value: string | null) {
+export function fingerprintDiagnosticValue(value: string | null) {
   if (!value) {
     return "missing";
   }

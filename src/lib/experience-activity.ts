@@ -1,3 +1,4 @@
+import type { StateUpdateScope } from "./state-update-offline";
 import type { AppViewType } from "./opco-api";
 
 export type ExperienceActivityResult = "idle" | "running" | "success" | "partial" | "error" | "cancelled";
@@ -7,7 +8,13 @@ export type ExperienceActivityRun = {
   startedAt: string;
 };
 
+export type StateUpdateVisibleCoverageContext = {
+  scope: StateUpdateScope;
+  sourceEntityTypeId: string;
+};
+
 export type ExperienceActivitySnapshot = {
+  stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeRuns: ExperienceActivityRun[];
   appViewId: string | null;
   appViewTitle: string | null;
@@ -62,7 +69,9 @@ export function reportExperienceActivity({
   errorCode,
   result,
   scopeKey,
+  stateUpdateCoverage = null,
 }: {
+  stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeCount: number;
   errorCode: string | null;
   result: Exclude<ExperienceActivityResult, "idle" | "running"> | null;
@@ -82,11 +91,13 @@ export function reportExperienceActivity({
   if (
     activeRuns.length === snapshot.activeRuns.length &&
     nextResult === snapshot.result &&
-    nextErrorCode === snapshot.errorCode
+    nextErrorCode === snapshot.errorCode &&
+    stateUpdateCoverage === (snapshot.stateUpdateCoverage ?? null)
   ) return;
 
   setSnapshot({
     ...snapshot,
+    stateUpdateCoverage,
     activeRuns,
     errorCode: nextErrorCode,
     result: nextResult,

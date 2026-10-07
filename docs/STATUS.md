@@ -1377,3 +1377,71 @@ Excluir íntegramente src/lib/state-update-conflict-resolution.test.ts (2 caract
 entre AppViews), src/lib/sqlite-projection-v10-open.experimental.test.ts y tests/experiments/*.
 Los demás hunks documentales previos (V11, SQLite/productivo, caso sin dateFieldId y etapas
 intermedias) quedan en el working tree; no se eliminan ni se preparan.
+
+
+## 2026-10-07 — Consistencia Inicio/workflow y copia de cobertura STATE_UPDATE
+
+Causa local demostrada: Inicio leía el mismo marcador diario sin dateFieldId,
+historyMode ni uniqueness. Omitía la validación existente que degrada a partial los
+marcadores antiguos sin contentVerified=true para subject/append/con fecha. Inicio y
+workflow ahora construyen su scope con buildStateUpdateCoverageScope. El lector conserva
+sus reglas; no se escribe ni promociona ningún marcador.
+
+«Copiar State Update», en la pestaña STATE_UPDATE del diagnóstico compartido, conserva
+el diagnóstico home_local_today para las AppViews con definición local. Además copia
+visible_workflow para la AppView visible: fecha seleccionada y configuración efectivas
+obtenidas del estado/response del workflow mediante el contexto de actividad existente.
+El shell proporciona la AppView de la ruta visible. La copia toma ese contexto al pulsar;
+la fecha del workflow nunca se infiere del reloj ni del marcador de Inicio. Al cambiar
+fecha se actualiza el contexto en memoria; al abandonar/cambiar scope se descarta.
+
+Cada sección incluye queriedDate (o all si no hay campo fecha), markerPresent (marcador
+válido leído), status efectivo, contentVerified (null si falta), downloadedThroughPage,
+pageSize, total y lastSuccessfulRefreshAt. Scope identificado por fingerprints existentes
+de owner/contrato/AppView/entidades/campo fecha, más uniqueness/historyMode. No incorpora
+valores de registros, nombres ni IDs crudos en las nuevas secciones. status se lee con
+la validación existente: no equivale al status crudo almacenado de un marcador legacy.
+
+homeDateSource=local_today y visibleDateSource=workflow_context; never_clock distinguen
+los dos orígenes. visible_workflow exige coincidencia entre la ruta, la actividad y el
+owner/contrato/AppView. Si faltan contexto o respuesta efectiva, o hay un scope anterior,
+se informa availability=unavailable y visibleWarningExplanation=not_established;
+expresamente el marcador de Inicio no explica el aviso visible. Si el scope es conocido
+pero carece de marcador, se exporta su propia queriedDate con markerPresent=false y
+status=absent, sin sustituirlo por otro día. Definiciones no cacheadas se distinguen de
+marcadores ausentes. Attendance no publica este contexto ni entra en el colector de Inicio.
+
+La prueba de latest no acredita todos los sujetos ni sus vigentes.
+subjectsLastFullRefreshAt refleja únicamente la evidencia de hidratación previa de la
+entidad fuente: subjectsAvailability=previous_full_refresh o unverified.
+currentCompleteness=not_certified siempre, porque no existe un marcador que acredite
+la totalidad de vigentes. No se infiere cobertura completa desde filas visibles.
+
+Regresiones locales: wiring Inicio/workflow/helper, complete/partial y marcadores antiguos;
+copia presente/ausente; distintas fechas de Inicio/selección con marcadores distintos;
+texto del camino real del botón capturado en un destino clipboard de prueba; ausencia
+de valores/PII y de escrituras al copiar; contexto ausente, fechas cambiadas, salida y
+reportes tardíos; rechazo de owner/contrato/AppView/scope/type distintos; aislamiento de
+Attendance y separación latest/sujetos/vigentes. SQLite real en memoria mediante harness
+Python y singleton de producción. Las conexiones de componentes/botón se comprueban
+estructuralmente; no se afirma una nueva prueba manual de navegador ni clipboard del SO.
+
+La copia lee el marcador vigente al pulsar, no un marcador histórico congelado cuando
+apareció el aviso. Preparación concurrente puede haberlo actualizado entre ambos instantes:
+los metadatos exportados sirven para correlacionar, pero no prueban por sí solos la causa
+del mensaje previo. Una definición o respuesta no disponible no se inventa ni se sustituye.
+
+Validación final del lote aislado: 940 pruebas en 77 archivos con máximo dos workers
+(17 regresiones propias); typecheck PASS; lint global PASS, 0 errores y las 2 advertencias
+require preexistentes de records-sync.local-db-regression.test.ts:182/183; build web y
+service worker PASS sin .env/.env.local; diff-check PASS. Árbol HEAD + 12 archivos/hunks
+seleccionados, sin V11, diagnósticos independientes ni sus pruebas. Los bytes funcionales
+coinciden con el workspace; las secciones documentales previas permanecen intactas.
+Parche e inventario verificables conservados en
+/home/dannysilver/dev2026/backups/state-update-coverage-close/2026-10-07/ fuera de /tmp.
+No cambia preparación, paginación, descargas, persistencia, escrituras/outbox, conflictos,
+sincronización, esquema, Core ni dependencias. El nuevo contexto sólo vive en memoria y
+usa el ciclo de actividad existente. V11 pausado; sin producción, commit, push ni deploy.
+La validación manual productiva tras 01b07b5 acredita lectura y persistencia tras reapertura
+offline, no escrituras/sync ni cobertura completa. La causa del aviso productivo y la
+causa primaria de Error finalizing statement siguen sin correlación concluyente.

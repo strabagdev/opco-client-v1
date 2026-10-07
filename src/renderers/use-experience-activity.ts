@@ -7,6 +7,7 @@ import {
   reportExperienceActivity,
   subscribeExperienceActivity,
   type ExperienceActivityResult,
+  type StateUpdateVisibleCoverageContext,
 } from "@/lib/experience-activity";
 import type { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
@@ -15,7 +16,9 @@ export function useExperienceActivityReporter(appView: AppView, {
   activeCount,
   errorCode,
   result,
+  stateUpdateCoverage = null,
 }: {
+  stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeCount: number;
   errorCode: string | null;
   result: Exclude<ExperienceActivityResult, "idle" | "running"> | null;
@@ -39,8 +42,8 @@ export function useExperienceActivityReporter(appView: AppView, {
 
   useEffect(() => {
     if (!scopeKey) return;
-    reportExperienceActivity({ activeCount, errorCode, result, scopeKey });
-  }, [activeCount, errorCode, result, scopeKey]);
+    reportExperienceActivity({ activeCount, errorCode, result, scopeKey, stateUpdateCoverage });
+  }, [activeCount, errorCode, result, scopeKey, stateUpdateCoverage]);
 }
 
 export function useExperienceBootstrapActivity(

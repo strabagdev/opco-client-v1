@@ -12,7 +12,7 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
-import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
+import { buildStateUpdateCoverageScope, hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
 import {
   buildInitialFormValues,
@@ -181,7 +181,25 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     : error && !visibleResponse
       ? "STATE_UPDATE_ACTIVITY_FAILED"
       : null;
+  const stateUpdateCoverage = useMemo(() => {
+    if (!ownerKey || !selectedContractId || !visibleResponse || visibleResponse.appView.id !== appView.id) return null;
+    return {
+      scope: buildStateUpdateCoverageScope({
+        appViewId: appView.id,
+        contractId: selectedContractId,
+        ownerKey,
+        date,
+      }, {
+        dateFieldId: visibleResponse.dateFieldId,
+        historyMode: visibleResponse.historyMode,
+        uniqueness: visibleResponse.uniqueness,
+        targetEntityTypeId: visibleResponse.targetEntityType.id,
+      }),
+      sourceEntityTypeId: visibleResponse.sourceEntityType.id,
+    };
+  }, [appView.id, date, ownerKey, selectedContractId, visibleResponse]);
   useExperienceActivityReporter(appView, {
+    stateUpdateCoverage,
     activeCount: Number(isLoading) + Number(isSearching) + Number(isLoadingMore) + Number(isSaving),
     errorCode: experienceErrorCode,
     result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isLoadingMore && !isSaving ? "success" : null,
@@ -257,16 +275,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     });
     const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
 
-    const scope = {
+    const scope = buildStateUpdateCoverageScope({
       appViewId: appView.id,
       contractId: selectedContractId,
-      date: definition.dateFieldId ? date : undefined,
-      dateFieldId: definition.dateFieldId,
-      historyMode: definition.historyMode,
-      uniqueness: definition.uniqueness,
+      date,
       ownerKey,
-      targetEntityTypeId: definition.targetEntityTypeId,
-    };
+    }, definition);
     const latestPageToLoad = query.page ?? 1;
     const [summary, latestResult, localConflicts, storedCoverage] = await Promise.all([
       definitionCache.getStateUpdateSummary(scope),
