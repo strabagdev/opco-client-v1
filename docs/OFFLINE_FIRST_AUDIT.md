@@ -1,5 +1,75 @@
 # Auditoria Offline-First
 
+## Vigente Por Fecha — CORRECCIÓN CORE Y VALIDACIÓN LOCAL — 2026-10-04
+
+Corrige sólo subjects[].current visible del GET de STATE_UPDATE con uniqueness=subject y dateFieldId.
+Core main/6a4374a0d1032786577c054d3ad4dcf46034c71f conserva un diff nuevo sin commit; Client
+main/d1ae50cdea72a80215de16ebfdce5142ccdd2063 conserva todos los pendientes. V11 pausado,
+caso independiente sin dateFieldId no reabierto. Error finalizing statement productivo sigue abierto.
+
+Causa: findExistingStateUpdates ordenaba updatedAt DESC y tomaba primero por sujeto, aunque latest
+usa fecha configurada DESC/id ASC. Consumers revisados: GET workflow, POST engine y proyección REPORT
+STATE_UPDATE CURRENT. Corrección mínima en Core: GET pide selection=workflow-current; sólo cuando
+uniqueness=subject y dateFieldId existe se filtra la fecha no nula y reordena los registros ya cargados
+por fecha DESC/id ASC antes de agrupar por sujeto. Usa exclusivamente el campo configurado. Fechas
+iguales y ausentes siguen el criterio existente de latest (empate por id; excluir ausentes; current=null
+si ninguno fechado). Sin fallback a timestamps/revisión. Default lookup de POST/unicidad/conflictos,
+REPORT y sujeto-fecha/Attendance conservados; updatedAt sigue siendo versión remota. No se afirma
+que la selección del target de escritura cambió: la regresión prueba que sigue eligiendo su target previo.
+
+Regresión real en state-update-workflow.test.ts: tres casos nuevos fallaron antes del cambio
+(R99 en vez de R1, empate/ausente incorrecto, todos sin fecha con current no nulo); no-date pasó.
+Run final focalizado Core: state-update-workflow, attendance-workflow y api-reports, 71/71 PASS.
+Cinco regresiones cubren R1 Fecha 04-10 frente a R99 Fecha 03-10/modificación posterior, empate por id,
+ausentes, no-date y target de conflicto conservado. npx tsc --noEmit y npm run lint Core PASS.
+Client typecheck PASS, lint sin errores con dos warnings require() preexistentes en
+records-sync.local-db-regression.test.ts. Diff-check ambos repos PASS. Sin suite completa ni build Core.
+Export Client temporal necesario para navegador: Expo Web --clear, sin reemplazar dist existente;
+entry-4dd0d77abe906953cfca390977c2112e.js verificado con API sólo localhost:19390;
+SW opco-shell-27ea03bc89480400, 28 recursos, incluye worker/SQLite WASM.
+
+Fixture autorizado Prisma/transacción en namespace local_current_20261004_9391: fuente Procedimientos,
+target Versionado; WORKFLOW/state-update; subjectFieldId *_subject RELATION ONE a *_source;
+dateFieldId *_date DATE Fecha; uniqueness subject; historyMode append; estados *_revision TEXT
+Revisión required=false, *_status SELECT Estatus required=true y *_date DATE Fecha required=false;
+extraFieldIds=[] y sin defaultOptionId inferido. Estatus sintético Validado sintético, valor
+VALIDADO_SYNTHETIC/optionId *_option. Un procedimiento buscable Inspección de tolva sintética.
+*_new R1 con Fecha 2026-10-04/updatedAt 08:00Z y *_old R99 con Fecha 2026-10-03/updatedAt 09:00Z
+(el mismo 04-10). Tipos de Revisión/Estatus, opciones/default omitido, IDs, permisos y timestamps son
+sintéticos, no acreditan datos exactos productivos. No escrituras UI ni prueba POST con ese fixture.
+
+DATABASE_URL leída de Core .env.local y explícita en Prisma y proceso Core. Guard host/puerto/base/rol;
+PostgreSQL confirmó opco_development/opco_dev, 127.0.0.1/32:5432. Core localhost:19390, Client
+localhost:19391; sólo sesiones sintéticas. Online GET search=tolva HTTP 200 devuelve current=*_new/R1
+Fecha 04-10 y latest ordenado [*_new, *_old], total=2/hasMore=false. No REPORT.
+
+Chrome 154.0.8037.93 Windows headless/CDP 9391, **corrida válida en perfil nuevo exclusivo**
+C:\Windows\Temp\opco-current-20261004-9393, sin Playwright ni perfil habitual.
+
+| Paso | Evidencia acreditada | Límite |
+| --- | --- | --- |
+| Preparación sin visitar workflow | Inicio pasó de Preparando 0/1 a Listo; requests incluyen definición workflow, fuente y records antes de apertura | No se capturó runId/telemetría terminal interna; Listo por sí solo no acredita cobertura histórica completa. |
+| OPFS antes de apertura | SW controlador, crossOriginIsolated=true, seis archivos expo-sqlite, DB 126976 bytes y cinco 4096 | Lectura de metadata de archivos, sin segunda conexión SQLite ni extracción DB. |
+| Primera apertura offline y buscar tolva | CDP offline activo hasta resultado estable; navigator.onLine=false/probe Core=false; sujeto, R1 y Fecha 04-10; Sin conexión, sin Cargando | Active date 04-10; no todas las fechas/historial ni writes/conflicts offline. |
+| Cierre completo | Browser.close y comprobación posterior cero procesos del perfil | No habitual/PWA instalada/native. |
+| Reapertura offline mismo perfil | Core y servidor Client detenidos; emulación antes de Page.navigate desde about:blank; shell/session/workflow recuperados, tolva devuelve mismo sujeto/R1/Fecha; online=false | Red cortada por CDP, no wifi físico. API local imposible por servicios detenidos; intentos GET fallidos no son respuestas remotas. |
+| Persistencia | Mismos seis nombres/tamaños OPFS tras cierre; mismo SW controlador y R1 | No demuestra todos los contenidos internos, outbox o cobertura completa. |
+
+Sin excepciones Runtime en las dos etapas válidas; no error SQLite, spinner permanente ni defecto nuevo.
+Se observaron dificultades **del arnés**, no contabilizadas como PASS: socket CDP inicial, selectores de
+Pressable y expresión await corregidos; servidor temporal inicialmente omitió API en CSP y se reinició
+con env correcta; una corrida preliminar soltó emulación antes de terminar debounce y reconectó.
+Se descartó para acreditar búsqueda offline y se repitió desde perfil limpio 9393, manteniendo conexión
+hasta resultado estable y Browser.close. No cambio funcional adicional por estos problemas del arnés.
+
+Limpieza: fixture/usuario/token propios eliminados vía Prisma; cero org/users/records/views/tokens
+confirmados. Ambos grupos de servicios propios detenidos, Chrome propio cerrado; se retiran sólo
+perfiles 9391/9392/9393, helpers Windows propios y directorio temporal del ensayo. No base/perfil previo
+ni pendientes existentes tocados. Documentos Core STATE_UPDATE/EXTERNAL_API y Client STATUS,
+STATE_UPDATE/OFFLINE_FIRST_AUDIT actualizados. Sin esquema, migración, dependencias, producción,
+commit, push o deploy. No se explica ni resuelve el incidente productivo de finalización SQLite.
+
+
 Fecha de corte original: 2026-09-22. Este documento contrasta la arquitectura documentada con el
 codigo actual. La verificacion de resiliencia RECORDS del 2026-09-23 conserva evidencia historica de un arbol
 experimental respaldado. La matriz de cierre 2026-09-28 distingue ese antecedente de la correccion

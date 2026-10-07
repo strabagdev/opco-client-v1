@@ -548,3 +548,22 @@ Stable nodes and boundaries for a later system diagram:
 - `refresh signals`: mounted workflow refresh after sync.
 - `Service Worker/PWA`: offline app shell only, not API data cache.
 - `RECORDS engine`: separate generic records renderer/sync system that shares SQLite infrastructure.
+
+
+## Corrección de current visible por fecha — 2026-10-04
+
+Core GET STATE_UPDATE con unicidad subject y dateFieldId selecciona ahora subjects.current por el
+DATE configurado descendente, id ascendente como latest; excluye fechas ausentes y retorna null si
+no hay candidato fechado. La selección se pide explícitamente con selection=workflow-current en
+findExistingStateUpdates. Sólo afecta GET visible; lookup por defecto de POST/unicidad/conflictos,
+proyección REPORT, Attendance/sujeto-fecha y no-date conservan comportamiento. updatedAt continúa
+siendo la versión de concurrencia; nunca sustituye fecha para el current visible de ese alcance.
+No se importa el contrato REPORT LATEST_BY_RELATION ni se modifica la persistencia Client.
+
+Tres regresiones fallaron antes; 71 pruebas focalizadas Core pasan tras corrección, incluido target de
+conflicto conservado. Fixture real local devuelve R1 de Fecha 04-10 frente a R99 de Fecha 03-10 con
+updatedAt posterior. Chrome exclusivo/OPFS real confirma R1 en primera apertura offline con búsqueda
+tras preparar desde Inicio y en reapertura después de cerrar todos los procesos del perfil, sin servicios
+locales y bajo CDP offline antes de navegar. Evidencia limitada al sujeto y fecha activa preparados;
+no cobertura histórica completa, writes/conflicts, native ni incidente productivo Error finalizing statement.
+Detalle, intentos descartados del arnés y limpieza en STATUS/OFFLINE_FIRST_AUDIT. V11 sigue pausado.
