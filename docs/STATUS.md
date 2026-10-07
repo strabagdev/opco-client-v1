@@ -1247,3 +1247,133 @@ from another worktree; rebuilding with an empty bundler cache passed.
 
 Offline/outbox behavior remains documented in [`STATE_UPDATE.md`](STATE_UPDATE.md); broader client
 architecture and future scope remain in [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md).
+
+### 2026-10-07 — Cierre de identidad/current STATE_UPDATE v10 y adaptación uniqueness
+
+Corrección local completada, sin publicar. El bloqueo de representación documentado el 06 quedó
+resuelto: normalizeStateUpdateUniqueness admite cadenas históricas y el objeto {mode:...} de Core
+para none/subject/subject-date, rechazando desconocidos con INVALID_STATE_UPDATE_UNIQUENESS.
+API y caché get/list/write entregan la misma representación interna. Definiciones legacy válidas
+se leen sin reescribir almacenamiento; inválidas producen definición/status error controlados.
+Core no cambió. No se alteraron outbox, claves de intención/idempotencia, esquema ni índice UNIQUE.
+
+Se activa el arreglo scoped para subject/append/dateFieldId: dos eventos remotos con igual sujeto
+y Fecha permanecen separados; current y latest reutilizan el mismo evento y se conserva el
+contenido completo de current. Se reutiliza el alias legacy del mismo evento sin reset de caché.
+Current offline: fecha configurada DESC/ID remoto ASC, sin filtro por fecha de consulta para
+historia synced, excluyendo fechas ausentes y manteniendo el overlay pendiente de consulta.
+La ausencia de fecha autoritativa no se sustituye por la fecha consultada.
+
+Cobertura: ambos productores pasan el total esperado en respuestas completas; contenido
+insuficiente impide reconciliación y complete. La cobertura exige IDs únicos realmente
+persistidos (no el número de referencias current/latest). Marcadores legacy sin prueba se
+leen partial en el modo acotado. Pendientes/conflictos y rollback permanecen protegidos.
+
+Regresiones red antes del cambio de boundary: 11 fallos por objeto no normalizado/configuración
+inválida aceptada, con los nueve casos previos verdes. Tras el cambio,
+src/lib/state-update-remote-snapshot.test.ts tiene 26 casos PASS, incluyendo raw API -> prewarm
+-> SQLite cache -> hidratación, caché histórica, tres modos/string/object, rechazo de valores
+desconocidos, contenido incompleto y conservación de extras completos del current.
+Checks finales afectados: 13 archivos/369 pruebas PASS; typecheck PASS; lint de ocho archivos
+afectados PASS; git diff --check PASS. Export web temporal + SW PASS; sin escribir dist.
+Se ejecutaron API, cache, prewarm, SQLite/local-db, state-update/offline/conflictos/sync,
+Attendance y lógica de workflows. No suite completa ni experimentos v11.
+
+Fixture Core/PostgreSQL local (DATABASE_URL de .env.local explícita en ambos procesos, guard
+localhost/opco_development): misma configuración acreditada, relación ONE Procedimiento,
+uniqueness.mode=subject, append, Fecha DATE y Revisión TEXT opcionales, Estatus SELECT obligatorio
+con opción/valor sintético explícito VALIDADO_SYNTHETIC. El default de producción sigue
+desconocido; no se inventó. Un procedimiento TOLVA, eventos A/R1 y B/R99 con Fecha 2026-10-04,
+IDs A<B, B modificado después, fecha consultada posterior. Usuario/organización/contrato/AppView
+nuevos y sintéticos; no se escribió en producción.
+
+Chrome con perfil exclusivo nuevo, API/Client localhost:19420/19421 y OPFS real:
+- Online TOLVA mientras preparación de fondo estaba retenida: navigator.onLine=true,
+  HTTP GET workflow 200, sujeto y current R1 visibles, dos filas/dos IDs remotos, sin error.
+- Tras liberar preparación: complete/total=2/contentVerified=true; siguen dos eventos.
+- Búsqueda offline tras el recorrido online: sujeto/current R1 y ambos eventos persistidos;
+  sin duplicados, fechas propias conservadas, sin Error finalizing statement observado.
+- Cierre completo: 0 procesos Chrome del perfil. Core y Client HTTP propios detenidos.
+  Reapertura del mismo perfil con red emulada offline antes de cargar la ruta: SW activo,
+  crossOriginIsolated=true, OPFS conserva dos IDs y current R1; sin error SQLite observado.
+
+Esta secuencia reproduce el recorrido online aclarado por el usuario y la persistencia tras cierre;
+no representa el almacenamiento productivo ni prueba por sí sola su sentencia SQLite primaria.
+Preparación concurrente controlada de una AppView sintética, no el inventario productivo 10/11.
+La versión histórica es anterior a la consulta; el empate además comprueba el ID ascendente.
+
+Inventario de esta continuación: opco-api.ts y app-view-definitions-cache.ts (normalización),
+local-db.ts (boundary cache y controles de contenido/fecha), state-update-offline.ts y productores
+app-view-prewarm.ts/StateUpdateWorkflow.tsx (total esperado), regresión remota extendida y estos
+tres documentos. local-db.test.ts conserva el matcher ajustado de la etapa anterior.
+Todos los pendientes ajenos y las pruebas anteriores de snapshot-date/conflictos están intactos
+por comparación SHA256; Core limpio en 6ed194af04717073fedb3087eb4ad836b234014a, Client main
+en 76babead92d82239fcc9ac78f3e1e1d6b3df939d, index vacío.
+
+Fixture eliminado: 0 objetos propios en nueve modelos comprobados. Perfil, credenciales,
+build temporal y procesos propios retirados; no se borraron cachés habituales. Evidencia
+sanitizada fuera de Git en backups/state-update-uniqueness-close/2026-10-07.
+Sin commit/push/deploy, V11 pausado. Error finalizing statement productivo sigue abierto,
+pendiente de correlación; problema independiente entre AppViews y caso sin fecha no retomados.
+
+
+### 2026-10-07 — Lote STATE_UPDATE v10 listo para publicar: cierre técnico
+
+El lote publicable se delimita contra Client main 76babead92d82239fcc9ac78f3e1e1d6b3df939d:
+7 archivos de implementación/prueba existente, 2 regresiones nuevas y 3 documentos con sólo
+las secciones de cierre de identidad/current/uniqueness y este cierre técnico. No se publican
+las notas intermedias de diagnóstico ni los demás pendientes documentales.
+
+Checks completos con máximo dos workers: árbol de trabajo 77 archivos/927 pruebas PASS;
+HEAD + lote seleccionado aislado 76 archivos/923 pruebas PASS. Los cuatro casos de diferencia
+son dos caracterizaciones V10 experimentales y dos diagnósticos entre AppViews, excluidos del
+lote. No se modificaron ni retiraron esos pendientes. Typecheck PASS, lint completo PASS
+con 0 errores y 2 advertencias preexistentes de require() en
+src/sync/records-sync.local-db-regression.test.ts:182/183, build:web/export/SW PASS, diff-check PASS.
+Build realizado en copia temporal, con endpoint localhost, sin copiar .env ni sobrescribir
+el dist habitual. No se cambiaron dependencias, migraciones, esquema ni Core.
+
+Revisión: definición cacheada objeto/string se normaliza sin reset/rewrite al leer; un modo
+inválido da error controlado. Una fila legacy synced del mismo evento conserva su alias.
+Un evento perdido por una versión anterior exige hidratación online exitosa para recuperarlo:
+no puede reconstruirse a partir de una cobertura antigua. Los marcadores antiguos sin prueba
+son partial, y total de contenido insuficiente impide complete/reconciliación destructiva.
+Las identidades y serialización efectiva de intenciones/outbox/idempotencia siguen intactas;
+las filas no synced y conflictos no se sobrescriben. Lookups/lectura/reconciliación filtran
+owner/contrato/entidad/AppView y current además sujeto. Attendance/subject-date/sin fecha
+retienen sus caminos anteriores; tests completos de los consumidores pasan. El UNIQUE v10
+entre AppViews distintas permanece como limitación independiente, sin corrección en este lote.
+
+Evidencia Chrome/OPFS reutilizada: SHA256 de todos los archivos funcionales finales coincide
+con el contenido validado en backups/state-update-uniqueness-close/2026-10-07. Online con
+preparación concurrente, offline y reapertura sin servicios conservan R1 y dos eventos.
+No hay riesgo funcional nuevo que justifique repetir navegador o fixtures. Alcance: fixture
+sintético completo de dos eventos/una AppView; no datos productivos, native, múltiples tabs
+ni garantía de vigente global con snapshot parcial. Error finalizing statement productivo
+permanece sin correlación concluyente de sentencia/causa primaria. V11 pausado.
+
+Parches e inventario verificables: backups/state-update-technical-close/2026-10-07,
+state-update-implementation.patch y state-update-documentation.patch; ambos aplican sobre
+el HEAD indicado y reproducen exactamente los archivos seleccionados. Sin secretos, .env,
+configuración local, bases SQLite/PostgreSQL, logs, builds ni experimentos en el lote.
+Main, índice y pendientes excluidos se conservan. Sin commit/push/deploy.
+
+Inventario exacto de archivos y hunks:
+
+- src/lib/app-view-definitions-cache.ts: todos los 2 hunks actuales pertenecen al lote.
+- src/lib/app-view-prewarm.ts: todos los 1 hunks actuales pertenecen al lote.
+- src/lib/local-db.test.ts: todos los 1 hunks actuales pertenecen al lote.
+- src/lib/local-db.ts: todos los 22 hunks actuales pertenecen al lote.
+- src/lib/opco-api.ts: todos los 3 hunks actuales pertenecen al lote.
+- src/lib/state-update-offline.ts: todos los 4 hunks actuales pertenecen al lote.
+- src/renderers/workflows/state-update/StateUpdateWorkflow.tsx: todos los 3 hunks actuales pertenecen al lote.
+- src/lib/state-update-snapshot-date.test.ts: archivo nuevo completo.
+- src/lib/state-update-remote-snapshot.test.ts: archivo nuevo completo.
+- docs/STATE_UPDATE.md: sólo desde «## Cierre v10: uniqueness normalizado, identidad remota y current offline — 2026-10-07» y el nuevo cierre técnico; el resto del diff se excluye.
+- docs/STATUS.md: sólo desde «### 2026-10-07 — Cierre de identidad/current STATE_UPDATE v10 y adaptación uniqueness» y el nuevo cierre técnico; el resto del diff se excluye.
+- docs/OFFLINE_FIRST_AUDIT.md: sólo desde «### 2026-10-07 — Cierre local v10: integración uniqueness/current/identidad aprobada en fixture» y el nuevo cierre técnico; el resto del diff se excluye.
+
+Excluir íntegramente src/lib/state-update-conflict-resolution.test.ts (2 caracterizaciones
+entre AppViews), src/lib/sqlite-projection-v10-open.experimental.test.ts y tests/experiments/*.
+Los demás hunks documentales previos (V11, SQLite/productivo, caso sin dateFieldId y etapas
+intermedias) quedan en el working tree; no se eliminan ni se preparan.

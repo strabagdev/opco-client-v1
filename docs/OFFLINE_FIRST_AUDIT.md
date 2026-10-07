@@ -776,3 +776,78 @@ terminar; ninguna conclusion depende de borrar el almacenamiento para funcionar.
 
 Pasar suites no sustituye la verificacion PWA real, y la matriz PWA no sustituye inyeccion controlada de
 todos los fallos. Ambas evidencias se mantienen separadas.
+
+### 2026-10-07 — Cierre local v10: integración uniqueness/current/identidad aprobada en fixture
+
+El impedimento anterior fue de adaptación: Client copiaba el objeto workflow.uniqueness de Core
+como si fuera string. Ahora API y definiciones cacheadas aceptan objeto {mode:...} y cadenas
+históricas para none/subject/subject-date, entregan enum interno coherente y rechazan valores
+desconocidos con error controlado. Leer caché legacy no la reescribe; no se resetearon datos.
+No hubo decisión de negocio nueva ni modificación del contrato Core.
+
+26 regresiones de identidad/boundaries PASS, incluyendo payload real API -> preparación/caché
+SQLite -> hidratación, legacy cache, configuraciones inválidas y contenido requerido incompleto.
+Total focalizado: 369 pruebas/13 archivos PASS, typecheck/lint/diff-check PASS, export web/SW
+temporales PASS. No suite completa ni pruebas experimentales.
+
+Fixture exclusivamente local, mismo procedimiento TOLVA y dos versiones A/R1 y B/R99 con Fecha
+2026-10-04, ID A<B, B.updatedAt posterior, consulta posterior a la fecha propia. Core/PostgreSQL
+reales con DATABASE_URL explícita de .env.local; Chrome nuevo/OPFS real. Online con preparación
+concurrente, tras completar preparación, offline y reapertura completa sin servicios HTTP:
+current=R1 en la fila del sujeto, dos filas/dos IDs, fechas propias intactas, sin duplicados
+ni Error finalizing statement observado. complete/2 lleva contentVerified=true sólo después de
+persistir ambos; contenido incompleto es partial y no habilita limpieza destructiva.
+
+Snapshot legacy reutiliza la fila del mismo evento; current/latest no sobreescriben otros IDs
+ni el contenido completo de current con una proyección parcial. Current offline usa fecha
+configurada DESC/ID remoto ASC, excluye ausencia de fecha y mantiene overlays de consulta.
+Pendientes, conflictos, append, Attendance y rollback conservados. Sin esquema/index/worker
+ni modificaciones de identidades locales/outbox/idempotencia.
+
+Límites: fixture sintético completo de dos eventos, preparación de una AppView y desconexión
+emulada por CDP. Default productivo de Estatus desconocido, valor sintético válido explícito.
+Snapshots parciales/ausentes no prueban vigente global; problema entre AppViews separado.
+No se accedió al almacenamiento productivo ni se confirmó su causa primaria SQLite.
+Fixture/perfil/procesos propios limpiados, pendientes ajenos intactos, sin publicación, V11 pausado.
+
+
+### 2026-10-07 — Verificación técnica del lote STATE_UPDATE v10
+
+El lote publicable se delimita contra Client main 76babead92d82239fcc9ac78f3e1e1d6b3df939d:
+7 archivos de implementación/prueba existente, 2 regresiones nuevas y 3 documentos con sólo
+las secciones de cierre de identidad/current/uniqueness y este cierre técnico. No se publican
+las notas intermedias de diagnóstico ni los demás pendientes documentales.
+
+Checks completos con máximo dos workers: árbol de trabajo 77 archivos/927 pruebas PASS;
+HEAD + lote seleccionado aislado 76 archivos/923 pruebas PASS. Los cuatro casos de diferencia
+son dos caracterizaciones V10 experimentales y dos diagnósticos entre AppViews, excluidos del
+lote. No se modificaron ni retiraron esos pendientes. Typecheck PASS, lint completo PASS
+con 0 errores y 2 advertencias preexistentes de require() en
+src/sync/records-sync.local-db-regression.test.ts:182/183, build:web/export/SW PASS, diff-check PASS.
+Build realizado en copia temporal, con endpoint localhost, sin copiar .env ni sobrescribir
+el dist habitual. No se cambiaron dependencias, migraciones, esquema ni Core.
+
+Revisión: definición cacheada objeto/string se normaliza sin reset/rewrite al leer; un modo
+inválido da error controlado. Una fila legacy synced del mismo evento conserva su alias.
+Un evento perdido por una versión anterior exige hidratación online exitosa para recuperarlo:
+no puede reconstruirse a partir de una cobertura antigua. Los marcadores antiguos sin prueba
+son partial, y total de contenido insuficiente impide complete/reconciliación destructiva.
+Las identidades y serialización efectiva de intenciones/outbox/idempotencia siguen intactas;
+las filas no synced y conflictos no se sobrescriben. Lookups/lectura/reconciliación filtran
+owner/contrato/entidad/AppView y current además sujeto. Attendance/subject-date/sin fecha
+retienen sus caminos anteriores; tests completos de los consumidores pasan. El UNIQUE v10
+entre AppViews distintas permanece como limitación independiente, sin corrección en este lote.
+
+Evidencia Chrome/OPFS reutilizada: SHA256 de todos los archivos funcionales finales coincide
+con el contenido validado en backups/state-update-uniqueness-close/2026-10-07. Online con
+preparación concurrente, offline y reapertura sin servicios conservan R1 y dos eventos.
+No hay riesgo funcional nuevo que justifique repetir navegador o fixtures. Alcance: fixture
+sintético completo de dos eventos/una AppView; no datos productivos, native, múltiples tabs
+ni garantía de vigente global con snapshot parcial. Error finalizing statement productivo
+permanece sin correlación concluyente de sentencia/causa primaria. V11 pausado.
+
+Parches e inventario verificables: backups/state-update-technical-close/2026-10-07,
+state-update-implementation.patch y state-update-documentation.patch; ambos aplican sobre
+el HEAD indicado y reproducen exactamente los archivos seleccionados. Sin secretos, .env,
+configuración local, bases SQLite/PostgreSQL, logs, builds ni experimentos en el lote.
+Main, índice y pendientes excluidos se conservan. Sin commit/push/deploy.

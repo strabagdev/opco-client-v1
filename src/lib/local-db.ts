@@ -10,6 +10,7 @@ import {
   normalizeStateUpdateRecord,
   OfflineStateUpdatePayload,
   OfflineStateUpdateValues,
+  usesDatedSubjectHistory,
   resolveStateUpdateClientRequestId,
   ResolveStateUpdateConflictWithLocalInput,
   DiscardStateUpdateConflictInput,
@@ -42,6 +43,7 @@ import {
   AppViewDefinitionStatus,
   CachedAppViewDefinition,
   PreparedAppViewDefinition,
+  normalizePreparedAppViewDefinition,
   UpsertAppViewDefinitionInput,
 } from "./app-view-definitions-cache";
 import {
@@ -1422,6 +1424,7 @@ async function upsertAppViewDefinition({
   workflowKey = null,
 }: UpsertAppViewDefinitionInput) {
   const db = await getDatabase();
+  const normalizedDefinition = normalizePreparedAppViewDefinition(definition);
 
   await db.runAsync(
     `
@@ -1449,9 +1452,9 @@ async function upsertAppViewDefinition({
     appViewId,
     appViewType,
     workflowKey,
-    JSON.stringify(definition),
+    JSON.stringify(normalizedDefinition),
     lastPreparedAt,
-    status,
+    normalizedDefinition.kind === "error" ? "error" : status,
   );
   notifyLocalDatabaseCacheChangeListeners();
 }
@@ -2859,6 +2862,9 @@ async function searchStateUpdateSubjects({
   appViewId,
   contractId,
   date,
+  dateFieldId,
+  historyMode,
+  uniqueness,
   ownerKey,
   search,
   sourceEntityTypeId,
@@ -2878,6 +2884,9 @@ async function searchStateUpdateSubjects({
         appViewId,
         contractId,
         date,
+        dateFieldId,
+        historyMode,
+        uniqueness,
         ownerKey,
         subjectRecordId: record.serverId ?? record.id,
         targetEntityTypeId,
@@ -2898,12 +2907,15 @@ async function searchStateUpdateSubjects({
   return results;
 }
 
-async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date: rawDate, items, latest = [], ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
+async function upsertStateUpdateSnapshot({ appViewId, complete = false, contractId, date: rawDate, dateFieldId, historyMode, uniqueness, expectedRemoteEventCount, items, latest = [], ownerKey, targetEntityTypeId }: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
   const date = normalizeStateUpdateLogicalDate(rawDate);
   let staleSyncedRemoved = 0;
   let reconciledFromSnapshot = false;
+  const datedHistory = usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness });
+  let contentVerified = true;
+  let persistedRemoteEventCount = 0;
 
   await db.withTransactionAsync(async (transaction) => {
     const latestItems = latest.map((item) => ({
@@ -2913,15 +2925,30 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         stateValues: item.stateValues ?? [],
         updatedAt: item.updatedAt,
       },
-      date: normalizeStateUpdateLogicalDate(item.date) ?? date,
+      date: normalizeStateUpdateLogicalDate(item.date) ?? (datedHistory ? undefined : date),
       subject: item.subject,
     }));
     const currentItems = [
-      ...items.filter((item) => item.current).map((item) => ({ ...item, date })),
-      ...latestItems,
+      ...items.filter((item) => item.current).map((item) => {
+        const fieldDate = dateFieldId
+          ? item.current?.stateValues.find((value) => value.fieldId === dateFieldId)?.value
+          : undefined;
+        const latestDate = latest.find((event) => event.recordId === item.current?.recordId &&
+          event.subject.id === item.subject.id)?.date;
+        const eventDate = normalizeStateUpdateLogicalDate(typeof fieldDate === "string" ? fieldDate : undefined) ??
+          normalizeStateUpdateLogicalDate(latestDate);
+        return { ...item, date: eventDate ?? (datedHistory ? undefined : date), eventDateKnown: eventDate !== undefined };
+      }),
+      ...latestItems.map((item, index) => ({
+        ...item, eventDateKnown: normalizeStateUpdateLogicalDate(latest[index].date) !== undefined,
+      })),
     ];
 
-    for (const item of currentItems) {
+    // Repeated references are one event. Prefer current's full state over latest's projection.
+    const snapshotItems = datedHistory
+      ? [...new Map(currentItems.filter(item => item.current).reverse().map(item => [item.current!.recordId, item])).values()]
+      : currentItems;
+    for (const item of snapshotItems) {
       if (!item.current) {
         continue;
       }
@@ -2933,6 +2960,10 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         subjectRecordId: item.subject.id,
         uniqueness: item.date ? "subject-date" : "subject",
       });
+      if (datedHistory) {
+        // An injective scoped remote identity; local intention keys remain unchanged.
+        localRecordId = `state_update_remote_${JSON.stringify([ownerKey, contractId, targetEntityTypeId, appViewId, item.current.recordId])}`;
+      }
       let existing = await getCachedRecordFromDatabase(transaction, {
         contractId,
         entityTypeId: targetEntityTypeId,
@@ -2940,18 +2971,30 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
         recordId: localRecordId,
       });
 
-      // A resolved append intent keeps its durable row when latest reads that exact remote record.
+      // Reuse only the same synced event within this workflow scope. Query dates are
+      // not event identity; an authoritative event date can repair an older cached date.
       if (!existing || existing.serverId !== item.current.recordId) {
         const remoteRecord = await getCachedRecordFromDatabase(transaction, {
           contractId, entityTypeId: targetEntityTypeId, ownerKey, recordId: item.current.recordId,
         });
         const remoteValues = remoteRecord?.values as OfflineStateUpdateValues | undefined;
+        if (datedHistory && remoteRecord && remoteValues?.appViewId === appViewId &&
+            remoteValues.subjectRecordId === item.subject.id && remoteRecord.syncStatus !== "synced") {
+          contentVerified = false;
+          continue; // Never merge a remote snapshot into a distinct pending intention/conflict.
+        }
         if (remoteRecord?.syncStatus === "synced" && remoteValues?.appViewId === appViewId &&
             remoteValues.subjectRecordId === item.subject.id &&
-            normalizeStateUpdateLogicalDate(remoteValues.date) === normalizeStateUpdateLogicalDate(item.date)) {
+            (datedHistory || item.eventDateKnown ||
+              normalizeStateUpdateLogicalDate(remoteValues.date) === normalizeStateUpdateLogicalDate(item.date))) {
           existing = remoteRecord;
           localRecordId = remoteRecord.localId;
         }
+      }
+
+      if (datedHistory && existing && existing.syncStatus !== "synced") {
+        contentVerified = false;
+        continue;
       }
 
       if (existing && existing.syncStatus !== "synced") {
@@ -2961,6 +3004,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
           const payload = pendingOperation.payload as OfflineStateUpdatePayload;
 
           if (!stateUpdateRemoteItemMatchesPayload(item, payload)) {
+            contentVerified = false;
             continue;
           }
 
@@ -2978,6 +3022,8 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
       const values: OfflineStateUpdateValues = {
         appViewId,
         date: item.date,
+        ...(datedHistory && !item.current.stateValues.some(value => value.fieldId === dateFieldId && typeof value.value === "string")
+          ? { snapshotDateFieldId: dateFieldId, snapshotEventDate: item.eventDateKnown ? item.date : null } : {}),
         expectedUpdatedAt: item.current.updatedAt,
         extraValues: item.current.extraValues,
         stateValues: item.current.stateValues,
@@ -3038,11 +3084,16 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
       );
     }
 
-    if (complete) {
+    persistedRemoteEventCount = contentVerified ? snapshotItems.length : 0;
+    if (datedHistory && expectedRemoteEventCount !== undefined && persistedRemoteEventCount !== expectedRemoteEventCount) {
+      contentVerified = false;
+    }
+
+    if (complete && contentVerified) {
       staleSyncedRemoved = await deleteStaleSyncedStateUpdateRecords({
         appViewId,
         contractId,
-        date,
+        date: datedHistory ? undefined : date,
         db: transaction,
         items: currentItems,
         ownerKey,
@@ -3058,7 +3109,7 @@ async function upsertStateUpdateSnapshot({ appViewId, complete = false, contract
     });
   }
 
-  return { staleSyncedRemoved };
+  return { staleSyncedRemoved, ...(datedHistory ? { contentVerified, persistedRemoteEventCount } : {}) };
 }
 
 async function deleteStaleSyncedStateUpdateRecords({
@@ -3145,7 +3196,13 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
 
 async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }) {
   const db = await getDatabase();
-  const date = normalizeStateUpdateLogicalDate(input.date);
+  const date = usesDatedSubjectHistory(input) ? undefined : normalizeStateUpdateLogicalDate(input.date);
+  const datedHistory = usesDatedSubjectHistory(input);
+  const fieldLiteral = `'${(input.dateFieldId ?? "").replaceAll("'", "''")}'`;
+  const eventDateSql = configuredSnapshotDateSql().replaceAll("?", fieldLiteral);
+  const historyPredicate = datedHistory ? `AND ((sync_status = 'synced' AND (${eventDateSql}) IS NOT NULL)
+    OR (sync_status != 'synced' AND substr(json_extract(values_json, '$.date'), 1, 10) = '${(normalizeStateUpdateLogicalDate(input.date) ?? "").replaceAll("'", "''")}'))` : "";
+  const historyOrder = datedHistory ? `(${eventDateSql}) DESC, server_id ASC, local_id ASC` : "cached_at DESC, local_id ASC";
   const page = input.page && input.page > 0 ? input.page : 1;
   const pageSize = input.pageSize && input.pageSize > 0 ? input.pageSize : 20;
   const offset = (page - 1) * pageSize;
@@ -3159,6 +3216,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
+        ${historyPredicate}
         AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
     `,
@@ -3179,9 +3237,10 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
         AND contract_id = ?
         AND entity_type_id = ?
         AND json_extract(values_json, '$.appViewId') = ?
+        ${historyPredicate}
         AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
         AND (? IS NULL OR lower(json_extract(values_json, '$.subjectDisplayName')) LIKE ?)
-      ORDER BY cached_at DESC, local_id ASC
+      ORDER BY ${historyOrder}
       LIMIT ? OFFSET ?
     `,
     input.ownerKey,
@@ -4623,9 +4682,38 @@ async function upsertStateUpdatePendingOperation(db: SQLite.SQLiteDatabase, {
   );
 }
 
+function configuredSnapshotDateSql() {
+  return `COALESCE((SELECT substr(json_extract(field.value, '$.value'), 1, 10)
+    FROM json_each(entity_records.values_json, '$.stateValues') AS field
+    WHERE json_extract(field.value, '$.fieldId') = ?
+      AND json_type(field.value, '$.value') = 'text' LIMIT 1),
+    CASE WHEN json_extract(values_json, '$.snapshotDateFieldId') = ?
+      THEN json_extract(values_json, '$.snapshotEventDate') END)`;
+}
+
 async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subjectRecordId: string }) {
   const db = await getDatabase();
   const date = normalizeStateUpdateLogicalDate(input.date);
+  if (usesDatedSubjectHistory(input)) {
+    // Preserve the existing query-scoped pending overlay before selecting synced history.
+    const pending = await db.getFirstAsync<EntityRecordRow>(`
+      SELECT * FROM entity_records WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND json_extract(values_json, '$.subjectRecordId') = ? AND sync_status != 'synced'
+        AND (? IS NULL OR substr(json_extract(values_json, '$.date'), 1, 10) = ?)
+      ORDER BY cached_at DESC LIMIT 1`, input.ownerKey, input.contractId, input.targetEntityTypeId,
+      input.appViewId, input.subjectRecordId, date ?? null, date ?? null);
+    if (pending) return mapRecordRow(pending);
+    const current = await db.getFirstAsync<EntityRecordRow>(`
+      SELECT * FROM (SELECT entity_records.*, ${configuredSnapshotDateSql()} AS event_date
+        FROM entity_records WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+        AND json_extract(values_json, '$.appViewId') = ?
+        AND json_extract(values_json, '$.subjectRecordId') = ? AND sync_status = 'synced' AND server_id IS NOT NULL)
+      WHERE event_date IS NOT NULL ORDER BY event_date DESC, server_id ASC LIMIT 1`,
+      input.dateFieldId!, input.dateFieldId!, input.ownerKey, input.contractId, input.targetEntityTypeId,
+      input.appViewId, input.subjectRecordId);
+    return current ? mapRecordRow(current) : null;
+  }
   const row = await db.getFirstAsync<EntityRecordRow>(
     `
       SELECT *
@@ -4934,14 +5022,15 @@ type SyncTelemetryRow = {
 };
 
 function mapAppViewDefinitionRow(row: AppViewDefinitionRow): CachedAppViewDefinition {
+  const definition = normalizePreparedAppViewDefinition(JSON.parse(row.definition_json) as PreparedAppViewDefinition);
   return {
     appViewId: row.app_view_id,
     appViewType: row.app_view_type,
     contractId: row.contract_id,
-    definition: JSON.parse(row.definition_json) as PreparedAppViewDefinition,
+    definition,
     lastPreparedAt: row.last_prepared_at,
     ownerKey: row.owner_key,
-    status: row.status,
+    status: definition.kind === "error" ? "error" : row.status,
     workflowKey: row.workflow_key,
   };
 }
@@ -5526,7 +5615,9 @@ async function getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<
     stateUpdateSnapshotCoverageKey(input),
   );
 
-  return row?.value ? parseStateUpdateSnapshotCoverage(row.value) : null;
+  const coverage = row?.value ? parseStateUpdateSnapshotCoverage(row.value) : null;
+  return coverage && usesDatedSubjectHistory(input) && coverage.contentVerified !== true
+    ? { ...coverage, status: "partial" } : coverage;
 }
 
 async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }) {
@@ -5551,16 +5642,20 @@ async function markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverag
     : continuesExistingCoverage
       ? page
       : current?.downloadedThroughPage ?? 0;
+  const verified = !usesDatedSubjectHistory(input) ||
+    (input.snapshotResult?.contentVerified === true &&
+      input.snapshotResult.persistedRemoteEventCount === input.pagination.total);
   const coverage: StateUpdateSnapshotCoverage = {
+    ...(usesDatedSubjectHistory(input) ? { contentVerified: verified } : {}),
     downloadedThroughPage,
     lastSuccessfulRefreshAt: input.refreshedAt ?? new Date().toISOString(),
     pageSize: input.pagination.pageSize,
-    status: page === 1 && !input.pagination.hasMore ? "complete" : "partial",
+    status: verified && page === 1 && !input.pagination.hasMore ? "complete" : "partial",
     total: input.pagination.total,
   };
 
   await db.runAsync(
-    `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
+    `INSERT INTO app_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     stateUpdateSnapshotCoverageKey(input),
     JSON.stringify(coverage),
   );
@@ -5879,6 +5974,7 @@ function parseStateUpdateSnapshotCoverage(value: string): StateUpdateSnapshotCov
     }
 
     return {
+      ...(parsed.contentVerified !== undefined ? { contentVerified: parsed.contentVerified === true } : {}),
       downloadedThroughPage: parsed.downloadedThroughPage,
       lastSuccessfulRefreshAt: parsed.lastSuccessfulRefreshAt,
       pageSize: parsed.pageSize,

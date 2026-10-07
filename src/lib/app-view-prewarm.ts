@@ -438,17 +438,25 @@ async function prewarmOneAppView({
         total: response.latest?.length ?? 0,
       };
       await measurePrewarmStage(telemetry, "snapshot", async () => {
-        await store.upsertStateUpdateSnapshot({
+        const snapshotResult = await store.upsertStateUpdateSnapshot({
           appViewId: appView.id,
           complete: snapshotPagination.page === 1 && !snapshotPagination.hasMore,
+          expectedRemoteEventCount: snapshotPagination.page === 1 && !snapshotPagination.hasMore ? snapshotPagination.total : undefined,
           contractId,
           date: response.date ?? requestedDate,
+          dateFieldId: response.dateFieldId,
+          historyMode: response.historyMode,
+          uniqueness: response.uniqueness,
           items: response.items,
           latest: response.latest ?? [],
           ownerKey,
           targetEntityTypeId: response.targetEntityType.id,
         });
         await store.markStateUpdateSnapshotCoverage({
+          dateFieldId: response.dateFieldId,
+          historyMode: response.historyMode,
+          uniqueness: response.uniqueness,
+          snapshotResult,
           appViewId: appView.id,
           contractId,
           date: response.date ?? requestedDate,

@@ -355,7 +355,7 @@ describe("local database singleton", () => {
     });
 
     const metadataCall = db.runAsync.mock.calls.find(
-      (call) => call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
+      (call) => call[0].startsWith(`INSERT INTO app_metadata (key, value) VALUES (?, ?)` ) &&
         typeof call[1] === "string" &&
         call[1].startsWith("state_update_snapshot_coverage:"),
     );

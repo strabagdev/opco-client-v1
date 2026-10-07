@@ -567,3 +567,90 @@ tras preparar desde Inicio y en reapertura después de cerrar todos los procesos
 locales y bajo CDP offline antes de navegar. Evidencia limitada al sujeto y fecha activa preparados;
 no cobertura histórica completa, writes/conflicts, native ni incidente productivo Error finalizing statement.
 Detalle, intentos descartados del arnés y limpieza en STATUS/OFFLINE_FIRST_AUDIT. V11 sigue pausado.
+
+## Cierre v10: uniqueness normalizado, identidad remota y current offline — 2026-10-07
+
+La discrepancia de integración anterior quedó resuelta en Client. Core conserva su contrato
+workflow.uniqueness={mode:"none"|"subject"|"subject-date"}. El límite API acepta también las
+cadenas históricas acreditadas, tanto en metadatos superiores como en workflow; entrega siempre
+un StateUpdateUniqueness interno en forma de cadena. Un valor desconocido, objeto sin mode o
+modo anidado inválido produce INVALID_STATE_UPDATE_UNIQUENESS; no existe default a subject.
+
+La misma validación se aplica al escribir y leer app_view_definitions (get y list). Una definición
+state-update antigua con objeto se normaliza al leer sin reescribir SQLite ni exigir limpieza.
+Una definición con modo inválido se entrega como kind=error/status=error con el mismo código,
+preservando el tratamiento de configuración inválida. Otros tipos de definición no se modifican.
+No se reinterpretan identidades, payloads ni claves de intenciones/outbox ya existentes.
+
+Esto activa la corrección anterior para subject/append/dateFieldId: IDs remotos distintos se
+conservan por separado con scope owner/contrato/entidad/AppView; referencias current/latest al
+mismo ID reutilizan una fila, priorizando los estados y extras completos de current. Filas synced
+legacy del mismo evento conservan su local_id. Filas pendientes/conflict/failed no se sobrescriben
+ni se fusionan. No hay cambio de esquema, índice UNIQUE, versión SQLite ni INSERT OR REPLACE nuevo.
+
+Current offline selecciona por fecha configurada DESC y server_id ASC, excluyendo fecha ausente,
+sin limitar historia synced a fecha consultada. El overlay no synced mantiene su scope de consulta
+existente. No se usa revisión ni timestamps como criterio del evento. Tampoco se guarda la fecha
+consultada como fecha del evento cuando la fecha autoritativa falta en el modo acotado.
+Attendance, subject-date y workflows sin fecha conservan sus caminos existentes.
+
+Las llamadas de preparación y carga pasan el total esperado de eventos si la respuesta declara
+primera página completa. Si el contenido único persistido no coincide, no se reconcilian filas
+synced ausentes y no se acredita complete. Los marcadores antiguos sin prueba de contenido se
+leen partial para el modo acotado. Una referencia repetida current/latest cuenta una sola vez;
+una transacción fallida no produce prueba nueva de cobertura. Páginas/search parciales siguen
+sin acreditar completitud ni hacer limpieza destructiva.
+
+Regresiones nuevas entran por createOpcoApi con el payload real {mode:"subject"}, recorren
+prewarm y la caché SQLite reales, hidratan ambos IDs y comprueban el ganador R1. Incluyen lectura
+de definiciones cacheadas antiguas, ambas formas para los tres modos, rechazo de configuración
+inválida, campo/extra completo de current frente a latest parcial y snapshot que declara total=2
+pero trae sólo un evento. Se preservan las regresiones previas de pendientes/conflictos/rollback
+y reapertura en disco. Véase STATUS para checks y Chrome/OPFS.
+
+Alcance comprobado: fixture local de dos eventos, historial completo y un procedimiento sintético.
+Un snapshot parcial/ausente no acredita vigente global ni cobertura completa. El problema conocido
+entre AppViews distintas queda separado. La causa exacta productiva de Error finalizing statement
+no se considera demostrada por estos resultados; V11 permanece pausado.
+
+
+## Cierre técnico del lote v10 — 2026-10-07
+
+El lote publicable se delimita contra Client main 76babead92d82239fcc9ac78f3e1e1d6b3df939d:
+7 archivos de implementación/prueba existente, 2 regresiones nuevas y 3 documentos con sólo
+las secciones de cierre de identidad/current/uniqueness y este cierre técnico. No se publican
+las notas intermedias de diagnóstico ni los demás pendientes documentales.
+
+Checks completos con máximo dos workers: árbol de trabajo 77 archivos/927 pruebas PASS;
+HEAD + lote seleccionado aislado 76 archivos/923 pruebas PASS. Los cuatro casos de diferencia
+son dos caracterizaciones V10 experimentales y dos diagnósticos entre AppViews, excluidos del
+lote. No se modificaron ni retiraron esos pendientes. Typecheck PASS, lint completo PASS
+con 0 errores y 2 advertencias preexistentes de require() en
+src/sync/records-sync.local-db-regression.test.ts:182/183, build:web/export/SW PASS, diff-check PASS.
+Build realizado en copia temporal, con endpoint localhost, sin copiar .env ni sobrescribir
+el dist habitual. No se cambiaron dependencias, migraciones, esquema ni Core.
+
+Revisión: definición cacheada objeto/string se normaliza sin reset/rewrite al leer; un modo
+inválido da error controlado. Una fila legacy synced del mismo evento conserva su alias.
+Un evento perdido por una versión anterior exige hidratación online exitosa para recuperarlo:
+no puede reconstruirse a partir de una cobertura antigua. Los marcadores antiguos sin prueba
+son partial, y total de contenido insuficiente impide complete/reconciliación destructiva.
+Las identidades y serialización efectiva de intenciones/outbox/idempotencia siguen intactas;
+las filas no synced y conflictos no se sobrescriben. Lookups/lectura/reconciliación filtran
+owner/contrato/entidad/AppView y current además sujeto. Attendance/subject-date/sin fecha
+retienen sus caminos anteriores; tests completos de los consumidores pasan. El UNIQUE v10
+entre AppViews distintas permanece como limitación independiente, sin corrección en este lote.
+
+Evidencia Chrome/OPFS reutilizada: SHA256 de todos los archivos funcionales finales coincide
+con el contenido validado en backups/state-update-uniqueness-close/2026-10-07. Online con
+preparación concurrente, offline y reapertura sin servicios conservan R1 y dos eventos.
+No hay riesgo funcional nuevo que justifique repetir navegador o fixtures. Alcance: fixture
+sintético completo de dos eventos/una AppView; no datos productivos, native, múltiples tabs
+ni garantía de vigente global con snapshot parcial. Error finalizing statement productivo
+permanece sin correlación concluyente de sentencia/causa primaria. V11 pausado.
+
+Parches e inventario verificables: backups/state-update-technical-close/2026-10-07,
+state-update-implementation.patch y state-update-documentation.patch; ambos aplican sobre
+el HEAD indicado y reproducen exactamente los archivos seleccionados. Sin secretos, .env,
+configuración local, bases SQLite/PostgreSQL, logs, builds ni experimentos en el lote.
+Main, índice y pendientes excluidos se conservan. Sin commit/push/deploy.

@@ -5,6 +5,8 @@ import {
   StateUpdateField,
   StateUpdateHistoryMode,
   StateUpdateUniqueness,
+  normalizeStateUpdateUniqueness,
+  OpcoApiError,
 } from "./opco-api";
 import { AttendanceDaySnapshotHydration, StateUpdateSnapshotCoverage, isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 import { SyncTelemetry } from "./sync-telemetry";
@@ -71,6 +73,16 @@ export type PreparedAppViewDefinition =
       errorCode?: string;
       kind: "error";
     };
+
+export function normalizePreparedAppViewDefinition(definition: PreparedAppViewDefinition): PreparedAppViewDefinition {
+  if (definition.kind !== "state-update") return definition;
+  try {
+    return { ...definition, uniqueness: normalizeStateUpdateUniqueness(definition.uniqueness) };
+  } catch (error) {
+    if (!(error instanceof OpcoApiError) || error.code !== "INVALID_STATE_UPDATE_UNIQUENESS") throw error;
+    return { appView: definition.appView, kind: "error", errorCode: error.code };
+  }
+}
 
 export type AppViewDefinitionCache = {
   getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string): Promise<CachedAppViewDefinition | null>;

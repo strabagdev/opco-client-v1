@@ -261,6 +261,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       appViewId: appView.id,
       contractId: selectedContractId,
       date: definition.dateFieldId ? date : undefined,
+      dateFieldId: definition.dateFieldId,
+      historyMode: definition.historyMode,
+      uniqueness: definition.uniqueness,
       ownerKey,
       targetEntityTypeId: definition.targetEntityTypeId,
     };
@@ -455,11 +458,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           pageSize: Math.max(1, nextResponse.latest?.length ?? 0),
           total: nextResponse.latest?.length ?? 0,
         };
-        await definitionCache.upsertStateUpdateSnapshot({
+        const snapshotResult = await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
           complete: !query.search && !query.subjectRecordId && pagination.page === 1 && !pagination.hasMore,
+          expectedRemoteEventCount: pagination.page === 1 && !pagination.hasMore ? pagination.total : undefined,
           contractId: selectedContractId,
           date: normalizeStateUpdateLogicalDate(nextResponse.date),
+          dateFieldId: nextResponse.dateFieldId,
+          historyMode: nextResponse.historyMode,
+          uniqueness: nextResponse.uniqueness,
           items: nextResponse.items,
           latest: nextResponse.latest ?? [],
           ownerKey,
@@ -467,6 +474,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         });
         if (!query.search && !query.subjectRecordId) {
           await definitionCache.markStateUpdateSnapshotCoverage({
+            dateFieldId: nextResponse.dateFieldId,
+            historyMode: nextResponse.historyMode,
+            uniqueness: nextResponse.uniqueness,
+            snapshotResult,
             appViewId: appView.id,
             contractId: selectedContractId,
             date: normalizeStateUpdateLogicalDate(nextResponse.date),

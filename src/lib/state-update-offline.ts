@@ -24,6 +24,8 @@ export type OfflineStateUpdatePayload = {
   appViewId: string;
   clientRequestId: string;
   date?: string;
+  snapshotDateFieldId?: string;
+  snapshotEventDate?: string | null;
   expectedUpdatedAt?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
   historyMode: "append" | "update-current";
@@ -752,10 +754,17 @@ function normalizeDiagnosticAttemptNumber(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 99 ? value : null;
 }
 
+export function usesDatedSubjectHistory(input: Pick<StateUpdateScope, "dateFieldId" | "historyMode" | "uniqueness">) {
+  return Boolean(input.dateFieldId && input.historyMode === "append" && input.uniqueness === "subject");
+}
+
 export type StateUpdateScope = {
   appViewId: string;
   contractId: string;
   date?: string;
+  dateFieldId?: string;
+  historyMode?: "append" | "update-current";
+  uniqueness?: "none" | "subject" | "subject-date";
   ownerKey: string;
   targetEntityTypeId: string;
 };
@@ -794,15 +803,20 @@ export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
 
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
   complete?: boolean;
+  expectedRemoteEventCount?: number;
+  dateFieldId?: string;
   items: StateUpdateItem[];
   latest?: StateUpdateLatestItem[];
 };
 
 export type StateUpdateSnapshotReconcileResult = {
+  contentVerified?: boolean;
+  persistedRemoteEventCount?: number;
   staleSyncedRemoved: number;
 };
 
 export type StateUpdateSnapshotCoverage = {
+  contentVerified?: boolean;
   downloadedThroughPage: number;
   lastSuccessfulRefreshAt: string;
   pageSize: number;
@@ -811,6 +825,7 @@ export type StateUpdateSnapshotCoverage = {
 };
 
 export type StateUpdateSnapshotCoverageInput = StateUpdateScope & {
+  snapshotResult?: StateUpdateSnapshotReconcileResult;
   pagination: {
     hasMore: boolean;
     page: number;

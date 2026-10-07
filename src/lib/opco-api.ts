@@ -705,6 +705,13 @@ export type AttendanceBatchResponse = {
 export type StateUpdateUniqueness = "none" | "subject" | "subject-date";
 export type StateUpdateHistoryMode = "append" | "update-current";
 
+export function normalizeStateUpdateUniqueness(input: unknown): StateUpdateUniqueness {
+  const mode = input && typeof input === "object" && !Array.isArray(input)
+    ? (input as { mode?: unknown }).mode : input;
+  if (mode === "none" || mode === "subject" || mode === "subject-date") return mode;
+  throw new OpcoApiError("Configuracion de unicidad STATE_UPDATE invalida.", "INVALID_STATE_UPDATE_UNIQUENESS", 200);
+}
+
 export type StateUpdateWorkflowQuery = {
   date?: string;
   page?: number;
@@ -848,12 +855,13 @@ type StateUpdateRawField = StateUpdateField | {
   type?: EntityFieldType | string | null;
 };
 
-type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "latestPagination" | "sourceEntityType" | "stateFields"> & {
+type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "latestPagination" | "sourceEntityType" | "stateFields" | "uniqueness"> & {
+  uniqueness?: StateUpdateUniqueness | { mode: StateUpdateUniqueness };
   workflow?: {
     dateFieldId?: string | null;
     historyMode?: StateUpdateHistoryMode;
     subjectFieldId?: string;
-    uniqueness?: StateUpdateUniqueness;
+    uniqueness?: StateUpdateUniqueness | { mode: StateUpdateUniqueness };
   };
   items?: StateUpdateRawItem[];
   latest?: StateUpdateRawLatest;
@@ -1853,7 +1861,7 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
     sourceEntityType,
     stateFields,
     subjectFieldId: response.subjectFieldId ?? response.workflow?.subjectFieldId,
-    uniqueness: response.uniqueness ?? response.workflow?.uniqueness,
+    uniqueness: normalizeStateUpdateUniqueness(response.uniqueness ?? response.workflow?.uniqueness),
   };
 }
 
