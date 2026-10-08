@@ -1445,3 +1445,40 @@ usa el ciclo de actividad existente. V11 pausado; sin producción, commit, push 
 La validación manual productiva tras 01b07b5 acredita lectura y persistencia tras reapertura
 offline, no escrituras/sync ni cobertura completa. La causa del aviso productivo y la
 causa primaria de Error finalizing statement siguen sin correlación concluyente.
+
+## 2026-10-07 — Preparación de vigentes STATE_UPDATE, sin historial completo
+
+Implementación local, sin commit/push/deploy: para `subject + append + dateFieldId`, prewarm recorre toda la lista origen preparada y consulta cada `subjectRecordId` con `pageSize=1`; persiste exclusivamente `subjects[].current` mediante el snapshot existente. Reutiliza el pool de cuatro por AppView. Un marcador SQLite v10 en `app_metadata`, separado de latest y con scope/configuración completos, sólo certifica current tras comprobar la fuente completa y la persistencia por sujeto; diferencia vigente, ausencia explícita, fallo y consulta no acreditada. El diagnóstico copia únicamente cantidades/metadatos del marcador.
+
+Fixture local Core/PostgreSQL: 130 sujetos y 217 eventos. Primera apertura offline sin visita previa y cierre/reapertura de Chrome/OPFS con ambos servicios detenidos conservaron D0, V1, V115 y R1 (empate Fecha/ID); sujeto 129 sin versiones. Cache: 136 eventos distintos, 117 sujetos con evento, 13 sin versión. Current completo para 130; latest sigue parcial 20/217. El cierre corrigió el conteo anterior: 262 eventos de red CDP, pero una preparación `home` con 131 GET (uno global y 130 por sujeto), sin búsqueda online. El capturador no guardó el método HTTP; el doble conteo es compatible con los preflight CORS locales. El marcador de vigentes midió 4.968 ms en el entorno local, sin estimación productiva. No se alteraron triggers ni se descargó todo el historial.
+
+Checks: 168 pruebas afectadas/8 archivos, máximo dos workers; typecheck, lint (0 errores, 2 warnings previos), export temporal web para CDP y diff-check aprobados. Fixture PostgreSQL propio eliminado, cero restantes. Contrato, inventario y límites en la nueva sección de `docs/STATE_UPDATE.md`; evidencia y parche incremental preservados fuera de /tmp en `backups/state-update-current-preparation/2026-10-07/`.
+
+Ajuste DATE previo preservado por separado, igual que V11, diagnósticos y pendientes ajenos. Main y su HEAD siguen intactos; Core no se modificó. No se probó sincronización de escrituras productivas. La causa exacta del incidente productivo `Error finalizing statement` sigue sin correlación concluyente.
+
+## 2026-10-07 — Cierre preparación de vigentes y DATE: BLOQUEADO
+
+Candidato de 12 archivos/hunks delimitado, incluyendo DATE y excluyendo V11/pendientes independientes. Código funcional idéntico al ensayo Chrome/OPFS anterior; no se amplió implementación. Main/HEAD 9b8eff7fa291abef337afa38c53b05a273d0acc4 e índice intactos; Core sin cambios.
+
+Se corrigió la interpretación de 262 eventos CDP: SQLite OPFS sintético conserva una preparación `home`; Core registra 137 GET del fixture, seis del benchmark y 131 de preparación (uno global + 130 por sujeto). El runner no repitió preparación online deliberadamente. El contador no guardó métodos/tipos; el doble conteo es compatible con preflight CORS entre los puertos locales, sin evidencia individual archivada de OPTIONS. Las repeticiones deliberadas de las regresiones unitarias son independientes. No se demostró duplicación automática ni se cambiaron disparadores. Los 4.968 ms de vigentes y 7.684 ms del run completo son mediciones locales, sin estimación productiva.
+
+Checks del candidato aislado: **953 pruebas/78 archivos**, máximo dos workers, typecheck, lint (0 errores, 2 warnings previos), build web/SW y diff-check aprobados. Chrome/OPFS previo reutilizado sólo para fixture limpio, primera apertura y reapertura; no acredita compatibilidad de los nuevos escenarios de revisión.
+
+**Bloqueo demostrado en revisión:** dos regresiones fuera del candidato fallan con SQLite real antes/después de reabrir: current remoto nulo conserva un vigente synced anterior visible; current remoto con fecha menor que un evento antiguo cacheado no gana offline. En ambos casos el marcador termina complete y contiene el resultado autoritativo correcto. El lector selecciona de todo el historial cacheado e ignora el resultado guardado por sujeto. Por tanto no se declara listo para publicar, aunque los checks generales pasen.
+
+Propuesta mínima sin implementar: usar la autoridad persistida por sujeto para seleccionar el current remoto en su scope, preservando overlays pendientes/conflictos e historial. No borrar cachés, descargar todos los eventos ni cambiar esquema, criterio de Core o outbox. Detenido antes de ampliar la corrección. DATE permanece validado como ajuste visual separado.
+
+Parche candidato/inventario verificables y evidencia del bloqueo en `backups/state-update-current-preparation-date-close/2026-10-07/`; `readyToPublish:false`. Detalle de archivos/hunks y causa en la última sección de STATE_UPDATE. Pendientes excluidos conservados byte a byte. V11 pausado y causa productiva exacta de Error finalizing statement todavía abierta. Sin producción, commit, push ni deploy.
+
+
+## 2026-10-07 — Cierre final preparación/current offline/DATE: listo localmente
+
+El bloqueo anterior queda resuelto dentro de los mismos doce archivos del lote. El lector honra la autoridad persistida y compatible por sujeto después del overlay pendiente/conflicto: evento exacto o null explícito. Fallo, ausencia o incompatibilidad mantienen el fallback conservador sin certificar complete. Valida referencias reales y fuente antes de acreditar cobertura; no reescribe marcadores ni elimina historial/outbox. Attendance, escrituras, esquema v10 y DATE preservados.
+
+Las dos regresiones bloqueantes están integradas y pasan tras reabrir SQLite, junto con compatibilidad de marcadores, scope, referencias y pendientes/conflictos. Lote aislado: **966 pruebas/78 archivos**, máximo dos workers; typecheck, lint (0 errores, 2 warnings previos), build web/SW y diff-check PASS.
+
+Chrome/OPFS con caché previa: Core local confirma V115 y null del sujeto 129; preparación home seguida de dos aperturas frías offline con cierre completo, servicios detenidos y mismo perfil intacto conserva ambos resultados. Los dos eventos obsoletos permanecen en historial: 138 filas, 130 resultados current verificados, 13 null; latest parcial 20/217. El primer intento de navegación dura encontró OPEN_FAILED / Invalid VFS state antes del lector; sin modificar código ni almacenamiento, cierre completo permitió validar las dos aperturas frías. Este impedimento de arranque queda separado y sin causa investigada.
+
+Conteo corregido: **una preparación home, 131 GET** (global +130 por sujeto). Los 262 eventos anteriores no demostraban dos preparaciones y no archivaron métodos. La captura nueva sí distingue 131 GET/131 OPTIONS. Los 4.968 ms anteriores y 9.485 ms actuales son mediciones locales, sin estimación productiva. No se cambiaron disparadores.
+
+Parche/inventario/hashes duraderos: backups/state-update-current-authority-close/2026-10-07/. Doce paths, excluidos V11 y pendientes independientes byte a byte. Fixture propio eliminado, procesos cerrados, perfiles conservados. Evidencia automatizada CDP, sin revisión manual nueva ni validación de escrituras productivas. Main/HEAD e índice preservados, Core sin cambios. Sin producción, commit/push/deploy. V11 pausado; causa exacta productiva Error finalizing statement sin correlación concluyente.

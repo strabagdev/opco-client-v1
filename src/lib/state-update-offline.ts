@@ -824,6 +824,18 @@ export type StateUpdateSnapshotCoverage = {
   total: number;
 };
 
+// A separate proof for per-subject current; latest pagination is not this proof.
+export type StateUpdateCurrentCoverageScope = StateUpdateScope & { sourceEntityTypeId: string };
+export type StateUpdateCurrentCoverage = {
+  status: "complete" | "partial";
+  sourceComplete: boolean;
+  totalSubjects: number;
+  subjects: Record<string, { status: "verified"; remoteRecordId: string | null } | { status: "failed" }>;
+  requestCount: number;
+  durationMs: number;
+  refreshedAt: string;
+};
+
 export type StateUpdateSnapshotCoverageInput = StateUpdateScope & {
   snapshotResult?: StateUpdateSnapshotReconcileResult;
   pagination: {
@@ -844,6 +856,8 @@ export type AttendanceDaySnapshotScope = StateUpdateScope & {
 };
 
 export type StateUpdateOfflineStore = {
+  getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope): Promise<StateUpdateCurrentCoverage | null>;
+  setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }): Promise<void>;
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
   discardStateUpdateLocalChange(input: DiscardStateUpdateConflictInput): Promise<void>;
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;

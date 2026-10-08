@@ -3,7 +3,8 @@ import { getExperienceActivitySnapshot, type ExperienceActivitySnapshot, type St
 import { fingerprintDiagnosticValue, type LocalDatabase } from "../lib/local-db";
 import { formatStateUpdateDiagnosticsCopyText, type DiagnosticCopySection } from "./state-update-diagnostics-copy";
 
-type CoverageCopyStore = Pick<LocalDatabase, "getAppViews" | "getAppViewDefinition" | "getStateUpdateSnapshotCoverage" | "getSyncTelemetry">;
+type CoverageCopyStore = Pick<LocalDatabase, "getAppViews" | "getAppViewDefinition" | "getStateUpdateSnapshotCoverage" | "getSyncTelemetry"> &
+  Partial<Pick<LocalDatabase, "getStateUpdateCurrentCoverage">>;
 
 async function readCoverageSection(
   store: CoverageCopyStore,
@@ -12,6 +13,7 @@ async function readCoverageSection(
 ): Promise<DiagnosticCopySection> {
   const { scope, sourceEntityTypeId } = context;
   const coverage = await store.getStateUpdateSnapshotCoverage(scope);
+  const current = await store.getStateUpdateCurrentCoverage?.({ ...scope, sourceEntityTypeId });
   const source = await store.getSyncTelemetry({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: sourceEntityTypeId });
   return {
     title: `STATE_UPDATE ${origin} latest coverage ${fingerprintDiagnosticValue(scope.appViewId)}`,
@@ -36,7 +38,15 @@ async function readCoverageSection(
       ["coverageMeaning", "latest unfiltered query; not subjects/current completeness"],
       ["subjectsLastFullRefreshAt", source?.lastFullRefreshCompletedAt ?? null],
       ["subjectsAvailability", source?.lastFullRefreshCompletedAt ? "previous_full_refresh" : "unverified"],
-      ["currentCompleteness", "not_certified"],
+      ["currentCompleteness", current?.status ?? "not_certified"],
+      ["currentSourceComplete", current?.sourceComplete ?? null],
+      ["currentTotalSubjects", current?.totalSubjects ?? null],
+      ["currentVerifiedSubjects", current ? Object.values(current.subjects).filter(subject => subject.status === "verified").length : null],
+      ["currentSubjectsWithoutVersion", current ? Object.values(current.subjects).filter(subject => subject.status === "verified" && subject.remoteRecordId === null).length : null],
+      ["currentFailedSubjects", current ? Object.values(current.subjects).filter(subject => subject.status === "failed").length : null],
+      ["currentRequestCount", current?.requestCount ?? null],
+      ["currentDurationMs", current?.durationMs ?? null],
+      ["currentRefreshedAt", current?.refreshedAt ?? null],
     ],
   };
 }

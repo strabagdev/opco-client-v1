@@ -763,3 +763,21 @@ function latestResponse({
     stateFields: fields,
   };
 }
+
+
+describe("DATE state labels in online/offline current subtitles", () => {
+  const field: StateUpdateField = { fieldId: "date-field", label: "Fecha", required: false, type: "DATE", options: [] };
+  it.each(["2026-08-13", "2026-08-13T00:00:00.000Z"])("formats date labels without local timezone conversion: %s", (label) => {
+    expect(formatStateValueLabel(field, { fieldId: field.fieldId, label, value: label, optionId: null })).toBe("13-08-2026");
+    expect(formatStateValueLabel(field, { fieldId: field.fieldId, label: null, value: label, optionId: null })).toBe("13-08-2026");
+  });
+  it("keeps arbitrary TEXT and DATETIME labels unchanged", () => {
+    const iso = "2026-08-13T00:00:00.000Z";
+    for (const type of ["TEXT", "DATETIME"] as const) {
+      expect(formatStateValueLabel({ ...field, type }, { fieldId: field.fieldId, label: iso, value: iso, optionId: null })).toBe(iso);
+    }
+    for (const label of ["Texto sin fecha", "2026-08-13 comentario libre"]) {
+      expect(formatStateValueLabel(field, { fieldId: field.fieldId, label, value: null, optionId: null })).toBe(label);
+    }
+  });
+});

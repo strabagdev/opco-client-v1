@@ -17,6 +17,7 @@ import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
 import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendance-snapshot-cache";
 import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore } from "./state-update-offline";
+import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
 
 export const PREWARM_CONCURRENCY = 4;
 export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
@@ -94,6 +95,7 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & {
   upsertEntityDefinition(contractId: string, entityTypeId: string, definition: EntityDefinition, syncedAt: string): Promise<void>;
 } & Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
   Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "markStateUpdateSnapshotCoverage" | "upsertStateUpdateSnapshot"> &
+  Partial<Pick<StateUpdateOfflineStore, "setStateUpdateCurrentCoverage">> &
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export function prewarmAssignedAppViewsOnce(params: {
@@ -104,6 +106,7 @@ export function prewarmAssignedAppViewsOnce(params: {
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
+  signal?: AbortSignal;
   trigger?: OfflinePreparationTrigger;
 }) {
   const key = `${params.ownerKey}:${params.contractId}`;
@@ -124,6 +127,7 @@ export async function prewarmAssignedAppViews({
   store,
   token,
   trigger = "other",
+  signal,
 }: {
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
@@ -132,6 +136,7 @@ export async function prewarmAssignedAppViews({
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
+  signal?: AbortSignal;
   trigger?: OfflinePreparationTrigger;
 }) {
   const startedAt = new Date().toISOString();
@@ -201,6 +206,7 @@ export async function prewarmAssignedAppViews({
           appView,
           contractId,
           loadEntityDefinition,
+          signal,
           ownerKey,
           store,
           token,
@@ -269,6 +275,7 @@ export async function prewarmAssignedAppViews({
 }
 
 async function prewarmOneAppView({
+  signal,
   api,
   appView,
   contractId,
@@ -281,6 +288,7 @@ async function prewarmOneAppView({
   appView: AppView;
   contractId: string;
   loadEntityDefinition: EntityDefinitionLoader;
+  signal?: AbortSignal;
   ownerKey: string;
   store: AppViewPrewarmStore;
   token: string;
@@ -419,12 +427,30 @@ async function prewarmOneAppView({
       await measurePrewarmStage(telemetry, "sqliteWrite", () =>
         store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt),
       );
+      const currentScope = {
+        appViewId: appView.id, contractId, ownerKey,
+        sourceEntityTypeId: response.sourceEntityType.id,
+        targetEntityTypeId: response.targetEntityType.id,
+        date: response.date ?? requestedDate, dateFieldId: response.dateFieldId,
+        historyMode: response.historyMode, uniqueness: response.uniqueness,
+      };
+      const prepareCurrent = response.uniqueness === "subject" && response.historyMode === "append" && !!response.dateFieldId;
+      if (prepareCurrent) await store.setStateUpdateCurrentCoverage?.({ ...currentScope, coverage: {
+        status: "partial", sourceComplete: false, totalSubjects: 0, subjects: {},
+        requestCount: 0, durationMs: 0, refreshedAt: lastPreparedAt,
+      } });
+      let sourceRemoteTotal: number | undefined;
+      let sourceFetched = 0;
       const sourceRecords = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => refreshEntityRecordsCache({
         api,
         contractId,
         entityTypeId: response.sourceEntityType.id,
         ownerKey,
         store,
+        onDiagnostics: (diagnostics) => {
+          sourceRemoteTotal = diagnostics.remoteTotal ?? undefined;
+          sourceFetched = diagnostics.recordsFetched;
+        },
         token,
       }));
       telemetry.sourceRecordsFetch = {
@@ -466,6 +492,19 @@ async function prewarmOneAppView({
           targetEntityTypeId: response.targetEntityType.id,
         });
       });
+
+      const setCurrentCoverage = store.setStateUpdateCurrentCoverage?.bind(store);
+      if (prepareCurrent && setCurrentCoverage) {
+        await measurePrewarmStage(telemetry, "snapshot", () => prepareStateUpdateCurrent({
+          api, token, scope: currentScope, store: {
+            listCachedRecords: store.listCachedRecords.bind(store),
+            upsertStateUpdateSnapshot: store.upsertStateUpdateSnapshot.bind(store),
+            setStateUpdateCurrentCoverage: setCurrentCoverage,
+          }, sourceRemoteTotal, sourceFetched,
+          sourceCacheTotal: sourceRecords.pagination.total,
+          runWithConcurrency, concurrency: PREWARM_CONCURRENCY, signal,
+        }));
+      }
 
       await measurePrewarmStage(telemetry, "sqliteWrite", () =>
         store.upsertAppViewDefinition(baseDefinitionInput({

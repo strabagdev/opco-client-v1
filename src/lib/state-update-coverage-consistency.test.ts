@@ -107,6 +107,24 @@ async function mark(verified: boolean) {
 async function copy() {
   return formatStateUpdateDiagnosticsCopyText(await readStateUpdateCoverageCopySections({ store, ...context }));
 }
+it("reports per-subject current proof separately from partial latest without record values", async () => {
+  await store.reconcileRemoteRecordsSnapshot({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: definition.sourceEntityTypeId,
+    records: ["private-versioned-subject", "private-empty-subject"].map(id => ({ id, displayName: "Synthetic", updatedAt: "2026-10-07T12:00:00Z", values: {} })) });
+  await store.upsertStateUpdateSnapshot({ ...scope, complete: false, items: [{ subject: { id: "private-versioned-subject", displayName: "Synthetic" }, current: {
+    recordId: "private-event", updatedAt: "2026-10-07T12:00:00Z", stateValues: [{ fieldId: definition.dateFieldId!, value: "2026-10-07", label: "2026-10-07", optionId: null }],
+  } }], latest: [] });
+  await store.setStateUpdateCurrentCoverage({ ...scope, sourceEntityTypeId: definition.sourceEntityTypeId, coverage: {
+    status: "complete", sourceComplete: true, totalSubjects: 2,
+    subjects: { "private-versioned-subject": { status: "verified", remoteRecordId: "private-event" }, "private-empty-subject": { status: "verified", remoteRecordId: null } },
+    requestCount: 2, durationMs: 42, refreshedAt: "2026-10-07T12:00:00Z",
+  } });
+  await store.markStateUpdateSnapshotCoverage({ ...scope, pagination: { page: 1, pageSize: 20, total: 217, hasMore: true } });
+  const sections = await readStateUpdateCoverageCopySections({ store, ownerKey: context.ownerKey, contractId: context.contractId, date: context.date });
+  const text = formatStateUpdateDiagnosticsCopyText(sections);
+  for (const expected of ["status: partial", "currentCompleteness: complete", "currentSourceComplete: true", "currentVerifiedSubjects: 2", "currentSubjectsWithoutVersion: 1", "currentRequestCount: 2", "currentDurationMs: 42"]) expect(text).toContain(expected);
+  for (const value of ["private-versioned-subject", "private-empty-subject", "private-event"]) expect(text).not.toContain(value);
+});
+
 describe("Home/workflow coverage and local diagnostic metadata", () => {
   it("wires both real consumers to the shared configuration scope", () => {
     const home = readFileSync("app/(app)/index.tsx", "utf8");

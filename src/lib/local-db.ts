@@ -29,6 +29,8 @@ import {
   StateUpdateScope,
   StateUpdateSnapshotCoverage,
   StateUpdateSnapshotCoverageInput,
+  StateUpdateCurrentCoverage,
+  StateUpdateCurrentCoverageScope,
   StateUpdateSessionTerminationTelemetry,
   StateUpdateSnapshotReconcileResult,
   StateUpdateVisibleErrorResolution,
@@ -247,6 +249,8 @@ export function getLocalDatabase(): LocalDatabase {
 	    getEntityDefinition,
 	    getAttendanceDaySnapshotHydration,
 	    getStateUpdateSnapshotCoverage,
+      getStateUpdateCurrentCoverage,
+      setStateUpdateCurrentCoverage,
 	    getOfflinePreparationDiagnostics,
     getAttendanceContextSelection,
     listStateUpdateConflicts,
@@ -2870,6 +2874,10 @@ async function searchStateUpdateSubjects({
   sourceEntityTypeId,
   targetEntityTypeId,
 }: SearchStateUpdateSubjectsInput) {
+  const currentCoverage = usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness })
+    ? await getStateUpdateCurrentCoverage({ appViewId, contractId, date, dateFieldId, historyMode,
+        uniqueness, ownerKey, sourceEntityTypeId, targetEntityTypeId })
+    : null;
   const subjects = await listCachedRecords({
     contractId,
     entityTypeId: sourceEntityTypeId,
@@ -2890,6 +2898,7 @@ async function searchStateUpdateSubjects({
         ownerKey,
         subjectRecordId: record.serverId ?? record.id,
         targetEntityTypeId,
+        currentAuthority: currentCoverage?.subjects[record.serverId ?? record.id],
       });
 
       return localState
@@ -4691,7 +4700,10 @@ function configuredSnapshotDateSql() {
       THEN json_extract(values_json, '$.snapshotEventDate') END)`;
 }
 
-async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subjectRecordId: string }) {
+async function findStateUpdateRecordForSubject(input: StateUpdateScope & {
+  subjectRecordId: string;
+  currentAuthority?: StateUpdateCurrentCoverage["subjects"][string];
+}) {
   const db = await getDatabase();
   const date = normalizeStateUpdateLogicalDate(input.date);
   if (usesDatedSubjectHistory(input)) {
@@ -4704,6 +4716,17 @@ async function findStateUpdateRecordForSubject(input: StateUpdateScope & { subje
       ORDER BY cached_at DESC LIMIT 1`, input.ownerKey, input.contractId, input.targetEntityTypeId,
       input.appViewId, input.subjectRecordId, date ?? null, date ?? null);
     if (pending) return mapRecordRow(pending);
+    if (input.currentAuthority?.status === "verified") {
+      if (input.currentAuthority.remoteRecordId === null) return null;
+      const authoritative = await db.getFirstAsync<EntityRecordRow>(`
+        SELECT * FROM entity_records WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+          AND json_extract(values_json, '$.appViewId') = ?
+          AND json_extract(values_json, '$.subjectRecordId') = ?
+          AND sync_status = 'synced' AND server_id = ? LIMIT 1`,
+        input.ownerKey, input.contractId, input.targetEntityTypeId, input.appViewId,
+        input.subjectRecordId, input.currentAuthority.remoteRecordId);
+      if (authoritative) return mapRecordRow(authoritative);
+    }
     const current = await db.getFirstAsync<EntityRecordRow>(`
       SELECT * FROM (SELECT entity_records.*, ${configuredSnapshotDateSql()} AS event_date
         FROM entity_records WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
@@ -5606,6 +5629,68 @@ async function getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotSco
   }
 
   return parseAttendanceDaySnapshotHydration(row.value);
+}
+
+function stateUpdateCurrentCoverageKey(input: StateUpdateCurrentCoverageScope) {
+  return `state_update_current_coverage:${JSON.stringify([
+    fingerprintDiagnosticValue(input.ownerKey), input.contractId, input.appViewId,
+    input.sourceEntityTypeId, input.targetEntityTypeId, input.date ?? null,
+    input.dateFieldId ?? null, input.uniqueness ?? null, input.historyMode ?? null,
+  ])}`;
+}
+
+async function getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope): Promise<StateUpdateCurrentCoverage | null> {
+  if (!usesDatedSubjectHistory(input)) return null;
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM app_metadata WHERE key = ?", stateUpdateCurrentCoverageKey(input));
+  if (!row) return null;
+  let coverage: StateUpdateCurrentCoverage;
+  try { coverage = JSON.parse(row.value) as StateUpdateCurrentCoverage; } catch { return null; }
+  if (!coverage || !coverage.subjects || Array.isArray(coverage.subjects) || typeof coverage.subjects !== "object" ||
+      !["complete", "partial"].includes(coverage.status) || typeof coverage.sourceComplete !== "boolean" ||
+      !Number.isInteger(coverage.totalSubjects) || coverage.totalSubjects < 0 ||
+      !Number.isInteger(coverage.requestCount) || coverage.requestCount < 0 ||
+      !Number.isFinite(coverage.durationMs) || coverage.durationMs < 0 ||
+      typeof coverage.refreshedAt !== "string" || !Number.isFinite(Date.parse(coverage.refreshedAt))) return null;
+  const outcomes = Object.fromEntries(Object.entries(coverage.subjects).map(([id, outcome]) => [id,
+    outcome?.status === "verified" && (outcome.remoteRecordId === null ||
+      (typeof outcome.remoteRecordId === "string" && outcome.remoteRecordId.length > 0))
+      ? outcome : { status: "failed" as const },
+  ]));
+  const persisted = await db.getAllAsync<{ serverId: string; subjectId: string; eventDate: string | null }>(`
+    SELECT server_id AS serverId, json_extract(values_json, '$.subjectRecordId') AS subjectId,
+      ${configuredSnapshotDateSql()} AS eventDate FROM entity_records
+    WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?
+      AND json_extract(values_json, '$.appViewId') = ? AND sync_status = 'synced'
+      AND server_id IN (SELECT json_extract(value, '$.remoteRecordId') FROM json_each(?))`,
+    input.dateFieldId!, input.dateFieldId!, input.ownerKey, input.contractId,
+    input.targetEntityTypeId, input.appViewId, JSON.stringify(outcomes));
+  const available = new Set(persisted.filter(event => normalizeStateUpdateLogicalDate(event.eventDate) !== undefined)
+    .map(event => JSON.stringify([event.subjectId, event.serverId])));
+  const subjects = Object.fromEntries(Object.entries(outcomes).map(([id, outcome]) => [id,
+    outcome?.status === "verified" && (outcome.remoteRecordId === null ||
+      (typeof outcome.remoteRecordId === "string" && outcome.remoteRecordId.length > 0 &&
+        available.has(JSON.stringify([id, outcome.remoteRecordId]))))
+      ? outcome : { status: "failed" as const },
+  ]));
+  const sourceRows = await db.getAllAsync<{ serverId: string | null }>(
+    "SELECT server_id AS serverId FROM entity_records WHERE owner_key = ? AND contract_id = ? AND entity_type_id = ?",
+    input.ownerKey, input.contractId, input.sourceEntityTypeId);
+  const sourceComplete = coverage.sourceComplete && sourceRows.length === coverage.totalSubjects &&
+    sourceRows.every(source => !!source.serverId && Object.hasOwn(subjects, source.serverId));
+  const verified = Object.values(subjects).filter(outcome => outcome.status === "verified").length;
+  return { ...coverage, subjects, sourceComplete,
+    status: coverage.status === "complete" && sourceComplete && verified === coverage.totalSubjects &&
+      Object.keys(subjects).length === coverage.totalSubjects && coverage.requestCount >= verified ? "complete" : "partial" };
+}
+
+async function setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }) {
+  const db = await getDatabase();
+  await db.runAsync(
+    "INSERT INTO app_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    stateUpdateCurrentCoverageKey(input), JSON.stringify(input.coverage),
+  );
+  notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null> {

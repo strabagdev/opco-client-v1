@@ -260,7 +260,7 @@ async function concurrentSearch(date: string) {
     getStateUpdateWorkflow: vi.fn(async (_t, _c, _v, q) => {
       reached();
       await gate;
-      return response(q.date);
+      return { ...response(q.date), items: q.subjectRecordId ? [{ subject, current }] : [] };
     }),
     getEntityDefinition: vi.fn(async () => ({
       entity: {
