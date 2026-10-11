@@ -17,7 +17,7 @@ import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-ex
 import { subscribeHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
-import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getHomeGridLayout, HOME_DESKTOP_CARD_GAP, HOME_MAX_WIDTH } from "@/lib/app-shell-layout";
 import { selectContractId } from "@/lib/contract-selection";
 import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { AppView } from "@/lib/opco-api";
@@ -36,6 +36,8 @@ export default function HomeScreen() {
     token,
   } = useSession();
   const { width } = useWindowDimensions();
+  const [gridContentWidth, setGridContentWidth] = useState<number>();
+  const gridLayout = getHomeGridLayout(width, gridContentWidth);
   const [views, setViews] = useState<AppView[]>([]);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
   const [isOfflineViews, setIsOfflineViews] = useState(false);
@@ -310,7 +312,7 @@ export default function HomeScreen() {
   );
 
   const experiencesSection = (
-    <View style={styles.section}>
+    <View style={[styles.section, isWideLayout ? styles.sectionWide : null]}>
       {isLoadingViews && !hasCompatibleViews ? <ReadLoadingIndicator mode="initial" /> : null}
       {isLoadingViews && hasCompatibleViews ? <ReadLoadingIndicator mode="refresh" /> : null}
       {!isLoadingViews && isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
@@ -321,12 +323,12 @@ export default function HomeScreen() {
       ) : null}
       {(hasCompatibleViews ? experienceSections : []).map((section) => (
         <View key={section.id} style={styles.experienceGroup}>
-          <Text style={styles.sectionTitle}>{section.title}</Text>
+          <Text style={[styles.sectionTitle, isWideLayout ? styles.sectionTitleWide : null]}>{section.title}</Text>
           <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
             {section.cards.map(({ appView, availabilityLabel, href, metadata }) => {
               return (
                 <Link href={href} key={appView.id} asChild>
-                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? styles.viewButtonWide : null])}>
+                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? { width: gridLayout.cardWidth } : null])}>
                     <View style={styles.viewIcon}>
                       <AppIcon icon={appView.icon} size={22} />
                     </View>
@@ -355,7 +357,7 @@ export default function HomeScreen() {
       ]}
       style={styles.screen}
     >
-      <View style={styles.bodyStack}>
+      <View style={styles.bodyStack} onLayout={(event) => setGridContentWidth(event.nativeEvent.layout.width)}>
         <View style={[styles.contextPanel, isWideLayout ? styles.contextPanelWide : null]}>
           {operationalContextSection}
         </View>
@@ -376,8 +378,9 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
   },
   contentWide: {
-    alignSelf: "stretch",
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
+    alignSelf: "center",
+    maxWidth: HOME_MAX_WIDTH,
+    paddingHorizontal: APP_SHELL_DESKTOP_GUTTER,
   },
   contractButton: {
     backgroundColor: "#ffffff",
@@ -439,11 +442,6 @@ const styles = StyleSheet.create({
     minHeight: 64,
     padding: 12,
   },
-  viewButtonWide: {
-    flexBasis: 260,
-    flexGrow: 1,
-    maxWidth: 360,
-  },
   viewIcon: {
     alignItems: "center",
     backgroundColor: "#e4f1f2",
@@ -459,6 +457,7 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     flexDirection: "row",
     flexWrap: "wrap",
+    gap: HOME_DESKTOP_CARD_GAP,
   },
   viewName: {
     color: "#17363c",
@@ -532,11 +531,17 @@ const styles = StyleSheet.create({
   section: {
     gap: 16,
   },
+  sectionWide: {
+    gap: 20,
+  },
   sectionTitle: {
     color: "#587078",
     fontSize: 13,
     fontWeight: "800",
     textTransform: "uppercase",
+  },
+  sectionTitleWide: {
+    fontSize: 14,
   },
   typeBadge: {
     alignSelf: "flex-start",

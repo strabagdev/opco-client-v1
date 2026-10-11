@@ -18,7 +18,7 @@ import {
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
 import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
-import { APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, HOME_MAX_WIDTH } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
 import {
   formatPendingSyncErrorMessage,
@@ -1423,8 +1423,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   headerWide: {
-    paddingHorizontal: APP_SHELL_HORIZONTAL_GUTTER,
-    paddingTop: 20,
+    alignSelf: "center",
+    maxWidth: HOME_MAX_WIDTH,
+    paddingHorizontal: APP_SHELL_DESKTOP_GUTTER,
+    paddingVertical: 12,
   },
   headerIdentity: {
     alignItems: "center",
