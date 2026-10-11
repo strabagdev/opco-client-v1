@@ -12,6 +12,7 @@ import {
   OfflineStateUpdateValues,
   usesDatedSubjectHistory,
   resolveStateUpdateClientRequestId,
+  stateUpdateIntentsEqual,
   ResolveStateUpdateConflictWithLocalInput,
   DiscardStateUpdateConflictInput,
   SaveStateUpdateLocallyInput,
@@ -2779,6 +2780,16 @@ async function saveStateUpdateLocallyWithRecordId(
     const existingPayload = existingOperation
       ? parsePendingStateUpdatePayload(existingOperation.payload_json)
       : null;
+
+    if (!resolvedLocalRecordId && input.preserveIdenticalConfirmedIntent &&
+        input.historyMode === "update-current" && input.uniqueness === "subject-date" &&
+        existingRecord?.serverId && existingOperation?.server_record_id === existingRecord.serverId &&
+        existingPayload?.overwrite === true && existingPayload.expectedUpdatedAt &&
+        stateUpdateIntentsEqual(existingPayload, { ...nextPayload, overwrite: true })) {
+      // No UPDATE/upsert: preserve authorization, base, attempts, errors and delivery state.
+      saved = normalizeStateUpdateRecord(existingRecord, existingOperation.client_request_id);
+      return;
+    }
 
     if (resolvedLocalRecordId && !existingOperation) {
       throw new Error("La operacion del conflicto ya no esta disponible.");

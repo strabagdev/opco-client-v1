@@ -770,6 +770,8 @@ export type StateUpdateScope = {
 };
 
 export type SaveStateUpdateLocallyInput = StateUpdateScope & {
+  // Attendance may repeat an already-confirmed immutable intent without resetting its delivery.
+  preserveIdenticalConfirmedIntent?: boolean;
   expectedUpdatedAt?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
   historyMode: "append" | "update-current";
