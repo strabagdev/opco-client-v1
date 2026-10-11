@@ -1,4 +1,4 @@
-export type DiagnosticTabId = "sync" | "performance" | "pwa" | "state-update" | "records";
+export type DiagnosticTabId = "problems" | "sync" | "performance" | "pwa" | "state-update" | "records";
 
 export type DiagnosticTab = {
   id: DiagnosticTabId;
@@ -6,6 +6,7 @@ export type DiagnosticTab = {
 };
 
 export const GLOBAL_DIAGNOSTIC_TABS: DiagnosticTab[] = [
+  { id: "problems", label: "Problemas" },
   { id: "sync", label: "Sincronización" },
   { id: "performance", label: "Rendimiento" },
   { id: "pwa", label: "PWA" },

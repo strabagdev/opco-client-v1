@@ -1,3 +1,5 @@
+import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
+import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -107,15 +109,27 @@ export default function AppLayout() {
     () => getPendingStateUpdateSyncErrors(diagnosticsStateUpdate.diagnostics),
     [diagnosticsStateUpdate.diagnostics],
   );
+  const [attentionSnapshot, setAttentionSnapshot] = useState<{ scope: string; problems: SyncAttentionProblem[] } | null>(null);
+  const [attentionError, setAttentionError] = useState<string | null>(null);
+  const attentionScope = JSON.stringify([ownerKey, selectedContractId]);
+  const attentionProblems = attentionSnapshot?.scope === attentionScope ? attentionSnapshot.problems : null;
+  useEffect(() => {
+    let active = true, sequence = 0;
+    async function refresh() {
+      const request = ++sequence;
+      if (!ownerKey || !selectedContractId) return;
+      try {
+        const problems = await definitionCache.getSyncAttentionProblems({ ownerKey, contractId: selectedContractId });
+        if (active && request === sequence) { setAttentionSnapshot({ scope: attentionScope, problems }); setAttentionError(null); }
+      } catch { if (active && request === sequence) setAttentionError("No fue posible leer los problemas locales. Consulta Diagnóstico."); }
+    }
+    void refresh();
+    const unsubscribe = subscribeLocalDatabaseCacheChanges(() => { void refresh(); });
+    return () => { active = false; unsubscribe(); };
+  }, [attentionScope, definitionCache, ownerKey, selectedContractId, recordsSyncSummary, diagnosticsStateUpdate.diagnostics, isDiagnosticsOpen]);
   const visibleErrorKind = classifyAppShellVisibleErrorEvent(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent);
-  const stateUpdateConflictCount = diagnosticsStateUpdate.diagnostics
-    ? Math.max(
-        diagnosticsStateUpdate.diagnostics.summary.conflict,
-        diagnosticsStateUpdate.diagnostics.summary.localConflict,
-      )
-    : 0;
-  const durableSyncErrorCount = recordsSyncSummary.failedCount + pendingStateUpdateSyncErrors.length;
-  const syncConflictCount = recordsSyncSummary.conflictCount + stateUpdateConflictCount;
+  const durableSyncErrorCount = attentionProblems ? attentionProblems.filter(p => p.state === "failed").length : recordsSyncSummary.failedCount;
+  const syncConflictCount = attentionProblems ? attentionProblems.filter(p => p.state === "conflict").length : recordsSyncSummary.conflictCount;
   const hasSyncError = durableSyncErrorCount > 0;
   const stateUpdateSummary = diagnosticsStateUpdate.diagnostics?.summary;
   const hasStateUpdateSummary = Boolean(stateUpdateSummary);
@@ -348,7 +362,7 @@ export default function AppLayout() {
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );
   const statusIndicator = (
-    <View accessibilityLiveRegion="polite" style={styles.statusIndicator}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Ver problemas de sincronización" onPress={() => { setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync"); setIsDiagnosticsOpen(true); }} style={styles.statusIndicator}>
       <View
         accessibilityLabel={"Estado " + shellStatusIndicator.label + ". " + shellStatusIndicator.accessibilityLabel}
         accessible
@@ -389,7 +403,7 @@ export default function AppLayout() {
           </Text>
         </View>
       ) : null}
-    </View>
+    </Pressable>
   );
   const userMenuButton = (
     <Pressable
@@ -520,6 +534,23 @@ export default function AppLayout() {
               keyboardShouldPersistTaps="handled"
               style={styles.diagnosticsContentScroll}
             >
+              {selectedDiagnosticsTab === "problems" ? (
+                <View style={{ gap: 12 }}>
+                  <Text style={styles.diagnosticsTitle}>Problemas de sincronización</Text>
+                  <Text>{attentionError ?? (attentionProblems === null ? "Leyendo cambios locales…" : attentionProblems.length === 0 ? shellStatusIndicator.state === "error" ? "No hay cambios locales por revisar. Consulta Sincronización para ver el aviso activo." : "No hay cambios locales por revisar." : attentionProblems.length === 1 ? "1 cambio local" : `${attentionProblems.length} cambios locales`)}</Text>
+                  {attentionProblems?.map(problem => (
+                    <View key={problem.key} style={{ gap: 8, padding: 12, borderWidth: 1, borderColor: "#d0d5dd", borderRadius: 8 }}>
+                      <Text style={styles.diagnosticsSectionTitle}>{problem.experience ?? "Experiencia no disponible"}</Text>
+                      <Text>{problem.recordName ?? "Registro no identificado"}{problem.date ? ` · ${problem.date.split("-").reverse().join("-")}` : " · Fecha no disponible"}</Text>
+                      <Text>{problem.state === "conflict" ? "En conflicto" : problem.state === "failed" ? "Fallido" : "Pendiente"}</Text>
+                      <Text>{syncAttentionReason(problem)}</Text>
+                      {problem.href ? <Pressable accessibilityRole="button" onPress={() => { setIsDiagnosticsOpen(false); router.push(problem.href as never); }} style={styles.secondaryModalButton}>
+                        <Text>{problem.state === "conflict" ? "Revisar conflicto" : "Revisar cambio"}</Text>
+                      </Pressable> : <Text>Faltan metadatos para abrir la experiencia. Los detalles están en Diagnóstico.</Text>}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
               {selectedDiagnosticsTab === "sync" ? (
                 <SyncStatusDiagnosticsPanel
                   getSQLiteDiagnostics={definitionCache.getSQLiteCoordinatorDiagnostics}

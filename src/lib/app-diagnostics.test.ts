@@ -5,6 +5,7 @@ import { GLOBAL_DIAGNOSTIC_TABS, GLOBAL_DIAGNOSTICS_BUTTON, normalizeDiagnosticT
 describe("global app diagnostics", () => {
   it("defines the global diagnostics modal tabs in one extensible list", () => {
     expect(GLOBAL_DIAGNOSTIC_TABS).toEqual([
+      { id: "problems", label: "Problemas" },
       { id: "sync", label: "Sincronización" },
       { id: "performance", label: "Rendimiento" },
       { id: "pwa", label: "PWA" },

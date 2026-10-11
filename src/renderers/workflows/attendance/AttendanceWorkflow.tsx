@@ -1,3 +1,5 @@
+import { useLocalSearchParams } from "expo-router";
+import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -105,7 +107,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     syncPendingRecords,
     token,
   } = useSession();
-  const [date, setDate] = useState(formatLocalDateInput(new Date()));
+  const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
+  const targetDate = attentionDate(attentionParams.attentionDate);
+  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? formatLocalDateInput(new Date()) });
+  const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
+  function setDate(next: string | ((current: string) => string)) {
+    setDateSelection({ routeDate: targetDate, value: typeof next === "function" ? next(date) : next });
+  }
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [items, setItems] = useState<AttendanceItem[]>([]);
@@ -1277,10 +1285,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {localConflicts.length > 0 ? (
         <View style={styles.latestBlock}>
           <Text style={styles.sectionTitle}>Conflictos por resolver</Text>
-          {localConflicts.map((record) => (
+          {[...localConflicts].sort((a, b) => Number(b.localRecordId === attentionParams.attentionRecordId) - Number(a.localRecordId === attentionParams.attentionRecordId)).map((record) => (
             <View key={record.localRecordId} style={styles.latestRow}>
               <View style={styles.personText}>
                 <Text style={styles.personName}>{record.person.displayName}</Text>
+                {record.localRecordId === attentionParams.attentionRecordId ? <Text>Conflicto seleccionado</Text> : null}
                 <Text style={styles.statusMeta}>Registraste sin conexion: {record.statusLabel ?? "Sin estado"}</Text>
                 <Text style={styles.statusMeta}>En Opco existe: {record.conflictRemoteStatusLabel ?? "Sin estado"}</Text>
               </View>

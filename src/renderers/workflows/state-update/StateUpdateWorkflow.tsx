@@ -1,3 +1,5 @@
+import { useLocalSearchParams } from "expo-router";
+import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -106,7 +108,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     syncPendingRecords,
     token,
   } = useSession();
-  const [date, setDate] = useState(formatLocalDateInput(new Date()));
+  const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
+  const targetDate = attentionDate(attentionParams.attentionDate);
+  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? formatLocalDateInput(new Date()) });
+  const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
+  function setDate(next: string | ((current: string) => string)) {
+    setDateSelection({ routeDate: targetDate, value: typeof next === "function" ? next(date) : next });
+  }
   const [searchText, setSearchText] = useState("");
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
   const [items, setItems] = useState<StateUpdateItem[]>([]);
@@ -985,7 +993,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       {durableConflicts.length > 0 && visibleResponse ? (
         <DurableConflictList
-          conflicts={durableConflicts}
+          conflicts={[...durableConflicts].sort((a, b) => Number(b.localRecordId === attentionParams.attentionRecordId) - Number(a.localRecordId === attentionParams.attentionRecordId))}
           extraFields={visibleResponse.extraFields}
           fields={visibleResponse.stateFields}
           isSaving={isSaving}

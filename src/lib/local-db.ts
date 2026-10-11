@@ -1,3 +1,4 @@
+import { buildSyncAttentionProblems, type AttentionRow, type SyncAttentionProblem } from "./sync-attention";
 import * as SQLite from "expo-sqlite";
 
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
@@ -176,6 +177,7 @@ export type LocalDatabase = AppNavigationCache &
   getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
+  getSyncAttentionProblems(scope: { ownerKey: string; contractId: string }): Promise<SyncAttentionProblem[]>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
   getPanelSnapshot(input: PanelSnapshotScope): Promise<CachedPanelSnapshot | null>;
   getReportSnapshot(input: ReportSnapshotScope): Promise<CachedReportSnapshot | null>;
@@ -240,6 +242,7 @@ export function getLocalDatabase(): LocalDatabase {
     getContextSnapshot,
     getCachedRecord,
     getRecordsSyncSummary,
+    getSyncAttentionProblems,
     getRecordsOpeningHistory,
     getRecordCacheStatusCounts,
     getRecordOutboxConsistency,
@@ -2218,6 +2221,35 @@ async function countPendingOperations(ownerKey: string) {
   );
 
   return row?.total ?? 0;
+}
+
+async function getSyncAttentionProblems(scope: { ownerKey: string; contractId: string }) {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<AttentionRow>(`
+    SELECT r.owner_key, r.contract_id, r.entity_type_id, r.local_id, r.display_name,
+      r.values_json, r.sync_status, p.payload_json, p.operation
+    FROM entity_records r
+    LEFT JOIN pending_operations p ON p.owner_key = r.owner_key AND p.contract_id = r.contract_id
+      AND p.entity_type_id = r.entity_type_id AND p.local_record_id = r.local_id
+    WHERE r.owner_key = ? AND r.contract_id = ? AND r.sync_status != 'synced'
+    UNION ALL
+    SELECT p.owner_key, p.contract_id, p.entity_type_id, p.local_record_id AS local_id, NULL AS display_name,
+      NULL AS values_json, CASE WHEN p.last_error_code = 'CONFLICT' THEN 'conflict'
+        WHEN p.last_error_code IS NOT NULL THEN 'failed' ELSE 'pending_create' END AS sync_status,
+      p.payload_json, p.operation
+    FROM pending_operations p
+    WHERE p.owner_key = ? AND p.contract_id = ? AND NOT EXISTS (
+      SELECT 1 FROM entity_records r WHERE r.owner_key = p.owner_key AND r.contract_id = p.contract_id
+        AND r.entity_type_id = p.entity_type_id AND r.local_id = p.local_record_id)
+  `, scope.ownerKey, scope.contractId, scope.ownerKey, scope.contractId);
+  const cached = await db.getAllAsync<{ definition_json: string }>(
+    `SELECT definition_json FROM app_view_definitions WHERE owner_key = ? AND contract_id = ? AND status != 'error'`,
+    scope.ownerKey, scope.contractId);
+  const definitions = cached.flatMap(row => {
+    try { const definition = JSON.parse(row.definition_json); return definition.appView ? [definition.appView] : []; }
+    catch { return []; }
+  });
+  return buildSyncAttentionProblems(rows, definitions, scope);
 }
 
 async function getRecordsSyncSummary({

@@ -21,10 +21,11 @@ describe("diagnostics modal layout", () => {
     expect(stateUpdateSource).toContain("accessibilityState={{ expanded }}");
     expect(stateUpdateSource).toContain("{action}");
   });
-  it("renders status as a live non-button indicator and keeps the diagnostics button", () => {
+  it("opens problems from the status indicator and keeps progress and diagnostics access", () => {
     const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
 
-    expect(source).toContain('accessibilityLiveRegion="polite"');
+    expect(source).toContain('accessibilityLabel="Ver problemas de sincronización"');
+    expect(source).toContain('setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync")');
     expect(source).toContain("style={styles.statusIndicator}");
     expect(source).toContain('accessibilityRole="progressbar"');
     expect(source).toContain("accessibilityValue={{");
