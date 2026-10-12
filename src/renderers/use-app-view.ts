@@ -1,3 +1,4 @@
+import { usePublishDesktopCatalog } from "../components/desktop-navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
@@ -9,6 +10,7 @@ import { getAppViewBootstrapState, resolveAppViewLoadError } from "./use-app-vie
 
 export function useAppView(appViewId: string | undefined) {
   const { api, context, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
+  const publishCatalog = usePublishDesktopCatalog();
   const [views, setViews] = useState<AppView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -60,6 +62,7 @@ export function useAppView(appViewId: string | undefined) {
           contractId: effectiveContractId,
           onCached(cached) {
             if (isMounted && cached.views.some((view) => view.id === appViewId)) {
+              publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), cached.views);
               setViews(cached.views);
               setIsLoading(false);
             }
@@ -69,6 +72,7 @@ export function useAppView(appViewId: string | undefined) {
         });
 
         if (isMounted) {
+          publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), data.views);
           setViews(data.views);
           setError(null);
         }
@@ -88,7 +92,7 @@ export function useAppView(appViewId: string | undefined) {
     return () => {
       isMounted = false;
     };
-  }, [api, appViewId, bootstrapState, definitionCache, effectiveContractId, ownerKey, retryCount, token]);
+  }, [api, appViewId, bootstrapState, definitionCache, effectiveContractId, ownerKey, publishCatalog, retryCount, token]);
 
   return {
     appView,

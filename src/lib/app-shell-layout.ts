@@ -13,3 +13,7 @@ export function getHomeGridLayout(viewportWidth: number, measuredContentWidth?: 
   const contentWidth = measuredContentWidth ?? Math.max(0, Math.min(viewportWidth, wide ? HOME_MAX_WIDTH : viewportWidth) - padding * 2);
   return { columns, padding, gap, cardWidth: Math.max(0, (contentWidth - gap * (columns - 1)) / columns) };
 }
+
+export function getDesktopSidebarWidth(viewportWidth: number) {
+  return viewportWidth < APP_SHELL_WIDE_BREAKPOINT ? 0 : viewportWidth >= HOME_THREE_COLUMN_BREAKPOINT ? 264 : 224;
+}

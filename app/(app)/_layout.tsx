@@ -1,3 +1,5 @@
+import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
+import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
@@ -18,7 +20,7 @@ import {
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
 import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
-import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, HOME_MAX_WIDTH } from "@/lib/app-shell-layout";
+import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getDesktopSidebarWidth } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
 import {
   formatPendingSyncErrorMessage,
@@ -93,6 +95,7 @@ export default function AppLayout() {
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const styles = isWideLayout ? desktopStyles : baseStyles;
   const visibleAppViewId = appViewIdFromPathname(pathname);
   const visibleWriteScope = ownerKey && selectedContractId && visibleAppViewId
     ? writeFeedbackScopeKey(ownerKey, selectedContractId, visibleAppViewId)
@@ -441,8 +444,11 @@ export default function AppLayout() {
   }
 
   return (
+    <DesktopNavigationProvider>
     <View style={styles.shell}>
-      <View style={[styles.header, isWideLayout ? styles.headerWide : styles.headerCompact]}>
+      <DesktopSidebar visible={isWideLayout} width={getDesktopSidebarWidth(width)} />
+      <View style={styles.mainArea}>
+      <View testID={isWideLayout ? "desktop-header" : "compact-header"} style={[styles.header, isWideLayout ? styles.headerWide : styles.headerCompact]}>
         <View style={styles.headerMainRow}>
           <View style={styles.headerIdentity}>
           {!isHome ? (
@@ -450,7 +456,7 @@ export default function AppLayout() {
               <Text style={styles.backText}>←</Text>
             </Pressable>
           ) : null}
-          <View style={styles.titleBlock}>
+          <View style={[styles.titleBlock, isWideLayout && { display: "none" }]}>
             <View style={styles.titleRow}>
               <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
             </View>
@@ -464,7 +470,7 @@ export default function AppLayout() {
             onPress={() => setIsDiagnosticsOpen(true)}
             style={styles.diagnosticsIconButton}
           >
-            <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} />
+            <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} color={isWideLayout ? "#315DA8" : undefined} />
           </Pressable>
           {isWideLayout ? userMenuButton : null}
           </View>
@@ -475,6 +481,7 @@ export default function AppLayout() {
 
       <View style={styles.content}>
         <Stack screenOptions={{ headerShown: false }} />
+      </View>
       </View>
 
       <Modal
@@ -717,6 +724,7 @@ export default function AppLayout() {
         </View>
       </Modal>
     </View>
+    </DesktopNavigationProvider>
   );
 }
 
@@ -1236,7 +1244,7 @@ function getUserInitials(value: string | null | undefined) {
   return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   backButton: {
     alignItems: "center",
     alignSelf: "flex-start",
@@ -1424,7 +1432,6 @@ const styles = StyleSheet.create({
   },
   headerWide: {
     alignSelf: "center",
-    maxWidth: HOME_MAX_WIDTH,
     paddingHorizontal: APP_SHELL_DESKTOP_GUTTER,
     paddingVertical: 12,
   },
@@ -1605,6 +1612,7 @@ const styles = StyleSheet.create({
     color: "#135d66",
     fontWeight: "800",
   },
+  mainArea: { flex: 1, minWidth: 0 },
   shell: {
     backgroundColor: "#eef4f4",
     flex: 1,
@@ -1936,4 +1944,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+});
+
+const styles = baseStyles;
+const desktopStyles = StyleSheet.create({
+  ...desktopStyleColors(baseStyles),
+  shell: { ...baseStyles.shell, flexDirection: "row" },
+  headerIdentity: { ...baseStyles.headerIdentity, flex: 0, minWidth: 48 },
+  headerWide: { ...baseStyles.headerWide, minHeight: 72, backgroundColor: "#F4F6F8" },
 });

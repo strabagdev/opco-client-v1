@@ -1595,3 +1595,118 @@ Implementación funcional idéntica durante el cierre: se reutilizan capturas re
 Respaldo duradero: /home/dannysilver/dev2026/backups/responsive-home-header-close/2026-10-11/, con parche, inventario de archivos/hunks/hashes, SHA256SUMS y once capturas locales inspeccionadas que contienen exclusivamente etiquetas y datos sintéticos (sin credenciales ni datos personales reales). Las capturas se conservan por autorización explícita de este cierre; no se copian logs, bases, perfiles, credenciales ni otros diagnósticos/artefactos rechazados previamente. Las imágenes no forman parte del parche publicable.
 
 Límites: esta etapa adapta cabecera e Inicio; TABLE/PANEL/REPORT/workflows todavía no recibieron un rediseño desktop. El recorrido visual interior fue RECORDS, no todos los renderers. Móvil es viewport emulado; sin dispositivo físico/lector de pantalla ni prueba visual de múltiples contratos/Análisis. La diferencia productiva de conflictos sin correlación y el bloqueo OPFS siguen independientes; auditoría general abierta. Sin ampliación de implementación, Core/datos/API/esquema/configuración/sincronización, commit/push/deploy. V11 pausado.
+
+
+## 2026-10-12 — Shell desktop, Inicio y Asistencia implementados localmente
+
+Alcance basado en la propuesta aprobada `design/proposals/desktop-home-attendance`, paleta azul.
+Barra sólo Inicio/categorías presentes, Opco/organización/selector compacto con nombres completos;
+experiencias en el cuerpo, categoría activa dentro de la experiencia y rutas existentes conservadas.
+224 px de barra entre 900–1199, 264 desde 1200; móvil debajo de 900 mantiene bloque de contratos,
+grupos y colores compactos anteriores. Inicio máximo 1280 exclusivo, dos/tres columnas y grupos
+unitarios compartiendo fila. Header conserva sincronización/progreso/Diagnóstico/usuario/volver.
+Otros renderers reciben el espacio restante, sin recolor ni rediseño internos.
+
+Asistencia: búsqueda 560, formulario 640, controles 800; resultados/registros del día en filas
+horizontales de ancho útil con nombre/estado alineados, separadores, hover/foco, sin tarjetas.
+Formulario/acciones con alturas naturales y wrap. Un Stack y una experiencia, mismos handlers;
+comparación AST confirma ocho handlers Attendance idénticos a HEAD. Ningún cambio en Session,
+Core/API/persistencia/outbox/sincronización/esquema/dependencias/configuración. Catálogo lateral
+proyectado de la caché autorizada por usuario/contrato y publicación de los datos ya cargados en
+Inicio, sin nuevas solicitudes API. Las respuestas tardías de catálogo se protegen por scope y
+generación. El selector usa el handler existente de contrato y regresa a Inicio.
+
+Checks afectados: 110 pruebas / 13 archivos, máximo dos workers, typecheck PASS, lint PASS
+(dos warnings previos de require en records-sync.local-db-regression.test.ts), diff-check PASS.
+Sin suite completa. Export web local para Chrome/OPFS, artefactos y perfiles fuera del repositorio.
+Perfil exclusivo, CDP directo, sin Playwright; capturas reales 1440×900, 1024×768 y 390×844,
+límites 899/900 y 1199/1200 sin overflow global. Nombres largos, selector completo/Enter/Escape,
+foco/hover, categorías, contrato activo y segundo contrato con catálogo aislado comprobados.
+Cero API por seleccionar categoría y por resize con observación editada; siete anchos conservan
+valor, y ensayo suplementario conserva la misma instancia coordinada SQLite. Atrás/adelante y
+PANEL con tabla real PASS; RECORDS/REPORT conservan su presentación y área disponible.
+
+Core/PostgreSQL únicamente locales: DATABASE_URL de .env.local validada como
+127.0.0.1:5432/opco_development/opco_dev, pasada explícitamente al proceso. OPFS real con
+crossOriginIsolated=true. Sólo API 127.0.0.1:19640 en las solicitudes del navegador. Fixture propio:
+dos contratos, tres personas, campos/estados sintéticos. CAPACITACIÓN online → PRESENTE offline
+con confirmación, cancelación sin nueva intención, aceptación con overwrite/base durable,
+lectura offline y reconexión: misma fila remota, sin duplicados, cero pendientes/conflictos.
+Las pruebas de reapertura y respuestas tardías son automáticas; no se equiparan al ensayo visual.
+
+Límite independiente: STATE_UPDATE navega y conserva categoría/ancho, pero al compartir el destino
+con Attendance en este fixture mostró Error finalizing statement y preparación incompleta.
+No se certifica esa lectura, no se capturó la sentencia/causa SQLite primaria aquí y no se atribuye
+al incidente productivo. Sin ampliar corrección de persistencia. Un perfil temporal restauró otra
+pestaña propia y activó ACCESS_HANDLE_BUSY; se cerró sólo la extra y se usó Reintentar; un retry
+posterior falló al abrir ese perfil, conservado sin reset. Perfil exclusivo nuevo completó el
+ensayo final. Los problemas iniciales de URL local/CSP del export y calculatedFields del fixture
+PANEL se corrigieron sólo en procesos/configuración sintética. Fallos de scripts DOM/fecha/SQL
+no son acreditados como fallos funcionales de la aplicación.
+
+Detalle, inventario y límites: docs/DESKTOP_INTERFACE.md y
+`design/validation/desktop-implementation-2026-10-12/`, capturas reales y visor comparativo estático
+contra el prototipo. Propuesta y documentación previa preservadas byte a byte, salvo esta adición.
+Pendientes excluidos y Core se verifican al entregar. No validación con dispositivo físico, lector
+de pantalla o usuarios nuevos. Otros renderers requieren su propio diseño desktop; cierre aislado
+y suite completa pendientes. Sin commit/push/deploy; V11 pausado, auditoría/incidentes abiertos.
+
+Control real adicional Attendance: tras una intención CAPACITACIÓN confirmada offline, un escritor
+controlado de Core local modificó la misma fila a AUSENTE. Reconectar retuvo un conflicto y la
+intención; ambas versiones/acciones visibles a 1440/1024. Diagnóstico → Problemas → Revisar conflicto
+volvió a AppView/fecha/registro seleccionado correctos, fingerprint durable del outbox intacto
+(identidad, payload y attempts). Sólo después se pulsó Usar Opco sobre el fixture: una fila vinculada,
+cero conflictos y cero pendientes. No resolución automática ni actuación productiva. Selección del
+contrato real con fondo #E8EFFA y texto #202B3A en bundle final comprobada.
+
+Borde de enlaces directos: use-app-view.ts publica también el catálogo completo que ya recibe
+(caché/remoto), sin nuevas peticiones, conservando su cancelación original. Tres regresiones del
+hook con cargador real comprueban API única, fallback y no publicar respuestas tardías. El bundle
+final se abrió directamente desde sesión/OPFS propios conservados, con Core apagado/API bloqueada;
+Flujos activa y sin overflow. No es un nuevo ensayo online de Core. Una muestra inicial de resize
+en ese arranque registró tres solicitudes sin aislar el trabajo pendiente; se conserva sin atribuir
+causa. El ensayo Core previo conserva los mismos handlers/estilos de Attendance.
+
+Control final de enlace directo/caché: después de ventana quieta de 2 s, se mantuvo el ancho fijo
+10 s. Allí aparecieron las mismas tres solicitudes (/me, catálogo, Attendance), sin resize. La
+secuencia posterior de siete tamaños produjo cero solicitudes y ningún overflow, conservando
+Flujos activa y OPFS real. Se archivan las muestras anteriores, sin atribuirles causa ni cambiar
+sesión/sincronización. Candidato final: 110 tests / 13 archivos PASS, typecheck/lint/diff-check PASS.
+
+Limpieza: cero entidades del fixture propio restantes; Chrome/Client/Core propios detenidos,
+ningún reset de caché/SQLite/outbox/perfil habitual. Galería estática de revisión únicamente:
+http://127.0.0.1:19647/validation/desktop-implementation-2026-10-12/.
+Inventario: 15 archivos de implementación/pruebas/documentación, más evidencia visual separada;
+STATUS sólo se amplía al final. Fuente/prototipo y 225 pendientes excluidos verificados por hash.
+No lote aislado/full suite ni publicación en esta etapa. V11 y auditoría permanecen como estaban.
+
+
+### 2026-10-12 — Cierre técnico desktop, sin publicación
+
+Lote aislado de 15 archivos: shell/Inicio/Attendance desktop, catálogo lateral de lectura,
+paleta azul, cuatro regresiones, declaraciones de prueba y DESKTOP_INTERFACE/este apéndice.
+STATUS anterior (232753 bytes), prototipo, V11, diagnósticos y documentación ajena excluidos.
+Parche/inventario/SHA256 y comparación: `design/validation/desktop-technical-close-2026-10-12/`.
+
+Suite completa con máximo dos workers: 1033 PASS / 88 archivos, 28,14 s. Primera ejecución:
+1031 PASS, dos timeouts de 5000 ms en pruebas SQLite de null autoritativo y write EPIPE;
+causa no demostrada. Repetición completa sin build/export concurrentes PASS, sin omitir pruebas,
+cambiar timeouts ni configuración. Typecheck PASS; lint PASS (dos advertencias require existentes);
+npm run build web + service worker PASS; diff/reconstrucción PASS. Artefactos sólo temporales.
+
+Contraste real HEAD 7fc76dc y candidato: perfiles exclusivos y bases SQLite OPFS independientes;
+Core idéntico y mismo fixture PostgreSQL local, restaurado secuencialmente sólo en sus eventos propios.
+DATABASE_URL .env.local validada 127.0.0.1:5432/opco_development como opco_dev y pasada explícitamente.
+Tres sujetos/dos contratos/ocho vistas; Attendance y STATE_UPDATE comparten entidades. En ambos:
+CAPACITACIÓN online → PRESENTE confirmado offline → reconectar → Home → STATE_UPDATE.
+Attendance acaba con una fila vinculada y cero pendientes; STATE_UPDATE muestra Error finalizing
+statement en ambos. Error reproducido preexistente al lote, sin causa SQLite primaria ni correlación
+productiva acreditada. No se certifica lectura STATE_UPDATE; ninguna corrección de persistencia.
+
+Contenido funcional final idéntico: evidencia visual/móvil/resize anterior reutilizada. Comprobación
+adicional del candidato aislado con Core: categorías, atrás/adelante, enlace directo RECORDS,
+contrato correcto y aislamiento del catálogo. Otros renderers reciben espacio, no rediseño interno.
+259 pendientes excluidos verificados por SHA256 y prefijo anterior STATUS intacto; Core limpio.
+Lote listo para revisión de publicación, no publicado. Límites/desglose en DESKTOP_INTERFACE.
+Fallo STATE_UPDATE y apertura OPFS previa siguen separados y abiertos; auditoría general abierta.
+Sin producción, commit, push/deploy ni cambios API/esquema/config/dependencias. V11 pausado.

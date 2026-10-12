@@ -1,4 +1,7 @@
-import { Link, useFocusEffect } from "expo-router";
+import { usePublishDesktopCatalog } from "@/components/desktop-navigation";
+import { desktopNavigation } from "@/lib/desktop-navigation";
+import { desktopStyleColors } from "@/lib/desktop-presentation";
+import { Link, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Pressable,
@@ -46,8 +49,15 @@ export default function HomeScreen() {
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const styles = isWideLayout ? desktopStyles : baseStyles;
+  const { category } = useLocalSearchParams();
+  const publishCatalog = usePublishDesktopCatalog();
   const viewsScope = ownerKey && selectedContractId ? ownerKey + ":" + selectedContractId : null;
   const hasCompatibleViews = Boolean(viewsScope && loadedViewsScope === viewsScope);
+  useEffect(() => {
+    if (hasCompatibleViews) publishCatalog(JSON.stringify([ownerKey, selectedContractId]), views);
+  }, [hasCompatibleViews, ownerKey, selectedContractId, views, publishCatalog]);
+  const selectedCategory = isWideLayout ? desktopNavigation(hasCompatibleViews ? views : [], "/", category).selectedCategory : null;
   const today = formatLocalDateInput(new Date());
   const currentMonthDates = useMemo(() => currentMonthDateKeys(new Date(`${today}T00:00:00`)), [today]);
 
@@ -321,16 +331,16 @@ export default function HomeScreen() {
       {!isLoadingViews && hasCompatibleViews && selectedContractId && views.length === 0 && !error ? (
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
-      {(hasCompatibleViews ? experienceSections : []).map((section) => (
-        <View key={section.id} style={styles.experienceGroup}>
-          <Text style={[styles.sectionTitle, isWideLayout ? styles.sectionTitleWide : null]}>{section.title}</Text>
+      {(hasCompatibleViews ? experienceSections.filter(section => !selectedCategory || section.id === selectedCategory) : []).map((section) => (
+        <View key={section.id} style={[styles.experienceGroup, isWideLayout && { width: "100%" }, isWideLayout && !selectedCategory && section.cards.length === 1 && gridContentWidth ? { width: (gridContentWidth - 24) / 2 } : null]}>
+          {!isWideLayout || !selectedCategory ? <Text style={[styles.sectionTitle, isWideLayout ? styles.sectionTitleWide : null]}>{section.title}</Text> : null}
           <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
             {section.cards.map(({ appView, availabilityLabel, href, metadata }) => {
               return (
                 <Link href={href} key={appView.id} asChild>
-                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? { width: gridLayout.cardWidth } : null])}>
+                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? { width: section.cards.length === 1 && !selectedCategory ? "100%" : gridLayout.cardWidth } : null])}>
                     <View style={styles.viewIcon}>
-                      <AppIcon icon={appView.icon} size={22} />
+                      <AppIcon icon={appView.icon} size={22} color={isWideLayout ? "#315DA8" : undefined} />
                     </View>
                     <View style={styles.viewText}>
                       <Text style={styles.viewName}>{appView.name}</Text>
@@ -355,10 +365,12 @@ export default function HomeScreen() {
         styles.content,
         isWideLayout ? styles.contentWide : styles.contentCompact,
       ]}
+      testID={isWideLayout ? "desktop-home" : "compact-home"}
       style={styles.screen}
     >
       <View style={styles.bodyStack} onLayout={(event) => setGridContentWidth(event.nativeEvent.layout.width)}>
-        <View style={[styles.contextPanel, isWideLayout ? styles.contextPanelWide : null]}>
+        {isWideLayout ? <Text style={styles.desktopTitle}>{experienceSections.find(section => section.id === selectedCategory)?.title ?? "Inicio"}</Text> : null}
+        <View style={[styles.contextPanel, isWideLayout && context && context.contracts.length > 0 ? { display: "none" } : null]}>
           {operationalContextSection}
         </View>
         <View style={isWideLayout ? styles.experiencesColumnWide : null}>{experiencesSection}</View>
@@ -367,7 +379,8 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
+  desktopTitle: { fontSize: 26, fontWeight: "800", color: "#202B3A" },
   content: {
     gap: 18,
     padding: APP_SHELL_HORIZONTAL_GUTTER,
@@ -571,3 +584,11 @@ function formatLocalDateInput(date: Date) {
 
   return `${year}-${month}-${day}`;
 }
+
+const desktopStyles = StyleSheet.create({
+  ...desktopStyleColors(baseStyles),
+  sectionWide: { ...baseStyles.sectionWide, flexDirection: "row", flexWrap: "wrap", gap: 24 },
+  sectionTitleWide: { color: "#202B3A", fontWeight: "800", fontSize: 18, textTransform: "none" },
+  typeBadge: { ...baseStyles.typeBadge, backgroundColor: "transparent", borderWidth: 0, paddingHorizontal: 0, paddingVertical: 0 },
+  typeBadgeText: { ...baseStyles.typeBadgeText, color: "#536174", fontWeight: "400" },
+});

@@ -1,3 +1,5 @@
+import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { useLocalSearchParams } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -90,6 +93,9 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
+  const { width } = useWindowDimensions();
+  const isDesktop = width >= APP_SHELL_WIDE_BREAKPOINT;
+  const styles = isDesktop ? desktopStyles : baseStyles;
   const {
     api,
     connectivityStatus,
@@ -1226,18 +1232,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
   return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+    <ScrollView testID={isDesktop ? "desktop-attendance" : "compact-attendance"} contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.icon}>
-          <AppIcon icon={appView.icon} size={26} />
+          <AppIcon icon={appView.icon} size={26} color={isDesktop ? "#315DA8" : undefined} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>{screenTitle}</Text>
-          {showSubtitle ? <Text style={styles.meta}>{appView.name}</Text> : null}
-          <Text style={styles.meta}>{formatDisplayDate(date)}</Text>
+          <Text style={styles.title}>{isDesktop ? appView.name : screenTitle}</Text>
+          {!isDesktop && showSubtitle ? <Text style={styles.meta}>{appView.name}</Text> : null}
+          {!isDesktop ? <Text style={styles.meta}>{formatDisplayDate(date)}</Text> : null}
         </View>
       </View>
 
+      <View testID="attendance-controls" style={styles.controlsGroup}>
+      <View style={styles.dateSummary}>
       <View style={styles.dateBar}>
         <Pressable onPress={() => changeDate(-1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Anterior</Text>
@@ -1251,6 +1259,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       <View style={styles.summaryBar}>
         <Text style={styles.summaryLabel}>Registrados en esta fecha</Text>
         <Text style={styles.summaryValue}>{hasCompatibleDay ? totalRegistered : "-"}</Text>
+      </View>
+
       </View>
 
       {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
@@ -1281,17 +1291,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         onChange={handleContextChange}
         values={contextValues}
       />
+      </View>
 
       {localConflicts.length > 0 ? (
         <View style={styles.latestBlock}>
           <Text style={styles.sectionTitle}>Conflictos por resolver</Text>
           {[...localConflicts].sort((a, b) => Number(b.localRecordId === attentionParams.attentionRecordId) - Number(a.localRecordId === attentionParams.attentionRecordId)).map((record) => (
-            <View key={record.localRecordId} style={styles.latestRow}>
-              <View style={styles.personText}>
+            <View key={record.localRecordId} style={[styles.latestRow, isDesktop && styles.conflictRow]}>
+              <View style={[styles.personText, isDesktop && { flexDirection: "column", alignItems: "stretch" }]} >
                 <Text style={styles.personName}>{record.person.displayName}</Text>
                 {record.localRecordId === attentionParams.attentionRecordId ? <Text>Conflicto seleccionado</Text> : null}
-                <Text style={styles.statusMeta}>Registraste sin conexion: {record.statusLabel ?? "Sin estado"}</Text>
-                <Text style={styles.statusMeta}>En Opco existe: {record.conflictRemoteStatusLabel ?? "Sin estado"}</Text>
+                <Text style={[styles.statusMeta, isDesktop && { width: "auto" }]}>Registraste sin conexion: {record.statusLabel ?? "Sin estado"}</Text>
+                <Text style={[styles.statusMeta, isDesktop && { width: "auto" }]}>En Opco existe: {record.conflictRemoteStatusLabel ?? "Sin estado"}</Text>
               </View>
               <View style={styles.conflictActions}>
                 <Pressable disabled={isSaving} onPress={() => void handleUseLocalConflictChange(record)} style={styles.smallPrimaryButton}>
@@ -1306,7 +1317,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      <View style={styles.searchBlock}>
+      <View testID="attendance-search" style={styles.searchBlock}>
+        {isDesktop ? <Text style={styles.searchLabel}>Buscar persona</Text> : null}
         <TextInput
           autoCapitalize="words"
           onChangeText={(value) => {
@@ -1330,7 +1342,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
           {items.map((item) => (
-            <Pressable key={item.person.id} onPress={() => void selectPerson(item)} style={styles.personRow}>
+            <Pressable testID="attendance-person-row" accessibilityRole="button" key={item.person.id} onPress={() => void selectPerson(item)} style={styles.personRow}>
               <View style={styles.personText}>
                 <Text style={styles.personName}>{item.person.displayName}</Text>
                 <Text style={styles.statusMeta}>{item.attendance?.statusLabel ?? "Sin registrar"}</Text>
@@ -1341,10 +1353,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ) : null}
 
       {selectedItem ? (
-        <View style={styles.checkInPanel}>
-          <View style={styles.personText}>
+        <View testID="attendance-form" style={styles.checkInPanel}>
+          <View style={[styles.personText, isDesktop && { flexDirection: "column", alignItems: "stretch" }]} >
             <Text style={styles.panelName}>{selectedItem.person.displayName}</Text>
-            <Text style={styles.statusMeta}>Actual: {selectedItem.attendance?.statusLabel ?? "Sin registrar"}</Text>
+            <Text style={[styles.statusMeta, isDesktop && { width: "auto" }]}>Actual: {selectedItem.attendance?.statusLabel ?? "Sin registrar"}</Text>
           </View>
 
           {supportsObservation ? (
@@ -1369,6 +1381,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             </View>
           ) : null}
 
+          <View style={styles.formActions}>
           {defaultStatus ? (
             <Pressable
               disabled={isSaving}
@@ -1399,6 +1412,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               ))}
             </View>
           ) : null}
+          </View>
         </View>
       ) : null}
 
@@ -1425,6 +1439,7 @@ function AttendanceContextSelectors({
   onChange(fieldId: string, optionId: string | null): void;
   values: Record<string, string | null>;
 }) {
+  const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
   if (fields.length === 0) {
     return null;
   }
@@ -1473,10 +1488,11 @@ function AttendanceContextSelectors({
 }
 
 function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
+  const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
   return (
     <View style={styles.latestBlock}>
       <Text style={styles.sectionTitle}>Registros del día</Text>
-      {latest.length > 0 ? <Text style={styles.statusMeta}>Los más recientes de esta fecha.</Text> : null}
+      {latest.length > 0 ? <Text style={[styles.statusMeta, { width: "auto" }]}>Los más recientes de esta fecha.</Text> : null}
       {latest.length === 0 ? <Text style={styles.empty}>Sin registros para esta fecha.</Text> : null}
       {latest.map((item) => (
         <View key={item.attendanceRecordId} style={styles.latestRow}>
@@ -1502,6 +1518,7 @@ function ConflictModal({
   onCancel(): void;
   onConfirm(): void;
 }) {
+  const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
       <View style={styles.modalBackdrop}>
@@ -1574,7 +1591,12 @@ function formatLocalTime(value: string) {
   }).format(new Date(value));
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
+  controlsGroup: { gap: 14 },
+  dateSummary: { gap: 14 },
+  formActions: { gap: 14 },
+  conflictRow: {},
+  searchLabel: { color: "#202B3A", fontSize: 14, fontWeight: "700" },
   checkInPanel: {
     backgroundColor: "#ffffff",
     borderColor: "#d7e4e7",
@@ -1958,4 +1980,33 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     flexShrink: 1,
   },
+});
+
+const desktopStyles = StyleSheet.create({
+  ...desktopStyleColors(baseStyles),
+  content: { ...baseStyles.content, padding: 24 },
+  controlsGroup: { gap: 12, width: "100%", maxWidth: 800, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#DCE2EA", borderRadius: 8, padding: 16 },
+  dateSummary: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 24 },
+  dateBar: { ...baseStyles.dateBar, gap: 36, justifyContent: "flex-start" },
+  summaryBar: { ...baseStyles.summaryBar, padding: 0, borderWidth: 0, gap: 12, flexShrink: 1 },
+  contextBlock: { ...baseStyles.contextBlock, padding: 0, borderWidth: 0 },
+  contextField: { ...baseStyles.contextField, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 16 },
+  contextLabel: { ...baseStyles.contextLabel, color: "#202B3A" },
+  checkInPanel: { ...baseStyles.checkInPanel, borderColor: "#DCE2EA", width: "100%", maxWidth: 640, padding: 20 },
+  searchBlock: { ...baseStyles.searchBlock, alignItems: "stretch", flexDirection: "column", gap: 8, width: "100%", maxWidth: 560 },
+  searchInput: { ...baseStyles.searchInput, borderColor: "#7B879A", color: "#202B3A" },
+  observationInput: { ...baseStyles.observationInput, backgroundColor: "#FFFFFF", color: "#202B3A", borderColor: "#7B879A" },
+  formActions: { flexDirection: "row", flexWrap: "wrap", gap: 10, alignItems: "flex-start" },
+  primaryStatusButton: { ...baseStyles.primaryStatusButton, backgroundColor: "#315DA8", minWidth: 200 },
+  secondaryStatusButton: { ...baseStyles.secondaryStatusButton, flexGrow: 0, minWidth: 150, borderColor: "#7B879A" },
+  statusGrid: { ...baseStyles.statusGrid, flexShrink: 1 },
+  personRow: { ...baseStyles.personRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: "#DCE2EA", backgroundColor: "transparent", minHeight: 56, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 12 },
+  latestRow: { ...baseStyles.latestRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: "#DCE2EA", backgroundColor: "transparent", minHeight: 56 },
+  personText: { ...baseStyles.personText, flexDirection: "row", alignItems: "center", gap: 16 },
+  personName: { ...baseStyles.personName, color: "#202B3A", flex: 1 },
+  statusMeta: { ...baseStyles.statusMeta, color: "#536174", width: 180, flexShrink: 0 },
+  list: { ...baseStyles.list, gap: 0 },
+  latestBlock: { ...baseStyles.latestBlock, width: "100%" },
+  conflictRow: { flexWrap: "wrap", alignItems: "flex-start" },
+  conflictActions: { ...baseStyles.conflictActions, flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start" },
 });
