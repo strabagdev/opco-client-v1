@@ -11,7 +11,7 @@ describe("Attendance snapshot cache", () => {
   it("persists a full remote day snapshot and marks the date hydrated", async () => {
     const store = {
       markAttendanceDaySnapshotHydrated: vi.fn(async () => undefined),
-      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 2 })),
+      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 2, contentVerified: true })),
     };
 
     const result = await cacheAttendanceRemoteSnapshot({
@@ -53,7 +53,7 @@ describe("Attendance snapshot cache", () => {
   it("persists a partial remote snapshot without marking the date hydrated", async () => {
     const store = {
       markAttendanceDaySnapshotHydrated: vi.fn(async () => undefined),
-      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0 })),
+      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0, contentVerified: true })),
     };
 
     const result = await cacheAttendanceRemoteSnapshot({
@@ -88,7 +88,7 @@ describe("Attendance snapshot cache", () => {
   it("marks a valid empty Attendance day as hydrated", async () => {
     const store = {
       markAttendanceDaySnapshotHydrated: vi.fn(async () => undefined),
-      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0 })),
+      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0, contentVerified: true })),
     };
 
     const result = await cacheAttendanceRemoteSnapshot({
@@ -106,6 +106,17 @@ describe("Attendance snapshot cache", () => {
     }));
     expect(store.markAttendanceDaySnapshotHydrated).toHaveBeenCalledOnce();
     expect(result.complete).toBe(true);
+  });
+
+  it("keeps received observation from current when latest repeats the same event sparsely", async () => {
+    const store = { markAttendanceDaySnapshotHydrated: vi.fn(async () => undefined),
+      upsertStateUpdateSnapshot: vi.fn(async () => ({ staleSyncedRemoved: 0, contentVerified: true })) };
+    const event = { recordId: "event", statusOptionId: "present_option", statusLabel: "Presente", observation: null, updatedAt: "2026-08-31T12:00:00Z" };
+    await cacheAttendanceRemoteSnapshot({ appViewId: "view_attendance", contractId: "contract_1", ownerKey: "owner",
+      config: { statusFieldId: "status_field", observationFieldId: "observation" }, store,
+      response: attendanceResponse({ items: [{ person: { id: "person", displayName: "Synthetic" }, attendance: event }],
+        latest: [{ attendanceRecordId: "event", person: { id: "person", displayName: "Synthetic" }, statusOptionId: event.statusOptionId, statusLabel: event.statusLabel, updatedAt: event.updatedAt }], summary: { totalRegistered: 1 } }) });
+    expect(store.upsertStateUpdateSnapshot).toHaveBeenCalledWith(expect.objectContaining({ items: [expect.objectContaining({ current: expect.objectContaining({ extraValues: { observation: null } }) })] }));
   });
 
   it("treats only metadata with a timestamp as hydrated", () => {

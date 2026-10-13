@@ -122,7 +122,7 @@ describe("characterization: prewarm current proof is separate from latest",()=>{
   const f=fixture();const get=f.api.getStateUpdateWorkflow;let active=0,peak=0;
   f.api.getStateUpdateWorkflow=async(...args)=>{active++;peak=Math.max(peak,active);try {await new Promise(resolve=>setTimeout(resolve,2));return await get(...args);}finally {active--;}};
   await prepare(f);expect(peak).toBeGreaterThan(1);expect(peak).toBeLessThanOrEqual(4);
-  const count=()=>harness.db.getFirstAsync("SELECT COUNT(*) AS n FROM entity_records WHERE entity_type_id=?",scope.targetEntityTypeId);
+  const count=()=>harness.db.getFirstAsync("SELECT COUNT(*) AS n FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=?",scope.targetEntityTypeId);
   expect((await count()).n).toBe(136);await prepare(f);expect((await count()).n).toBe(136);
   expect((await store.getStateUpdateSnapshotCoverage(scope))?.status).toBe("partial");
   const before=await store.getStateUpdateCurrentCoverage({...scope,sourceEntityTypeId:"audit-subjects"});
@@ -234,5 +234,5 @@ it.each(["pending_create","conflict"])("keeps %s overlay and durable outbox over
  expect((await find(129)).current?.recordId).toBe(intent.localRecordId);expect((await find(129)).current?.stateValues[0].value).toBe("LOCAL");
  await reopen();expect((await find(129)).current?.recordId).toBe(intent.localRecordId);expect((await harness.db.getFirstAsync("SELECT sync_status FROM entity_records WHERE local_id=?",intent.localRecordId)).sync_status).toBe(status);
  expect(await harness.db.getAllAsync("SELECT * FROM entity_records WHERE sync_status!='synced' ORDER BY local_id")).toEqual(before);expect(await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")).toEqual(outbox);
- expect((await harness.db.getFirstAsync("SELECT COUNT(*) AS n FROM entity_records WHERE server_id='obsolete-129'")).n).toBe(1);
+ expect((await harness.db.getFirstAsync("SELECT COUNT(*) AS n FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.server_id')='obsolete-129'")).n).toBe(1);
 });

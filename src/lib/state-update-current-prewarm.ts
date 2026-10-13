@@ -58,7 +58,10 @@ export async function prepareStateUpdateCurrent({
         throw new Error("STATE_UPDATE_CURRENT_RESPONSE_MISMATCH");
       }
       // subjects[].current is authoritative, including explicit null. Do not fetch history.
-      const result = await store.upsertStateUpdateSnapshot({ ...scope, complete: false, items: response.items, latest: [] });
+      const result = await store.upsertStateUpdateSnapshot({ ...scope, complete: false, projectionDefinition: {
+        sourceEntityTypeId: response.sourceEntityType.id, subjectFieldId: response.subjectFieldId,
+        dateFieldId: response.dateFieldId, stateFields: response.stateFields, extraFields: response.extraFields,
+      }, items: response.items, latest: [] });
       const current = response.items[0].current;
       if (result.contentVerified !== true || result.persistedRemoteEventCount !== (current ? 1 : 0)) {
         throw new Error("STATE_UPDATE_CURRENT_CONTENT_UNVERIFIED");

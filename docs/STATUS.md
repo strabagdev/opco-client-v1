@@ -1710,3 +1710,262 @@ contrato correcto y aislamiento del catálogo. Otros renderers reciben espacio, 
 Lote listo para revisión de publicación, no publicado. Límites/desglose en DESKTOP_INTERFACE.
 Fallo STATE_UPDATE y apertura OPFS previa siguen separados y abiertos; auditoría general abierta.
 Sin producción, commit, push/deploy ni cambios API/esquema/config/dependencias. V11 pausado.
+
+### 2026-10-12 — Integración local del runtime STATE_UPDATE compartido en SQLite v10
+
+**Integrado y validado localmente; NO publicable.** Se mantiene el bloqueo de coexistencia con
+Client publicado 49913c3e84aeaa0c15138508269b70b9c408caac. V11 pausado; ningún commit/push/deploy,
+cambio de Core/API/esquema/dependencias ni acceso productivo.
+
+- Identidad remota compartida y snapshots separados por AppView/configuración en app_metadata.
+  Lectores, getCachedRecord scoped, resolución de relaciones, hidratación, confirmación y
+  restauración están adaptados conjuntamente. No se ocupa una segunda fila física con el mismo
+  server_id; el UNIQUE y SCHEMA_VERSION=10 permanecen intactos.
+- Intenciones/recibos conservan su identidad durable y referencia lógica. Append, claves
+  idempotentes, overwrite/base, pendientes/conflictos y RECORDS están protegidos. Envío y
+  respuestas tardías comprueban que la intención seleccionada sigue siendo actual y pertenece
+  al scope. Cancelaciones y acciones de Attendance conservan sus handlers existentes.
+- La hidratación Attendance conserva todos los IDs de latest, incluso para igual persona/fecha,
+  y respeta el current autoritativo; el resumen no lo sustituye por otro ID. La regresión real
+  del adaptador anterior conservaba sólo uno de dos eventos; ahora conserva ambos tras reapertura.
+- ACK no acredita contenido completo; autoridades/cobertura afectadas se invalidan. Una
+  representación sparse no elimina contenido recibido de la misma versión; Attendance conserva
+  Observación de current aunque latest la omita. No se inventan campos ni se amplían descargas.
+- Regresión real contra HEAD 49913c3: hidratar el mismo evento en dos AppViews falla con SQLite
+  UNIQUE (owner/contract/entity/server_id). El mismo caso pasa en el candidato, sin cambio de esquema.
+
+Checks afectados: 275 pruebas en 19 archivos; 22 de preparación y 23 de resolución seleccionada
+(320 en total), máximo dos workers; typecheck PASS, lint PASS con cuatro warnings (dos helpers que
+quedaron sin uso y dos require preexistentes en pruebas RECORDS), git diff --check PASS. No suite
+completa. Export aislado exclusivamente necesario para OPFS, sin build/publicación productiva.
+Las dos caracterizaciones históricas que esperan la colisión UNIQUE y el archivo diagnóstico
+independiente siguen intactos/excluidos; no se presenta su resultado como suite completa verde.
+Se registran las ejecuciones anteriores con timeouts/EPIPE, sin causa atribuida ni resultados ocultos.
+
+Core real: DATABASE_URL leída de .env.local, validada exclusivamente como
+127.0.0.1:5432/opco_development/opco_dev y pasada explícitamente. Fixture propio: tres sujetos,
+un evento remoto, dos vistas principales y una Attendance de control con fila física v10 anterior.
+La Observación del fixture se corrigió a TEXTAREA, exigido por Core; no cambió el esquema.
+Chrome/OPFS real con perfil exclusivo y export de fuentes funcionales idénticas al candidato:
+
+- Attendance→STATE_UPDATE y orden inverso, sin colisión ni duplicar el evento remoto.
+- PRESENTE confirmado offline, cierre/reapertura con identidad/autorización/base intactas;
+  reconexión automática actualiza la misma fila Core, sin duplicados ni outbox seleccionada.
+- Cambio remoto posterior produce conflicto real y conserva ambas versiones/intención. En el
+  bundle final, “Usar Opco” por UI restaura sólo ese cambio y conserva byte a byte el conflicto
+  de otra AppView, incluso ligado físicamente al mismo ID remoto.
+- Preparación exitosa mediante mecanismo existente y comprobación autoritativa por sujeto:
+  lectores Attendance/generic coinciden con Core. Último cierre completo y reapertura offline,
+  con Core y servidor web detenidos: ambos lectores y pantallas visibles conservan datos,
+  sin Error finalizing statement, schema 10 e integrity_check=ok.
+
+Límites separados: un ensayo prolongado/reintentado dejó 28.391 lecturas en cola y ocho pantallas
+Attendance retenidas; causa todavía no demostrada, sin corrección añadida. Tras interrumpirlo había
+una definición generic kind=error y no se acreditó esa lectura; preparación exitosa posterior sí
+recuperó una configuración válida. Chrome también restauró dos páginas y produjo ACCESS_HANDLE_BUSY;
+se cerraron exclusivamente páginas propias y se comprobó reapertura de una sola página, sin borrar
+la base. ACCESS_HANDLE_BUSY/Invalid VFS state no son barreras de seguridad ni solución de coexistencia.
+Hubo ajustes del arnés (viewport, CSP local, campos de fixture, inputs ocultos retenidos por Expo y
+espera del owner real) registrados en la evidencia; no son cambios funcionales del producto.
+
+Un export de prueba se generó accidentalmente en dist ignorado del repositorio; quedó fuera del lote.
+No se afirma conservación byte a byte de un dist previo no inventariado. Los pendientes inventariados
+sí se verifican mediante hashes, incluidas secciones ajenas de documentación y experimentos V11.
+Evidencia sanitizada, inventario y parche del delta propio:
+`design/validation/state-update-v10-runtime-local-2026-10-12/`.
+
+La causa productiva exacta de Error finalizing statement y la auditoría offline general siguen abiertas.
+El segundo fixture verifica dos eventos por persona/fecha: Attendance mantiene B según Core,
+STATE_UPDATE mantiene A según Fecha/ID; ambas AppViews conservan ambos eventos. La confirmación
+offline de B y reapertura conservan autorización/base. La cobertura Attendance permanece parcial
+si un resumen omite Observación; no se descarga contenido adicional ni se certifica esa ausencia.
+La limpieza elimina únicamente fixtures, credenciales temporales, instrumentación y procesos propios;
+no toca almacenamiento habitual ni conflictos productivos.
+
+Cierre del límite de lectura (13-10): el SQL interno reutiliza normalizePreparedAppViewDefinition,
+como el getter público. Una definición histórica uniqueness={mode:"subject-date"} conserva lectura
+por AppView/fecha tras reapertura; valores desconocidos siguen como configuración inválida. Regresión
+falla antes y pasa después. Control OPFS final con cache sintética histórica (sin Core/ACK): positivo,
+fecha distinta ausente, snapshots sin cambios, unknown controlado e integrity=ok tras reapertura.
+Los casos Core reales anteriores usan definiciones normalizadas; este último ajuste no cambia sus
+valores/scope, y su evidencia se distingue de la simulación de cache histórica.
+
+#### 2026-10-13 — Cierre técnico aislado del candidato v10 (NO PUBLICABLE)
+
+Reconstrucción exacta desde runtime-v10-local.patch/inventory del respaldo del 12-10,
+sobre HEAD 49913c3e84aeaa0c15138508269b70b9c408caac. No cambió código funcional ni pruebas
+publicables en este cierre; sólo esta documentación y evidencia sanitizada nueva.
+
+- Primera suite completa, máximo dos workers: 1016 PASS, 36 FAIL /1052, 89 archivos;
+  15 fallos local-db.test.ts y 21 timeouts en prewarm-current, más un EPIPE del arnés.
+  Se inició junto a typecheck/lint/build; no se atribuye causalidad a esa concurrencia.
+- Repetición completa sin otros checks concurrentes: 1037 PASS, 15 FAIL /1052,
+  88 archivos PASS/1 FAIL, sin timeouts ni EPIPE. Prewarm aislado: 22/22 PASS.
+  local-db.test.ts en HEAD: 96/96 PASS; candidato: 81/96 PASS. Hay expectativas de
+  SQL/filas físicas/reconciliación anteriores y mocks sin la nueva identidad/precondición.
+  No se descartaron ni editaron esas pruebas. Queda bloqueado el cierre verde hasta
+  revisar los 15 casos/adaptar su contrato sin debilitar garantías; no se los declara
+  inocuos ni evidencia suficiente de un defecto funcional específico.
+- Typecheck PASS; lint PASS con cuatro warnings; build web PASS; diff-check PASS.
+  Nuevas: configuredSnapshotDateSql (local-db.ts:4470) y
+  markStateUpdateSyncDiagnosticsReconciledFromSnapshot (:5872), sin uso.
+  Preexistentes: no-require-imports en records-sync.local-db-regression.test.ts:182/183;
+  lint del HEAD aislado confirma exactamente esas dos. No se limpian helpers en este cierre.
+
+Cola: sonda exclusiva con funciones reales y SQLite Python, API sintética de 130 sujetos/217
+eventos, dos preparaciones completas y una interrumpida: al retornar, active=null y
+waitingTotal=0; durante dos esperas de 200 ms no se generaron nuevas operaciones. La
+interrupción conserva current coverage parcial. Otra sonda, cuatro hidrataciones repetidas
+de dos AppViews y 500 lecturas detrás de una operación retenida deliberadamente, drena a
+cero y permanece sin actividad nueva 500 ms después. Son controles de cola/transitoriedad,
+no reproducción de los ocho componentes retenidos en Chrome. La evidencia OPFS anterior
+prepare-final registra preparación terminada/cola=0 y reaperturas posteriores también=0.
+El ensayo de 28.391 lecturas se interrumpió: no hay seguimiento temporal que demuestre
+su drenaje, bloqueo permanente o generación indefinida. Su disparador permanece sin
+correlación; no se declara resuelto ni se añade una corrección.
+
+Escenarios funcionales Core/Chrome anteriores reutilizados sólo por identidad SHA256
+de las diez fuentes funcionales. No se repitió navegador. Snapshots en ambas AppViews,
+reapertura, ACK real, Usar Opco y conservación de conflictos ajenos siguen acreditados
+en los escenarios documentados; no implican compatibilidad con runtime antiguo.
+
+Bloqueos separados: compatibilidad con Client 49913c3 sigue pendiente; cierre de suite
+completa tiene 15 fallos; ensayo UI de crecimiento de cola sin explicación concluyente.
+Incidente productivo Error finalizing statement sigue sin correlación exacta. V11 pausado.
+Respaldo final verificable: design/validation/state-update-v10-technical-close-2026-10-13/.
+Sin Core/API/esquema/dependencias/configuración/datos productivos, commit, push ni deploy.
+
+#### 2026-10-13 — Resolución acotada de los 15 fallos local-db del candidato v10
+
+Los 96 casos de local-db.test.ts quedan conservados y pasan; sus garantías se revisaron
+contra HEAD 49913c3. Dos fallos revelaron regresión real: la hidratación ya no reparaba
+una huérfana confirmada ni completaba/reconciliaba una intención update-current que
+coincidía exactamente con current. Las comprobaciones nuevas con SQLite real fallan
+2/2 sobre el candidato previo y pasan con la corrección. Se restituye sólo en el scope
+owner/contract/entity/AppView/configuración/sujeto/fecha; current es autoritativo, no
+se infiere confirmación desde latest. Coincidencia usa el comparador semántico existente.
+Se exige identidad actual de fila/outbox/request, IDs remotos conocidos compatibles y
+valores/extras exactos. Append/none, conflictos, otros scopes o contenido distinto se
+preservan. No se añade overwrite ni se cambia versión base para evitar un conflicto.
+
+Los restantes trece casos se adaptan sin eliminar pruebas: dos coordinador (resultado
+con metadatos nuevos); dos limpieza (proyecciones/manifiestos, no borrar filas compartidas);
+tres ACK (fila/outbox durables reales y lectura del recibo/estados); tres conflicto
+(estado público, ambas versiones y rollback real de fila/outbox/metadatos); tres latest
+(paginación/orden/fecha sobre datos reales, sin totales SQL inventados). Se verifica
+reapertura e integridad. Cuatro regresiones adicionales protegen aislamiento/append,
+ID remoto distinto, rollback de reconciliación/autorización y conflicto update-current.
+
+configuredSnapshotDateSql retirado. El helper de telemetría vuelve a usarse para preservar
+reconciled_success; no es código muerto. Retirado el mock de intención que ya no usa
+ningún caso. Lint conserva sólo los dos require preexistentes de RECORDS.
+
+Validación afectada: 118/118 (local-db 96, runtime 22); suite completa aislada, máximo
+dos workers: 1056/1056 en 89 archivos. Typecheck/lint/build/diff-check PASS. El build
+usa EXPO_ROUTER_APP_ROOT explícito por el node_modules enlazado del aislamiento; se
+verifica que el bundle contiene las rutas/SQLite, no sólo un shell vacío. No cambia
+configuración del repositorio. Evidencia y hashes del candidato final en
+design/validation/state-update-v10-local-db-failures-close-2026-10-13/.
+
+Chrome/OPFS repetido para el código modificado: recuperación de huérfana, confirmación
+exacta tras timeout simulado, rollback de recibo y conflicto ajeno intacto. Datos/DTO
+sintéticos por funciones reales; NO Core real/ACK/red/sincronización nuevos. Cierre
+completo y reapertura offline con servidor detenido: persisten recibos y conflicto,
+schema=10/integrity=ok. Chrome restauró dos páginas: una ready y otra ACCESS_HANDLE_BUSY;
+se cerró sólo la fallida y se verificó la restaurada. No se borró almacenamiento.
+La evidencia Core anterior es histórica: no se presenta como repetida ni como código
+funcional idéntico. Cola de 28.391 y coexistencia antigua no se investigaron aquí.
+
+Límite del arnés: primer export sin rutas descartado; intento export accidental en dist
+ignorado del workspace, excluido del lote, sin afirmar su conservación byte a byte.
+El ensayo before inicialmente lanzado en cwd equivocado se descartó; el before válido
+es el candidato reconstruido anterior y falla 2/2. Hubo correcciones de fixtures de
+prueba (propiedades públicas de conflicto/fecha de scope) y ws existente para Node20.
+No son cambios funcionales ni se atribuyen a Core.
+
+Cierre técnico verde; publicación aún BLOQUEADA por compatibilidad con runtimes anteriores.
+Incidente productivo sin correlación exacta y auditoría offline general abiertos.
+322 pendientes originales preservados por hashes; respaldos previos intactos.
+Sin Core/producción/API/esquema/dependencias/migraciones, commit, push ni deploy; V11 pausado.
+
+El último export limpio se hizo con caché Metro reconstruida: se comprobó ausencia de
+__v10Fix15, presencia de rutas/SQLite y build npm completo. El primer build de cierre
+había reutilizado contexto Metro del arnés y fue descartado; no se lo usa como build
+final. Se retiró la instrumentación del dist ignorado mediante el export limpio,
+sin afirmar que se restauró su contenido previo no inventariado.
+
+#### 2026-10-13 — Corte controlado sin transferencia: un usuario, computador e iPhone
+
+El usuario confirmó que es el único usuario, tiene un computador y una PWA iPhone y
+renuncia voluntariamente a TODOS los cambios/conflictos/snapshots/pendientes locales de
+ambos. NO renuncia a datos remotos de Core. Esto elimina el requisito de handoff/importación
+antigua que bloqueaba el plan anterior, sólo para este corte conocido. No declara
+compatibilidad general con runtimes antiguos ni soporte multi-tab.
+
+Cambio mínimo: LOCAL_DATABASE_NAME=opco-client-v10-epoch2.db para apertura, recuperación
+y reset confirmado. Schema/version10/índice/runtime integrado sin cambios. No abre,
+copia, reconcilia, sincroniza o elimina opco-client.db. La base anterior queda abandonada
+en disco; tampoco se borra ahora almacenamiento real de ningún dispositivo. Mantener
+constante el nombre nuevo en builds compatibles. Cambio de generación requiere documento
+nuevo/cierre completo, no Fast Refresh con una conexión anterior retenida.
+
+Identificación de sólo lectura en Diagnóstico > PWA y en ingreso web antes de autenticarse:
+Base local del runtime y Bundle de esta pagina. El nombre de entrada se lee del documento,
+no del service worker; URL query/valores de registros no se muestran. Si no existe o es
+ambiguo se declara no disponible. No hay peticiones, auth, nuevas conexiones o handlers
+de negocio por esas etiquetas. Ingreso web muestra metadatos para verificar antes de
+permitir API; login/selección de organización/acciones permanecen como estaban.
+
+Core/PostgreSQL sólo local: DATABASE_URL de .env.local validada explícitamente como
+127.0.0.1:5432/opco_development/opco_dev y pasada a procesos. Fixture propio con una persona
+TOLVA, dos WORKFLOW (Attendance y STATE_UPDATE append/subject con Fecha) compartiendo
+un evento CAPACITACIÓN; status/fecha/relation configurados, sin Observación opcional.
+Prisma sólo para fixture, POST real para evento y sync; sin cambios/migraciones Core.
+Diferencias respecto de producción: 1 sujeto/1 evento, datos sintéticos y defaultPRESENTE
+conocido; producción no se infiere. Token nativo/Bearer del arnés, no login PWA real de iPhone.
+
+Chrome/OPFS mismo perfil exclusivo:
+- Old49913c3 usa ./opco-client.db, marcador y pendiente sintético abandonable.
+- Tras cerrar TODOS los contextos, candidato usa ./opco-client-v10-epoch2.db; antes de
+  preparación: filas=0,outbox=0,marcador anterior ausente. Prewarm existente desde Core
+  prepara ambas vistas, ~3104 ms locales, sin visita previa a experiencias. Snapshot
+  genérico conserva estado/versión semilla Core; identidad se verifica mediante serverId,
+  no comparando alias local de current con ID remoto. Latest/cobertura mantienen políticas.
+- Lectura offline, guardado confirmado mediante store real (autorización explícita del
+  arnés, no nuevo clic UI), cierre/reapertura: PRESENTE, request/base/overwrite conservados.
+- Control secuencial antiguo, carga explícita del bundle499 con SW bypass/API bloqueada:
+  escribe sólo base antigua. Al reabrir candidato offline, fingerprint lógico de TODOS
+  filas/outbox/metadatos de base nueva idéntico. Es control de aislamiento, NO rollback
+  ni ruta normal de actualización.
+- Reconexión con motor/API/Core reales: attempted1/completed1/failed0/conflicts0, misma
+  fila remota, total1,sin outbox. Última reapertura offline conserva PRESENTE, integrity=ok,
+  schema10,marcador legacy ausente. Ambas bases sólo sintéticas propias de prueba.
+- Intento concurrente old/new produjo ACCESS_HANDLE_BUSY; no cuenta como protección.
+  Corte manual exige un contexto a la vez y cierre completo. Invalid VFS state no se usa.
+- Export limpio sin hook: a390×844, API bloqueada/Core detenido, etiquetas de identidad
+  visibles antes de login, bundle real correcto, sin overflow. NO iPhone físico/Safari probado.
+
+Errores de arnés conservados: seed leyó data.results en respuesta cruda single result;
+el POST sí creó el evento y luego se leyó/renovó sólo auth, sin duplicar. Comparación
+inicial de ID usó alias local y dio false; serverId y versión/estado Core se verificaron
+después. Arranque de inspección redundante produjo EADDRINUSE, sin nuevos servicios.
+No se presentan esos intentos como validaciones exitosas ni como defectos nuevos de Core.
+
+Checks finales: 1059/1059 en89 archivos del candidato aislado,maxWorkers2; typecheck/lint/
+build/diff-check PASS, dos warnings require RECORDS preexistentes. Parche anterior
+22/81 preservado; nuevo candidato e incremento de corte guardados aparte con inventario/
+hashes en design/validation/state-update-v10-controlled-cut-2026-10-13/.
+
+Procedimiento futuro detallado en PROCEDURE.md: cerrar old en ambos; bloquear TODOS los
+requests a APIweb.opco.cl mientras se permite descargar Client; comprobar labels/bundle
+REAL en computador Y PWA instalada; sólo después liberar API, recargar/entrar y preparar
+fresco desde Core. No basta shellCacheVersion/icono/Safari externo. Sin bloqueo API
+verificado, no abrir una versión desconocida online: podría autosincronizar work viejo
+antes de revisar su build. La barrera de red es una condición operativa aún no aplicada
+ni acreditada en los dispositivos reales. No es un nuevo guard o motor de sincronización.
+
+No publicación ni borrado real autorizado por esta etapa. No hay transferencia/puente/
+reconciliación entre generaciones/V11. Rollback sólo build compatible con esta representación
+y filename; nunca49913c3. Cola28.391, incidente productivo exacto y auditoría general abiertos.
+Limpieza únicamente fixture/perfil/instrumentación/procesos propios, Core tracked intacto
+y pendientes del repositorio preservados.

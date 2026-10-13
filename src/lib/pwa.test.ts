@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getExecutingWebBundleName,
   getOfflineReadiness,
   getOfflineShellStatus,
   OfflineShellSnapshot,
@@ -30,6 +31,14 @@ describe("offline PWA app shell", () => {
     vi.restoreAllMocks();
   });
 
+  it("identifies the document bundle independently of service worker state and strips URL query data", () => {
+    Object.defineProperty(globalThis,"document",{configurable:true,value:{scripts:[{src:"https://synthetic.invalid/_expo/static/js/web/entry-"+"a".repeat(32)+".js?ignored=private"}]}});
+    expect(getExecutingWebBundleName()).toBe("entry-"+"a".repeat(32)+".js");
+  });
+  it("does not certify an unavailable or ambiguous executing bundle", () => {
+    Object.defineProperty(globalThis,"document",{configurable:true,value:undefined});expect(getExecutingWebBundleName()).toBeNull();
+    Object.defineProperty(globalThis,"document",{configurable:true,value:{scripts:[{src:"http://synthetic/entry-"+"a".repeat(32)+".js"},{src:"http://synthetic/entry-"+"b".repeat(32)+".js"}]}});expect(getExecutingWebBundleName()).toBeNull();
+  });
   it("uses same-origin manifest and service worker paths", () => {
     expect(WEB_MANIFEST_PATH).toBe("/manifest.json");
     expect(SERVICE_WORKER_PATH).toBe("/sw.js?opco-shell=hardening-1a");

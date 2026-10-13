@@ -1084,7 +1084,7 @@ class MemoryPrewarmStore implements AppViewDefinitionCache {
     }
     this.snapshots.push(input);
 
-    return { staleSyncedRemoved: input.complete ? 1 : 0 };
+    return { staleSyncedRemoved: input.complete ? 1 : 0, contentVerified: true };
   }
 
   async getStateUpdateSnapshotCoverage(input: StateUpdateScope) {

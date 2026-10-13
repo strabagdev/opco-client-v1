@@ -165,7 +165,7 @@ async function cacheSubject() {
 describe("v10 remote event identity and dated subject current", () => {
  it("preserves distinct IDs with equal subject/date and deduplicates current/latest", async () => {
   await hydrate(); await hydrate();
-  const rows = await harness.db.getAllAsync("SELECT server_id FROM entity_records WHERE entity_type_id = ? ORDER BY server_id", scope.targetEntityTypeId);
+  const rows = await harness.db.getAllAsync("SELECT json_extract(value,'$.row.server_id') AS server_id FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id') = ? ORDER BY server_id", scope.targetEntityTypeId);
   expect(rows.map((row: {server_id: string}) => row.server_id)).toEqual(["tie-a", "tie-b"]);
  });
  it("selects the configured date then remote ID, independent of query/cache dates", async () => {
@@ -215,12 +215,13 @@ describe("v10 remote event identity and dated subject current", () => {
   expect(first.localRecordId).not.toBe(second.localRecordId);
   expect((await store.searchStateUpdateSubjects({ ...datedScope, sourceEntityTypeId: "diagnostic-procedures", search: "tolva" }))[0].current?.stateValues[0].value).toBe("pending");
  });
- it("protects an unsynced row carrying a remote ID and refuses complete coverage", async () => {
+ it("protects a bound unsynced intention while independently verifying the full remote snapshot", async () => {
   await hydrate();
-  await harness.db.runAsync("UPDATE entity_records SET sync_status='conflict' WHERE server_id='tie-a'");
+  const saved = await store.saveStateUpdateLocally({ ...datedScope, subjectRecordId: subject.id, subjectDisplayName: subject.displayName, stateFields: [], stateValues: [] });
+  await harness.db.runAsync("UPDATE entity_records SET server_id='tie-a',sync_status='conflict' WHERE local_id=?", saved.localRecordId);
   const before = await harness.db.getFirstAsync("SELECT * FROM entity_records WHERE server_id='tie-a'");
   const snapshotResult = await hydrate();
-  expect(snapshotResult.contentVerified).toBe(false);
+  expect(snapshotResult.contentVerified).toBe(true);
   expect(await harness.db.getFirstAsync("SELECT * FROM entity_records WHERE server_id='tie-a'")).toEqual(before);
  });
  it("rolls back snapshot failure without losing pending rows", async () => {
@@ -230,7 +231,7 @@ describe("v10 remote event identity and dated subject current", () => {
   const run = harness.db.runAsync.getMockImplementation()!;
   let count = 0;
   harness.db.runAsync.mockImplementation((sql: string, ...args: unknown[]) => {
-   if (sql.includes("INSERT INTO entity_records") && ++count === 2) throw new Error("synthetic snapshot failure");
+   if (sql.startsWith("INSERT INTO app_metadata") && String(args[0]).startsWith("state_update_v10_snapshot:") && ++count === 2) throw new Error("synthetic snapshot failure");
    return run(sql, ...args);
   });
   await expect(hydrate()).rejects.toThrow("synthetic snapshot failure");
@@ -322,7 +323,8 @@ describe("normalization and required snapshot content guards", () => {
  });
  it("retains current's full state when latest repeats a sparse representation of the same event", async () => {
   await store.upsertStateUpdateSnapshot({ ...datedScope, items: [{ subject, current: { ...tied[0], extraValues: { detail: "synthetic-current-content" } } }], latest: [{ ...tied[0], stateValues: [] }, tied[1]] });
-  const row = await harness.db.getFirstAsync("SELECT values_json FROM entity_records WHERE server_id='tie-a'");
+  const cached = await harness.db.getFirstAsync("SELECT value FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.server_id')='tie-a'");
+  const row = JSON.parse(cached.value).row;
   expect(JSON.parse(row.values_json)).toMatchObject({ extraValues: { detail: "synthetic-current-content" }, stateValues: tied[0].stateValues });
   expect((await store.listStateUpdateLatest(datedScope)).pagination.total).toBe(2);
  });

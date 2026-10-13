@@ -239,3 +239,13 @@ function getRunningMode(): OfflineShellSnapshot["runningMode"] {
 
   return "browser";
 }
+
+// Identify this document's entry script, independently of the active service worker.
+export function getExecutingWebBundleName(): string | null {
+  if (typeof document === "undefined") return null;
+  const names = Array.from(document.scripts ?? []).map(script => {
+    try { return new URL(script.src).pathname.split("/").pop() ?? ""; } catch { return ""; }
+  }).filter(name => /^entry-[a-f0-9]{32}\.js$/.test(name));
+  const unique = [...new Set(names)];
+  return unique.length === 1 ? unique[0] : null;
+}

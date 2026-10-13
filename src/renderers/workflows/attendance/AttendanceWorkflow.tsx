@@ -926,7 +926,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const confirmationScope = resolutionScope;
       let cached;
       try {
-        cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId,
+        cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, appViewId: appView.id, date,
           entityTypeId: appView.config.targetEntityTypeId, recordId: existing.recordId });
       } catch (nextError) {
         if (requestId === requestSequenceRef.current && confirmationScope === resolutionScopeRef.current) {
@@ -938,7 +938,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current) return;
       const operation = cached?.serverId && cached.syncStatus === "pending_update"
         ? (await definitionCache.listPendingStateUpdateOperations(ownerKey)).map((item) => ({ ...item, payload: item.payload as OfflineStateUpdatePayload })).find((item) =>
-            item.localRecordId === existing.recordId && item.serverRecordId === cached.serverId &&
+            item.localRecordId === cached.localId && item.serverRecordId === cached.serverId &&
             item.contractId === selectedContractId && item.entityTypeId === appView.config.targetEntityTypeId &&
             item.payload.appViewId === appView.id && item.payload.subjectRecordId === entry.personRecordId && item.payload.date === date)
         : undefined;

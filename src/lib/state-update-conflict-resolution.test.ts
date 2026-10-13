@@ -135,7 +135,8 @@ describe("selected STATE_UPDATE conflict resolution", () => {
     expect(state.outbox.some((o: any) => o.local_record_id === other.localRecordId)).toBe(true);
     if (scenario === "confirmed") {
       const confirmed = state.records.find((r: any) => r.local_id === saved.localRecordId);
-      expect(confirmed.server_id).toBe("remote-record");
+      expect(confirmed.server_id).toBeNull();
+      expect(JSON.parse(confirmed.values_json).__opcoStateUpdateRemote.recordId).toBe("remote-record");
       expect(JSON.parse(confirmed.values_json).stateValues[0].optionId).toBe("local");
     }
   });

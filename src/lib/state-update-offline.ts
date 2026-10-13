@@ -20,6 +20,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
 export type OfflineStateUpdatePayload = {
+  snapshotConfiguration?: string;
   expectedRecordId?: string;
   appViewId: string;
   clientRequestId: string;
@@ -75,6 +76,11 @@ export type StateUpdateSyncErrorDetails = {
 };
 
 export type OfflineStateUpdateValues = {
+  __opcoStateUpdateRemote?: { format: 1; recordId: string };
+  snapshotConfiguration?: string;
+  __opcoStateUpdateIntent?: 1;
+  snapshotDateFieldId?: string;
+  snapshotEventDate?: string | null;
   remoteRecordId?: string;
   clientRequestId?: string;
   appViewId: string;
@@ -803,7 +809,18 @@ export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
   sourceEntityTypeId: string;
 };
 
+export type StateUpdateProjectionDefinition = {
+  sourceEntityTypeId: string;
+  subjectFieldId?: string;
+  dateFieldId?: string;
+  stateFields: Pick<StateUpdateField, "fieldId" | "required">[];
+  extraFields?: { id: string; required: boolean }[];
+  observationFieldId?: string;
+};
+
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
+  projectionDefinition?: StateUpdateProjectionDefinition;
+  sourceEntityTypeId?: string;
   complete?: boolean;
   expectedRemoteEventCount?: number;
   dateFieldId?: string;
@@ -881,7 +898,7 @@ export type StateUpdateOfflineStore = {
     };
   }>;
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
-  markStateUpdateOperationSyncing(operationId: string): Promise<void>;
+  markStateUpdateOperationSyncing(operationId: string, expectedRequestId?: string): Promise<boolean | void>;
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;

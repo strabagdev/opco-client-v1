@@ -489,6 +489,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           dateFieldId: nextResponse.dateFieldId,
           historyMode: nextResponse.historyMode,
           uniqueness: nextResponse.uniqueness,
+          projectionDefinition: {
+            sourceEntityTypeId: nextResponse.sourceEntityType.id, subjectFieldId: nextResponse.subjectFieldId,
+            dateFieldId: nextResponse.dateFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
+          },
           items: nextResponse.items,
           latest: nextResponse.latest ?? [],
           ownerKey,

@@ -1,6 +1,6 @@
 import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
-import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
+import { LOCAL_DATABASE_NAME, subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
@@ -27,6 +27,7 @@ import {
   getPendingStateUpdateSyncErrors,
   getPendingSyncErrorTechnicalRows,
 } from "@/lib/pending-sync-errors";
+import { getExecutingWebBundleName } from "@/lib/pwa";
 import { useOfflineReadiness } from "@/lib/use-offline-readiness";
 import {
   activeSince,
@@ -738,6 +739,8 @@ function PwaDiagnostics({
   showTitle?: boolean;
 }) {
   const rows = [
+    ["Base local del runtime", LOCAL_DATABASE_NAME],
+    ["Bundle de esta pagina", getExecutingWebBundleName() ?? "no disponible"],
     ["runningMode", diagnostics.runningMode],
     ["serviceWorkerSupported", diagnostics.serviceWorkerSupported ? "yes" : "no"],
     ["registrationScope", diagnostics.registrationScope ?? "none"],

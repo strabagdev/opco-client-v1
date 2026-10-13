@@ -84,7 +84,8 @@ const scope = {
   ownerKey: "diagnostic:user",
   contractId: "diagnostic-contract",
   targetEntityTypeId: "diagnostic-versions",
-  appViewId: "diagnostic-view"
+  appViewId: "diagnostic-view",
+  historyMode: "append" as const, uniqueness: "subject" as const, dateFieldId: "date"
 };
 const fields = [{
   fieldId: "revision",
@@ -343,18 +344,19 @@ describe("STATE_UPDATE event date snapshot identity", () => {
     const result = await concurrentSearch("2026-10-04");
     expect(result.primary).toBe(null);
     expect(result.terminal?.status).toBe("completed");
-    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM entity_records WHERE entity_type_id=?", scope.targetEntityTypeId)).toEqual({
+    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=?", scope.targetEntityTypeId)).toEqual({
       total: 2
     });
   });
   it("different query date: search reuses the dated event row while preparation succeeds", async () => {
     await priorSnapshot();
-    const before = await harness.db.getAllAsync("SELECT local_id,server_id,values_json FROM entity_records ORDER BY local_id");
+    const before = await harness.db.getAllAsync("SELECT json_extract(value,'$.row.local_id') local_id,json_extract(value,'$.row.server_id') server_id,json_extract(value,'$.row.values_json') values_json FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' ORDER BY local_id");
     const result = await concurrentSearch("2026-10-06");
     expect(result.primary).toBe(null);
     expect(result.terminal?.status).toBe("completed");
-    const after = await harness.db.getAllAsync("SELECT local_id,server_id,values_json FROM entity_records WHERE entity_type_id=? ORDER BY local_id", scope.targetEntityTypeId);
-    expect(after).toEqual(before);
+    const after = await harness.db.getAllAsync("SELECT json_extract(value,'$.row.local_id') local_id,json_extract(value,'$.row.server_id') server_id,json_extract(value,'$.row.values_json') values_json FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=? ORDER BY local_id", scope.targetEntityTypeId);
+    expect(after.map((r: any) => ({ id: r.server_id, local: r.local_id, states: JSON.parse(r.values_json).stateValues })))
+      .toEqual(before.map((r: any) => ({ id: r.server_id, local: r.local_id, states: JSON.parse(r.values_json).stateValues })));
     expect(result.failures).toEqual([]);
     expect((await store.getStateUpdateSnapshotCoverage({
       ...scope,
@@ -374,19 +376,15 @@ describe("STATE_UPDATE event date snapshot identity", () => {
       }],
       latest: [latest[1]]
     });
-    const cached = await harness.db.getAllAsync("SELECT server_id, values_json FROM entity_records WHERE entity_type_id=?", scope.targetEntityTypeId);
+    const cached = await harness.db.getAllAsync("SELECT json_extract(value,'$.row.server_id') server_id,json_extract(value,'$.row.values_json') values_json FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=?", scope.targetEntityTypeId);
     expect(cached).toHaveLength(2);
     expect(JSON.parse(cached.find((row: any) => row.server_id === current.recordId).values_json).date).toBe("2026-10-04");
   });
   it("repairs a synced row previously dated by query without changing its local identity", async () => {
-    await store.upsertStateUpdateSnapshot({
-      ...scope,
-      date: "2026-10-06",
-      items: [{
-        subject,
-        current
-      }]
-    });
+    await harness.db.runAsync(`INSERT INTO entity_records(local_id,server_id,owner_key,contract_id,entity_type_id,display_name,values_json,remote_updated_at,cached_at,sync_status)
+      VALUES (?,?,?,?,?,?,?,?,?,'synced')`, "legacy-current-row", current.recordId, scope.ownerKey, scope.contractId, scope.targetEntityTypeId,
+      subject.displayName, JSON.stringify({ appViewId: scope.appViewId, date: "2026-10-06", subjectRecordId: subject.id,
+        subjectDisplayName: subject.displayName, stateValues: current.stateValues, expectedUpdatedAt: current.updatedAt }), current.updatedAt, current.updatedAt);
     const before = await harness.db.getFirstAsync("SELECT local_id FROM entity_records WHERE server_id=?", current.recordId);
     await store.upsertStateUpdateSnapshot({
       ...scope,
@@ -398,10 +396,10 @@ describe("STATE_UPDATE event date snapshot identity", () => {
       }],
       latest
     });
-    const after = await harness.db.getFirstAsync("SELECT local_id,values_json FROM entity_records WHERE server_id=?", current.recordId);
+    const after = await harness.db.getFirstAsync("SELECT json_extract(value,'$.row.local_id') local_id,json_extract(value,'$.row.values_json') values_json FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.server_id')=?", current.recordId);
     expect(after.local_id).toBe(before.local_id);
     expect(JSON.parse(after.values_json).date).toBe("2026-10-04");
-    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM entity_records WHERE entity_type_id=?", scope.targetEntityTypeId)).toEqual({
+    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=?", scope.targetEntityTypeId)).toEqual({
       total: 2
     });
   });
@@ -458,7 +456,7 @@ describe("STATE_UPDATE event date snapshot identity", () => {
     const run = harness.db.runAsync.getMockImplementation()!;
     let inserts = 0;
     harness.db.runAsync.mockImplementation((sql: string, ...args: unknown[]) => {
-      if (sql.includes("INSERT INTO entity_records") && ++inserts === 2) throw new Error("synthetic second insert failure");
+      if (sql.startsWith("INSERT INTO app_metadata") && String(args[0]).startsWith("state_update_v10_snapshot:") && ++inserts === 2) throw new Error("synthetic second insert failure");
       return run(sql, ...args);
     });
     await expect(store.upsertStateUpdateSnapshot({
@@ -504,8 +502,8 @@ describe("STATE_UPDATE event date snapshot identity", () => {
       page: 1,
       pageSize: 20,
       search: "tolva"
-    })).items).toHaveLength(1);
-    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM entity_records WHERE entity_type_id=?", scope.targetEntityTypeId)).toEqual({
+    })).items).toHaveLength(2);
+    expect(await harness.db.getFirstAsync("SELECT COUNT(*) AS total FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.entity_type_id')=?", scope.targetEntityTypeId)).toEqual({
       total: 2
     });
   });

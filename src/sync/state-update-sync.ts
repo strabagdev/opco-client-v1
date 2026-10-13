@@ -15,7 +15,7 @@ export type StateUpdateSyncStore = {
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
-  markStateUpdateOperationSyncing(operationId: string): Promise<void>;
+  markStateUpdateOperationSyncing(operationId: string, expectedRequestId?: string): Promise<boolean | void>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
 } & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
@@ -95,7 +95,7 @@ async function runSync({
         continue;
       }
 
-      await store.markStateUpdateOperationSyncing(operation.id);
+      if (await store.markStateUpdateOperationSyncing(operation.id, operation.clientRequestId) === false) continue;
       result.operationsAttempted += 1;
 
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {

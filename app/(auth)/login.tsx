@@ -11,6 +11,8 @@ import {
   View,
 } from "react-native";
 
+import { LOCAL_DATABASE_NAME } from "@/lib/local-db";
+import { getExecutingWebBundleName } from "@/lib/pwa";
 import { useSession } from "@/state/session";
 
 export default function LoginScreen() {
@@ -122,12 +124,20 @@ export default function LoginScreen() {
             </Pressable>
           </View>
         )}
+        {Platform.OS === "web" ? (
+          <View style={styles.runtimeInfo}>
+            <Text selectable style={styles.runtimeInfoText}>Base local del runtime: {LOCAL_DATABASE_NAME}</Text>
+            <Text selectable style={styles.runtimeInfoText}>Bundle de esta pagina: {getExecutingWebBundleName() ?? "no disponible"}</Text>
+          </View>
+        ) : null}
       </View>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  runtimeInfo: { marginTop: 16 },
+  runtimeInfoText: { color: "#466068", fontSize: 12, lineHeight: 18 },
   button: {
     alignItems: "center",
     backgroundColor: "#135d66",

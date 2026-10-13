@@ -473,6 +473,7 @@ async function prewarmOneAppView({
           dateFieldId: response.dateFieldId,
           historyMode: response.historyMode,
           uniqueness: response.uniqueness,
+          projectionDefinition: stateUpdatePreparedDefinition(appView, response),
           items: response.items,
           latest: response.latest ?? [],
           ownerKey,
@@ -1029,7 +1030,7 @@ async function cacheAttendanceMonthSnapshots({
   });
 }
 
-function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): PreparedAppViewDefinition {
+function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateResponse): Extract<PreparedAppViewDefinition, { kind: "state-update" }> {
   return {
     appView,
     dateFieldId: response.dateFieldId,

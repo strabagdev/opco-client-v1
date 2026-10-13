@@ -1,3 +1,4 @@
+import { attendanceStateFields } from "./attendance-offline";
 import { attendanceResponseToStateUpdateItems, isAttendanceRemoteSnapshotComplete } from "../renderers/workflows/attendance/attendance-workflow-logic";
 import { AttendanceResponse, AttendanceWorkflowConfig } from "./opco-api";
 import { AttendanceDaySnapshotHydration, AttendanceDaySnapshotScope, StateUpdateOfflineStore } from "./state-update-offline";
@@ -6,7 +7,7 @@ export type AttendanceMonthStatus = "complete" | "partial" | "none";
 
 export type CacheAttendanceRemoteSnapshotInput = {
   appViewId: string;
-  config: Pick<AttendanceWorkflowConfig, "contextFieldIds" | "observationFieldId" | "statusFieldId">;
+  config: Pick<AttendanceWorkflowConfig, "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
   contractId: string;
   ownerKey: string;
   response: AttendanceResponse;
@@ -26,17 +27,41 @@ export async function cacheAttendanceRemoteSnapshot({
   const complete = snapshotComplete ?? isAttendanceRemoteSnapshotComplete(response);
   const refreshedAt = new Date().toISOString();
   const targetEntityTypeId = response.targetEntityType.id;
+  // Keep the endpoint's current authoritative and every distinct latest event. Converting
+  // the whole response into a map by person would replace current and discard other IDs.
+  const items = attendanceResponseToStateUpdateItems({ ...response, latest: [] }, config);
+  const latest = response.latest.flatMap(event => {
+    const item = attendanceResponseToStateUpdateItems({ ...response, items: [], latest: [event] }, config)[0];
+    if (!item?.current) return [];
+    return [{ ...item.current, date: response.date, subject: item.subject }];
+  });
+  const subjectsWithCurrentResponse = new Set(items.map(item => item.subject.id));
+  for (const event of latest) {
+    if (subjectsWithCurrentResponse.has(event.subject.id)) continue;
+    // Core already orders Attendance latest by the same criterion as current. Use its
+    // first representation only when that subject was not included in this response.
+    items.push({ subject: event.subject, current: event });
+    subjectsWithCurrentResponse.add(event.subject.id);
+  }
   const result = await store.upsertStateUpdateSnapshot({
     appViewId,
     complete,
     contractId,
     date: response.date,
-    items: attendanceResponseToStateUpdateItems(response, config),
+    projectionDefinition: {
+      sourceEntityTypeId: response.sourceEntityType.id, subjectFieldId: config.personFieldId, dateFieldId: config.dateFieldId,
+      stateFields: attendanceStateFields(response.statuses, { statusFieldId: config.statusFieldId }),
+      extraFields: response.contextFields?.map(f => ({ id: f.id, required: f.required })), observationFieldId: config.observationFieldId,
+    },
+    items,
+    latest,
+    expectedRemoteEventCount: complete ? response.summary.totalRegistered : undefined,
     ownerKey,
     targetEntityTypeId,
   });
 
-  if (complete) {
+  const persistedComplete = complete && result.contentVerified === true;
+  if (persistedComplete) {
     await store.markAttendanceDaySnapshotHydrated({
       appViewId,
       contractId,
@@ -48,8 +73,8 @@ export async function cacheAttendanceRemoteSnapshot({
   }
 
   return {
-    complete,
-    lastSuccessfulRefreshAt: complete ? refreshedAt : null,
+    complete: persistedComplete,
+    lastSuccessfulRefreshAt: persistedComplete ? refreshedAt : null,
     staleSyncedRemoved: result.staleSyncedRemoved,
   };
 }

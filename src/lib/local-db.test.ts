@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @ts-expect-error Node types are intentionally absent from the Expo application config.
+import { spawn } from "node:child_process";
+// @ts-expect-error Node types are intentionally absent from the Expo application config.
+import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __getLocalDatabaseDebugStateForTests,
@@ -66,6 +70,13 @@ describe("local database singleton", () => {
     await Promise.all([firstRead, secondRead]);
 
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+  });
+
+  it("opens only the new local generation and never deletes or opens the legacy database", async () => {
+    const store=getLocalDatabase();await store.getSelectedContractId();await getLocalDatabaseRecoverySummary();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(1);
+    expect(sqliteMock.openDatabaseAsync.mock.calls.every(call=>call[0]==="opco-client-v10-epoch2.db")).toBe(true);
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
   });
 
   it("runs migrations once for repeated local database access", async () => {
@@ -1415,50 +1426,12 @@ describe("local database singleton", () => {
   });
 
   it("repairs an orphaned local STATE_UPDATE record when the remote snapshot contains the completed state", async () => {
-    db.getFirstAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM entity_records")) {
-        return stateUpdateEntityRecordRow({
-          local_id: "state_update_attendance_2026_08_26_person_real_1",
-          sync_status: "pending_update",
-        });
-      }
-
-      if (sql.includes("FROM pending_operations")) {
-        return { total: 0 };
-      }
-
-      return null;
-    });
-    const store = getLocalDatabase();
-
-    await store.upsertStateUpdateSnapshot({
-      appViewId: "attendance_view_real_1",
-      contractId: "contract_real_1",
-      date: "2026-08-26",
-      items: [{
-        current: {
-          recordId: "attendance_remote_1",
-          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
-          updatedAt: "2026-08-26T11:00:00.000Z",
-        },
-        subject: { displayName: "Persona segura", id: "person_real_1" },
-      }],
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-
-    expect(db.runAsync).toHaveBeenCalledWith(
-      expect.stringContaining("sync_status = 'synced'"),
-      expect.stringMatching(/^state_update_/),
-      "attendance_remote_1",
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "Persona segura",
-      expect.any(String),
-      "2026-08-26T11:00:00.000Z",
-      expect.any(String),
-    );
+    const store=await realStore();const row=await seedRealRow();
+    await store.upsertStateUpdateSnapshot(realSnapshot());
+    const repaired=await store.getCachedRecord({ownerKey:realScope.ownerKey,contractId:realScope.contractId,entityTypeId:realScope.targetEntityTypeId,recordId:row.local_id});
+    expect(repaired).toMatchObject({localId:row.local_id,serverId:"attendance_remote_1",syncStatus:"synced",remoteUpdatedAt:"2026-08-26T11:00:00.000Z"});
+    expect(await store.listPendingStateUpdateOperations(realScope.ownerKey)).toEqual([]);
+    const reopened=await realStore(true);expect((await reopened.getCachedRecord({ownerKey:realScope.ownerKey,contractId:realScope.contractId,entityTypeId:realScope.targetEntityTypeId,recordId:row.local_id}))?.syncStatus).toBe("synced");await verifyRealIntegrity();
   });
 
   it("serializes concurrent attendance snapshot transactions on the shared web connection", async () => {
@@ -1495,9 +1468,9 @@ describe("local database singleton", () => {
       snapshot("2026-08-27"),
       snapshot("2026-08-28"),
     ])).resolves.toEqual([
-      { staleSyncedRemoved: 0 },
-      { staleSyncedRemoved: 0 },
-      { staleSyncedRemoved: 0 },
+      { staleSyncedRemoved: 0, contentVerified: true, persistedRemoteEventCount: 0 },
+      { staleSyncedRemoved: 0, contentVerified: true, persistedRemoteEventCount: 0 },
+      { staleSyncedRemoved: 0, contentVerified: true, persistedRemoteEventCount: 0 },
     ]);
     expect(db.withTransactionAsync).toHaveBeenCalledTimes(3);
     expect(maximumActiveTransactions).toBe(1);
@@ -1591,7 +1564,7 @@ describe("local database singleton", () => {
     const [failedResult, waitingResult] = await Promise.allSettled([failedRecordsSync, waitingSnapshot]);
 
     expect(failedResult).toMatchObject({ reason: expect.objectContaining({ message: "forced rollback" }), status: "rejected" });
-    expect(waitingResult).toEqual({ status: "fulfilled", value: { staleSyncedRemoved: 0 } });
+    expect(waitingResult).toEqual({ status: "fulfilled", value: { staleSyncedRemoved: 0, contentVerified: true, persistedRemoteEventCount: 0 } });
     expect(db.withTransactionAsync).toHaveBeenCalledTimes(2);
   });
 
@@ -1680,60 +1653,23 @@ describe("local database singleton", () => {
   });
 
   it("removes stale synced STATE_UPDATE cache rows only after a complete remote snapshot", async () => {
-    db.getFirstAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM entity_records") || sql.includes("FROM pending_operations")) {
-        return null;
-      }
-
-      return null;
-    });
-    db.runAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("DELETE FROM entity_records")) {
-        return { changes: 6 };
-      }
-
-      return undefined;
-    });
-    const store = getLocalDatabase();
-
-    const result = await store.upsertStateUpdateSnapshot({
-      appViewId: "attendance_view_real_1",
-      complete: true,
-      contractId: "contract_real_1",
-      date: "2026-08-27",
-      items: [{
-        current: {
-          recordId: "attendance_remote_keep",
-          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
-          updatedAt: "2026-08-27T11:00:00.000Z",
-        },
-        subject: { displayName: "Persona segura", id: "person_keep" },
-      }],
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-
-    const deleteCall = db.runAsync.mock.calls.find(([sql]) =>
-      typeof sql === "string" && sql.includes("DELETE FROM entity_records"),
-    );
-
-    expect(result.staleSyncedRemoved).toBe(6);
-    expect(deleteCall?.[0]).toContain("sync_status = 'synced'");
-    expect(deleteCall?.[0]).toContain("json_extract(values_json, '$.appViewId') = ?");
-    expect(deleteCall?.[0]).toContain("substr(json_extract(values_json, '$.date'), 1, 10) = ?");
-    expect(deleteCall?.[0]).toContain("local_id NOT IN (?)");
-    expect(deleteCall?.[0]).toContain("server_id NOT IN (?)");
-    expect(deleteCall).toEqual([
-      expect.any(String),
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "attendance_view_real_1",
-      "2026-08-27",
-      "2026-08-27",
-      "state_update_attendance_view_real_1_2026-08-27_person_keep",
-      "attendance_remote_keep",
-    ]);
+    const store=await realStore();
+    const rows=[];
+    for(const status of ["synced","pending_create","pending_update","failed","conflict"]){
+      rows.push(await seedRealRow({local_id:status,server_id:status==="synced"?"stale-remote":null,sync_status:status,values_json:JSON.stringify({...realScope,subjectRecordId:status,subjectDisplayName:status,stateValues:[{fieldId:"status_field",optionId:"absent_option"}]})}));
+    }
+    const foreign=await seedRealRow({local_id:"foreign",server_id:"foreign-remote",sync_status:"synced",values_json:JSON.stringify({...realScope,appViewId:"other-view",subjectRecordId:"foreign",subjectDisplayName:"foreign",stateValues:[]})});
+    const otherDate=await seedRealRow({local_id:"other-date",server_id:"other-date-remote",sync_status:"synced",values_json:JSON.stringify({...realScope,date:"2026-08-27",subjectRecordId:"other-date",subjectDisplayName:"other-date",stateValues:[]})});
+    const snapshot=realSnapshot();
+    await store.upsertStateUpdateSnapshot({...snapshot,complete:false});
+    expect((await store.listStateUpdateLatest(realScope)).items.some(item=>item.subject.id==="synced")).toBe(true);
+    await store.upsertStateUpdateSnapshot({...snapshot,complete:true});
+    const visible=await store.listStateUpdateLatest(realScope);
+    expect(visible.items.map(item=>item.subject.id).sort()).toEqual(["conflict","failed","pending_create","pending_update",realSubject.id].sort());
+    for(const row of [...rows,foreign,otherDate])expect(await realHarness!.db.getFirstAsync("SELECT * FROM entity_records WHERE local_id=?",row.local_id)).toEqual(row);
+    expect((await store.listStateUpdateLatest({...realScope,appViewId:"other-view"})).items[0].subject.id).toBe("foreign");
+    expect((await store.listStateUpdateLatest({...realScope,date:"2026-08-27"})).items[0].subject.id).toBe("other-date");
+    await realStore(true);expect((await getLocalDatabase().listStateUpdateLatest(realScope)).items.map(item=>item.subject.id).sort()).toEqual(visible.items.map(item=>item.subject.id).sort());await verifyRealIntegrity();
   });
 
   it("does not remove stale STATE_UPDATE cache rows when the remote snapshot is partial", async () => {
@@ -1764,41 +1700,23 @@ describe("local database singleton", () => {
   });
 
   it("can clear synced STATE_UPDATE cache for an empty complete day while preserving unresolved statuses", async () => {
-    db.runAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("DELETE FROM entity_records")) {
-        return { changes: 7 };
-      }
-
-      return undefined;
-    });
-    const store = getLocalDatabase();
-
-    const result = await store.upsertStateUpdateSnapshot({
-      appViewId: "attendance_view_real_1",
-      complete: true,
-      contractId: "contract_real_1",
-      date: "2026-08-27",
-      items: [],
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-
-    const deleteCall = db.runAsync.mock.calls.find(([sql]) =>
-      typeof sql === "string" && sql.includes("DELETE FROM entity_records"),
-    );
-
-    expect(result.staleSyncedRemoved).toBe(7);
-    expect(deleteCall?.[0]).toContain("sync_status = 'synced'");
-    expect(deleteCall?.[0]).not.toContain("NOT IN");
-    expect(deleteCall).toEqual([
-      expect.any(String),
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "attendance_view_real_1",
-      "2026-08-27",
-      "2026-08-27",
-    ]);
+    const store=await realStore();
+    const rows=[];
+    for(const status of ["synced","pending_create","pending_update","failed","conflict"]){
+      rows.push(await seedRealRow({local_id:status,server_id:status==="synced"?"stale-remote":null,sync_status:status,values_json:JSON.stringify({...realScope,subjectRecordId:status,subjectDisplayName:status,stateValues:[{fieldId:"status_field",optionId:"absent_option"}]})}));
+    }
+    const foreign=await seedRealRow({local_id:"foreign",server_id:"foreign-remote",sync_status:"synced",values_json:JSON.stringify({...realScope,appViewId:"other-view",subjectRecordId:"foreign",subjectDisplayName:"foreign",stateValues:[]})});
+    const otherDate=await seedRealRow({local_id:"other-date",server_id:"other-date-remote",sync_status:"synced",values_json:JSON.stringify({...realScope,date:"2026-08-27",subjectRecordId:"other-date",subjectDisplayName:"other-date",stateValues:[]})});
+    const snapshot={...realSnapshot(),items:[]};
+    await store.upsertStateUpdateSnapshot({...snapshot,complete:false});
+    expect((await store.listStateUpdateLatest(realScope)).items.some(item=>item.subject.id==="synced")).toBe(true);
+    await store.upsertStateUpdateSnapshot({...snapshot,complete:true});
+    const visible=await store.listStateUpdateLatest(realScope);
+    expect(visible.items.map(item=>item.subject.id).sort()).toEqual(["conflict","failed","pending_create","pending_update"]);
+    for(const row of [...rows,foreign,otherDate])expect(await realHarness!.db.getFirstAsync("SELECT * FROM entity_records WHERE local_id=?",row.local_id)).toEqual(row);
+    expect((await store.listStateUpdateLatest({...realScope,appViewId:"other-view"})).items[0].subject.id).toBe("foreign");
+    expect((await store.listStateUpdateLatest({...realScope,date:"2026-08-27"})).items[0].subject.id).toBe("other-date");
+    await realStore(true);expect((await getLocalDatabase().listStateUpdateLatest(realScope)).items.map(item=>item.subject.id).sort()).toEqual(visible.items.map(item=>item.subject.id).sort());await verifyRealIntegrity();
   });
 
   it("does not overwrite a local STATE_UPDATE record when a pending operation does not match the remote snapshot", async () => {
@@ -1850,112 +1768,17 @@ describe("local database singleton", () => {
   });
 
   it("completes a pending STATE_UPDATE and marks telemetry reconciled when a later remote snapshot confirms the write", async () => {
-    db.getFirstAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM entity_records")) {
-        return stateUpdateEntityRecordRow({
-          local_id: "state_update_attendance_2026_08_26_person_real_1",
-          sync_error_code: "OpcoNetworkError",
-          sync_error_message: "La solicitud a Opco agoto el tiempo de espera.",
-          sync_status: "pending_update",
-        });
-      }
-
-      if (sql.includes("FROM pending_operations")) {
-        return stateUpdatePendingOperationRow({
-          payload_json: JSON.stringify({
-            appViewId: "attendance_view_real_1",
-            clientRequestId: "client_request_timeout_1",
-            date: "2026-08-26",
-            historyMode: "update-current",
-            stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
-            subjectDisplayName: "Persona segura",
-            subjectRecordId: "person_real_1",
-            uniqueness: "subject-date",
-          }),
-        });
-      }
-
-      if (sql.includes("FROM app_metadata")) {
-        return {
-          value: JSON.stringify({
-            currentConnectivity: { status: "online", updatedAt: "2026-08-27T10:00:00.000Z" },
-            lastReconnect: {
-              detected: true,
-              detectedAt: "2026-08-27T10:00:00.000Z",
-              previousConnectivityStatus: "offline",
-              resultingConnectivityStatus: "online",
-            },
-            lastStateUpdateSync: {
-              completedAt: "2026-08-27T10:00:12.000Z",
-              operationsAttempted: 1,
-              operationsCompleted: 0,
-              operationsFailed: 1,
-              operationsSelected: 1,
-              reconciledAfterTimeout: false,
-              result: "failed",
-              startedAt: "2026-08-27T10:00:00.000Z",
-              trigger: "reconnect",
-            },
-          }),
-        };
-      }
-
-      return null;
-    });
-    const store = getLocalDatabase();
-
-    await store.upsertStateUpdateSnapshot({
-      appViewId: "attendance_view_real_1",
-      contractId: "contract_real_1",
-      date: "2026-08-26",
-      items: [{
-        current: {
-          recordId: "attendance_remote_1",
-          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present_option" }],
-          updatedAt: "2026-08-26T11:00:00.000Z",
-        },
-        subject: { displayName: "Persona segura", id: "person_real_1" },
-      }],
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-
-    expect(db.runAsync).toHaveBeenCalledWith(
-      `DELETE FROM pending_operations WHERE id = ? AND operation = ?`,
-      "state_update_local_1",
-      "STATE_UPDATE",
-    );
-    expect(db.runAsync).toHaveBeenCalledWith(
-      expect.stringContaining("sync_status = 'synced'"),
-      "attendance_remote_1",
-      "Persona segura",
-      expect.any(String),
-      expect.any(String),
-      expect.any(String),
-      "state_update_attendance_2026_08_26_person_real_1",
-    );
-    expect(db.runAsync).toHaveBeenCalledWith(
-      `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
-      expect.stringMatching(/^state_update_sync_diagnostics:fp_[a-f0-9]{8}$/),
-      expect.stringContaining('"result":"reconciled_success"'),
-    );
-    const diagnosticsWrites = db.runAsync.mock.calls.filter((call) =>
-      call[0] === `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)` &&
-      String(call[1]).startsWith("state_update_sync_diagnostics:"),
-    );
-    const diagnosticsWrite = diagnosticsWrites[diagnosticsWrites.length - 1];
-    const telemetry = JSON.parse(String(diagnosticsWrite?.[2]));
-
-    expect(telemetry.lastStateUpdateActivity).toMatchObject({
-      result: "reconciled_success",
-      trigger: "snapshot_reconciliation",
-      type: "snapshot_reconciliation",
-    });
-    expect(telemetry.lastStateUpdateSync).toMatchObject({
-      result: "failed",
-      trigger: "reconnect",
-    });
-    expect(db.runAsync.mock.calls.some((call) => String(call[2]).includes("La solicitud a Opco"))).toBe(false);
+    const store=await realStore();const {saved,operation}=await realUnresolved(store);
+    await store.failStateUpdateOperation(operation,"OpcoNetworkError","Synthetic timeout");
+    const previousRun={completedAt:"2026-08-27T10:00:12.000Z",operationsAttempted:1,operationsCompleted:0,operationsFailed:1,operationsSelected:1,reconciledAfterTimeout:false,result:"failed" as const,startedAt:"2026-08-27T10:00:00.000Z",trigger:"reconnect" as const};
+    await store.setStateUpdateSyncDiagnosticsTelemetry(realScope.ownerKey,{currentConnectivity:{status:"online",updatedAt:previousRun.completedAt},lastReconnect:{detected:true,detectedAt:previousRun.startedAt,previousConnectivityStatus:"offline",resultingConnectivityStatus:"online"},lastStateUpdateSync:previousRun} as Parameters<typeof store.setStateUpdateSyncDiagnosticsTelemetry>[1]);
+    await store.upsertStateUpdateSnapshot(realSnapshot());
+    expect(await store.listPendingStateUpdateOperations(realScope.ownerKey)).toEqual([]);
+    expect(await store.getStateUpdateResolutionOutcome({...realScope,localRecordId:saved.localRecordId,clientRequestId:saved.clientRequestId!})).toBe("confirmed");
+    const telemetry=await store.getStateUpdateSyncDiagnosticsTelemetry(realScope.ownerKey);
+    expect(telemetry?.lastStateUpdateActivity).toMatchObject({result:"reconciled_success",trigger:"snapshot_reconciliation",type:"snapshot_reconciliation"});
+    expect(telemetry?.lastStateUpdateSync).toMatchObject(previousRun);
+    const reopened=await realStore(true);expect(await reopened.listPendingStateUpdateOperations(realScope.ownerKey)).toEqual([]);await verifyRealIntegrity();
   });
 
   it("classifies a real local STATE_UPDATE pending row with outbox as protected instead of orphaned", async () => {
@@ -1992,7 +1815,7 @@ describe("local database singleton", () => {
   });
 
   it("marks the associated local STATE_UPDATE record as synced when a pending operation completes", async () => {
-    const store = getLocalDatabase();
+    const store = await realStore();
 
     const operation: PendingOperation = {
       attempts: 1,
@@ -2019,7 +1842,7 @@ describe("local database singleton", () => {
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
     };
-    mockCurrentStateUpdateOperation(operation);
+    await seedRealOperation(operation);
 
     await store.completeStateUpdateOperation(operation, {
       recordId: "attendance_remote_1",
@@ -2028,30 +1851,19 @@ describe("local database singleton", () => {
       updatedAt: "2026-08-26T11:30:00.000Z",
     });
 
-    expect(db.runAsync).toHaveBeenCalledWith(
-      `DELETE FROM pending_operations WHERE id = ? AND operation = ?`,
-      "state_update_pending_1",
-      "STATE_UPDATE",
-    );
-    expect(db.runAsync).toHaveBeenCalledWith(
-      expect.stringContaining("sync_status = 'synced'"),
-      "attendance_remote_1",
-      "Persona segura",
-      expect.any(String),
-      "2026-08-26T11:30:00.000Z",
-      expect.any(String),
-      "state_update_local_record_1",
-    );
-    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
-    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
-
+    const cached=await store.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId});
+    expect(cached).toMatchObject({localId:operation.localRecordId,serverId:"attendance_remote_1",syncStatus:"synced",remoteUpdatedAt:"2026-08-26T11:30:00.000Z"});
+    expect(await store.getStateUpdateResolutionOutcome({ownerKey:operation.ownerKey,contractId:operation.contractId,targetEntityTypeId:operation.entityTypeId,appViewId:(operation.payload as {appViewId:string}).appViewId,date:(operation.payload as {date?:string}).date,localRecordId:operation.localRecordId,clientRequestId:operation.clientRequestId})).toBe("confirmed");
+    expect(await store.listPendingStateUpdateOperations(operation.ownerKey)).toEqual([]);
+    const syncedValues=cached!.values;
     expect(syncedValues.stateValues).toEqual([
       { fieldId: "status_field", label: "Presente", optionId: "present_option" },
     ]);
+    const reopened=await realStore(true);expect((await reopened.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId}))?.values).toEqual(syncedValues);await verifyRealIntegrity();
   });
 
   it("keeps every effective state value when completing a generic multi-field STATE_UPDATE", async () => {
-    const store = getLocalDatabase();
+    const store = await realStore();
 
     const operation: PendingOperation = {
       attempts: 1,
@@ -2080,7 +1892,7 @@ describe("local database singleton", () => {
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
     };
-    mockCurrentStateUpdateOperation(operation);
+    await seedRealOperation(operation);
 
     await store.completeStateUpdateOperation(operation, {
       recordId: "versioning_remote_1",
@@ -2089,17 +1901,20 @@ describe("local database singleton", () => {
       updatedAt: "2026-08-26T11:30:00.000Z",
     });
 
-    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
-    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
-
+    const cached=await store.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId});
+    expect(cached).toMatchObject({localId:operation.localRecordId,serverId:"versioning_remote_1",syncStatus:"synced",remoteUpdatedAt:"2026-08-26T11:30:00.000Z"});
+    expect(await store.getStateUpdateResolutionOutcome({ownerKey:operation.ownerKey,contractId:operation.contractId,targetEntityTypeId:operation.entityTypeId,appViewId:(operation.payload as {appViewId:string}).appViewId,date:(operation.payload as {date?:string}).date,localRecordId:operation.localRecordId,clientRequestId:operation.clientRequestId})).toBe("confirmed");
+    expect(await store.listPendingStateUpdateOperations(operation.ownerKey)).toEqual([]);
+    const syncedValues=cached!.values;
     expect(syncedValues.stateValues).toEqual([
       { fieldId: "status_field", label: "En revision", optionId: "status_review" },
       { fieldId: "version_field", label: "2", optionId: "version_2" },
     ]);
+    const reopened=await realStore(true);expect((await reopened.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId}))?.values).toEqual(syncedValues);await verifyRealIntegrity();
   });
 
   it("keeps scalar state values when completing a generic STATE_UPDATE", async () => {
-    const store = getLocalDatabase();
+    const store = await realStore();
 
     const operation: PendingOperation = {
       attempts: 1,
@@ -2128,7 +1943,7 @@ describe("local database singleton", () => {
       serverRecordId: null,
       updatedAt: "2026-08-26T10:01:00.000Z",
     };
-    mockCurrentStateUpdateOperation(operation);
+    await seedRealOperation(operation);
 
     await store.completeStateUpdateOperation(operation, {
       recordId: "equipment_event_remote_1",
@@ -2137,41 +1952,28 @@ describe("local database singleton", () => {
       updatedAt: "2026-08-26T11:30:00.000Z",
     });
 
-    const syncedWrite = db.runAsync.mock.calls.find(([sql]) => String(sql).includes("sync_status = 'synced'"));
-    const syncedValues = JSON.parse(String(syncedWrite?.[3]));
-
+    const cached=await store.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId});
+    expect(cached).toMatchObject({localId:operation.localRecordId,serverId:"equipment_event_remote_1",syncStatus:"synced",remoteUpdatedAt:"2026-08-26T11:30:00.000Z"});
+    expect(await store.getStateUpdateResolutionOutcome({ownerKey:operation.ownerKey,contractId:operation.contractId,targetEntityTypeId:operation.entityTypeId,appViewId:(operation.payload as {appViewId:string}).appViewId,date:(operation.payload as {date?:string}).date,localRecordId:operation.localRecordId,clientRequestId:operation.clientRequestId})).toBe("confirmed");
+    expect(await store.listPendingStateUpdateOperations(operation.ownerKey)).toEqual([]);
+    const syncedValues=cached!.values;
     expect(syncedValues.stateValues).toEqual([
       { fieldId: "active_field", label: "No", optionId: null, value: false },
       { fieldId: "count_field", label: "0", optionId: null, value: 0 },
     ]);
+    const reopened=await realStore(true);expect((await reopened.getCachedRecord({ownerKey:operation.ownerKey,contractId:operation.contractId,entityTypeId:operation.entityTypeId,recordId:operation.localRecordId}))?.values).toEqual(syncedValues);await verifyRealIntegrity();
   });
 
   it("commits STATE_UPDATE conflict metadata and local record status as one transaction", async () => {
-    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
-    const store = getLocalDatabase();
-
-    await store.markStateUpdateOperationConflict(
-      stateUpdatePendingOperation(),
-      stateUpdateConflictResult(),
-    );
-
-    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
-    const transactionTask = db.withTransactionAsync.mock.calls[0][0] as () => Promise<void>;
-
-    db.runAsync.mockClear();
-    await transactionTask();
-
-    expect(db.runAsync.mock.calls[0][0]).toContain("UPDATE pending_operations");
-    expect(db.runAsync.mock.calls[1][0]).toContain("sync_status = 'conflict'");
-    expect(db.runAsync.mock.calls[1]).toEqual([
-      expect.stringContaining("UPDATE entity_records"),
-      "CONFLICT",
-      "Opco tiene un estado distinto para este registro.",
-      expect.stringContaining("\"extraValues\":{\"shift_field\":\"turno_b\"}"),
-      "Persona segura",
-      "2026-08-26T12:00:00.000Z",
-      "state_update_local_record_1",
-    ]);
+    const store=await realStore();const {saved,operation}=await realUnresolved(store);
+    await store.markStateUpdateOperationConflict(operation,stateUpdateConflictResult());
+    const selected=(await store.listStateUpdateConflicts(realScope))[0];
+    expect(selected).toMatchObject({localRecordId:saved.localRecordId,syncStatus:"conflict"});
+    expect(selected.conflictRemoteExtraValues).toEqual({shift_field:"turno_b"});
+    expect(selected.conflictRemoteStateValues).toEqual(stateUpdateConflictResult().existing.stateValues);
+    expect(selected.conflictRemoteUpdatedAt).toBe("2026-08-26T12:00:00.000Z");
+    expect(await realHarness!.db.getFirstAsync("SELECT client_request_id,last_error_code FROM pending_operations WHERE id=?",operation.id)).toEqual({client_request_id:operation.clientRequestId,last_error_code:"CONFLICT"});
+    const reopened=await realStore(true);expect((await reopened.listStateUpdateConflicts(realScope))[0].localRecordId).toBe(saved.localRecordId);await verifyRealIntegrity();
   });
 
   it("reads STATE_UPDATE conflicts only from the complete visible scope", async () => {
@@ -2257,57 +2059,27 @@ describe("local database singleton", () => {
   });
 
   it("does not leave STATE_UPDATE conflict half-applied when the local record conflict write fails inside the transaction", async () => {
-    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
-    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
-      await expect(task()).rejects.toThrow("state update conflict record failed");
-      throw new Error("state update conflict record failed");
-    });
-    db.runAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("sync_status = 'conflict'")) {
-        throw new Error("state update conflict record failed");
-      }
-      return undefined;
-    });
-    const store = getLocalDatabase();
-
-    await expect(store.markStateUpdateOperationConflict(
-      stateUpdatePendingOperation(),
-      stateUpdateConflictResult(),
-    )).rejects.toThrow("state update conflict record failed");
-
-    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
-    const conflictCalls = db.runAsync.mock.calls.filter(([sql]) =>
-      String(sql).includes("UPDATE pending_operations") || String(sql).includes("sync_status = 'conflict'"),
-    );
-    expect(conflictCalls[0][0]).toContain("UPDATE pending_operations");
-    expect(conflictCalls[1][0]).toContain("sync_status = 'conflict'");
+    const store=await realStore();const {operation}=await realUnresolved(store);
+    const beforeRows=await realHarness!.db.getAllAsync("SELECT * FROM entity_records"),beforeOutbox=await realHarness!.db.getAllAsync("SELECT * FROM pending_operations"),beforeMetadata=await realHarness!.db.getAllAsync("SELECT * FROM app_metadata ORDER BY key");
+    const run=realHarness!.db.runAsync.getMockImplementation()!;
+    realHarness!.db.runAsync.mockImplementation((sql,...args)=>{if(sql.includes("sync_status = 'conflict'"))throw Error('state update conflict record failed');return run(sql,...args);});
+    await expect(store.markStateUpdateOperationConflict(operation,stateUpdateConflictResult())).rejects.toThrow('state update conflict record failed');
+    realHarness!.db.runAsync.mockImplementation(run);
+    expect(await realHarness!.db.getAllAsync("SELECT * FROM entity_records")).toEqual(beforeRows);expect(await realHarness!.db.getAllAsync("SELECT * FROM pending_operations")).toEqual(beforeOutbox);expect(await realHarness!.db.getAllAsync("SELECT * FROM app_metadata ORDER BY key")).toEqual(beforeMetadata);
+    const reopened=await realStore(true);expect(await reopened.listStateUpdateConflicts(realScope)).toEqual([]);expect((await reopened.listPendingStateUpdateOperations(realScope.ownerKey))[0].clientRequestId).toBe(operation.clientRequestId);
+    await reopened.markStateUpdateOperationConflict(operation,stateUpdateConflictResult());expect((await reopened.listStateUpdateConflicts(realScope)).length).toBe(1);await verifyRealIntegrity();
   });
 
   it("does not apply STATE_UPDATE conflict record changes when the pending operation write fails first", async () => {
-    mockCurrentStateUpdateOperation(stateUpdatePendingOperation());
-    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
-      await expect(task()).rejects.toThrow("state update conflict pending failed");
-      throw new Error("state update conflict pending failed");
-    });
-    db.runAsync.mockImplementation(async (sql: string) => {
-      if (sql.includes("UPDATE pending_operations")) {
-        throw new Error("state update conflict pending failed");
-      }
-      return undefined;
-    });
-    const store = getLocalDatabase();
-
-    await expect(store.markStateUpdateOperationConflict(
-      stateUpdatePendingOperation(),
-      stateUpdateConflictResult(),
-    )).rejects.toThrow("state update conflict pending failed");
-
-    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
-    const conflictCalls = db.runAsync.mock.calls.filter(([sql]) =>
-      String(sql).includes("UPDATE pending_operations") || String(sql).includes("sync_status = 'conflict'"),
-    );
-    expect(conflictCalls).toHaveLength(1);
-    expect(conflictCalls[0][0]).toContain("UPDATE pending_operations");
+    const store=await realStore();const {operation}=await realUnresolved(store);
+    const beforeRows=await realHarness!.db.getAllAsync("SELECT * FROM entity_records"),beforeOutbox=await realHarness!.db.getAllAsync("SELECT * FROM pending_operations"),beforeMetadata=await realHarness!.db.getAllAsync("SELECT * FROM app_metadata ORDER BY key");
+    const run=realHarness!.db.runAsync.getMockImplementation()!;
+    realHarness!.db.runAsync.mockImplementation((sql,...args)=>{if(sql.includes('UPDATE pending_operations'))throw Error('state update conflict pending failed');return run(sql,...args);});
+    await expect(store.markStateUpdateOperationConflict(operation,stateUpdateConflictResult())).rejects.toThrow('state update conflict pending failed');
+    realHarness!.db.runAsync.mockImplementation(run);
+    expect(await realHarness!.db.getAllAsync("SELECT * FROM entity_records")).toEqual(beforeRows);expect(await realHarness!.db.getAllAsync("SELECT * FROM pending_operations")).toEqual(beforeOutbox);expect(await realHarness!.db.getAllAsync("SELECT * FROM app_metadata ORDER BY key")).toEqual(beforeMetadata);
+    const reopened=await realStore(true);expect(await reopened.listStateUpdateConflicts(realScope)).toEqual([]);expect((await reopened.listPendingStateUpdateOperations(realScope.ownerKey))[0].clientRequestId).toBe(operation.clientRequestId);
+    await reopened.markStateUpdateOperationConflict(operation,stateUpdateConflictResult());expect((await reopened.listStateUpdateConflicts(realScope)).length).toBe(1);await verifyRealIntegrity();
   });
 
   it("persists the local STATE_UPDATE record and outbox operation in one SQLite transaction", async () => {
@@ -2389,173 +2161,33 @@ describe("local database singleton", () => {
   });
 
   it("lists cached STATE_UPDATE latest updates with search, default page size, and pagination metadata", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 25 });
-    db.getAllAsync.mockResolvedValue([
-      stateUpdateEntityRecordRow({
-        cached_at: "2026-08-27T10:00:00.000Z",
-        local_id: "state_update_view_versioning_2026-08-27_procedure_a",
-        sync_status: "synced",
-        values_json: JSON.stringify({
-          appViewId: "view_versioning",
-          date: "2026-08-27T00:00:00.000Z",
-          extraValues: { version_field: "2" },
-          stateValues: [{ fieldId: "status_field", label: "Publicado", optionId: "status_published" }],
-          subjectDisplayName: "Procedimiento A",
-          subjectRecordId: "procedure_a",
-        }),
-      }),
-      stateUpdateEntityRecordRow({
-        cached_at: "2026-08-26T10:00:00.000Z",
-        local_id: "state_update_view_versioning_2026-08-26_procedure_b",
-        sync_status: "pending_create",
-        values_json: JSON.stringify({
-          appViewId: "view_versioning",
-          date: "2026-08-26",
-          stateValues: [{ fieldId: "status_field", label: "Borrador", optionId: "status_draft" }],
-          subjectDisplayName: "Procedimiento B",
-          subjectRecordId: "procedure_b",
-        }),
-      }),
-    ]);
-    const store = getLocalDatabase();
-
-    const result = await store.listStateUpdateLatest({
-      appViewId: "view_versioning",
-      contractId: "contract_real_1",
-      ownerKey: "org_1:user_1",
-      search: " Procedimiento ",
-      targetEntityTypeId: "attendance",
-    });
-
-    expect(result.pagination).toEqual({
-      hasMore: true,
-      page: 1,
-      pageSize: 20,
-      total: 25,
-    });
-    expect(result.items).toMatchObject([
-      {
-        date: "2026-08-27",
-        extraValues: { version_field: "2" },
-        recordId: "state_update_view_versioning_2026-08-27_procedure_a",
-        subject: { displayName: "Procedimiento A", id: "procedure_a" },
-      },
-      {
-        date: "2026-08-26",
-        recordId: "state_update_view_versioning_2026-08-26_procedure_b",
-        stateValues: [{ fieldId: "status_field", label: "Borrador (por sincronizar)", optionId: "status_draft" }],
-      },
-    ]);
-    const selectCall = db.getAllAsync.mock.calls.find(([sql]) => String(sql).includes("ORDER BY"));
-    expect(selectCall?.[0]).toContain("ORDER BY cached_at DESC, local_id ASC");
-    expect(selectCall).toEqual([
-      expect.any(String),
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "view_versioning",
-      null,
-      null,
-      "%procedimiento%",
-      "%procedimiento%",
-      20,
-      0,
-    ]);
+    const store=await realStore();
+    for(let n=0;n<25;n++)await seedRealRow({local_id:"latest-"+String(n).padStart(2,"0"),server_id:n===1?null:"remote-"+n,sync_status:n===1?"pending_create":"synced",cached_at:"2026-08-27T10:00:00.000Z",values_json:JSON.stringify({...realScope,appViewId:"view_versioning",subjectRecordId:"procedure-"+n,subjectDisplayName:"Procedimiento "+n,stateValues:[{fieldId:"status_field",label:n===1?"Borrador":"Publicado",optionId:n===1?"draft":"published"}]})});
+    await seedRealRow({local_id:"foreign",server_id:"foreign",sync_status:"synced",values_json:JSON.stringify({...realScope,appViewId:"another-view",subjectRecordId:"foreign",subjectDisplayName:"Procedimiento foreign",stateValues:[]})});
+    const result=await store.listStateUpdateLatest({...realScope,appViewId:"view_versioning",search:" Procedimiento ",page:1});
+    expect(result.pagination).toEqual({page:1,pageSize:20,total:25,hasMore:true});
+    expect(result.items.map(item=>item.recordId)).toEqual(Array.from({length:20},(_,n)=>"latest-"+String(n+0).padStart(2,"0")));
+    expect(result.items[1].stateValues?.[0].label).toBe("Borrador (por sincronizar)");
+    const reopened=await realStore(true);expect(await reopened.listStateUpdateLatest({...realScope,appViewId:"view_versioning",search:" Procedimiento ",page:1})).toEqual(result);await verifyRealIntegrity();
   });
 
   it("loads more cached STATE_UPDATE latest updates with a real offset", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 45 });
-    db.getAllAsync.mockResolvedValue([
-      stateUpdateEntityRecordRow({
-        local_id: "state_update_view_versioning_2026-08-07_procedure_u",
-        sync_status: "synced",
-        values_json: JSON.stringify({
-          appViewId: "view_versioning",
-          date: "2026-08-07",
-          stateValues: [{ fieldId: "status_field", label: "Publicado", optionId: "status_published" }],
-          subjectDisplayName: "Procedimiento U",
-          subjectRecordId: "procedure_u",
-        }),
-      }),
-    ]);
-    const store = getLocalDatabase();
-
-    const result = await store.listStateUpdateLatest({
-      appViewId: "view_versioning",
-      contractId: "contract_real_1",
-      ownerKey: "org_1:user_1",
-      page: 2,
-      pageSize: 20,
-      targetEntityTypeId: "attendance",
-    });
-
-    expect(result.pagination).toEqual({
-      hasMore: true,
-      page: 2,
-      pageSize: 20,
-      total: 45,
-    });
-    expect(db.getAllAsync.mock.calls.at(-1)).toEqual([
-      expect.any(String),
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "view_versioning",
-      null,
-      null,
-      null,
-      null,
-      20,
-      20,
-    ]);
+    const store=await realStore();
+    for(let n=0;n<45;n++)await seedRealRow({local_id:"latest-"+String(n).padStart(2,"0"),server_id:n===1?null:"remote-"+n,sync_status:n===1?"pending_create":"synced",cached_at:"2026-08-27T10:00:00.000Z",values_json:JSON.stringify({...realScope,appViewId:"view_versioning",subjectRecordId:"procedure-"+n,subjectDisplayName:"Procedimiento "+n,stateValues:[{fieldId:"status_field",label:n===1?"Borrador":"Publicado",optionId:n===1?"draft":"published"}]})});
+    await seedRealRow({local_id:"foreign",server_id:"foreign",sync_status:"synced",values_json:JSON.stringify({...realScope,appViewId:"another-view",subjectRecordId:"foreign",subjectDisplayName:"Procedimiento foreign",stateValues:[]})});
+    const result=await store.listStateUpdateLatest({...realScope,appViewId:"view_versioning",search:" Procedimiento ",page:2});
+    expect(result.pagination).toEqual({page:2,pageSize:20,total:45,hasMore:true});
+    expect(result.items.map(item=>item.recordId)).toEqual(Array.from({length:20},(_,n)=>"latest-"+String(n+20).padStart(2,"0")));
+    const first=await store.listStateUpdateLatest({...realScope,appViewId:"view_versioning",page:1});expect(result.items.every(item=>!first.items.some(previous=>previous.recordId===item.recordId))).toBe(true);
+    const reopened=await realStore(true);expect(await reopened.listStateUpdateLatest({...realScope,appViewId:"view_versioning",search:" Procedimiento ",page:2})).toEqual(result);await verifyRealIntegrity();
   });
 
   it("scopes cached Attendance latest records by attendance date rather than cache date", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 1 });
-    db.getAllAsync.mockResolvedValue([
-      stateUpdateEntityRecordRow({
-        cached_at: "2026-09-02T08:00:00.000Z",
-        local_id: "state_update_attendance_2026-09-01_person_a",
-        values_json: JSON.stringify({
-          appViewId: "attendance_view",
-          date: "2026-09-01",
-          stateValues: [{ fieldId: "status_field", label: "Presente", optionId: "present" }],
-          subjectDisplayName: "Persona A",
-          subjectRecordId: "person_a",
-        }),
-      }),
-    ]);
-    const store = getLocalDatabase();
-
-    await store.listStateUpdateLatest({
-      appViewId: "attendance_view",
-      contractId: "contract_real_1",
-      date: "2026-09-01",
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-    await store.listStateUpdateLatest({
-      appViewId: "attendance_view",
-      contractId: "contract_real_1",
-      date: "2026-09-02",
-      ownerKey: "org_1:user_1",
-      targetEntityTypeId: "attendance",
-    });
-
-    const datedCalls = db.getAllAsync.mock.calls.slice(-2);
-    expect(datedCalls[0]?.[0]).toContain("substr(json_extract(values_json, '$.date'), 1, 10) = ?");
-    expect(datedCalls[0]?.slice(1, 7)).toEqual([
-      "org_1:user_1",
-      "contract_real_1",
-      "attendance",
-      "attendance_view",
-      "2026-09-01",
-      "2026-09-01",
-    ]);
-    expect(datedCalls[1]?.slice(5, 7)).toEqual(["2026-09-02", "2026-09-02"]);
-    expect(datedCalls[0]?.[0]).toContain("ORDER BY cached_at DESC, local_id ASC");
+    const store=await realStore();await seedRealRow({local_id:"historical-date",server_id:"historical-date",sync_status:"synced",cached_at:"2026-09-02T08:00:00.000Z",values_json:JSON.stringify({...realScope,date:"2026-09-01",subjectRecordId:"person_a",subjectDisplayName:"Persona A",stateValues:[]})});
+    const first=await store.listStateUpdateLatest({...realScope,date:"2026-09-01"});const next=await store.listStateUpdateLatest({...realScope,date:"2026-09-02"});
+    expect(first.pagination.total).toBe(1);expect(first.items[0]).toMatchObject({date:"2026-09-01",subject:{id:"person_a"}});expect(next.pagination.total).toBe(0);expect(next.items).toEqual([]);
+    const reopened=await realStore(true);expect(await reopened.listStateUpdateLatest({...realScope,date:"2026-09-01"})).toEqual(first);expect((await reopened.listStateUpdateLatest({...realScope,date:"2026-09-02"})).items).toEqual([]);await verifyRealIntegrity();
   });
-
 
   it("returns an empty cached STATE_UPDATE latest page", async () => {
     db.getFirstAsync.mockResolvedValue({ total: 0 });
@@ -3609,7 +3241,7 @@ describe("local database singleton", () => {
   it("deletes local SQLite only after confirmation and recreates schema", async () => {
     await resetLocalDatabaseAfterConfirmation({ confirmed: true });
 
-    expect(sqliteMock.deleteDatabaseAsync).toHaveBeenCalledWith("opco-client.db");
+    expect(sqliteMock.deleteDatabaseAsync).toHaveBeenCalledWith("opco-client-v10-epoch2.db");
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(1);
     expect(getLocalDatabaseStorageState()).toMatchObject({ status: "ready" });
   });
@@ -4086,12 +3718,103 @@ function openingMeasurement() {
   };
 }
 
-function mockCurrentStateUpdateOperation(operation: PendingOperation) {
-  db.getFirstAsync.mockImplementation(async (sql: string) => sql.includes("FROM pending_operations") ? {
-    id: operation.id, owner_key: operation.ownerKey, contract_id: operation.contractId,
-    entity_type_id: operation.entityTypeId, local_record_id: operation.localRecordId,
-    operation: operation.operation, client_request_id: operation.clientRequestId,
-    payload_json: JSON.stringify(operation.payload), attempts: operation.attempts,
-    created_at: operation.createdAt, updated_at: operation.updatedAt,
-  } : null);
+
+
+function localDbSqliteHarness(databasePath = ":memory:") {
+  const worker = spawn("python3", ["-u", "-c", `
+import sqlite3,json,sys
+c=sqlite3.connect(sys.argv[1], isolation_level=None)
+c.row_factory=sqlite3.Row
+for line in sys.stdin:
+ try:
+  q=json.loads(line); sql=q['sql']; args=q.get('args',[])
+  if q['kind']=='exec':
+   if sql.strip() in ('BEGIN','COMMIT','ROLLBACK'): c.execute(sql)
+   else: c.executescript(sql)
+   result=None
+  else:
+   cur=c.execute(sql,args)
+   result=[dict(r) for r in cur.fetchall()] if q['kind']=='read' else {'changes':cur.rowcount}
+  print(json.dumps({'result':result}))
+ except Exception as e: print(json.dumps({'error':str(e),'sqliteCode':getattr(e,'sqlite_errorcode',None),'sqliteName':getattr(e,'sqlite_errorname',None)}))
+`, databasePath]);
+  let buffer = "";
+  const queue: {
+    resolve: (value: any) => void;
+    reject: (error: Error) => void;
+  }[] = [];
+  worker.stdout.on("data", (chunk: string) => {
+    buffer += chunk;
+    while (buffer.includes("\n")) {
+      const end = buffer.indexOf("\n");
+      const reply = JSON.parse(buffer.slice(0, end));
+      buffer = buffer.slice(end + 1);
+      const task = queue.shift()!;
+      if (reply.error) task.reject(Object.assign(new Error(reply.error), {
+        sqliteCode: reply.sqliteCode,
+        sqliteName: reply.sqliteName
+      }));else task.resolve(reply.result);
+    }
+  });
+  const query = (kind: string, sql: string, args: unknown[] = []) => new Promise<any>((resolve, reject) => {
+    queue.push({
+      resolve,
+      reject
+    });
+    worker.stdin.write(JSON.stringify({
+      kind,
+      sql,
+      args
+    }) + "\n");
+  });
+  const db = {
+    execAsync: (sql: string) => query("exec", sql),
+    getAllAsync: (sql: string, ...args: unknown[]) => query("read", sql, args),
+    getFirstAsync: async (sql: string, ...args: unknown[]) => (await query("read", sql, args))[0] ?? null,
+    runAsync: vi.fn((sql: string, ...args: unknown[]) => query("write", sql, args)),
+    withTransactionAsync: async (task: () => Promise<void>) => {
+      await query("exec", "BEGIN");
+      try {
+        await task();
+        await query("exec", "COMMIT");
+      } catch (error) {
+        await query("exec", "ROLLBACK");
+        throw error;
+      }
+    },
+    closeAsync: async () => {
+      worker.kill();
+    }
+  };
+  return {
+    db,
+    stop: () => worker.kill()
+  };
+}
+
+let realHarness: ReturnType<typeof localDbSqliteHarness> | undefined;
+let realDirectory: string | undefined;
+afterEach(() => { realHarness?.stop();realHarness=undefined;if(realDirectory)rmSync(realDirectory,{recursive:true,force:true});realDirectory=undefined; });
+const realScope={ownerKey:"org_1:user_1",contractId:"contract_real_1",targetEntityTypeId:"attendance",appViewId:"attendance_view_real_1",date:"2026-08-26",historyMode:"update-current" as const,uniqueness:"subject-date" as const};
+async function realStore(reopen=false) {
+ realHarness?.stop();__resetLocalDatabaseForTests();
+ if(!reopen)realDirectory=mkdtempSync("/tmp/opco-local-db-v10-");
+ realHarness=localDbSqliteHarness(realDirectory+"/cache.sqlite");sqliteMock.openDatabaseAsync.mockResolvedValue(realHarness.db);
+ const store=getLocalDatabase();await store.getSelectedContractId();return store;
+}
+async function seedRealRow(overrides:Record<string,unknown>={}) {
+ const row=stateUpdateEntityRecordRow(overrides),keys=Object.keys(row);
+ await realHarness!.db.runAsync(`INSERT INTO entity_records (${keys.join(",")}) VALUES (${keys.map(()=>"?").join(",")})`,...Object.values(row));return row;
+}
+const realSubject={id:"person_real_1",displayName:"Persona segura"};
+function realSnapshot() {return {...realScope,items:[{subject:realSubject,current:{recordId:"attendance_remote_1",updatedAt:"2026-08-26T11:00:00.000Z",stateValues:[{fieldId:"status_field",label:"Presente",optionId:"present_option"}],extraValues:{shift_field:"turno_a"}}}]};}
+async function verifyRealIntegrity() {expect(await realHarness!.db.getFirstAsync("PRAGMA integrity_check")).toEqual({integrity_check:"ok"});expect(await realHarness!.db.getAllAsync("PRAGMA foreign_key_check")).toEqual([]);}
+async function realUnresolved(store:ReturnType<typeof getLocalDatabase>, optionId="present_option") {
+ const saved=await store.saveStateUpdateLocally({...stateUpdateSaveInput(realSubject.id,optionId),...realScope,extraValues:{shift_field:"turno_a"}});
+ const operation=(await store.listPendingStateUpdateOperations(realScope.ownerKey))[0];return {saved,operation};
+}
+
+async function seedRealOperation(operation:PendingOperation) {
+ await seedRealRow({local_id:operation.localRecordId,owner_key:operation.ownerKey,contract_id:operation.contractId,entity_type_id:operation.entityTypeId,values_json:JSON.stringify(operation.payload)});
+ await realHarness!.db.runAsync("INSERT INTO pending_operations(id,client_request_id,operation,owner_key,contract_id,entity_type_id,local_record_id,server_record_id,payload_json,created_at,updated_at,attempts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",operation.id,operation.clientRequestId,operation.operation,operation.ownerKey,operation.contractId,operation.entityTypeId,operation.localRecordId,operation.serverRecordId,JSON.stringify(operation.payload),operation.createdAt,operation.updatedAt,operation.attempts);
 }
