@@ -42,6 +42,34 @@ export function shiftLocalDate(value: string, amount: number) {
   return formatLocalDateInput(date);
 }
 
+export function constrainAttendanceDate(value: string | undefined, today: string) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return today;
+  const [year, month, day] = value.split("-").map(Number);
+  if (formatLocalDateInput(new Date(year, month - 1, day)) !== value) return today;
+  return value > today ? today : value;
+}
+
+export function attendanceOfflineDayNotice(snapshotHydrated: boolean, localEventCount: number) {
+  if (snapshotHydrated) return null;
+  return localEventCount > 0
+    ? "Hay registros locales de este dia, pero su cobertura completa aun no esta verificada. El total no esta disponible sin conexion."
+    : "Datos de este dia aun no disponibles sin conexion.";
+}
+
+export function attendanceConfigurationKey(config: AttendanceWorkflowConfig) {
+  return JSON.stringify([config.sourceEntityTypeId, config.targetEntityTypeId, config.personFieldId,
+    config.dateFieldId, config.statusFieldId, config.observationFieldId ?? null,
+    config.defaultCheckInOptionId, config.contextFieldIds ?? []]);
+}
+
+export function isAttendanceDayScopeCurrent(currentScope: AttendanceDayScope | null, requestedScope: AttendanceDayScope) {
+  return currentScope?.ownerKey === requestedScope.ownerKey &&
+    currentScope.contractId === requestedScope.contractId &&
+    currentScope.appViewId === requestedScope.appViewId &&
+    currentScope.targetEntityTypeId === requestedScope.targetEntityTypeId &&
+    currentScope.date === requestedScope.date;
+}
+
 export function formatDisplayDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
 
@@ -100,11 +128,7 @@ export function shouldPublishAttendanceDay({
   return currentRequestId === requestId &&
     readResult !== "absent" &&
     readResult !== "failed" &&
-    currentScope?.ownerKey === requestedScope.ownerKey &&
-    currentScope.contractId === requestedScope.contractId &&
-    currentScope.appViewId === requestedScope.appViewId &&
-    currentScope.targetEntityTypeId === requestedScope.targetEntityTypeId &&
-    currentScope.date === requestedScope.date;
+    isAttendanceDayScopeCurrent(currentScope, requestedScope);
 }
 
 export function shouldRefreshAttendanceLatestAfterSync(

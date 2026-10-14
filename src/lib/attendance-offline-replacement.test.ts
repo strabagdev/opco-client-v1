@@ -4,8 +4,9 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
-import type { OpcoApi } from "./opco-api";
+import type { AttendanceResponse, OpcoApi } from "./opco-api";
 import { syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
+import { cacheAttendanceRemoteSnapshot, refreshAttendanceDaySnapshot } from "./attendance-snapshot-cache";
 const sqlite = vi.hoisted(() => ({
   openDatabaseAsync: vi.fn()
 }));
@@ -92,6 +93,46 @@ afterEach(()=>{harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{r
 async function reopen(){await harness.db.closeAsync();__resetLocalDatabaseForTests();harness=sqliteHarness(directory+"/db.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();await store.getSelectedContractId();}
 function input(overwrite?:boolean){return {...scope,subjectRecordId:"person",subjectDisplayName:"Synthetic",historyMode:"update-current" as const,uniqueness:"subject-date" as const,stateFields:fields,stateValues:[{fieldId:"status",optionId:"present"}],expectedUpdatedAt:base,overwrite};}
 describe("Attendance confirmed offline replacement persistence",()=>{
+ it("a sync receipt remains readable after reopen but requires a fresh full day snapshot", async () => {
+  const response: AttendanceResponse = {
+   appView: { id: scope.appViewId, name: "Synthetic", slug: "synthetic" }, date: scope.date,
+   sourceEntityType: { id: "people", name: "People" }, targetEntityType: { id: scope.targetEntityTypeId, name: "Attendance" },
+   statuses: [{ optionId: "training", label: "Training", isDefaultCheckIn: false }, { optionId: "present", label: "Present", isDefaultCheckIn: true }],
+   items: [], latest: [{ attendanceRecordId: "remote", person: { id: "person", displayName: "Synthetic" }, statusOptionId: "training", statusLabel: "Training", updatedAt: base }], summary: { totalRegistered: 1 },
+  };
+  const config = { statusFieldId: "status", personFieldId: "person-field", dateFieldId: "date-field" };
+  expect((await cacheAttendanceRemoteSnapshot({ ...scope, config, response, store })).complete).toBe(true);
+  await reopen();
+  expect(await store.getAttendanceDaySnapshotHydration(scope)).not.toBeNull();
+  await store.saveStateUpdateLocally(input(true));
+  await reopen();
+  const api = { saveStateUpdateWorkflow: vi.fn<OpcoApi["saveStateUpdateWorkflow"]>(async () => ({
+   appView: response.appView, results: [{ recordId: "remote", subjectRecordId: "person", updatedAt: "2026-10-09T11:00:00.000Z", result: "UPDATED" as const }],
+  })) };
+  expect((await syncPendingStateUpdatesOnce({ api, store, ownerKey: scope.ownerKey, token: "test-only" })).completed).toBe(1);
+  await reopen();
+  expect(await store.getAttendanceDaySnapshotHydration(scope)).toBeNull();
+  expect((await store.listStateUpdateLatest(scope)).items).toEqual(expect.arrayContaining([expect.objectContaining({ stateValues: expect.arrayContaining([expect.objectContaining({ optionId: "present" })]) })]));
+  expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+  const refreshed = { ...response, latest: [{ ...response.latest[0], statusOptionId: "present", statusLabel: "Present", updatedAt: "2026-10-09T11:00:00.000Z" }] };
+  const readFailure = new Error("day recovery unavailable");
+  await expect(refreshAttendanceDaySnapshot({ ...scope, config, api: { getAttendanceWorkflow: async () => { throw readFailure; } }, token: "test-only", store, isCurrent: () => true })).rejects.toBe(readFailure);
+  await reopen();
+  expect(await store.getAttendanceDaySnapshotHydration(scope)).toBeNull();
+  expect((await store.listStateUpdateLatest(scope)).items[0].stateValues).toEqual(expect.arrayContaining([expect.objectContaining({ optionId: "present" })]));
+  await store.saveStateUpdateLocally({ ...input(), appViewId: "other-view", subjectRecordId: "other-person" });
+  const foreignBefore = await store.listPendingStateUpdateOperations(scope.ownerKey);
+  const sourceFailure = vi.fn(async () => { throw new Error("unrelated source refresh failed"); });
+  const recoveryApi = { getAttendanceWorkflow: vi.fn<OpcoApi["getAttendanceWorkflow"]>(async () => refreshed), getEntityDefinition: sourceFailure };
+  const recovery = await refreshAttendanceDaySnapshot({ ...scope, config, api: recoveryApi, token: "test-only", store, isCurrent: () => true });
+  expect(recovery?.hydration.complete).toBe(true);
+  expect(recoveryApi.getAttendanceWorkflow).toHaveBeenCalledWith("test-only", scope.contractId, scope.appViewId, { date: scope.date });
+  expect(sourceFailure).not.toHaveBeenCalled();
+  expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual(foreignBefore);
+  await reopen();
+  expect(await store.getAttendanceDaySnapshotHydration(scope)).not.toBeNull();
+ });
+
  it("persists authorization/base atomically and sends unchanged after reopen",async()=>{
   const saved=await store.saveStateUpdateLocally(input(true));const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];await reopen();const after=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(after).toEqual(before);expect(after.serverRecordId).toBe("remote");expect(after.payload).toMatchObject({overwrite:true,expectedUpdatedAt:base});
   const api={saveStateUpdateWorkflow:vi.fn<OpcoApi["saveStateUpdateWorkflow"]>(async()=>({appView:{id:scope.appViewId,name:"Synthetic",slug:"synthetic"},results:[{recordId:"remote",subjectRecordId:"person",updatedAt:"2026-10-09T11:00:00.000Z",result:"UPDATED" as const}]}))};const result=await syncPendingStateUpdatesOnce({api,store,ownerKey:scope.ownerKey,token:"test-only"});expect(api.saveStateUpdateWorkflow.mock.calls[0][3]).toMatchObject({overwrite:true,expectedUpdatedAt:base,clientRequestId:before.clientRequestId});expect(result.completed).toBe(1);expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);const records=await harness.db.getAllAsync("SELECT local_id,server_id,sync_status FROM entity_records");expect(records).toEqual([{local_id:saved.localRecordId,server_id:null,sync_status:"synced"}]);

@@ -1,6 +1,6 @@
 import { attendanceStateFields } from "./attendance-offline";
 import { attendanceResponseToStateUpdateItems, isAttendanceRemoteSnapshotComplete } from "../renderers/workflows/attendance/attendance-workflow-logic";
-import { AttendanceResponse, AttendanceWorkflowConfig } from "./opco-api";
+import { AttendanceResponse, AttendanceWorkflowConfig, OpcoApi } from "./opco-api";
 import { AttendanceDaySnapshotHydration, AttendanceDaySnapshotScope, StateUpdateOfflineStore } from "./state-update-offline";
 
 export type AttendanceMonthStatus = "complete" | "partial" | "none";
@@ -14,6 +14,40 @@ export type CacheAttendanceRemoteSnapshotInput = {
   snapshotComplete?: boolean;
   store: Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "upsertStateUpdateSnapshot">;
 };
+
+// After an ACK only the day's attendance changed. Its complete DTO can be persisted
+// independently of an unrelated refresh of the already prepared people list.
+export async function refreshAttendanceDaySnapshot(input: Omit<CacheAttendanceRemoteSnapshotInput, "response" | "snapshotComplete"> & {
+  api: Pick<OpcoApi, "getAttendanceWorkflow">;
+  date: string;
+  token: string;
+  isCurrent(): boolean;
+}) {
+  const response = await input.api.getAttendanceWorkflow(input.token, input.contractId, input.appViewId, { date: input.date });
+  if (!input.isCurrent()) return null;
+  if (response.date !== input.date) throw new Error("Opco devolvio asistencia para una fecha diferente.");
+  let hydration = await cacheAttendanceRemoteSnapshot({ ...input, response });
+  const completeDay = isAttendanceRemoteSnapshotComplete(response);
+  if (completeDay && !hydration.complete && input.config.observationFieldId) {
+    // latest omits Observation. Fetch current via the existing person endpoint, not
+    // from an ACK or an old version. Serial reads are bounded by the day limit (10).
+    const items = [...response.items];
+    for (const personId of new Set(response.latest.map(event => event.person.id))) {
+      if (!input.isCurrent()) return null;
+      const current = await input.api.getAttendanceWorkflow(input.token, input.contractId, input.appViewId, {
+        date: input.date, personRecordId: personId,
+      });
+      if (!input.isCurrent()) return null;
+      if (current.date !== input.date) throw new Error("Opco devolvio asistencia para una fecha diferente.");
+      items.push(...current.items.filter(item => item.person.id === personId));
+    }
+    hydration = await cacheAttendanceRemoteSnapshot({ ...input, response: { ...response, items } });
+  }
+  if (completeDay && !hydration.complete) {
+    throw new Error("No se pudo verificar el contenido completo de asistencia para este dia.");
+  }
+  return { response, hydration };
+}
 
 export async function cacheAttendanceRemoteSnapshot({
   appViewId,

@@ -1156,3 +1156,190 @@ reconciliación entre generaciones/V11. Rollback sólo build compatible con esta
 y filename; nunca49913c3. Cola28.391, incidente productivo exacto y auditoría general abiertos.
 Limpieza únicamente fixture/perfil/instrumentación/procesos propios, Core tracked intacto
 y pendientes del repositorio preservados.
+
+## 2026-10-13 — Attendance: aviso de cobertura y límite de fecha (LOCAL, SIN PUBLICAR)
+
+### Reporte manual productivo, recibido del usuario
+
+Sobre Client publicado cc29c95b1fdc97d69053907c67da406b1330b81e, el usuario reporta
+PRESENTE visible junto a aviso de datos del día no disponibles y total «-». Confirmó
+que guardó offline, cerró/reabrió y luego sincronizó correctamente con Core. Se registra
+como prueba manual productiva de esa lectura/persistencia/escritura/sincronización reportada;
+NO como certificación del snapshot completo del día, ni reproducción local del navegador real.
+No se accedió a producción o a su almacenamiento para esta investigación.
+
+### Evidencia local y corrección acotada
+
+Regresión con funciones reales, SQLite de archivo y reapertura: un snapshot Attendance
+completo acredita markAttendanceDaySnapshotHydrated. Una intención offline confirmada
+se conserva al reabrir. El sincronizador recibe un UPDATED simulado y persiste el recibo
+PRESENTE; persistStateUpdateReceipt invalida el marcador de día y autoridades, conservando
+registro e identidad y consumiendo sólo su outbox. Tras otra reapertura hay datos legibles,
+pero marcador ausente. Una respuesta completa posterior, persistida mediante
+cacheAttendanceRemoteSnapshot, restaura el marcador. El ACK simulado prueba la rama local,
+no una nueva sincronización con Core real. No se modifica ese comportamiento de persistencia:
+una respuesta de escritura individual no acredita contenido completo del día.
+
+Esto demuestra una explicación local de la combinación observada, NO demuestra que ése
+fue el recorrido exacto del navegador productivo. No hay fallo demostrado de reconocimiento
+ni pérdida del registro. Para distinguir en producción se necesita fecha efectiva, scope
+owner/contrato/AppView/entidad (fingerprints), existencia/lastSuccessfulRefreshAt del marcador,
+resultado y completitud del último refresh y secuencia temporal del ACK/refresh.
+
+Defecto de presentación: el texto absoluto «Datos ... no disponibles» contradice la
+existencia de registros locales. Attendance ahora distingue «Hay registros locales de
+este dia, pero su cobertura completa aun no esta verificada. El total no esta disponible
+sin conexion.» del caso sin registros. Conserva el aviso y «-», y nunca acredita cobertura
+por un registro, búsqueda parcial o recibo. No amplía descargas ni modifica marcas.
+
+Fechas: se limita la fecha efectiva de Attendance antes de usarla en lectores/handlers,
+incluidas rutas y selección retenida. Fechas futuras/invalidas se llevan a hoy; hoy y
+anteriores se conservan. Siguiente queda disabled/aria-disabled y su handler no cambia
+fecha ni limpia el formulario al llegar a hoy. Se usa formatLocalDateInput y calendario
+local existentes, sin ISO UTC. La derivación usa useMemo para conservar las garantías
+del React Compiler; no se cambian handlers de guardado/confirmación/resolución. No se
+borra ningún registro futuro, ni se modifican otros workflows o la preparación mensual.
+
+### Validación y límites
+
+78 pruebas focalizadas PASS / cinco archivos / máximo dos workers: lógica Attendance,
+reemplazo offline/reapertura/ACK, revisión de autorizaciones, snapshots y runtime v10.
+Typecheck PASS; lint PASS con dos warnings require RECORDS preexistentes; diff-check PASS.
+Sin suite completa ni build de cierre. Export temporal indispensable para comprobación
+visual; sin cambios de dependencias/configuración del repositorio.
+
+Chrome local con perfil exclusivo, renderer real y sesión/datos/cobertura SIMULADOS:
+1440x900, 1024x768 y 390x844; aviso parcial y persona PRESENTE con total «-», día completo
+con total1 sin aviso, día ausente con aviso; ruta attentionDate=2099-01-01 usa hoy local,
+Siguiente disabled sin lectura extra, Anterior y retorno hasta hoy funcionan. Sin overflow
+horizontal. Capturas inspeccionadas: desktop y móvil. No es OPFS ni Core real ni Safari/iPhone
+físico: persistencia/reapertura se acreditan sólo mediante SQLite automatizado en esta etapa.
+Dominios productivos bloqueados durante el ensayo. Primeros intentos de arnés fallaron
+por esperar título desktop móvil y seleccionar Anterior por role inexistente; corregidos
+sólo en el arnés. Lint inicial detectó derivación no memoizada; corregida y checks repetidos.
+
+Archivos propios: AttendanceWorkflow.tsx, attendance-workflow-logic.ts y su prueba,
+attendance-offline-replacement.test.ts; sólo esta sección en STATE_UPDATE.md y STATUS.md.
+Evidencia sintética en design/validation/attendance-day-coverage-and-date-2026-10-13/.
+Pendientes anteriores byte a byte preservados; limpieza sólo de servidor/perfil/exports
+propios. Core/API/esquema/outbox/sync intactos; sin commit/push/deploy. V11 pausado y
+la auditoría general abierta.
+
+## Attendance: recuperación del día después del ACK — 2026-10-14 (sin cierre técnico)
+
+La prueba manual productiva reportada acredita guardado offline, cierre/reapertura y
+sincronización posterior con Core. No acredita un snapshot completo del día. Esta etapa
+corrige causas reproducidas localmente; no correlaciona por sí sola el navegador productivo.
+
+El ACK invalida correctamente el marcador del día: el recibo no contiene todos los campos
+configurados ni el snapshot completo. La recuperación existente se activa después de la
+sincronización. Antes dependía además de refrescar definición y lista de personas: un fallo
+en esa lectura impedía persistir una respuesta del día ya obtenida correctamente. Ahora
+recupera el día sin esa dependencia, usando el mismo endpoint y persistencia existentes.
+
+Se comprobó además que latest de Core omite Observación; el current de la consulta por
+persona sí contiene el campo, incluido null. Cuando la respuesta global contiene todo el
+día (límite existente de 10) pero falta ese contenido requerido, se consulta current por
+cada persona representada, serialmente y como máximo diez veces. Sólo se certifica tras
+persistir y verificar todo el contenido. Días mayores que el límite conservan cobertura
+parcial: no se descargó todo el historial ni se certificó un ACK o una fila local.
+
+En Chrome se reprodujo otra causa: una carga concurrente del mismo scope incrementaba
+el identificador de presentación y cancelaba la hidratación, incluso después de recibir
+current completo. La persistencia ahora valida usuario/contrato/AppView/entidad/fecha y
+configuración semántica; la presentación conserva su guard contra respuestas antiguas.
+Cambiar persona/búsqueda no descarta una recuperación válida del mismo día. Cambiar de
+scope/configuración sí la descarta. El error primario se publica antes del fallback local,
+que conserva los datos; no se sustituye por un total inventado ni se oculta el fallo.
+
+Evidencia nueva: Core/PostgreSQL locales, DATABASE_URL explícita de .env.local validada
+como opco_dev en 127.0.0.1:5432/opco_development, sesión web real, Chrome exclusivo y OPFS.
+Fixture sintético: una persona, un registro por día, CAPACITACIÓN/PRESENTE; caso inicial
+sin Observación y segundo con Observación opcional TEXTAREA. El primer caso parte del día
+preparado. El segundo parte de cobertura no verificada y reproduce la omisión de contenido.
+Cambio offline confirmado → cierre/reapertura con intención conservada → reconexión:
+Core UPDATED, misma fila, total1, overwrite y base confirmada conservados. Después del GET
+completo y current requerido, marcador verdadero; cierre completo y reapertura sin Core:
+PRESENTE, total1, un evento, cero pendientes/conflictos/fallos, sin aviso de cobertura.
+Las cuatro fuentes funcionales exportadas son idénticas a las del repositorio; bundle local
+entry-20a9a944e060bea1b1324500908262b5.js. Capturas reales desktop y móvil conservadas.
+
+El límite de fecha usa calendario local; reloj de medianoche y retorno del segundo plano
+actualizan hoy. Pruebas de reloj y rutas/estado restaurado; en Chrome se simuló avance de
+fecha mediante Date/visibilitychange: límite actualizado sin perder búsqueda ni generar
+lecturas Attendance adicionales. Ruta futura vuelve a hoy y Siguiente queda deshabilitado.
+No se borran registros futuros. No es una prueba física de paso de medianoche en iPhone.
+
+127 pruebas focalizadas PASS (11 archivos, máximo dos workers), typecheck PASS, lint sin
+errores y dos warnings require preexistentes en records-sync.local-db-regression.test.ts
+182/183; diff-check PASS. No suite completa ni build de cierre: sólo export temporal
+indispensable para OPFS. Pruebas incluyen fallo de recuperación, reapertura SQLite,
+pendiente de otra AppView preservado, autorización/conflictos y contenido no verificable.
+
+Separado: una regresión de once AppViews RECORDS, una fallida y diez exitosas, produce
+11/11 procesadas y un fallo sin ninguna consulta Attendance. Procesadas incluye fallidas.
+NO se identifica ni corrige el incidente productivo «Preparación incompleta · 1 fallo,
+11/11 procesadas». Faltan runId/scopeKey/trigger, contadores, etapa/AppView/error del fallo
+y respuesta primaria. lastAppView puede no ser la que falló; el resumen actual sólo
+conserva error.name, sin causa HTTP. No se amplía telemetría en este lote.
+
+Controles excluidos de éxito: reutilizar una base tras modificar remotamente su fixture
+produjo CONFLICT real y lo conservó; no se presenta como sincronización completada.
+ACCESS_HANDLE_BUSY en un intento de navegación repetida sigue separado; cierre completo
+permitió el ensayo final sin reset. Errores iniciales del arnés (payload/field TEXT en vez
+de TEXTAREA) fueron corregidos sólo en fixtures. No son defectos demostrados de Core.
+
+Sin cambios de Core, esquema, outbox ni motor de sincronización, commit/push/deploy.
+Pendientes ajenos preservados. Se detienen procesos propios; no se borran almacenamiento,
+perfiles ni fixtures en esta etapa. V11 pausado; auditoría general e incidente productivo
+sin correlación permanecen abiertos. Esto es evidencia funcional, no cierre publicable.
+
+## Cierre técnico Attendance — recuperación ACK, cobertura y fecha — 2026-10-14
+
+Candidato aislado desde HEAD cc29c95b1fdc97d69053907c67da406b1330b81e, main:
+11 archivos propios; sólo las secciones Attendance 2026-10-13/14 en estos documentos.
+Los 402 pendientes excluidos permanecen byte a byte, incluidos los experimentos y el
+rediseño independiente de indicadores de carga. Índice vacío; sin commit/push/deploy.
+
+Revisión: recuperaciones concurrentes del mismo scope pueden persistir aunque una búsqueda
+reemplace su presentación. Respuestas de otro usuario/contrato/AppView/entidad/fecha o
+configuración no activan esa recuperación. No se usa la secuencia visual para cancelar
+contenido válido. Marcador sólo después de persistencia con contentVerified, incluida
+Observación recibida en current; ACK/fila local/página parcial no certifican el día.
+Consulta de Observación interrumpida no certifica; una invocación posterior recupera sin
+bucle automático. Fallo de GET/persistencia conserva recibos y pendientes. La regresión
+SQLite reabre después del ACK y del fallo y conserva una intención de otra AppView.
+Confirmaciones, autorización, conflictos e identidad siguen usando el runtime existente.
+No se cambiaron outbox, sincronización, SQLite, Core ni esquema.
+
+Dos regresiones adicionales de concurrencia/interrupción PASS. Ningún cambio funcional
+desde Chrome/OPFS: se reutiliza la evidencia de día preparado → cambio offline confirmado
+→ cierre/reapertura → reconexión → UPDATED en misma fila → snapshot verificado → cierre y
+reapertura offline, PRESENTE/total1, un evento y cero pendientes/conflictos. Caso adicional
+con Observación opcional obtiene su current por persona antes de verificar. Capturas
+reales desktop/móvil y reporte sanitizado incluidos como evidencia, no como código del lote.
+Calendario local: hoy/anterior válidos, ruta futura acotada, Siguiente deshabilitado en hoy;
+reloj de medianoche y segundo plano probados. La prueba de avance de día en navegador fue
+simulada; no se acredita un iPhone físico ni paso real de medianoche.
+
+Suite completa del candidato: 90 archivos, 1075 pruebas PASS con un worker (máximo dos),
+70,41 segundos. Se conservan los resultados iniciales: con dos workers, primera ejecución
+21 timeouts y un EPIPE; segunda, 14 timeouts y un EPIPE, ambos en el archivo preexistente
+state-update-prewarm-current-investigation.test.ts. Sus 22 pruebas aisladas pasaron. No se
+atribuye causa a esos fallos, no se aumentaron timeouts ni se omitieron/debilitaron pruebas.
+Un lanzamiento inicial accidental desde el árbol de trabajo fue interrumpido y no cuenta
+como validación del candidato.
+Typecheck PASS; lint PASS, cero errores y dos warnings require preexistentes en
+src/sync/records-sync.local-db-regression.test.ts:182/183. Build web PASS con API pública
+https://web.opco.cl; export sólo en /tmp, sin solicitudes a producción. Bundle generado
+entry-6ea725dc52333ccc2252cc07e52390ab.js y service worker 3b87b49380218079.
+Diff-check PASS. No secretos, configuración local, exports, logs o bases en el parche.
+El parche preliminar tenía un error de serialización de fin de línea: el parche final usa
+Git, se reconstruye íntegramente y verifica hashes de cada archivo.
+
+Inventario, parche, SHA256SUMS y evidencia en
+ design/validation/attendance-day-recovery-close-2026-10-14/.
+Lote cerrado técnicamente para revisión; no publicado ni autorizado para publicar.
+«11/11 procesadas, 1 fallo» sigue independiente y sin causa productiva confirmada: este
+lote NO lo corrige. Tampoco cierra la auditoría offline ni los problemas OPFS históricos.
+V11 pausado. No se borró almacenamiento ni datos; sin cambios Core/esquema/configuración.

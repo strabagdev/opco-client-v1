@@ -8,6 +8,10 @@ import {
   attendanceContextValidationErrors,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
+  attendanceConfigurationKey,
+  isAttendanceDayScopeCurrent,
+  attendanceOfflineDayNotice,
+  constrainAttendanceDate,
   attendanceResponseToStateUpdateItems,
   firstBlockingAttendanceResult,
   formatAttendancePendingText,
@@ -634,4 +638,41 @@ describe("attendance workflow logic", () => {
     expect(visible.find((item) => item.person.id === "person_2")?.statusLabel).toBe("Presente");
     expect(JSON.stringify(visible)).not.toContain("por sincronizar");
   });
+});
+
+
+describe("Attendance day boundaries and honest offline coverage", () => {
+  it("constrains future routes and restored selection before use", () => {
+    expect(constrainAttendanceDate("2026-10-14", "2026-10-13")).toBe("2026-10-13");
+    expect(constrainAttendanceDate("2026-10-13", "2026-10-13")).toBe("2026-10-13");
+    expect(constrainAttendanceDate("2026-10-12", "2026-10-13")).toBe("2026-10-12");
+    for (const invalid of [undefined, "2026-02-30", "not-a-date", "2026-10-13T00:00:00Z"])
+      expect(constrainAttendanceDate(invalid, "2026-10-13")).toBe("2026-10-13");
+  });
+  it("uses local calendar day when UTC is already tomorrow", () => {
+    const localLateEvening = new Date(2026, 9, 13, 23, 30);
+    const today = formatLocalDateInput(localLateEvening);
+    expect(today).toBe("2026-10-13");
+    expect(constrainAttendanceDate(shiftLocalDate(today, 1), today)).toBe(today);
+    expect(constrainAttendanceDate(shiftLocalDate(today, -1), today)).toBe("2026-10-12");
+  });
+  it("does not confuse visible local events or an ACK with a complete day", () => {
+    expect(attendanceOfflineDayNotice(false, 1)).toContain("Hay registros locales");
+    expect(attendanceOfflineDayNotice(false, 1)).toContain("cobertura completa aun no esta verificada");
+    expect(attendanceOfflineDayNotice(false, 0)).toBe("Datos de este dia aun no disponibles sin conexion.");
+    expect(attendanceOfflineDayNotice(true, 1)).toBeNull();
+    expect(attendanceOfflineDayNotice(true, 0)).toBeNull();
+  });
+});
+
+
+it("keeps persistence scoped while equivalent config objects or a newer search change presentation", () => {
+  const scope = { ownerKey: "owner", contractId: "contract", appViewId: "view", targetEntityTypeId: "entity", date: "2026-10-14" };
+  expect(isAttendanceDayScopeCurrent({ ...scope }, scope)).toBe(true);
+  for (const changed of [{ ownerKey: "other" }, { contractId: "other" }, { appViewId: "other" }, { targetEntityTypeId: "other" }, { date: "2026-10-13" }])
+    expect(isAttendanceDayScopeCurrent({ ...scope, ...changed }, scope)).toBe(false);
+  expect(isAttendanceDayScopeCurrent(null, scope)).toBe(false);
+  expect(attendanceConfigurationKey({ ...attendanceConfig })).toBe(attendanceConfigurationKey(attendanceConfig));
+  expect(attendanceConfigurationKey({ ...attendanceConfig, observationFieldId: "other" })).not.toBe(attendanceConfigurationKey(attendanceConfig));
+  expect(shouldPublishAttendanceDay({ currentRequestId: 2, requestId: 1, currentScope: scope, requestedScope: scope, readResult: "remote" })).toBe(false);
 });

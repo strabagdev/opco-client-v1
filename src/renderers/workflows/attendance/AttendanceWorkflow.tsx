@@ -5,6 +5,7 @@ import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Modal,
   Pressable,
   ScrollView,
@@ -17,7 +18,7 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
-import { cacheAttendanceRemoteSnapshot, hasSuccessfulAttendanceDayHydration } from "@/lib/attendance-snapshot-cache";
+import { cacheAttendanceRemoteSnapshot, hasSuccessfulAttendanceDayHydration, refreshAttendanceDaySnapshot } from "@/lib/attendance-snapshot-cache";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import {
   attendanceStateFields,
@@ -29,6 +30,7 @@ import {
   stateUpdateLatestToAttendanceLatest,
 } from "@/lib/attendance-offline";
 import { createClientRequestId } from "@/lib/client-request-id";
+import { watchAttendanceLocalDay } from "@/lib/attendance-local-day";
 import { refreshEntityRecordsCache } from "@/lib/offline-records";
 import {
   AttendanceBatchEntry,
@@ -48,11 +50,15 @@ import {
   attendanceContextValidationErrors,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
+  attendanceConfigurationKey,
+  attendanceOfflineDayNotice,
+  constrainAttendanceDate,
   firstBlockingAttendanceResult,
   formatDisplayDate,
   formatLocalDateInput,
   hasSuccessfulAttendanceResult,
   isAttendanceRequestCurrent,
+  isAttendanceDayScopeCurrent,
   mergeAttendanceLatestWithLocalOverlay,
   mergeAttendanceStatuses,
   normalizeAttendanceSearch,
@@ -115,10 +121,28 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   } = useSession();
   const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
   const targetDate = attentionDate(attentionParams.attentionDate);
+  const [today, setToday] = useState(() => formatLocalDateInput(new Date()));
+  useEffect(() => {
+    const clock = watchAttendanceLocalDay(setToday);
+    const resume = AppState.addEventListener("change", state => {
+      if (state === "active") clock.refresh();
+    });
+    const visible = () => {
+      if (document.visibilityState === "visible") clock.refresh();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", visible);
+    return () => {
+      resume.remove();
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", visible);
+      clock.dispose();
+    };
+  }, []);
   const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? formatLocalDateInput(new Date()) });
-  const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
+  const date = useMemo(() => constrainAttendanceDate(
+    dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value, today,
+  ), [dateSelection.routeDate, dateSelection.value, targetDate, today]);
   function setDate(next: string | ((current: string) => string)) {
-    setDateSelection({ routeDate: targetDate, value: typeof next === "function" ? next(date) : next });
+    setDateSelection({ routeDate: targetDate, value: constrainAttendanceDate(typeof next === "function" ? next(date) : next, today) });
   }
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
@@ -171,9 +195,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     targetEntityTypeId: appView.config.targetEntityTypeId,
   } : null, [appView.config.targetEntityTypeId, appView.id, date, ownerKey, selectedContractId]);
   const attendanceDayScopeRef = useRef(attendanceDayScope);
-  useEffect(() => {
+  const attendanceConfigurationRef = useRef(appView.config);
+  useLayoutEffect(() => {
     attendanceDayScopeRef.current = attendanceDayScope;
-  }, [attendanceDayScope]);
+    attendanceConfigurationRef.current = appView.config;
+  }, [attendanceDayScope, appView.config]);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
   const showSubtitle = shouldShowAttendanceSubtitle({ subtitle: appView.name, title: screenTitle });
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
@@ -549,17 +575,26 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     const requestId = ++requestSequenceRef.current;
+    const requestedScope = { ownerKey, contractId: selectedContractId, appViewId: appView.id,
+      targetEntityTypeId: appView.config.targetEntityTypeId, date };
+    const configurationKey = attendanceConfigurationKey(appView.config);
+    const isRecoveryScopeCurrent = () => resolutionMountedRef.current &&
+      isAttendanceDayScopeCurrent(attendanceDayScopeRef.current, requestedScope) &&
+      attendanceConfigurationKey(attendanceConfigurationRef.current) === configurationKey;
 
     try {
       setRefreshError(null);
-      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
-
+      const refreshed = await refreshAttendanceDaySnapshot({
+        api, appViewId: appView.id, config: appView.config, contractId: selectedContractId,
+        date, ownerKey, store: definitionCache, token,
+        isCurrent: isRecoveryScopeCurrent,
+      });
+      if (!refreshed) return;
+      const { response } = refreshed;
       if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
-        return;
-      }
-
-      await cacheAttendanceOnlineResponse(response);
-      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+        // A newer search/config object may supersede presentation without changing
+        // the day. Read persisted coverage, preserving the newer search/form state.
+        await refreshLocalDayState();
         return;
       }
       applyAttendanceResponse(response, { updateLatest: false });
@@ -571,15 +606,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setRefreshError(null);
       clearVisibleError();
     } catch (nextError) {
-      if (requestId === requestSequenceRef.current) {
-        const unresolvedCount = await refreshLocalDayState();
+      if (isRecoveryScopeCurrent()) {
         setRefreshError(stateUpdateRefreshErrorMessage(nextError));
         recordVisibleError({
           error: nextError,
           operation: "refresh",
           resolution: "refresh_failed",
         });
-
+        // Preserve the primary recovery cause even if the local fallback also fails.
+        let unresolvedCount;
+        try { unresolvedCount = await refreshLocalDayState(); } catch { return; }
         if (unresolvedCount === 0) {
           setError(null);
         }
@@ -587,11 +623,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
   }, [
     api,
+    appView.config,
     appView.id,
     applyAttendanceResponse,
-    cacheAttendanceOnlineResponse,
     clearVisibleError,
     date,
+    definitionCache,
     isOnline,
     recordVisibleError,
     ownerKey,
@@ -1199,6 +1236,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   function changeDate(amount: number) {
+    if (amount > 0 && date >= today) return;
     clearPersonFlow();
     setDate((current) => shiftLocalDate(current, amount));
   }
@@ -1251,7 +1289,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           <Text style={styles.dateButtonText}>Anterior</Text>
         </Pressable>
         <Text style={styles.dateLabel}>{date}</Text>
-        <Pressable onPress={() => changeDate(1)} style={styles.dateButton}>
+        <Pressable accessibilityRole="button" accessibilityState={{ disabled: date >= today }} disabled={date >= today} onPress={() => changeDate(1)} style={[styles.dateButton, date >= today && styles.disabledButton]}>
           <Text style={styles.dateButtonText}>Siguiente</Text>
         </Pressable>
       </View>
@@ -1277,7 +1315,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {refreshError ? <Text style={styles.offline}>{refreshError}</Text> : null}
       {visibleError && !isLoading ? <Pressable accessibilityRole="button" onPress={() => void loadDay()} style={styles.smallSecondaryButton}><Text style={styles.smallSecondaryText}>Reintentar</Text></Pressable> : null}
       {connectivityStatus !== "online" && !daySnapshotHydrated ? (
-        <Text style={styles.offline}>Datos de este dia aun no disponibles sin conexion.</Text>
+        <Text style={styles.offline}>{attendanceOfflineDayNotice(daySnapshotHydrated, latest.length)}</Text>
       ) : null}
       {showVisibleErrorDiagnostics && visibleErrorDiagnostics ? (
         <Text style={styles.diagnostic}>

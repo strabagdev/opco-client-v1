@@ -31,6 +31,26 @@ describe("app view prewarm", () => {
     vi.useRealTimers();
   });
 
+  it("can report 11 processed and one failure without any Attendance operation", async () => {
+    const template = appViewsFixture[0] as Extract<AppView, { type: "RECORDS" }>;
+    const views: AppView[] = Array.from({ length: 11 }, (_, index) => ({
+      ...template, id: `synthetic-records-${index}`, slug: `synthetic-records-${index}`,
+      config: { entityTypeId: index === 10 ? "failed-source" : "entity_1" },
+    }));
+    const api = {
+      getEntityDefinition: vi.fn(async (_token: string, _contract: string, entity: string) => {
+        if (entity === "failed-source") throw new Error("controlled definition failure");
+        return { entity: entityDefinitionFixture };
+      }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn(),
+    };
+    const telemetry: OfflinePreparationDiagnostics[] = [];
+    await prewarmAssignedAppViewsOnce({ api, appViews: views, contractId: "synthetic-contract", ownerKey: "synthetic-owner", store, token: "test-only", onTelemetry: async value => { telemetry.push(value); } });
+    expect(telemetry.at(-1)).toMatchObject({ status: "failed", appViews: { completed: 11, failed: 1, running: 0, total: 11 } });
+    expect(api.getAttendanceWorkflow).not.toHaveBeenCalled();
+    expect(api.getStateUpdateWorkflow).not.toHaveBeenCalled();
+  });
+
   it("prepares records definitions, attendance statuses, source records, and the current month snapshots", async () => {
     const api = {
       getAttendanceWorkflow: vi.fn(async (_token, _contractId, _appViewId, query: { date: string }) => ({
