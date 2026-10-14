@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { buildStateUpdateCoverageScope, deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
@@ -24,6 +24,7 @@ import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_B
 import { selectContractId } from "@/lib/contract-selection";
 import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { AppView } from "@/lib/opco-api";
+import { useHomeReadActivity } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 
 export default function HomeScreen() {
@@ -54,6 +55,7 @@ export default function HomeScreen() {
   const publishCatalog = usePublishDesktopCatalog();
   const viewsScope = ownerKey && selectedContractId ? ownerKey + ":" + selectedContractId : null;
   const hasCompatibleViews = Boolean(viewsScope && loadedViewsScope === viewsScope);
+  useHomeReadActivity({ isLoading: isLoadingViews || (!context && status !== "offline"), hasContent: hasCompatibleViews, error });
   useEffect(() => {
     if (hasCompatibleViews) publishCatalog(JSON.stringify([ownerKey, selectedContractId]), views);
   }, [hasCompatibleViews, ownerKey, selectedContractId, views, publishCatalog]);
@@ -295,7 +297,7 @@ export default function HomeScreen() {
 
   const operationalContextSection = (
     <View style={styles.operationalContext}>
-      {!context && status !== "offline" ? <ReadLoadingIndicator mode="initial" /> : null}
+      {!context && status !== "offline" ? <ReadLoadingState mode="initial" /> : null}
       <View style={[styles.contextPair, isWideLayout ? styles.contextPairWide : null]}>
         <View style={styles.contextItem}>
           <Text style={styles.label}>Organizacion</Text>
@@ -323,8 +325,7 @@ export default function HomeScreen() {
 
   const experiencesSection = (
     <View style={[styles.section, isWideLayout ? styles.sectionWide : null]}>
-      {isLoadingViews && !hasCompatibleViews ? <ReadLoadingIndicator mode="initial" /> : null}
-      {isLoadingViews && hasCompatibleViews ? <ReadLoadingIndicator mode="refresh" /> : null}
+      {context && isLoadingViews && !hasCompatibleViews ? <ReadLoadingState mode="initial" /> : null}
       {!isLoadingViews && isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error ? <Pressable accessibilityRole="button" onPress={() => setViewsRetryVersion((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>Reintentar</Text></Pressable> : null}

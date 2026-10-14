@@ -162,7 +162,18 @@ export function resolveAppShellPersistentFeedback({
   return null;
 }
 
-export function resolveAppShellStatusIndicator({
+export function resolveAppShellStatusIndicator(input: AppShellFeedbackInput): AppShellStatusIndicator {
+  const status = resolveAppShellStatusBase(input);
+  const activity = input.experienceActivity;
+  if ((activity?.readCount ?? activity?.activeRuns.length ?? 0) <= 0) return status;
+  const verb = activity?.readMode === "initial" ? "Cargando" : "Actualizando";
+  const reading = `${verb} ${activity?.appViewTitle ?? "experiencia"}…`;
+  if (status.label.includes(reading)) return status;
+  // Reads never replace offline/conflict/error/preparation or write feedback.
+  return { ...status, label: `${status.label} · ${reading}`, accessibilityLabel: `${status.accessibilityLabel}. ${reading}` };
+}
+
+function resolveAppShellStatusBase({
   connectivityStatus,
   experienceActivity,
   hasConflict,
@@ -245,16 +256,6 @@ export function resolveAppShellStatusIndicator({
     };
   }
 
-  if ((experienceActivity?.activeRuns.length ?? 0) > 0) {
-    const title = experienceActivity?.appViewTitle;
-    const activity = title ? `Actualizando ${title}…` : "Actualizando experiencia…";
-    return {
-      accessibilityLabel: pendingCount > 0 ? `${activity} ${formatPendingCount(pendingCount)}` : activity,
-      label: pendingCount > 0 ? `${activity} · ${formatPendingCount(pendingCount)}` : activity,
-      state: "working",
-    };
-  }
-
   if (isOfflinePreparationRunning) {
     return {
       accessibilityLabel: "Preparando uso sin conexion",
@@ -282,6 +283,17 @@ export function resolveAppShellStatusIndicator({
       label: "Preparación offline interrumpida",
       preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "interrupted"),
       state: "pending",
+    };
+  }
+
+  if ((experienceActivity?.readCount ?? experienceActivity?.activeRuns.length ?? 0) > 0) {
+    const title = experienceActivity?.appViewTitle;
+    const verb = experienceActivity?.readMode === "initial" ? "Cargando" : "Actualizando";
+    const activity = title ? `${verb} ${title}…` : `${verb} experiencia…`;
+    return {
+      accessibilityLabel: pendingCount > 0 ? `${activity} ${formatPendingCount(pendingCount)}` : activity,
+      label: pendingCount > 0 ? `${activity} · ${formatPendingCount(pendingCount)}` : activity,
+      state: "working",
     };
   }
 

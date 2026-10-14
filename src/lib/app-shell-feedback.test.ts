@@ -535,7 +535,7 @@ describe("app shell feedback", () => {
     };
 
     expect(resolveAppShellStatusIndicator({ ...baseInput, experienceActivity, pendingCount: 2, writeFeedback })).toMatchObject({
-      label: "Guardado localmente · 2 cambios pendientes",
+      label: "Guardado localmente · 2 cambios pendientes · Actualizando Personas…",
       state: "pending",
     });
   });
@@ -560,4 +560,20 @@ describe("app shell feedback", () => {
     expect(resolveAppShellStatusIndicator({ ...baseInput, hasConflict: true, writeFeedback }).label)
       .toBe("Requiere atención");
   });
+  it("distinguishes initial Home reads from save/load-more activity", () => {
+    const activity = { activeRuns: [{ id: "read", startedAt: "now" }], appViewId: null, appViewTitle: "Inicio", appViewType: null, errorCode: null, result: "running" as const, scopeKey: "home", updatedAt: "now", readCount: 1, readMode: "initial" as const };
+    expect(resolveAppShellStatusIndicator({ ...baseInput, experienceActivity: activity })).toMatchObject({ label: "Cargando Inicio…", state: "working" });
+    expect(resolveAppShellStatusIndicator({ ...baseInput, experienceActivity: { ...activity, readCount: 0 } })).toMatchObject({ label: "Listo", state: "online" });
+  });
+  it("keeps errors, offline and incomplete preparation visible during reads", () => {
+    const activity = { activeRuns: [{ id: "read", startedAt: "now" }], appViewId: "view", appViewTitle: "Asistencia", appViewType: "WORKFLOW" as const, errorCode: null, result: "running" as const, scopeKey: "scope", updatedAt: "now", readCount: 2, readMode: "refresh" as const };
+    for (const flag of [{ hasError: true }, { hasConflict: true }]) {
+      expect(resolveAppShellStatusIndicator({ ...baseInput, ...flag, experienceActivity: activity })).toMatchObject({ label: "Requiere atención · Actualizando Asistencia…", state: "error" });
+    }
+    expect(resolveAppShellStatusIndicator({ ...baseInput, connectivityStatus: "offline", experienceActivity: activity }).label).toBe("Sin conexión · Actualizando Asistencia…");
+    const incomplete = resolveAppShellStatusIndicator({ ...baseInput, offlinePreparationStatus: "failed", offlinePreparationProgress: { total: 11, completed: 11, failed: 1 }, experienceActivity: activity });
+    expect(incomplete.label).toBe("Preparación incompleta · 1 fallo · Actualizando Asistencia…");
+    expect(incomplete.preparationProgress).toMatchObject({ failed: 1, processed: 11, state: "incomplete" });
+  });
+
 });

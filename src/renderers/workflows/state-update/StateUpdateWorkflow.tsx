@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { buildStateUpdateCoverageScope, hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
 import {
@@ -131,6 +131,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
     useState<StateUpdateVisibleErrorDiagnostics | null>(null);
+  const [readRequests, setReadRequests] = useState<Record<string, number>>({});
+  const readScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date]);
+  const activeReadCount = readRequests[readScope] ?? 0;
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -208,7 +211,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }, [appView.id, date, ownerKey, selectedContractId, visibleResponse]);
   useExperienceActivityReporter(appView, {
     stateUpdateCoverage,
-    activeCount: Number(isLoading) + Number(isSearching) + Number(isLoadingMore) + Number(isSaving),
+    activeCount: Math.max(activeReadCount, Number(isLoading) + Number(isSearching)) + Number(isLoadingMore) + Number(isSaving),
+    readCount: activeReadCount + Number(!isOnline && isLoading && !isLoadingMore),
+    readMode: visibleResponse ? "refresh" : "initial",
     errorCode: experienceErrorCode,
     result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isLoadingMore && !isSaving ? "success" : null,
   });
@@ -405,6 +410,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
+    const activityScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date]);
+    if (!query.appendLatest) setReadRequests(current => ({ ...current, [activityScope]: (current[activityScope] ?? 0) + 1 }));
     const requestId = ++requestSequenceRef.current;
     const hasSearch = Boolean(query.search);
     const latestPageToLoad = query.page ?? 1;
@@ -538,6 +545,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         }
       }
     } finally {
+      if (!query.appendLatest) setReadRequests(current => {
+        const next = { ...current };
+        if ((next[activityScope] ?? 0) <= 1) delete next[activityScope];
+        else next[activityScope] -= 1;
+        return next;
+      });
       if (isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         setIsLoading(false);
         setIsSearching(false);
@@ -1026,7 +1039,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       </View>
 
 
-      {isLoading || isSearching ? <ReadLoadingIndicator mode={visibleResponse && (!normalizedSearch || items.length > 0) ? "refresh" : "initial"} /> : null}
+      {(isLoading || isSearching) && !(visibleResponse && (!normalizedSearch || items.length > 0)) ? <ReadLoadingState mode="initial" /> : null}
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}

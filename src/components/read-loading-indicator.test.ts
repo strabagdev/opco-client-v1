@@ -10,38 +10,53 @@ describe("read loading indicator integration", () => {
     "utf8",
   );
 
-  it("uses one accessible indeterminate bar with reduced-motion support", () => {
-    expect(indicator).toContain('accessibilityRole="progressbar"');
-    expect(indicator).toContain('accessibilityLiveRegion="polite"');
+  it("keeps body loading states static and reduced motion in the central header", () => {
+    const shell = readFileSync("app/(app)/_layout.tsx", "utf8");
+    expect(indicator).toContain("ReadLoadingState");
+    expect(indicator).not.toContain("Animated");
+    expect(indicator).not.toContain("progressbar");
+    expect(indicator).toContain("Esperando datos…");
     expect(indicator).toContain("AccessibilityInfo.isReduceMotionEnabled()");
     expect(indicator).toContain('"reduceMotionChanged"');
-    expect(indicator).toContain("Animated.loop");
-    expect(indicator).toContain(
-      'mode === "initial" ? "Cargando…" : "Actualizando…"',
-    );
-    expect(indicator).not.toContain("accessibilityValue");
+    expect(shell).toContain('accessibilityLiveRegion="polite"');
+    expect(shell).toContain('shellStatusIndicator.state !== "working" || reducedMotion');
+    expect(shell).toContain("animation.stop()");
   });
 
-  it("supports a compact initial state for constrained module surfaces", () => {
+  it("keeps a static per-module state for PANEL and action spinners for writes/pagination", () => {
     expect(indicator).toContain("compact?: boolean");
-    expect(indicator).toContain("mode === \"refresh\" ? styles.refreshContainer : compact");
-    expect(indicator).toContain("compactContainer");
-    expect(indicator).toContain("minHeight: 28");
+    expect(indicator).toContain("Actualizando este módulo…");
+    const panel = readFileSync("src/renderers/panels/PanelRenderer.tsx", "utf8");
+    expect(panel).toContain('ReadLoadingState mode="refresh"');
+    for (const file of ["src/renderers/records/RecordsRenderer.tsx", "src/renderers/workflows/attendance/AttendanceWorkflow.tsx", "src/renderers/workflows/state-update/StateUpdateWorkflow.tsx"]) {
+      expect(readFileSync(file, "utf8")).toContain("ActivityIndicator");
+    }
   });
 
-  it("covers Home, route bootstrap, RECORDS, workflows, PANEL, and REPORT", () => {
-    const files = [
-      "app/(app)/index.tsx",
-      "app/(app)/view/[appViewId].tsx",
-      "src/renderers/records/RecordsRenderer.tsx",
-      "src/renderers/workflows/attendance/AttendanceWorkflow.tsx",
-      "src/renderers/workflows/state-update/StateUpdateWorkflow.tsx",
-      "src/renderers/panels/PanelRenderer.tsx",
-      "src/renderers/reports/ReportRenderer.tsx",
-    ];
+  it("covers all initial bodies without animated refresh bars", () => {
+    for (const file of ["app/(app)/index.tsx", "app/(app)/view/[appViewId].tsx", "src/renderers/records/RecordsRenderer.tsx", "src/renderers/workflows/attendance/AttendanceWorkflow.tsx", "src/renderers/workflows/state-update/StateUpdateWorkflow.tsx", "src/renderers/reports/ReportRenderer.tsx"]) {
+      const source = readFileSync(file, "utf8");
+      expect(source).toContain("ReadLoadingState");
+      expect(source).not.toContain("ReadLoadingIndicator");
+      expect(source).not.toContain('mode="refresh"');
+    }
+    expect(readFileSync("app/(app)/index.tsx", "utf8")).toContain("useHomeReadActivity");
+    expect(readFileSync("src/renderers/use-experience-activity.ts", "utf8")).toContain("useFocusEffect");
+  });
 
-    for (const file of files) {
-      expect(readFileSync(file, "utf8")).toContain("ReadLoadingIndicator");
+  it("uses the same central channel for RECORDS detail/form/problems and their route bootstrap", () => {
+    for (const file of ["RecordFormScreen", "RecordDetailScreen", "RecordProblemsScreen"]) {
+      const source = readFileSync(`src/renderers/records/${file}.tsx`, "utf8");
+      expect(source).toContain("useExperienceActivityReporter");
+      expect(source).toContain("ReadLoadingState");
+      expect(source).not.toContain("<ActivityIndicator />");
+    }
+    expect(readFileSync("src/renderers/records/RecordFormScreen.tsx", "utf8")).toContain('<ActivityIndicator color="#ffffff" />');
+    for (const file of ["record/new.tsx", "record/[recordId].tsx", "record/[recordId]/edit.tsx", "problems.tsx"]) {
+      const source = readFileSync(`app/(app)/view/[appViewId]/${file}`, "utf8");
+      expect(source).toContain("useExperienceBootstrapActivity");
+      expect(source).toContain("ReadLoadingState");
+      expect(source).not.toContain("ActivityIndicator");
     }
   });
 

@@ -17,7 +17,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { cacheAttendanceRemoteSnapshot, hasSuccessfulAttendanceDayHydration, refreshAttendanceDaySnapshot } from "@/lib/attendance-snapshot-cache";
 import { hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import {
@@ -165,6 +165,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
     useState<StateUpdateVisibleErrorDiagnostics | null>(null);
+  const [recoveryReads, setRecoveryReads] = useState<Record<string, number>>({});
+  const recoveryReadScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, attendanceConfigurationKey(appView.config)]);
+  const recoveryReadCount = recoveryReads[recoveryReadScope] ?? 0;
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -233,7 +236,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ? "ATTENDANCE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
-    activeCount: Number(isLoading) + Number(isSearching) + Number(isSaving),
+    activeCount: Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount,
+    readCount: Number(isLoading) + Number(isSearching) + recoveryReadCount,
+    readMode: loadedDate === date ? "refresh" : "initial",
     errorCode: experienceErrorCode,
     result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isSaving ? "success" : null,
   });
@@ -582,6 +587,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       isAttendanceDayScopeCurrent(attendanceDayScopeRef.current, requestedScope) &&
       attendanceConfigurationKey(attendanceConfigurationRef.current) === configurationKey;
 
+    const readScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, configurationKey]);
+    setRecoveryReads(current => ({ ...current, [readScope]: (current[readScope] ?? 0) + 1 }));
     try {
       setRefreshError(null);
       const refreshed = await refreshAttendanceDaySnapshot({
@@ -620,6 +627,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           setError(null);
         }
       }
+    } finally {
+      setRecoveryReads(current => {
+        const next = { ...current };
+        if ((next[readScope] ?? 0) <= 1) delete next[readScope];
+        else next[readScope] -= 1;
+        return next;
+      });
     }
   }, [
     api,
@@ -1375,7 +1389,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
 
-      {isLoading || isSearching ? <ReadLoadingIndicator mode={hasCompatibleDay && (!normalizedSearch || items.length > 0) ? "refresh" : "initial"} /> : null}
+      {(isLoading || isSearching) && !(hasCompatibleDay && (!normalizedSearch || items.length > 0)) ? <ReadLoadingState mode="initial" /> : null}
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}

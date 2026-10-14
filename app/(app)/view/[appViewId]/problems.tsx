@@ -1,5 +1,7 @@
+import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { useExperienceBootstrapActivity } from "@/renderers/use-experience-activity";
 import { useLocalSearchParams } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text } from "react-native";
 
 import { RecordProblemsScreen } from "@/renderers/records/RecordProblemsScreen";
 import { UnsupportedRenderer } from "@/renderers/unsupported/UnsupportedRenderer";
@@ -8,11 +10,12 @@ import { useAppView } from "@/renderers/use-app-view";
 export default function AppViewProblemsRoute() {
   const { appViewId } = useLocalSearchParams<{ appViewId: string }>();
   const { appView, error, isLoading, retry } = useAppView(appViewId);
+  useExperienceBootstrapActivity(appViewId, { enabled: !appView, errorCode: error ? "APP_VIEW_LOAD_FAILED" : null, isLoading });
 
   if (isLoading) {
     return (
       <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
-        <ActivityIndicator />
+        <ReadLoadingState mode="initial" />
       </ScrollView>
     );
   }

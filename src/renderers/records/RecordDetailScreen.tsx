@@ -1,6 +1,8 @@
+import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { Link, router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { buildAppViewRecordConflictHref, buildEditAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
@@ -38,6 +40,11 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
     [definition, record],
   );
 
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isLoading), readCount: Number(isLoading),
+    readMode: record ? "refresh" : "initial", errorCode: error ? "RECORDS_DETAIL_FAILED" : null,
+    result: error ? "error" : isLoading ? null : "success",
+  });
   useEffect(() => {
     let isMounted = true;
 
@@ -160,7 +167,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
         </Pressable>
       ) : null}
 
-      {isLoading ? <ActivityIndicator /> : null}
+      {isLoading && !(record) ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error && !record ? (
         <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>

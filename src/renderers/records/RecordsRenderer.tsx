@@ -11,7 +11,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
@@ -86,7 +86,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.conflictCount > 0;
   const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
   useExperienceActivityReporter(appView, {
-    activeCount: Number(isRefreshing) + Number(isLoadingMore),
+    activeCount: Number(isLoading) + Number(isRefreshing) + Number(isLoadingMore),
+    readCount: Number(isLoading || isRefreshing),
+    readMode: hasCompatibleRecords ? "refresh" : "initial",
     errorCode: error ? "RECORDS_READ_FAILED" : null,
     result: error ? "error" : !isRefreshing && !isLoading ? "success" : null,
   });
@@ -579,8 +581,7 @@ function RecordsListContent({
 }) {
   return (
     <>
-      {isLoading && records.length === 0 ? <ReadLoadingIndicator mode="initial" /> : null}
-      {isRefreshing && records.length > 0 ? <ReadLoadingIndicator mode="refresh" /> : null}
+      {isLoading && records.length === 0 ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error ? (
         <Pressable onPress={onRetry} style={styles.retryButton}>

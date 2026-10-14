@@ -1,6 +1,8 @@
+import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { Link } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { buildAppViewRecordHref, buildEditAppViewRecordHref } from "@/lib/app-views";
 import { CachedEntityRecord, RecordsFailedOperationDiagnostics } from "@/lib/offline-records";
@@ -29,6 +31,11 @@ export function RecordProblemsScreen({ appView }: Props) {
   const [retryCount, setRetryCount] = useState(0);
   const busyRecordsRef = useRef(new Set<string>());
 
+  useExperienceActivityReporter(appView, {
+    activeCount: Number(isLoading), readCount: Number(isLoading),
+    readMode: records.length > 0 ? "refresh" : "initial", errorCode: error ? "RECORDS_PROBLEMS_FAILED" : null,
+    result: error ? "error" : isLoading ? null : "success",
+  });
   useEffect(() => {
     let isMounted = true;
 
@@ -270,7 +277,7 @@ export function RecordProblemsScreen({ appView }: Props) {
         <Text style={styles.title}>Problemas de sincronizacion</Text>
       </View>
 
-      {isLoading ? <ActivityIndicator /> : null}
+      {isLoading && !(records.length > 0) ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error ? (
         <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>

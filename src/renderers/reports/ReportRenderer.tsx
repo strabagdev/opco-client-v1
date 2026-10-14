@@ -7,7 +7,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 
 import { ReportAppView, ReportResponse } from "@/lib/opco-api";
 import { loadReportWithOfflineCache } from "@/lib/offline-reports";
@@ -51,6 +51,8 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const visibleReport = report && loadedQueryKey === reportQueryKey ? report : null;
   useExperienceActivityReporter(appView, {
     activeCount: Number(isLoading),
+    readCount: Number(isLoading),
+    readMode: visibleReport ? "refresh" : "initial",
     errorCode: error ? "REPORT_READ_FAILED" : null,
     result: error ? "error" : !isLoading && visibleReport ? "success" : null,
   });
@@ -170,7 +172,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       )}
 
       {isLoading && !visibleReport ? (
-        <View style={styles.stateBox}><ReadLoadingIndicator mode="initial" /></View>
+        <View style={styles.stateBox}><ReadLoadingState mode="initial" /></View>
       ) : error && !visibleReport ? (
         <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View>
       ) : !visibleReport ||
@@ -180,7 +182,6 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         <View style={styles.stateBox}><Text style={styles.stateText}>Este reporte necesita configuración.</Text></View>
       ) : (
         <>
-          {isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
           {error ? <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View> : null}
           {visibleReport.records.length === 0 ? (
             <View style={styles.stateBox}><Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text></View>

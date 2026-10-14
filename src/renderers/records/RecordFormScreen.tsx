@@ -1,3 +1,5 @@
+import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -70,6 +72,12 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const latestValuesRef = useRef(values);
 
   const fields = useMemo(() => (definition ? getWritableFields(definition) : []), [definition]);
+  const reading = Number(isLoading) + fields.filter(field => relationOptionsByField[field.key]?.isLoading).length + Number(Boolean(checkingUniqueFieldKey) && !isSubmitting);
+  useExperienceActivityReporter(appView, {
+    activeCount: reading + Number(isSubmitting), readCount: reading,
+    readMode: definition ? "refresh" : "initial", errorCode: error ? "RECORDS_FORM_FAILED" : null,
+    result: error ? "error" : reading === 0 && !isSubmitting ? "success" : null,
+  });
   const title = mode === "create" ? `Crear en ${appView.name}` : `Editar ${record?.displayName ?? "registro"}`;
 
   useEffect(() => {
@@ -403,7 +411,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         {definition ? <Text style={styles.meta}>{definition.name}</Text> : null}
       </View>
 
-      {isLoading ? <ActivityIndicator /> : null}
+      {isLoading && !definition ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {uniqueNotice ? <Text style={styles.notice}>{uniqueNotice}</Text> : null}
       {error && !definition ? (

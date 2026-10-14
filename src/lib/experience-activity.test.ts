@@ -78,6 +78,38 @@ describe("visible experience activity", () => {
     expect(getExperienceActivitySnapshot().scopeKey).toBeNull();
     unsubscribe();
   });
+  it("rejects outgoing bootstrap cleanup and reports after renderer takeover of the same scope", () => {
+    activateExperienceActivityScope({ appViewId: "view", appViewTitle: "Experiencia", appViewType: null, scopeKey: "scope", reporterId: "bootstrap" });
+    activateExperienceActivityScope({ appViewId: "view", appViewTitle: "Asistencia", appViewType: "WORKFLOW", scopeKey: "scope", reporterId: "renderer" });
+    reportExperienceActivity({ scopeKey: "scope", reporterId: "renderer", activeCount: 2, readCount: 2, readMode: "initial", errorCode: null, result: null });
+    leaveExperienceActivityScope("scope", "bootstrap");
+    reportExperienceActivity({ scopeKey: "scope", reporterId: "bootstrap", activeCount: 0, readCount: 0, errorCode: "LATE", result: "error" });
+    expect(getExperienceActivitySnapshot()).toMatchObject({ appViewTitle: "Asistencia", readCount: 2, errorCode: null });
+    reportExperienceActivity({ scopeKey: "scope", reporterId: "renderer", activeCount: 1, readCount: 1, errorCode: null, result: null });
+    expect(getExperienceActivitySnapshot().activeRuns).toHaveLength(1);
+    reportExperienceActivity({ scopeKey: "scope", reporterId: "renderer", activeCount: 0, readCount: 0, errorCode: null, result: "success" });
+    expect(getExperienceActivitySnapshot()).toMatchObject({ activeRuns: [], readCount: 0, result: "success" });
+  });
+  it("does not accept late reads from a different owner/contract or cleared scope", () => {
+    activate("owner-a:contract-a:view", "Primera");
+    report("owner-a:contract-a:view", 2, null, null);
+    activate("owner-b:contract-b:view", "Segunda");
+    report("owner-a:contract-a:view", 0, "LATE", "error");
+    expect(getExperienceActivitySnapshot()).toMatchObject({ appViewTitle: "Segunda", activeRuns: [], errorCode: null });
+    leaveExperienceActivityScope("owner-b:contract-b:view");
+    report("owner-b:contract-b:view", 1, null, null);
+    expect(getExperienceActivitySnapshot().scopeKey).toBeNull();
+  });
+
+  it("does not hide a previous error on an optimistic success while a read remains active", () => {
+    activate("scope-a", "Asistencia");
+    report("scope-a", 0, "ATTENDANCE_REFRESH_FAILED", "error");
+    reportExperienceActivity({ scopeKey: "scope-a", activeCount: 1, readCount: 1, errorCode: null, result: "success" });
+    expect(getExperienceActivitySnapshot()).toMatchObject({ errorCode: "ATTENDANCE_REFRESH_FAILED", result: "running", readCount: 1 });
+    reportExperienceActivity({ scopeKey: "scope-a", activeCount: 0, readCount: 0, errorCode: null, result: "success" });
+    expect(getExperienceActivitySnapshot()).toMatchObject({ errorCode: null, activeRuns: [], result: "success" });
+  });
+
 });
 
 function activate(scopeKey: string, appViewTitle: string) {

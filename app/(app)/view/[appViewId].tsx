@@ -2,7 +2,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text } from "react-native";
 
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 
 import { ExperienceOpeningProvider, monotonicNow } from "@/renderers/experience-opening";
 import { renderAppView } from "@/renderers/registry";
@@ -22,7 +22,7 @@ export default function AppViewScreen() {
   if (isLoading) {
     return (
       <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
-        <ReadLoadingIndicator mode="initial" />
+        <ReadLoadingState mode="initial" />
       </ScrollView>
     );
   }

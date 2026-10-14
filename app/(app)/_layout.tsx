@@ -19,6 +19,7 @@ import {
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
+import { useReducedMotion } from "@/components/read-loading-indicator";
 import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
 import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getDesktopSidebarWidth } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
@@ -92,6 +93,7 @@ export default function AppLayout() {
   const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
   const recordsOpeningHistory = useRecordsOpeningHistory();
   const experienceActivity = useExperienceActivitySnapshot();
+  const reducedMotion = useReducedMotion();
   const writeFeedbackSnapshot = useWriteFeedbackSnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
@@ -251,7 +253,7 @@ export default function AppLayout() {
   }, [lastPreflight?.syncRunId, lastSync?.syncRunId, ownerKey, selectedContractId, syncStatusDiagnostics]);
 
   useEffect(() => {
-    if (shellStatusIndicator.state !== "working") {
+    if (shellStatusIndicator.state !== "working" || reducedMotion) {
       statusPulseOpacity.stopAnimation();
       statusPulseOpacity.setValue(1);
       return;
@@ -280,7 +282,7 @@ export default function AppLayout() {
       animation.stop();
       statusPulseOpacity.setValue(1);
     };
-  }, [shellStatusIndicator.state, statusPulseOpacity]);
+  }, [reducedMotion, shellStatusIndicator.state, statusPulseOpacity]);
 
   useEffect(() => {
     if (!lastSync?.completedAt) {
@@ -370,9 +372,10 @@ export default function AppLayout() {
       <View
         accessibilityLabel={"Estado " + shellStatusIndicator.label + ". " + shellStatusIndicator.accessibilityLabel}
         accessible
+        accessibilityLiveRegion="polite"
         style={styles.statusIndicatorSummary}
       >
-        <Animated.View style={shellStatusIndicator.state === "working" ? { opacity: statusPulseOpacity } : null}>
+        <Animated.View style={shellStatusIndicator.state === "working" && !reducedMotion ? { opacity: statusPulseOpacity } : null}>
           {preparationProgress?.state === "incomplete"
             ? <AlertCircle color="#b7791f" size={17} />
             : statusIndicatorIcon(shellStatusIndicator.state)}

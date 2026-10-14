@@ -246,6 +246,19 @@ describe("copy button with effective visible workflow context", () => {
     reportExperienceActivity({ scopeKey: key, activeCount: 0, errorCode: null, result: "success", stateUpdateCoverage: { scope, sourceEntityTypeId: definition.sourceEntityTypeId } });
     expect(getExperienceActivitySnapshot().stateUpdateCoverage).toBeUndefined();
   });
+  it("preserves the effective diagnostic coverage through concurrent reads and rejects the outgoing reporter", () => {
+    const key = reportVisible("2026-10-04");
+    const context = getExperienceActivitySnapshot().stateUpdateCoverage!;
+    activateExperienceActivityScope({ appViewId: scope.appViewId, appViewTitle: "Synthetic workflow", appViewType: "WORKFLOW", scopeKey: key, reporterId: "renderer" });
+    reportExperienceActivity({ scopeKey: key, reporterId: "renderer", activeCount: 2, readCount: 2, errorCode: null, result: null, stateUpdateCoverage: context });
+    expect(getExperienceActivitySnapshot().stateUpdateCoverage).toBe(context);
+    reportExperienceActivity({ scopeKey: key, reporterId: "renderer", activeCount: 1, readCount: 1, errorCode: null, result: null, stateUpdateCoverage: context });
+    reportExperienceActivity({ scopeKey: key, reporterId: "bootstrap", activeCount: 0, readCount: 0, errorCode: null, result: "success", stateUpdateCoverage: null });
+    leaveExperienceActivityScope(key, "bootstrap");
+    expect(getExperienceActivitySnapshot()).toMatchObject({ readCount: 1, stateUpdateCoverage: context });
+    reportExperienceActivity({ scopeKey: key, reporterId: "renderer", activeCount: 0, readCount: 0, errorCode: null, result: "success", stateUpdateCoverage: context });
+    expect(getExperienceActivitySnapshot()).toMatchObject({ activeRuns: [], stateUpdateCoverage: context });
+  });
   it("wires the actual copy button, visible route and workflow state to the tested copy path", () => {
     const panel = readFileSync("src/state/session.tsx", "utf8");
     const shell = readFileSync("app/(app)/_layout.tsx", "utf8");
@@ -262,6 +275,7 @@ describe("copy button with effective visible workflow context", () => {
     expect(visibleRoute.test("/")).toBe(false);
     expect(workflow).toMatch(/scope: buildStateUpdateCoverageScope\(\{[\s\S]*?date,/);
     expect(workflow).toMatch(/useExperienceActivityReporter\(appView, \{\s*stateUpdateCoverage,/);
-    expect(reporter).toContain("reportExperienceActivity({ activeCount, errorCode, result, scopeKey, stateUpdateCoverage })");
+    expect(reporter).toContain("reportExperienceActivity({ activeCount, errorCode, result, readCount, readMode, stateUpdateCoverage, scopeKey, reporterId })");
+    expect(reporter).toContain("useVisibleActivity(scopeKey");
   });
 });

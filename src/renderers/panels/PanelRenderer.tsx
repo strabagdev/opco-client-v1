@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 
-import { ReadLoadingIndicator } from "@/components/read-loading-indicator";
+import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "@/lib/offline-panels";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
@@ -354,6 +354,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
   useExperienceActivityReporter(appView, {
     activeCount: liveDatasetStates.filter((state) => state.isLoading).length,
+    readCount: liveDatasetStates.filter((state) => state.isLoading).length,
+    readMode: liveLoadedCount > 0 ? "refresh" : "initial",
     errorCode: liveFailedCount > 0 ? "PANEL_PARTIAL_LOAD_FAILED" : null,
     result: liveFailedCount > 0 && liveLoadedCount > 0 ? "partial" : liveFailedCount > 0 ? "error" : liveDatasetStates.length > 0 ? "success" : null,
   });
@@ -547,7 +549,7 @@ function PanelModule({
         />
       ) : (!currentState || currentState.isLoading) && !dataset ? (
         <View style={styles.stateBox}>
-          <ReadLoadingIndicator mode="initial" />
+          <ReadLoadingState mode="initial" />
         </View>
       ) : currentState?.error && !dataset ? (
         <View style={styles.stateBox}>
@@ -560,7 +562,7 @@ function PanelModule({
         <PanelState message="Este módulo necesita configuración." />
       ) : (
         <>
-          {currentState?.isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
+          {currentState?.isLoading ? <ReadLoadingState mode="refresh" /> : null}
           {currentState?.error ? <View style={styles.inlineError}><Text style={styles.stateText}>{currentState.error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}><Text style={styles.actionButtonText}>Reintentar</Text></Pressable></View> : null}
           {dataset.rows.length === 0 ? (
         <PanelState message="No hay datos para mostrar." />
@@ -613,7 +615,7 @@ function PanelKpi({
   }
 
   if (isLoading && !kpi) {
-    return <View style={styles.kpiCard}><ReadLoadingIndicator compact mode="initial" /></View>;
+    return <View style={styles.kpiCard}><ReadLoadingState compact mode="initial" /></View>;
   }
 
   if (error && !kpi) {
@@ -651,7 +653,7 @@ function PanelKpi({
       showsVerticalScrollIndicator
       style={styles.kpiCardViewport}
     >
-      {isLoading ? <ReadLoadingIndicator mode="refresh" /> : null}
+      {isLoading ? <ReadLoadingState mode="refresh" /> : null}
       {error ? <View style={styles.inlineError}><Text style={styles.stateText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.actionButton}><Text style={styles.actionButtonText}>Reintentar</Text></Pressable></View> : null}
       <View style={[styles.kpiValueArea, Platform.OS === "web" ? ({ containerType: "inline-size" } as never) : null]}>
         <ScrollView

@@ -16,6 +16,8 @@ export type StateUpdateVisibleCoverageContext = {
 export type ExperienceActivitySnapshot = {
   stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeRuns: ExperienceActivityRun[];
+  readCount?: number;
+  readMode?: "initial" | "refresh";
   appViewId: string | null;
   appViewTitle: string | null;
   appViewType: AppViewType | null;
@@ -38,6 +40,7 @@ const emptySnapshot: ExperienceActivitySnapshot = {
 
 let snapshot = emptySnapshot;
 let runSequence = 0;
+let activeReporterId: string | undefined;
 const listeners = new Set<() => void>();
 
 export function activateExperienceActivityScope({
@@ -45,13 +48,16 @@ export function activateExperienceActivityScope({
   appViewTitle,
   appViewType,
   scopeKey,
+  reporterId,
 }: {
-  appViewId: string;
+  reporterId?: string;
+  appViewId: string | null;
   appViewTitle: string;
   appViewType: AppViewType | null;
   scopeKey: string;
 }) {
-  if (snapshot.scopeKey === scopeKey) return;
+  if (snapshot.scopeKey === scopeKey && activeReporterId === reporterId) return;
+  activeReporterId = reporterId;
   setSnapshot({
     activeRuns: [],
     appViewId,
@@ -70,14 +76,20 @@ export function reportExperienceActivity({
   result,
   scopeKey,
   stateUpdateCoverage = null,
+  reporterId,
+  readCount,
+  readMode,
 }: {
+  reporterId?: string;
+  readCount?: number;
+  readMode?: "initial" | "refresh";
   stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeCount: number;
   errorCode: string | null;
   result: Exclude<ExperienceActivityResult, "idle" | "running"> | null;
   scopeKey: string;
 }) {
-  if (snapshot.scopeKey !== scopeKey) return;
+  if (snapshot.scopeKey !== scopeKey || activeReporterId !== reporterId) return;
   const nextCount = Math.max(0, activeCount);
   const activeRuns = snapshot.activeRuns.slice(0, nextCount);
 
@@ -87,8 +99,10 @@ export function reportExperienceActivity({
   }
 
   const nextResult = nextCount > 0 ? "running" : errorCode ? "error" : result ?? snapshot.result;
-  const nextErrorCode = errorCode ?? (result === "success" ? null : snapshot.errorCode);
+  const nextErrorCode = errorCode ?? (nextCount === 0 && result === "success" ? null : snapshot.errorCode);
   if (
+    readCount === snapshot.readCount &&
+    readMode === snapshot.readMode &&
     activeRuns.length === snapshot.activeRuns.length &&
     nextResult === snapshot.result &&
     nextErrorCode === snapshot.errorCode &&
@@ -98,6 +112,8 @@ export function reportExperienceActivity({
   setSnapshot({
     ...snapshot,
     stateUpdateCoverage,
+    readCount,
+    readMode,
     activeRuns,
     errorCode: nextErrorCode,
     result: nextResult,
@@ -105,8 +121,11 @@ export function reportExperienceActivity({
   });
 }
 
-export function leaveExperienceActivityScope(scopeKey: string) {
-  if (snapshot.scopeKey === scopeKey) setSnapshot(emptySnapshot);
+export function leaveExperienceActivityScope(scopeKey: string, reporterId?: string) {
+  if (snapshot.scopeKey === scopeKey && activeReporterId === reporterId) {
+    activeReporterId = undefined;
+    setSnapshot(emptySnapshot);
+  }
 }
 
 export function getExperienceActivitySnapshot() {
@@ -120,6 +139,7 @@ export function subscribeExperienceActivity(listener: () => void) {
 
 export function resetExperienceActivityForTests() {
   snapshot = emptySnapshot;
+  activeReporterId = undefined;
   runSequence = 0;
   listeners.clear();
 }

@@ -2156,3 +2156,146 @@ Lote cerrado técnicamente para revisión; no publicado ni autorizado para publi
 «11/11 procesadas, 1 fallo» sigue independiente y sin causa productiva confirmada: este
 lote NO lo corrige. Tampoco cierra la auditoría offline ni los problemas OPFS históricos.
 V11 pausado. No se borró almacenamiento ni datos; sin cambios Core/esquema/configuración.
+
+## Unificación visual de lecturas — 2026-10-14 (LOCAL, SIN PUBLICAR)
+
+Base main publicada: 4169fc33b524d52cd3222d6157b0d03a74d1679c. Se reutilizan
+experience-activity/use-experience-activity y resolveAppShellStatusIndicator. Antes,
+ruta y renderers reportaban activeRuns pero además dibujaban barras de lectura; Inicio
+no reportaba y RECORDS omitía la lectura inicial. Guardado/paginación estaban mezclados
+con las lecturas en los workflows.
+
+Ahora Inicio, bootstrap y RECORDS/Attendance/STATE_UPDATE/PANEL/REPORT publican readCount
+y readMode en el canal existente. activeRuns mantiene el contexto general de actividad;
+la cabecera distingue lectura de guardado y cargar más. Muestra Cargando/Actualizando y
+el nombre de Inicio/experiencia. Sin datos compatibles, el cuerpo muestra Esperando datos
+estático; durante una actualización conserva el contenido compatible con los guards ya
+existentes. Detalle, crear/editar y problemas de RECORDS, junto con su bootstrap, también reportan
+lectura en ese canal. Las opciones de relación/validación del formulario conservan sus
+mensajes junto al campo y el guardado conserva su spinner. PANEL conserva estados estáticos por módulo y sus errores/reintentos cuando
+unos módulos tienen datos y otros no. Botones de guardado y cargar más conservan sus
+spinners, confirmaciones, feedback y handlers locales; no se centralizan las escrituras.
+
+El reporter sigue el foco de navegación. Una identidad de reporter dentro del mismo
+scope evita que el cleanup o respuesta del bootstrap saliente borre la actividad del
+renderer entrante. Scopes incluyen usuario, contrato y AppView; Home usa su propio scope.
+Attendance cuenta la recuperación ACK por scope/configuración; STATE_UPDATE cuenta las
+lecturas en vuelo por scope y excluye appendLatest. Contadores exclusivamente visuales,
+decrementados en finally; no cambian secuencias, consultas, cancelaciones, cachés,
+cobertura, outbox ni sincronización. Una respuesta de otra ruta/scope no publica en la
+cabecera actual. Actividades concurrentes conservan el indicador mientras haya lecturas
+pertinentes; salir de la ruta retira su presentación sin cancelar su petición.
+
+Errores/conflictos, offline, feedback de guardado y preparación incompleta conservan su
+prioridad y acceso a Diagnóstico; el contexto de lectura se añade sin sustituirlos.
+Preparación incompleta conserva su progreso existente. No se añade motor, polling,
+reintentos ni solicitudes. El único pulso de lectura es el existente en cabecera, ahora
+sin movimiento mientras la preferencia no esté resuelta o sea de movimiento reducido.
+Una señal success mientras hay lecturas activas no borra un error anterior: sólo la
+finalización exitosa lo retira. Este último ajuste se cubre con regresión y una revisión
+visual dirigida que inyecta estados sintéticos en el canal real, sin peticiones. Las
+otras capturas preceden ese ajuste y se reutilizan sólo para escenarios no afectados.
+El estado central se anuncia con live region polite; el cuerpo no repite animaciones ni
+anuncios de progreso. Referencia API consultada: Expo Router SDK57,
+https://docs.expo.dev/versions/v57.0.0/sdk/router/ (useFocusEffect con callback estable).
+
+259 pruebas focalizadas PASS en 17 archivos, máximo dos workers: actividad/feedback,
+presentación estática, guards de contenido compatible, modelos de los cinco renderers,
+Attendance/confirmación/conflictos/SQLite/reapertura y refresh. Typecheck PASS; lint sin
+errores, con las dos advertencias require preexistentes en
+src/sync/records-sync.local-db-regression.test.ts:182/183; diff-check PASS. No suite completa.
+Export web temporal indispensable para navegador, no build de cierre ni export publicable.
+
+Revisión visual REAL de componentes/pantallas en Chrome exclusivo: 1440x900 y 390x844.
+Sesión, API, demoras, personas y caché fueron SIMULADOS en una copia temporal: no acredita
+Core, OPFS, escritura/sincronización ni iPhone físico en esta etapa. Inicio con experiencias
+visibles durante actualización; bootstrap y renderers sin datos con estado estático;
+REPORT conserva tabla durante refresh; PANEL muestra datos de un módulo y error del otro.
+Regreso a Inicio con lectura de otra ruta pendiente deja el estado de Inicio. Movimiento
+reducido: opacidad central estable1; foco de teclado visible (outline solid3px). Resize
+390/1024/1440 en REPORT no aumenta las llamadas del arnés. Sin overflow global en las
+capturas finales. Detalle, crear, editar y problemas de RECORDS se revisaron también en
+escritorio y móvil; para problemas se demoró sólo la caché sintética, pues esa pantalla
+lee localmente. Un primer wait erróneo del arnés esperaba una API que no existe en ese
+recorrido: se corrigió sin añadir peticiones al producto. Autenticación/arranque,
+Diagnóstico y rutas genéricas legacy /entity no se rediseñan en este lote de AppViews. Contenido/estados y navegación son de los componentes reales; errores
+PANEL/REPORT y demoras del arnés son escenarios sintéticos, no fallos productivos.
+
+Los primeros fixtures omitían layout/transformation de PANEL y table.visibleFieldIds de
+REPORT; se corrigieron sólo en el arnés y se repitieron sus capturas. También se corrigió
+un selector del arnés. La revisión móvil se interrumpió al terminar el servidor temporal
+(ERR_CONNECTION_REFUSED); se repuso el proceso propio y se completó la revisión. Ninguno
+se atribuye al producto. Las capturas válidas y resultados sanitizados se conservan en
+ design/validation/read-loading-unification-2026-10-14/.
+
+25 archivos propios: siete rutas de app, componente read-loading-indicator y prueba,
+experience-activity y prueba, app-shell-feedback y prueba, hook use-experience-activity,
+cinco renderers principales, detalle/formulario/problemas RECORDS y prueba PANEL, y sólo
+esta sección de STATE_UPDATE/STATUS. Los 402
+pendientes excluidos se preservan byte a byte; se preservan las secciones ajenas de estos
+documentos. Sin cambios Core/API/esquema/dependencias/configuración. Sin borrado de cachés,
+fixtures anteriores o outbox, ni commit/push/deploy. Sólo se detienen procesos de revisión.
+No atribuye ni resuelve «11/11 procesadas, 1 fallo»; incidente independiente. V11 pausado;
+auditoría general abierta. Implementación local para revisión, sin cierre técnico completo.
+
+## Cierre técnico — unificación de indicadores — 2026-10-14 (SIN PUBLICAR)
+
+Base main 4169fc33b524d52cd3222d6157b0d03a74d1679c. Reconstrucción inicial exacta del
+respaldo 25 archivos / 75 hunks, SHA256 comprobados. Ese respaldo se conserva intacto.
+No cambió implementación: la suite descubrió una expectativa textual antigua en
+state-update-coverage-consistency.test.ts, que buscaba la llamada anterior del reporter.
+Se adaptó al mismo contexto pasado por useVisibleActivity con readCount/readMode y
+reporterId; se añadió una comprobación equivalente contra el store real: contexto
+conservado con dos/una lecturas, cierre del reporter saliente ignorado y finalización
+sin perder el contexto para Copiar diagnóstico. No se eliminó ni debilitó la cobertura.
+Por eso el lote final añade únicamente ese archivo de regresión (26 archivos).
+
+Suite completa sobre candidato aislado: 90 archivos / 1082 pruebas PASS, un worker
+(máximo dos), 70,98 segundos. Primera ejecución: 1058 PASS / 23 fallos; 22 timeouts y un
+EPIPE en state-update-prewarm-current-investigation.test.ts, más la expectativa textual
+indicada. La causa de los timeouts/EPIPE NO está demostrada; no se atribuye al diseño,
+al build paralelo ni al producto. No se alteraron timeouts ni se omitieron pruebas.
+Prueba de cobertura adaptada: 19 PASS. Typecheck PASS. Lint PASS, cero errores y dos
+warnings require preexistentes en records-sync.local-db-regression.test.ts:182/183.
+Build web PASS: entry-dcd9fe7b06c165c83fa0b45f9524bd05.js, shell 54854ee6d82b2b4a,
+API https://web.opco.cl; dist sólo en /tmp, fuera del lote. El build precede únicamente
+al ajuste de pruebas/documentación, que no altera su contenido funcional. Diff-check PASS.
+Una comprobación auxiliar Node falló con EPERM al invocar Git; se completó leyendo
+archivos de HEAD previamente verificados, sin atribuir causa al error del arnés.
+
+Revisión de garantías: los contadores de lectura de Attendance/STATE_UPDATE decrecen
+en finally, independientemente de la secuencia usada para presentar respuestas. Son
+por scope; cierre/cambio de ruta limpia sólo al reporter propietario. La regresión
+2→1→0 y los reports tardíos/scopes ajenos conservan actividad válida y cierran al final.
+Un success anticipado no borra un error mientras haya actividad. Error/conflicto,
+offline, guardado y preparación incompleta conservan prioridad, texto y acceso a
+Diagnóstico mientras el contexto de lectura se añade. Cuerpo inicial estático; PANEL
+retiene mensajes y resultados individuales. Guardado/cargar más mantienen spinners y
+handlers junto a su acción. No se introducen timers, reintentos o polling de datos.
+El pulso central se detiene al dejar working, reducir movimiento o desmontarse.
+
+Comprobación AST adicional contra HEAD: llamadas API/caché, sus argumentos y listas de
+dependencias de hooks de datos idénticos en los 19 archivos de implementación. Sin
+cambios en API, consultas, persistencia, cobertura offline, outbox o sincronización;
+no se tocaron sus módulos. Pruebas completas incluyen las garantías existentes de
+Attendance, RECORDS, conflictos, intenciones, idempotencia y SQLite.
+
+Revisión visual reutilizada: las 19 fuentes funcionales coinciden con las del lote
+revisado. Capturas principales preceden al ajuste de conservación de error; su camino
+afectado tiene captura dirigida posterior. Las rutas adicionales RECORDS se comprobaron
+después de su integración. Son componentes reales Chrome desktop/móvil con sesión/API,
+caché, demoras y reportes de actividad SINTÉTICOS. No se presentan como evidencia nueva
+con Core/OPFS, sincronización productiva, iPhone físico o lector de pantalla. Se conserva
+la distinción entre pruebas SQLite automatizadas y revisión visual del arnés.
+
+Inventario final, parche, hashes, resultados de checks y referencia a capturas en
+ design/validation/read-loading-unification-close-2026-10-14/.
+Sólo las secciones propias de unificación/cierre se incluyen de STATE_UPDATE/STATUS;
+secciones ajenas y 402 pendientes excluidos byte a byte preservados. No secretos,
+configuración local, perfiles, bases, logs, capturas o exports en el parche publicable.
+Las capturas siguen en el respaldo visual anterior, fuera del lote de código.
+HEAD e índice intactos; sin Core/esquema/configuración/dependencias, commit/push/deploy.
+Cierre técnico para revisión, sin autorización de publicación. «11/11 procesadas,
+1 fallo» continúa independiente, abierto y sin causa confirmada. V11 pausado;
+auditoría general abierta. Rutas legacy entity/autenticación/Diagnóstico fuera de este
+rediseño; conservan sus estados originales según la delimitación de implementación.
