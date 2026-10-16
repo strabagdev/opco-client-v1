@@ -9,6 +9,7 @@ import {
   AttendanceWorkflowConfig,
   EntityDefinition,
   OpcoApi,
+  OpcoApiError,
   OpcoNetworkError,
   StateUpdateResponse,
 } from "./opco-api";
@@ -55,6 +56,8 @@ export type OfflinePreparationAppViewTelemetry = {
   appViewType: AppView["type"];
   durationMs: number | null;
   errorCode: string | null;
+  httpStatus?: number | null;
+  appViewName?: string | null;
   fingerprint: string;
   result: "success" | "skipped" | "failed";
   slow: boolean;
@@ -74,6 +77,7 @@ export type OfflinePreparationDiagnostics = {
     total: number;
   };
   lastAppView: OfflinePreparationAppViewTelemetry | null;
+  failedAppViews?: OfflinePreparationAppViewTelemetry[];
   prewarmCompletedAt: string | null;
   prewarmDurationMs: number | null;
   prewarmStartedAt: string | null;
@@ -634,6 +638,7 @@ function createAppViewTelemetry(appView: AppView): OfflinePreparationAppViewTele
     appViewType: appView.type,
     durationMs: null,
     errorCode: null,
+    appViewName: appView.name,
     fingerprint: fingerprintPrewarmValue(appView.id),
     result: "success",
     slow: false,
@@ -672,6 +677,7 @@ async function measurePrewarmStage<T>(
     };
     return result;
   } catch (error) {
+    telemetry.stage = stage;
     const completedAt = new Date().toISOString();
 
     telemetry[key] = {
@@ -711,6 +717,7 @@ function completeAppViewTelemetry(
   telemetry.appViewCompletedAt = new Date().toISOString();
   telemetry.durationMs = durationMs;
   telemetry.errorCode = error ? sanitizePrewarmError(error) : null;
+  telemetry.httpStatus = error instanceof OpcoApiError ? error.status : null;
   telemetry.result = result;
   telemetry.slow = durationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS;
   return telemetry;
@@ -764,6 +771,7 @@ function buildOfflinePreparationDiagnostics({
       total,
     },
     lastAppView: findLastAppViewTelemetry(appViews),
+    failedAppViews: appViews.filter((appView) => appView.result === "failed"),
     prewarmCompletedAt: completedAt,
     prewarmDurationMs,
     prewarmStartedAt: startedAt,
@@ -815,7 +823,14 @@ async function recordOfflinePreparationTelemetry({
 }
 
 function sanitizePrewarmError(error: unknown) {
-  return error instanceof Error && error.name ? error.name : "UNKNOWN";
+  // Never include messages, details, request bodies or arbitrary error names.
+  if (error instanceof OpcoApiError) return "HTTP_ERROR";
+  if (error instanceof OpcoNetworkError) return "NETWORK_ERROR";
+  if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) return "SQLITE_CONSTRAINT_UNIQUE";
+  if (error instanceof Error && error.message.includes("Error finalizing statement")) return "STATEMENT_FINALIZATION_FAILED";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof Error) return "Error";
+  return "UNKNOWN";
 }
 
 function fingerprintPrewarmValue(value: string) {
@@ -853,6 +868,9 @@ export function normalizeOfflinePreparationDiagnostics(
       total: normalizeCount(value.appViews?.total),
     },
     lastAppView: normalizeAppViewTelemetry(value.lastAppView),
+    failedAppViews: Array.isArray(value.failedAppViews)
+      ? value.failedAppViews.map(normalizeAppViewTelemetry).filter((entry): entry is OfflinePreparationAppViewTelemetry => entry?.result === "failed")
+      : undefined,
     prewarmCompletedAt: normalizeNullableString(value.prewarmCompletedAt),
     prewarmDurationMs: normalizeNullableNumber(value.prewarmDurationMs),
     prewarmStartedAt: normalizeNullableString(value.prewarmStartedAt),
@@ -915,7 +933,9 @@ function normalizeAppViewTelemetry(
     appViewType: value.appViewType,
     definitionLoad: normalizeStageTelemetry(value.definitionLoad) ?? undefined,
     durationMs: normalizeNullableNumber(value.durationMs),
-    errorCode: normalizeNullableString(value.errorCode),
+    errorCode: ["HTTP_ERROR", "NETWORK_ERROR", "OpcoApiError", "OpcoNetworkError", "SQLITE_CONSTRAINT_UNIQUE", "STATEMENT_FINALIZATION_FAILED", "TypeError", "Error", "UNKNOWN"].includes(value.errorCode ?? "") ? value.errorCode : value.errorCode ? "UNKNOWN" : null,
+    httpStatus: typeof value.httpStatus === "number" && Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599 ? value.httpStatus : null,
+    appViewName: normalizeNullableString(value.appViewName),
     fingerprint: typeof value.fingerprint === "string" && value.fingerprint.startsWith("fp_") ? value.fingerprint : "fp_unknown",
     result: isAppViewResult(value.result) ? value.result : "failed",
     slow: Boolean(value.slow),

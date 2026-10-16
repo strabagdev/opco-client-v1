@@ -5,12 +5,13 @@ import {
   ATTENDANCE_MONTH_PREWARM_CONCURRENCY,
   OFFLINE_PREPARATION_SLOW_THRESHOLD_MS,
   OfflinePreparationDiagnostics,
+  parseOfflinePreparationDiagnostics,
   isOfflinePreparationDiagnosticsCurrent,
   offlinePreparationScopeKey,
   prewarmAssignedAppViewsOnce,
 } from "./app-view-prewarm";
 import { CachedEntityRecord } from "./offline-records";
-import { AppView, AttendanceResponse, EntityDefinition, EntityRecord, OpcoNetworkError, StateUpdateResponse } from "./opco-api";
+import { AppView, AttendanceResponse, EntityDefinition, EntityRecord, OpcoApiError, OpcoNetworkError, StateUpdateResponse } from "./opco-api";
 import { emptySyncTelemetry, SyncErrorPhase, SyncPhase, SyncTelemetry, SyncTelemetryScope } from "./sync-telemetry";
 import { appViewsFixture, entityDefinitionFixture } from "../test/fixtures";
 import {
@@ -49,6 +50,87 @@ describe("app view prewarm", () => {
     expect(telemetry.at(-1)).toMatchObject({ status: "failed", appViews: { completed: 11, failed: 1, running: 0, total: 11 } });
     expect(api.getAttendanceWorkflow).not.toHaveBeenCalled();
     expect(api.getStateUpdateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("persists the failed experience even when later successes replace lastAppView, and retries without retained failures", async () => {
+    const views = Array.from({ length: 11 }, (_, index) => ({
+      ...appViewsFixture[0], type: "RECORDS" as const,
+      id: `safe-view-${index}`, name: `Synthetic experience ${index}`,
+      config: { entityTypeId: index === 0 ? "failure" : "entity_1" },
+    }));
+    let fail = true;
+    const api = {
+      getEntityDefinition: vi.fn(async (_token: string, _contract: string, entity: string) => {
+        if (entity === "failure" && fail) throw new OpcoApiError("private record or token", "private payload", 503, { secret: true });
+        return { entity: entityDefinitionFixture };
+      }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn(),
+    };
+    const run = () => prewarmAssignedAppViewsOnce({ api, appViews: views, contractId: "contract", ownerKey: "owner", store, token: "secret-token" });
+    await run();
+    const serialized = JSON.stringify(store.offlinePreparationDiagnostics);
+    const persisted = parseOfflinePreparationDiagnostics(serialized)!;
+    expect(persisted).toMatchObject({ status: "failed", appViews: { completed: 11, failed: 1 } });
+    expect(persisted.lastAppView?.result).toBe("success");
+    expect(persisted.failedAppViews).toEqual([expect.objectContaining({
+      appViewName: "Synthetic experience 0", stage: "definition_load", errorCode: "HTTP_ERROR", httpStatus: 503,
+    })]);
+    expect(persisted.runId).toMatch(/^prewarm-/);
+    expect(serialized).not.toMatch(/private|secret-token|secret/);
+    expect([...store.definitions.values()].filter(entry => entry.status === "ready")).toHaveLength(10);
+    fail = false;
+    await run();
+    expect(store.offlinePreparationDiagnostics).toMatchObject({ status: "completed", failedAppViews: [], appViews: { completed: 11, failed: 0 } });
+    expect(api.getEntityDefinition).toHaveBeenCalledTimes(4); // shared definitions are loaded once per run
+  });
+
+  it("keeps multiple failures with their own phases and resets them at the start of a new run", async () => {
+    const views = ["definition-fails", "write-fails", "succeeds"].map((id) => ({
+      ...appViewsFixture[0], type: "RECORDS" as const, id, name: `Synthetic ${id}`,
+      config: { entityTypeId: id },
+    }));
+    let failing = true;
+    store.failDefinitionUpsertFor = "write-fails";
+    const api = {
+      getEntityDefinition: vi.fn(async (_token: string, _contract: string, entity: string) => {
+        if (failing && entity === "definition-fails") throw new OpcoApiError("private", "private", 403);
+        return { entity: entityDefinitionFixture };
+      }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn(),
+    };
+    const updates: OfflinePreparationDiagnostics[] = [];
+    const run = () => prewarmAssignedAppViewsOnce({ api, appViews: views, contractId: "contract", ownerKey: "owner", store, token: "test", onTelemetry: value => { updates.push(JSON.parse(JSON.stringify(value))); } });
+    await run();
+    const first = parseOfflinePreparationDiagnostics(JSON.stringify(store.offlinePreparationDiagnostics))!;
+    expect(first.appViews).toEqual({ completed: 3, failed: 2, running: 0, total: 3 });
+    expect(first.failedAppViews).toEqual([
+      expect.objectContaining({ appViewName: "Synthetic definition-fails", stage: "definition_load", errorCode: "HTTP_ERROR", httpStatus: 403 }),
+      expect.objectContaining({ appViewName: "Synthetic write-fails", stage: "sqlite_write", errorCode: "Error", httpStatus: null }),
+    ]);
+    expect(new Set(first.failedAppViews?.map(entry => entry.fingerprint)).size).toBe(2);
+    failing = false;
+    store.failDefinitionUpsertFor = null;
+    updates.length = 0;
+    await run();
+    expect(updates[0].failedAppViews).toEqual([]);
+    expect(updates[0].runId).not.toBe(first.runId);
+    expect(updates.every(value => value.runId === updates[0].runId && value.failedAppViews?.length === 0)).toBe(true);
+    expect(store.offlinePreparationDiagnostics?.status).toBe("completed");
+  });
+
+  it.each([
+    ["UNIQUE constraint failed: private_column", "SQLITE_CONSTRAINT_UNIQUE"],
+    ["Error finalizing statement: private_value", "STATEMENT_FINALIZATION_FAILED"],
+    ["private_value", "Error"],
+  ])("captures safe diagnostic categories without copying message %s", async (message, expectedCode) => {
+    const api = {
+      getEntityDefinition: vi.fn(async () => { throw new Error(message); }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn(),
+    };
+    await prewarmAssignedAppViewsOnce({ api, appViews: [appViewsFixture[0]], contractId: "contract", ownerKey: "owner", store, token: "test" });
+    const persisted = parseOfflinePreparationDiagnostics(JSON.stringify(store.offlinePreparationDiagnostics))!;
+    expect(persisted.failedAppViews?.[0].errorCode).toBe(expectedCode);
+    expect(JSON.stringify(persisted)).not.toContain("private_");
   });
 
   it("prepares records definitions, attendance statuses, source records, and the current month snapshots", async () => {

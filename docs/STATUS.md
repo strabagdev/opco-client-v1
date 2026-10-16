@@ -2299,3 +2299,141 @@ Cierre técnico para revisión, sin autorización de publicación. «11/11 proce
 1 fallo» continúa independiente, abierto y sin causa confirmada. V11 pausado;
 auditoría general abierta. Rutas legacy entity/autenticación/Diagnóstico fuera de este
 rediseño; conservan sus estados originales según la delimitación de implementación.
+
+## Preparación incompleta 11/11 · diagnóstico individual — 2026-10-15 (LOCAL, SIN PUBLICAR)
+
+Base publicada 235ba5e6dcf7ae1ad806e7a93a330591ff61ae26. Alcance exclusivo del incidente
+reportado a 2026-10-14T01:07:09Z: once AppViews procesadas, un fallo. La evidencia
+histórica documentada no identifica AppView, fase ni causa primaria. El diagnóstico
+original de esa hora no está disponible entre los archivos consultados; no se afirma
+haberlo inspeccionado ni se atribuye el fallo a Attendance, red o SQLite.
+
+Defecto diagnóstico demostrado: prewarm conserva un Map por AppView durante la ejecución,
+pero buildOfflinePreparationDiagnostics reduce ese Map a contadores, lastAppView y top
+lento sin identidad de experiencia. Un éxito posterior puede dejar lastAppView exitoso.
+setOfflinePreparationDiagnostics persiste ese resumen en app_metadata, por owner
+fingerprint; el consumidor de sesión verifica el scope de usuario/contrato existente.
+Normalización al leer no puede reconstruir detalles que nunca se persistieron.
+11/11 significa procesadas, incluidas fallidas; no once preparaciones exitosas.
+
+Se conserva ahora failedAppViews para la ejecución actual: nombre de experiencia de
+AppView (no nombres de registros/personas), fingerprint, tipo/workflow, fase, código
+seguro, HTTP status cuando la excepción es OpcoApiError. runId/scope ya existentes
+identifican la ejecución. Los éxitos posteriores no sustituyen sus fallos. Persistencia
+JSON/lectura usan el mecanismo app_metadata existente, sin esquema nuevo. Una ejecución
+posterior sustituye el diagnóstico de la anterior; no se introduce historial de runs.
+El catch de una etapa conserva esa etapa fallida. No cambian consultas, concurrencia,
+reintentos, snapshots, cobertura, intenciones ni sincronización de escrituras.
+
+Categorías seguras: HTTP_ERROR con estado HTTP, NETWORK_ERROR por clase de excepción,
+TypeError/Error/UNKNOWN. Mensajes reconocidos de UNIQUE o finalización se traducen a
+SQLITE_CONSTRAINT_UNIQUE o STATEMENT_FINALIZATION_FAILED; este último NO demuestra una
+restricción concreta. Nunca se copian mensajes libres, details, tokens, cuerpos, nombres
+de columnas ni valores de registros. Errores genéricos siguen sin causa primaria detallada.
+
+Acceso: pulsar el estado superior → Diagnóstico. En PWA → Preparacion offline se ven
+fallos individuales y runId; en Sincronización → Copiar diagnóstico se copia el mismo
+contexto persistido. Diagnósticos antiguos sin failedAppViews indican expresamente
+«Detalle no conservado por esta versión; repetir la preparación para capturarlo».
+No se interpreta una lista ausente como cero fallos. En el siguiente intento con este
+código, guardar la copia antes de iniciar otra preparación permitirá identificar la
+experiencia y la fase, y distinguir HTTP/categorías reconocidas. No hay publicación ni
+captura nueva del dispositivo del usuario en esta etapa.
+
+Evidencia AUTOMATIZADA: once experiencias sintéticas RECORDS, primera con HTTP 503 al
+cargar definición y diez exitosas; 11/11, failed=1, lastAppView success, fallo individual
+conservado tras serialización/normalización y presente en copia. Sin mensajes/payloads
+privados. Reintento explícito posterior exitoso conserva definiciones listas y deja la
+lista de fallos vacía. Regresiones de categorías seguras, marcador antiguo, ausencia de
+run, run sin fallos y cableado a las secciones existentes. No evidencia Core/Chrome/OPFS
+nueva ni reproducción de la causa histórica productiva. Las comprobaciones de UI son
+unitarias/de cableado, no revisión visual de navegador.
+
+Checks: 89 pruebas focalizadas PASS en cinco archivos; otras dos PASS de local-db.test.ts
+filtradas por «offline preparation» (95 no seleccionadas). Typecheck PASS; lint PASS con dos warnings require preexistentes en
+records-sync.local-db-regression.test.ts:182/183; diff-check PASS. No suite completa ni build. La primera prueba nueva usó erróneamente
+.filter sobre el Map del fixture: corregida a [...values()]. La importación node:fs del
+test falló typecheck por la configuración de tipos existente; se reutilizó la convención
+require declarada de las pruebas del repositorio, sin dependencias. No fueron fallos
+del producto.
+
+Nueve archivos propios: app/(app)/_layout.tsx, app-view-prewarm.ts y su prueba,
+sync-status-diagnostics.ts y su prueba, nuevos offline-preparation-diagnostic.ts y su
+prueba, sólo esta sección de STATUS y STATE_UPDATE. Los 402 pendientes excluidos y las
+secciones documentales ajenas se conservan. Sin Core/API/esquema, borrado, datos
+productivos, commit/push/deploy. V11 pausado. Incidente productivo ABIERTO: diagnóstico
+habilitado localmente; experiencia y causa históricas todavía no acreditadas.
+
+## Cierre técnico — diagnóstico individual de preparación — 2026-10-15 (SIN PUBLICAR)
+
+Candidato aislado desde main 235ba5e6dcf7ae1ad806e7a93a330591ff61ae26. Nueve archivos:
+app/(app)/_layout.tsx; app-view-prewarm.ts y su prueba; sync-status-diagnostics.ts y su
+prueba; nuevos offline-preparation-diagnostic.ts y su prueba; sólo las secciones propias
+de diagnóstico/cierre de STATUS y STATE_UPDATE. No se amplió implementación en el cierre:
+únicamente se añadió una regresión de varios fallos y separación entre runs.
+
+Garantías: fallo seguido de éxito conserva su experiencia, fingerprint, fase y código.
+Varios fallos se guardan separados (HTTP 403 en definition_load; fallo de escritura en
+sqlite_write), asociados al runId del resumen. El siguiente run tiene otro ID, empieza
+con failedAppViews=[] y no mezcla el anterior. El parser mantiene legibles los resúmenes
+históricos sin la nueva lista; el detalle ausente se explica y no se presenta como cero
+fallos. Pantalla y copia reutilizan offlinePreparationFailureRows y el mismo contexto de
+preparación. No se modifica el motor, las peticiones, snapshots, cobertura, reintentos,
+intenciones, conflictos ni sincronización de escrituras. Revisión del diff: sólo
+instrumentación observacional, serialización/normalización y presentación; ningún módulo
+de persistencia o sincronización editado. No cambia el esquema ni la base epoch2.
+
+Suite completa AISLADA: 1091 pruebas / 91 archivos PASS, un worker (máximo dos), 58,51 s.
+Typecheck PASS. Lint cero errores y dos warnings require preexistentes en
+records-sync.local-db-regression.test.ts:182/183. Build web final PASS; bundle
+entry-ba34ca42dffb1deb6fb4a81a89710821.js; shell e17c9c4b7cd6ac8b. Verificados cableado del
+detalle en bundle, API https://web.opco.cl y opco-client-v10-epoch2.db; es un export local,
+no despliegue ni acceso a Core. Diff-check PASS. No se omitieron pruebas ni cambiaron
+sus timeouts. El build sólo precede al texto de este cierre, sin cambios funcionales.
+
+Revisión visual REAL de las pantallas PWA/Sincronización del candidato en Chrome exclusivo
+1440x900 y 390x844. Sesión, API, caché y errores controlados son SINTÉTICOS; se ejecutaron
+prewarm y normalización reales. Se observó «11/11 procesadas · 1 fallo», luego dos fallos
+con distintas experiencias/fases/códigos. Copiar diagnóstico mostró «Copiado»; se leyó el
+clipboard real y coincidieron las filas y runId. No contenía los mensajes, payload,
+columnas privadas ni token sintéticos usados como señuelos. Móvil sin overflow global;
+el detalle histórico muestra el aviso de campos no conservados. Nuevo run exitoso sin
+fallos anteriores. Cero excepciones de runtime en el recorrido final. Los flags de
+conectividad/caché del arnés NO acreditan red, preparación con Core, SQLite/OPFS, ni el
+incidente productivo. No se usó Playwright. Capturas/resultado/clipboard sintéticos en el
+respaldo de cierre, fuera del parche publicable.
+
+Límites y tropiezos del ensayo, sin atribución productiva: la conexión CDP inicial fue
+bloqueada por el sandbox (EPERM); se completó con acceso local autorizado. Se corrigió
+el selector del arnés para las pestañas role=tab. La primera lectura del clipboard no
+tenía foco/permiso. Un stub de getSQLiteCoordinatorDiagnostics devolvía Promise, causando
+«No se pudo copiar»; se sustituyó exclusivamente en la copia visual por el getter síncrono
+real. Se descartaron exports que no incluían el cableado nuevo y se regeneraron con
+--clear; el build final usa la variable existente EXPO_PUBLIC_OPCO_API_URL, tras corregir
+el nombre equivocado usado en un primer comando. Se observaron reinicios de la sesión
+sintética durante intentos preliminares; su causa no se demostró. Para el ensayo final
+se usó un perfil nuevo con el export ya terminado; la copia visual deshabilita la llamada
+de registro SW de su root layout para reducir interferencias de actualización, sin
+cambiar archivos del candidato. Esto no demuestra la causa de los reinicios previos.
+Ninguna captura preliminar ni build descartado se acredita como resultado final.
+
+Cómo capturar el próximo fallo, DESPUÉS de una publicación autorizada y comprobar el
+bundle nuevo ejecutado: 1) con conexión y el contrato correcto, abrir Inicio y esperar
+la preparación automática; no hace falta un botón nuevo. 2) Si aparece preparación
+incompleta, no iniciar otra preparación ni cambiar de contrato antes de copiar: el
+marcador conserva sólo el último run. 3) Pulsar el estado superior → Diagnóstico → PWA;
+en Preparacion offline revisar runId, Scope, contadores y cada Fallo. 4) Abrir la pestaña
+Sincronización → «Copiar diagnóstico de sincronización» y conservar el texto, incluida
+la sección «Preparación offline — fallos por experiencia». 5) Si dice «Detalle no
+conservado», corresponde a un marcador histórico: registrar esa limitación y realizar
+una nueva preparación online volviendo a abrir Inicio. 6) Guardar el texto antes de
+reintentar. Error/UNKNOWN puede requerir reproducción dirigida adicional; no se infiere
+una causa primaria ni un tipo de fallo a partir del contador o del último éxito.
+
+Inventario exacto, parche, SHA256SUMS y evidencia sanitizada en
+ design/validation/offline-preparation-diagnostics-close-2026-10-15/.
+402 pendientes excluidos byte a byte intactos; documentación previa preservada. HEAD e
+índice sin modificar. Sin Core, esquema, dependencias, configuración, datos productivos,
+borrado, commit/push/deploy. Incidente de 2026-10-14T01:07:09Z sigue sin experiencia ni
+causa histórica confirmadas. Cierre del diagnóstico, no resolución del fallo productivo.
+V11 pausado; auditoría general abierta.

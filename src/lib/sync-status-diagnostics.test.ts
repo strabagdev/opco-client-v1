@@ -27,6 +27,22 @@ const baseInput: SyncStatusDiagnosticsInput = {
 };
 
 describe("sync status diagnostics", () => {
+  it("copies the same persisted preparation failure detail with its runId and no payload", () => {
+    const preparation = {
+      appViews: { completed: 11, failed: 1, running: 0, total: 11 }, status: "failed" as const,
+      runId: "prewarm-test-run", lastAppView: null, prewarmCompletedAt: null, prewarmStartedAt: null,
+      prewarmDurationMs: null, slow: false, slowestStages: [],
+      failedAppViews: [{ appViewName: "Synthetic experience", appViewStartedAt: "2026-10-15T00:00:00Z", appViewCompletedAt: null,
+        appViewType: "RECORDS" as const, durationMs: null, errorCode: "HTTP_ERROR", httpStatus: 503,
+        fingerprint: "fp_test", result: "failed" as const, slow: false, stage: "definition_load" as const, workflowKey: null }],
+    };
+    const result = buildSyncStatusDiagnostics({ ...baseInput, offlinePreparation: { ...baseInput.offlinePreparation, diagnostics: preparation, status: "failed" } });
+    const copied = formatSyncStatusDiagnosticsCopy(result, { events: [], scopeKey: "scope" });
+    expect(copied).toContain("prewarm-test-run");
+    expect(copied).toContain("Synthetic experience | fp_test");
+    expect(copied).toContain("fase=definition_load | código=HTTP_ERROR | HTTP=503");
+  });
+
   it("describes online idle and unknown timestamps without assuming a completed sync", () => {
     const result = buildSyncStatusDiagnostics(baseInput);
     expect(result.reason).toContain("Online");

@@ -1,3 +1,5 @@
+import type { OfflinePreparationDiagnostics } from "./app-view-prewarm";
+import { offlinePreparationFailureRows } from "./offline-preparation-diagnostic";
 import type { AppShellStatusIndicator } from "./app-shell-feedback";
 import type { ConnectivityStatus } from "./connectivity";
 import type { ExperienceActivitySnapshot } from "./experience-activity";
@@ -37,6 +39,7 @@ export type SyncStatusDiagnosticsInput = {
   experience: ExperienceActivitySnapshot;
   indicator: AppShellStatusIndicator;
   offlinePreparation: {
+    diagnostics?: OfflinePreparationDiagnostics | null;
     activeInCurrentRuntime: boolean;
     completedAt: string | null;
     startedAt: string | null;
@@ -65,6 +68,7 @@ export type SyncStatusDiagnosticsInput = {
 };
 
 export type SyncStatusDiagnostics = {
+  preparation?: OfflinePreparationDiagnostics | null;
   activities: string[];
   checklist: SyncChecklistItem[];
   indicator: AppShellStatusIndicator;
@@ -83,6 +87,7 @@ export function buildSyncStatusDiagnostics(input: SyncStatusDiagnosticsInput): S
 
   return {
     activities,
+    preparation: input.offlinePreparation.diagnostics,
     checklist: [
       item("connectivity", "Conexión con Opco", connectivityState(input), null, input.connectivity.checkedAt, null,
         input.connectivity.status === "online" ? "Navegador online; no confirma por sí solo acceso a Opco." : `Conectividad ${input.connectivity.status}.`),
@@ -178,6 +183,9 @@ export function formatSyncStatusDiagnosticsCopy(
     `Anima: ${diagnostics.indicator.state === "working" ? "sí" : "no"}`,
     `Actividades concurrentes: ${diagnostics.activities.join(", ") || "Ninguna"}`,
     `Última sincronización exitosa: ${diagnostics.lastSuccessfulSyncAt ?? "Sin información"}`,
+    "",
+    "Preparación offline — fallos por experiencia",
+    ...offlinePreparationFailureRows(diagnostics.preparation ?? null).map(([label, value]) => `${label}: ${value}`),
     "",
     "Coordinador SQLite",
     ...sqliteCoordinatorCopyLines(sqlite),

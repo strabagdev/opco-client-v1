@@ -1,3 +1,4 @@
+import { offlinePreparationFailureRows } from "@/lib/offline-preparation-diagnostic";
 import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { LOCAL_DATABASE_NAME, subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
@@ -187,6 +188,7 @@ export default function AppLayout() {
     experience: experienceActivity,
     indicator: shellStatusIndicator,
     offlinePreparation: {
+      diagnostics: offlinePreparationDiagnostics,
       activeInCurrentRuntime: isOfflinePreparationRunning,
       completedAt: offlinePreparationDiagnostics?.prewarmCompletedAt ?? null,
       startedAt: offlinePreparationDiagnostics?.prewarmStartedAt ?? null,
@@ -1232,6 +1234,7 @@ function getOfflinePreparationRows(diagnostics: OfflinePreparationDiagnostics | 
     ["failed", String(diagnostics.appViews.failed)],
     ["running", String(diagnostics.appViews.running)],
     ["Ultima AppView", diagnostics.lastAppView ? `${diagnostics.lastAppView.fingerprint} ${diagnostics.lastAppView.stage} ${diagnostics.lastAppView.result}` : "none"],
+    ...offlinePreparationFailureRows(diagnostics).filter(([label]) => label !== "runId"),
     ["Top lento", diagnostics.slowestStages.map((stage) => `${stage.stage}:${stage.durationMs ?? "none"}ms`).join(", ") || "none"],
   ];
 }
