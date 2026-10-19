@@ -1,4 +1,8 @@
-import { useLocalSearchParams } from "expo-router";
+import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
+import { prepareStateUpdateCurrent } from "@/lib/state-update-current-prewarm";
+import { runWithConcurrency, PREWARM_CONCURRENCY } from "@/lib/app-view-prewarm";
+import { refreshEntityRecordsCache } from "@/lib/offline-records";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -85,6 +89,7 @@ import {
 } from "./state-update-operation-feedback";
 
 type ConflictState = Extract<StateUpdateBatchResult, { result: "CONFLICT" }> & {
+  confirmationKey?: string;
   durableRecord?: CachedStateUpdateRecord;
   subjectName: string;
 };
@@ -108,15 +113,29 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     syncPendingRecords,
     token,
   } = useSession();
-  const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
-  const targetDate = attentionDate(attentionParams.attentionDate);
-  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? formatLocalDateInput(new Date()) });
+  const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string; reportDate?: string; reportContext?: string }>();
+  const router = useRouter();
+  const compositeMode = (typeof appView.config.uniqueness === "object" ? appView.config.uniqueness.mode : appView.config.uniqueness) === "subject-date-fields";
+  const targetDate = attentionDate(compositeMode ? attentionParams.reportDate ?? attentionParams.attentionDate : attentionParams.attentionDate);
+  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? (compositeMode ? "" : formatLocalDateInput(new Date())) });
   const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
-  function setDate(next: string | ((current: string) => string)) {
-    setDateSelection({ routeDate: targetDate, value: typeof next === "function" ? next(date) : next });
-  }
   const [searchText, setSearchText] = useState("");
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
+  const [contextSelection, setContextSelection] = useState({ route: attentionParams.reportContext, value: parseCompositeContextValues(attentionParams.reportContext) });
+  const identityValues = contextSelection.route === attentionParams.reportContext ? contextSelection.value : parseCompositeContextValues(attentionParams.reportContext);
+  function setIdentityValues(next: (current: Record<string,string>) => Record<string,string>) {
+    const value = next(identityValues);
+    setContextSelection({route: attentionParams.reportContext, value});
+    router.setParams({reportContext: JSON.stringify(value)});
+  }
+  const selectedIdentityJson = JSON.stringify(response?.appView.id === appView.id ? selectCompositeIdentity(response?.identityDefinition, response?.identityFields, identityValues) : undefined);
+  const identity = useMemo(() => selectedIdentityJson ? JSON.parse(selectedIdentityJson) as import("@/lib/opco-api").CompositeStateIdentity : undefined, [selectedIdentityJson]);
+  const identityKey = compositeIdentityKey(identity);
+  const contextPreparationRef = useRef<AbortController | null>(null);
+  const contextReady = !compositeMode || Boolean(identity && /^\d{4}-\d{2}-\d{2}$/.test(date));
+  const [isPreparingContext, setIsPreparingContext] = useState(false);
+  const [verifiedOfflineAbsences, setVerifiedOfflineAbsences] = useState<{scope:string;ids:string[]}>({scope:"",ids:[]});
+  const [confirmContextExit, setConfirmContextExit] = useState(false);
   const [items, setItems] = useState<StateUpdateItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<StateUpdateItem | null>(null);
   const [latestPage, setLatestPage] = useState(1);
@@ -132,15 +151,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
     useState<StateUpdateVisibleErrorDiagnostics | null>(null);
   const [readRequests, setReadRequests] = useState<Record<string, number>>({});
-  const readScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date]);
-  const activeReadCount = readRequests[readScope] ?? 0;
+  const readScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date, ...(compositeMode ? [identityKey] : [])]);
+  const activeReadCount = (readRequests[readScope] ?? 0) + Number(isPreparingContext);
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [offlineHistoryState, setOfflineHistoryState] = useState<StateUpdateOfflineHistoryState>(null);
   const requestSequenceRef = useRef(0);
-  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date]);
+  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, ...(compositeMode ? [identityKey] : [])]);
+  useEffect(() => () => contextPreparationRef.current?.abort(), [resolutionScope]);
   const resolutionScopeRef = useRef(resolutionScope);
   useLayoutEffect(() => { resolutionScopeRef.current = resolutionScope; }, [resolutionScope]);
   const resolutionInFlightRef = useRef(false);
@@ -151,7 +171,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }, []);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
-  const visibleResponse = response && (!response.date || normalizeStateUpdateLogicalDate(response.date) === date) ? response : null;
+  const visibleResponse = response && response.appView.id === appView.id && (!compositeMode || (contextReady && compositeIdentityKey(response.identityContext) === identityKey)) && (!response.date || normalizeStateUpdateLogicalDate(response.date) === date) ? response : null;
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const currentStateUpdateSyncRunId =
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
@@ -197,6 +217,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     return {
       scope: buildStateUpdateCoverageScope({
         appViewId: appView.id,
+        identity,
         contractId: selectedContractId,
         ownerKey,
         date,
@@ -208,7 +229,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }),
       sourceEntityTypeId: visibleResponse.sourceEntityType.id,
     };
-  }, [appView.id, date, ownerKey, selectedContractId, visibleResponse]);
+  }, [appView.id, date, identity, ownerKey, selectedContractId, visibleResponse]);
   useExperienceActivityReporter(appView, {
     stateUpdateCoverage,
     activeCount: Math.max(activeReadCount, Number(isLoading) + Number(isSearching)) + Number(isLoadingMore) + Number(isSaving),
@@ -238,7 +259,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     if (ownerKey) {
       void definitionCache.resolveStateUpdateVisibleErrorEvent(ownerKey, resolution).catch(() => undefined);
     }
-  }, [definitionCache, ownerKey]);
+  }, [definitionCache, ownerKey, setVisibleErrorDiagnostics]);
 
   const recordVisibleError = useCallback(({
     error: nextError,
@@ -261,7 +282,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     if (ownerKey) {
       void definitionCache.recordStateUpdateVisibleErrorEvent(ownerKey, event).catch(() => undefined);
     }
-  }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
+  }, [currentStateUpdateSyncRunId, definitionCache, ownerKey, setVisibleErrorDiagnostics]);
 
   const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; requestId?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
@@ -280,6 +301,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return false;
     }
     const definition = prepared.definition;
+    if (compositeMode && !contextReady) {
+      setResponse({ appView: { id: appView.id, name: appView.name, slug: appView.slug }, date, dateFieldId: definition.dateFieldId,
+        identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
+        extraFields: definition.extraFields, stateFields: definition.stateFields, subjectFieldId: definition.subjectFieldId,
+        historyMode: definition.historyMode, uniqueness: definition.uniqueness, items: [], latest: [],
+        sourceEntityType: { id: definition.sourceEntityTypeId, name: definition.sourceEntityTypeName ?? "Registros" }, targetEntityType: { id: definition.targetEntityTypeId, name: definition.targetEntityTypeName ?? "Registros" } });
+      setItems([]);return true;
+    }
 
     const sourceTelemetry = await definitionCache.getSyncTelemetry({
       contractId: selectedContractId,
@@ -290,12 +319,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     const scope = buildStateUpdateCoverageScope({
       appViewId: appView.id,
+      identity,
       contractId: selectedContractId,
       date,
       ownerKey,
     }, definition);
     const latestPageToLoad = query.page ?? 1;
-    const [summary, latestResult, localConflicts, storedCoverage] = await Promise.all([
+    const [summary, latestResult, localConflicts, storedCoverage, currentCoverage] = await Promise.all([
       definitionCache.getStateUpdateSummary(scope),
       definitionCache.listStateUpdateLatest({
         ...scope,
@@ -305,6 +335,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }),
       definitionCache.listStateUpdateConflicts(scope),
       definitionCache.getStateUpdateSnapshotCoverage(scope),
+      compositeMode ? definitionCache.getStateUpdateCurrentCoverage({...scope,sourceEntityTypeId:definition.sourceEntityTypeId}) : null,
     ]);
     const effectiveCoverage = resolveStateUpdateOfflineHistoryState({
       cachedRecordCount: Math.max(latestResult.items.length, summary.totalRegistered),
@@ -333,6 +364,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return false;
     }
 
+    if (compositeMode) setVerifiedOfflineAbsences({scope:readScope,ids:Object.entries(currentCoverage?.subjects ?? {}).filter(([,authority])=>hasVerifiedCompositeAbsence(authority)).map(([id])=>id)});
     const nextResponse: StateUpdateResponse = {
       appView: {
         id: appView.id,
@@ -352,6 +384,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
         : null,
       dateFieldId: definition.dateFieldId,
+      identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
       extraFields: definition.extraFields,
       historyMode: definition.historyMode,
       items: nextItems,
@@ -401,7 +434,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
 
     return true;
-  }, [appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId]);
+  }, [identity, contextReady, compositeMode, appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId, setError, setItems, setDurableConflicts, setLatestPage, setOfflineHistoryState, readScope, setVerifiedOfflineAbsences]);
 
   const loadWorkflow = useCallback(async (query: { appendLatest?: boolean; operation?: StateUpdateVisibleErrorOperation; page?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!token || !selectedContractId) {
@@ -410,7 +443,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
-    const activityScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date]);
+    const activityScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date, ...(compositeMode ? [identityKey] : [])]);
     if (!query.appendLatest) setReadRequests(current => ({ ...current, [activityScope]: (current[activityScope] ?? 0) + 1 }));
     const requestId = ++requestSequenceRef.current;
     const hasSearch = Boolean(query.search);
@@ -440,20 +473,31 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
 
       const nextResponse = await api.getStateUpdateWorkflow(token, selectedContractId, appView.id, {
-        date: hasDate ? date : undefined,
+        date: hasDate && date ? date : undefined,
+        identity: contextReady ? identity : undefined,
         page: latestPageToLoad,
         pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
-        search: query.search,
-        subjectRecordId: query.subjectRecordId,
+        search: contextReady ? query.search : undefined,
+        subjectRecordId: contextReady ? query.subjectRecordId : undefined,
       });
 
       if (!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
 
+      if (nextResponse.uniqueness === "subject-date-fields" && nextResponse.contextRequired) {
+        setResponse(nextResponse);setItems([]);
+        if (ownerKey) await definitionCache.upsertAppViewDefinition({ appViewId: appView.id, appViewType: "WORKFLOW", workflowKey: "state-update", ownerKey, contractId: selectedContractId,
+          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", sourceEntityTypeId: nextResponse.sourceEntityType.id,
+            sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
+            dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
+            identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
+        return;
+      }
       const localConflicts = ownerKey
         ? await definitionCache.listStateUpdateConflicts({
             appViewId: appView.id,
+            identity,
             contractId: selectedContractId,
             date: normalizeStateUpdateLogicalDate(nextResponse.date),
             ownerKey,
@@ -489,6 +533,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         };
         const snapshotResult = await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
+          identity,
           complete: !query.search && !query.subjectRecordId && pagination.page === 1 && !pagination.hasMore,
           expectedRemoteEventCount: pagination.page === 1 && !pagination.hasMore ? pagination.total : undefined,
           contractId: selectedContractId,
@@ -498,6 +543,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           uniqueness: nextResponse.uniqueness,
           projectionDefinition: {
             sourceEntityTypeId: nextResponse.sourceEntityType.id, subjectFieldId: nextResponse.subjectFieldId,
+            identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition,
             dateFieldId: nextResponse.dateFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
           },
           items: nextResponse.items,
@@ -512,6 +558,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             uniqueness: nextResponse.uniqueness,
             snapshotResult,
             appViewId: appView.id,
+            identity,
             contractId: selectedContractId,
             date: normalizeStateUpdateLogicalDate(nextResponse.date),
             ownerKey,
@@ -557,7 +604,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         setIsLoadingMore(false);
       }
     }
-  }, [api, appView.id, clearVisibleError, connectivityStatus, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, recordVisibleError, selectedContractId, token]);
+  }, [api, appView, identity, identityKey, contextReady, compositeMode, clearVisibleError, connectivityStatus, date, definitionCache, hasDate, isOnline, loadOfflineWorkflow, ownerKey, recordVisibleError, selectedContractId, token, setDurableConflicts, setError, setIsLoading, setIsLoadingMore, setIsSearching, setItems, setLatestPage, setOfflineHistoryState, setReadRequests, setRefreshError, setResponse]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -606,6 +653,18 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     return () => clearTimeout(timeoutId);
   }, [loadWorkflow, searchText]);
 
+  function setDate(next: string | ((current: string) => string)) {
+    const value = typeof next === "function" ? next(date) : next;
+    if (compositeMode && value === date) return;
+    setDateSelection({ routeDate: targetDate, value });
+    if (compositeMode) {
+      requestSequenceRef.current += 1;
+      setItems([]);setSelectedItem(null);setConflict(null);setDurableConflicts([]);
+      setSuccessMessage(null);setError(null);setRefreshError(null);setResolutionFeedback(null);
+      router.setParams({ reportDate: value });
+    }
+  }
+
   function clearEditor() {
     setItems([]);
     setSelectedItem(null);
@@ -615,7 +674,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setConflict(null);
   }
 
+  function unavailableCompositeAbsence(item: StateUpdateItem) {
+    return compositeMode && !isOnline && !item.current && (verifiedOfflineAbsences.scope !== readScope || !verifiedOfflineAbsences.ids.includes(item.subject.id));
+  }
   async function selectSubject(item: StateUpdateItem) {
+    if (unavailableCompositeAbsence(item)) { setError("Prepara este contexto con conexión antes de crear un reporte sin conexión.");return; }
     setSelectedItem(item);
     setConflict(null);
     setError(null);
@@ -640,7 +703,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }
 
   async function saveSelected(overwrite = false, expectedUpdatedAt?: string) {
-    if (!response || !selectedItem || !selectedContractId || isSaving) {
+    if (!response || !selectedItem || !selectedContractId || isSaving || !contextReady) {
       return;
     }
 
@@ -662,7 +725,19 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
+    const selectedScope = resolutionScope;
+    if (compositeMode && selectedItem.current && !overwrite) {
+      const cached = ownerKey ? await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, entityTypeId: response.targetEntityType.id, recordId: selectedItem.current.recordId }) : null;
+      if (resolutionScopeRef.current !== selectedScope || !resolutionMountedRef.current) return;
+      if (!cached || cached.serverId) {
+        setConflict({ confirmationKey: compositeConfirmationKey(selectedScope, selectedItem.subject.id, selectedItem.current.updatedAt, stateSnapshot.stateValues, buildSubmitValues(response.extraFields, extraValues)), result: "CONFLICT", subjectRecordId: selectedItem.subject.id, subjectName: selectedItem.subject.displayName,
+          existing: selectedItem.current, requested: { stateValues: stateSnapshot.stateValues.map(v => ({ ...v, label: null, optionId: v.optionId ?? null })), extraValues: buildSubmitValues(response.extraFields, extraValues) } });
+        return;
+      }
+    }
+    const savingScope = resolutionScope;
     const entry: StateUpdateEntry = {
+      identity,
       expectedUpdatedAt,
       extraValues: buildSubmitValues(response.extraFields, extraValues),
       overwrite,
@@ -677,16 +752,18 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setResolutionFeedback(null);
 
     try {
-      if (!isOnline) {
+      if (!isOnline || compositeMode) {
         if (!ownerKey) {
           return;
         }
 
         const localRecord = await definitionCache.saveStateUpdateLocally({
           appViewId: appView.id,
+          identity,
           contractId: selectedContractId,
           date: hasDate ? date : undefined,
           expectedUpdatedAt: expectedUpdatedAt ?? selectedItem.current?.updatedAt ?? null,
+          preserveIdenticalConfirmedIntent: compositeMode,
           extraValues: buildSubmitValues(response.extraFields, extraValues),
           historyMode: response.historyMode,
           overwrite,
@@ -698,6 +775,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           targetEntityTypeId: response.targetEntityType.id,
           uniqueness: response.uniqueness,
         });
+        if (compositeMode && resolutionScopeRef.current !== savingScope) return;
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         insertSavedLatestItem({
           recordId: localRecord.localRecordId,
@@ -708,6 +786,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         clearVisibleError();
         clearEditor();
         await refreshRecordsSyncSummary();
+        if (compositeMode && isOnline) {
+          await syncPendingRecords();
+          await loadWorkflow({ operation: "refresh", subjectRecordId: localRecord.subject.id });
+          await refreshRecordsSyncSummary();
+        }
         return;
       }
 
@@ -825,6 +908,9 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
+    if (compositeMode && (!selectedItem || !response || conflict.confirmationKey !== compositeConfirmationKey(resolutionScope, selectedItem.subject.id, selectedItem.current?.updatedAt ?? "", buildEffectiveStateSnapshot({currentStateValues:selectedItem.current?.stateValues,fields:response.stateFields,formValues:stateValues}).stateValues, buildSubmitValues(response.extraFields,extraValues)))) {
+      setConflict(null);setError("El contexto o el cambio mostrado cambió. Revisa y confirma nuevamente.");return;
+    }
     await saveSelected(true, conflict.existing.updatedAt);
   }
 
@@ -854,6 +940,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
         conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
+        identity,
         contractId: selectedContractId,
         date: hasDate ? date : undefined,
         expectedUpdatedAt: record.conflictRemoteUpdatedAt,
@@ -880,7 +967,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       await refreshRecordsSyncSummary();
       if (!isCurrent()) return;
       const outcome = await definitionCache.getStateUpdateResolutionOutcome({
-        appViewId: appView.id, contractId: selectedContractId, ownerKey,
+        appViewId: appView.id, contractId: selectedContractId, identity, ownerKey,
         targetEntityTypeId: response.targetEntityType.id, date: hasDate ? date : undefined,
         localRecordId: saved.localRecordId, clientRequestId: saved.clientRequestId!,
       });
@@ -927,6 +1014,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         localRecordId: record.localRecordId,
         conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
+        identity,
         contractId: selectedContractId,
         date: hasDate ? date : undefined,
         ownerKey,
@@ -948,6 +1036,25 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       resolutionInFlightRef.current = false;
       setIsSaving(false);
     }
+  }
+
+  async function prepareSelectedContext() {
+    if (!response || !identity || !contextReady || !isOnline || !token || !ownerKey || !selectedContractId || isPreparingContext) return;
+    const selectedScope = resolutionScope;
+    const controller = new AbortController();contextPreparationRef.current = controller;
+    setIsPreparingContext(true);setError(null);
+    try {
+      let sourceRemoteTotal: number | undefined;let sourceFetched=0;
+      const source = await refreshEntityRecordsCache({ api, token, ownerKey, contractId: selectedContractId, entityTypeId: response.sourceEntityType.id, store: definitionCache,
+        onDiagnostics: d => { sourceRemoteTotal=d.remoteTotal ?? undefined;sourceFetched=d.recordsFetched; } });
+      await prepareStateUpdateCurrent({ api, token, store: definitionCache, signal: controller.signal, concurrency: PREWARM_CONCURRENCY, runWithConcurrency,
+        scope: { identity, appViewId: appView.id, ownerKey, contractId: selectedContractId, sourceEntityTypeId: response.sourceEntityType.id,
+          targetEntityTypeId: response.targetEntityType.id, date, dateFieldId: response.dateFieldId, uniqueness: response.uniqueness, historyMode: response.historyMode },
+        sourceRemoteTotal, sourceFetched, sourceCacheTotal: source.pagination.total });
+      const coverage = await definitionCache.getStateUpdateCurrentCoverage({ identity, appViewId: appView.id, ownerKey, contractId: selectedContractId, sourceEntityTypeId: response.sourceEntityType.id, targetEntityTypeId: response.targetEntityType.id, date, dateFieldId: response.dateFieldId, uniqueness: response.uniqueness, historyMode: response.historyMode });
+      if (resolutionScopeRef.current === selectedScope) { setSuccessMessage(coverage?.status === "complete" ? "Contexto preparado para uso sin conexión." : "Preparación parcial: faltan sujetos o reportes por verificar.");await loadWorkflow({ operation: "refresh" }); }
+    } catch (error) { if (resolutionScopeRef.current === selectedScope) setError(error instanceof Error ? error.message : "No fue posible preparar este contexto."); }
+    finally { setIsPreparingContext(false); }
   }
 
   function loadMoreLatest() {
@@ -1019,6 +1126,18 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
+      {compositeMode ? <View style={styles.form}>
+        <Text style={styles.label}>Contexto del reporte</Text>
+        <TextInput accessibilityLabel="Fecha operacional" editable={!selectedItem && !isSaving && !isPreparingContext} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" style={styles.input} />
+        {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.fieldGroup}>
+          <Text style={styles.label}>{field.label}</Text><View style={styles.optionList}>{field.options.map(option => <Pressable key={option.optionId} disabled={!!selectedItem || isSaving || isPreparingContext}
+            accessibilityRole="button" accessibilityState={{ selected: identityValues[field.fieldId] === option.optionId }}
+            onPress={()=>{if(identityValues[field.fieldId]===option.optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:option.optionId}));setItems([]);setConflict(null);setSuccessMessage(null);}}
+            style={[styles.optionButton, identityValues[field.fieldId]===option.optionId && styles.optionButtonSelected]}><Text style={[styles.optionText, identityValues[field.fieldId]===option.optionId && styles.optionTextSelected]}>{option.label}{option.active===false ? " (inactivo)" : ""}</Text></Pressable>)}</View>
+        </View>)}
+        {!contextReady ? <Text>Selecciona fecha y todos los campos de contexto antes de buscar.</Text> : null}
+        <Pressable accessibilityRole="button" disabled={!contextReady || !isOnline || isPreparingContext || !!selectedItem} onPress={()=>void prepareSelectedContext()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Preparar este contexto sin conexión</Text></Pressable>
+      </View> : null}
       <View style={styles.searchBlock}>
         <TextInput
           autoCapitalize="words"
@@ -1032,6 +1151,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             setSuccessMessage(null);
             setResolutionFeedback(null);
           }}
+          editable={contextReady && !isPreparingContext}
           placeholder="Buscar"
           style={styles.searchInput}
           value={searchText}
@@ -1047,7 +1167,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             <Pressable key={item.subject.id} onPress={() => void selectSubject(item)} style={styles.subjectRow}>
               <View style={styles.subjectText}>
                 <Text style={styles.subjectName}>{item.subject.displayName}</Text>
-                <Text style={styles.statusMeta}>{formatCurrentState(response, item) ?? "Sin estado"}</Text>
+                <Text style={styles.statusMeta}>{unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : formatCurrentState(response, item) ?? "Sin estado"}</Text>
               </View>
             </Pressable>
           ))}
@@ -1062,7 +1182,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           </View>
 
           <View style={styles.form}>
-            {hasDate ? (
+            {hasDate && !compositeMode ? (
               <View style={styles.fieldGroup}>
                 <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
                 <TextInput
@@ -1104,6 +1224,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           >
             {isSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>{submitLabel}</Text>}
           </Pressable>
+          {compositeMode ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Volver a buscar</Text></Pressable> : null}
         </View>
       ) : null}
 
@@ -1119,6 +1240,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
+      <Modal visible={confirmContextExit} transparent onRequestClose={()=>setConfirmContextExit(false)}><View style={styles.modalBackdrop}><View style={styles.modalPanel}>
+        <Text style={styles.title}>¿Descartar el borrador sin guardar?</Text><Text>Los cambios ya guardados y pendientes se conservan.</Text>
+        <Pressable accessibilityRole="button" onPress={()=>setConfirmContextExit(false)} style={styles.secondaryButton}><Text>Continuar editando</Text></Pressable>
+        <Pressable accessibilityRole="button" onPress={()=>{clearEditor();setConfirmContextExit(false);}} style={styles.secondaryButton}><Text>Volver a buscar</Text></Pressable>
+      </View></View></Modal>
       <ConflictModal
         conflict={conflict}
         extraFields={response?.extraFields ?? []}

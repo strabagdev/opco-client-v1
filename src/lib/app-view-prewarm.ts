@@ -461,6 +461,10 @@ async function prewarmOneAppView({
         ...telemetry.sourceRecordsFetch!,
         sourceRecordsCount: sourceRecords.pagination.total,
       };
+      if (response.uniqueness === "subject-date-fields") {
+        await store.upsertAppViewDefinition(baseDefinitionInput({ appView, contractId, ownerKey, lastPreparedAt, status: "ready", definition: stateUpdatePreparedDefinition(appView, response) }));
+        return completeAppViewTelemetry(telemetry, appStartedMs, "success");
+      }
       const snapshotPagination = response.latestPagination ?? {
         hasMore: false,
         page: 1,
@@ -617,7 +621,7 @@ function baseDefinitionInput({
   };
 }
 
-async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+export async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
   let index = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (index < items.length) {
@@ -1060,6 +1064,7 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     sourceEntityTypeId: response.sourceEntityType.id,
     sourceEntityTypeName: response.sourceEntityType.name,
     stateFields: response.stateFields ?? [],
+    identityFields: response.identityFields, identityDefinition: response.identityDefinition,
     subjectFieldId: response.subjectFieldId,
     targetEntityTypeId: response.targetEntityType.id,
     targetEntityTypeName: response.targetEntityType.name,

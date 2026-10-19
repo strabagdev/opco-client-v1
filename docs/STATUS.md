@@ -2437,3 +2437,99 @@ Inventario exacto, parche, SHA256SUMS y evidencia sanitizada en
 borrado, commit/push/deploy. Incidente de 2026-10-14T01:07:09Z sigue sin experiencia ni
 causa histórica confirmadas. Cierre del diagnóstico, no resolución del fallo productivo.
 V11 pausado; auditoría general abierta.
+
+
+## STATE_UPDATE identidad compuesta — primera etapa local — 2026-10-18
+
+Implementado únicamente subject-date-fields + update-current en Core/editor y Client. Roles SELECT
+simples/obligatorios, definición compartida entre AppViews, reserva única transaccional, bloqueo de
+escrituras genéricas/borrado para entidades nuevas que activan el modo. Sin adopción de entidades
+pobladas, sin reinterpretar modos anteriores. Client selecciona fecha/contexto antes de buscar,
+prepara sólo el contexto explícito, persiste scopes e intenciones exactos en SQLite v10/epoch2 y
+reutiliza confirmación, outbox, conflictos, restauración e indicador central.
+
+Pruebas focalizadas, máximo dos workers: Client 264/12 archivos (presupuesto CLI20s; ver limitación abajo); Core 200/5 archivos y repetición de
+los nueve casos PostgreSQL sobre migración final limpia. Typecheck, lint y diff-check aprobados;
+lint Client conserva dos advertencias require-imports de HEAD, Core cero. Sin suite completa ni build
+Core; export local Client indispensable para Chrome/OPFS. Chrome real acredita preparación/búsqueda,
+creación offline, edición confirmada, cierre/reapertura offline con autorización durable, ACK real sin
+duplicados, conflicto por cambio remoto posterior, restauración y aislamiento al cambiar contexto.
+El ajuste final de ausencia no verificada se repitió en el bundle final
+entry-4fa1cfed7a91b8872d4bf9f7dba0fd41.js; no se acredita prueba productiva o revisión móvil.
+
+Migración aditiva 20261018000100_state_update_composite_identity sólo en
+127.0.0.1:5432/opco_development como opco_dev, URL de .env.local pasada explícitamente. Tras limpiar
+fixtures se reaplicó exclusivamente la migración experimental propia: 23 aplicadas/cero fallidas,
+checksum final correcto y las 22 entradas anteriores intactas. Sin migración SQLite ni cambio de base.
+Serializador real del Client anterior 1b4bdaa contra HTTP local: 400 COMPOSITE_IDENTITY_REQUIRED;
+no demuestra coexistencia completa de runtimes. Horarios/duración, eliminación Client, reglas de
+horómetros, REPORT/PANEL y V11 permanecen fuera. Incidentes productivos históricos, OPFS y preparación
+incompleta no se atribuyen ni se declaran resueltos por esta implementación.
+
+Lote exacto: 14 archivos Client y 11 Core (implementación, regresiones y cuatro secciones documentales).
+[Inventario y parches propios](../design/validation/state-update-composite-stage1-2026-10-18/inventory.json).
+Se conservan las 402 exclusiones por hash y los pendientes adicionales de entrada; las secciones
+ajenas de STATE_UPDATE/STATUS permanecen byte a byte como prefijo anterior. Ambos main/HEAD e índices
+intactos. Se limpiaron sólo fixtures/procesos/perfil propios, conservando registros locales ajenos.
+Sin commit, push, deploy ni acceso productivo; requiere cierre técnico posterior antes de publicar.
+
+
+Última revisión: se cerraron fecha/sujeto como estados editables sólo para el modo nuevo en Core, y
+la lectura directa scoped por ID en Client (fecha/contexto también en pendientes). Regresiones fallaron
+antes y pasan después. El último lector se comprobó además en Chrome/OPFS tras reapertura, bundle
+entry-aa67ade897355755cfe604791b321382.js, con snapshot sintético por funciones reales; no es una nueva
+prueba de sincronización Core. Client 264 afectadas; Core 200 afectadas. Sin suite completa.
+
+
+Transición de Fecha del modo compuesto comprobada antes/después en Core real con HTTP lento: no se
+mantiene visible la fila del contexto anterior. Cambiar fecha limpia sólo estado visual e invalida
+respuestas antiguas; seleccionar el mismo valor es noop. No cambia Attendance ni la outbox.
+
+Límite de cierre: ejecución Client estándar5s con21 timeouts/EPIPE; repetición del archivo con14
+timeouts. No se adjudica causa. Misma selección264 pruebas pasa con CLI --testTimeout=20000 y dos
+workers, sin editar tests/configuración. Typecheck/lint/diff-check pasan (dos warnings de HEAD).
+No acreditar PASS estándar ni publicación lista. La inestabilidad del presupuesto queda abierta,
+separada del resultado funcional, V11 y los incidentes históricos. Se limpiaron siete organizaciones
+propias en total más perfiles/procesos sintéticos; datos ajenos preservados.
+
+
+Validación del bloqueo subject-date-fields — 2026-10-19: comparación aislada HEAD/candidato del archivo
+con timeouts históricos: 22/22 y 22/22 con un worker y 5 s normales. La causa del primer timeout histórico
+no se reprodujo; el stack EPIPE identifica el harness, no prueba su causa primaria. No se amplió timeout.
+La primera suite completa reveló seis fallos por identity ausente en el contexto del harness de handlers;
+se corrigió sólo esa prueba, conservando/reforzando aserciones. HEAD 7/7, candidato corregido 7/7.
+Suite completa final Client 1104/1104, Core 1112 PASS/25 omitidas, un worker; typecheck/lint/build y
+diff-check PASS en ambos. Dos warnings Client ya existentes en HEAD; Core cero. Build Core webpack en
+archive fuera del sandbox con entorno local explícito, después de errores de captura TypeScript vacía
+y AUTH_SECRET omitida, conservados en el informe. Nueve integraciones PostgreSQL previas reutilizadas,
+no acreditadas como ejecutadas por la suite estándar. Sólo SELECT confirmó 23 migraciones/cero fallidas,
+checksum aditivo y digest de las 22 previas intactos, sin reaplicar. Runtime funcional idéntico: se
+reutiliza Chrome/OPFS con sus límites. Cápsula anterior preservada y lote actualizado de 15 Client/11 Core
+con hashes y reconstrucción exacta. 402 exclusiones y pendientes adicionales intactos. Sin commit/push/
+deploy, sin nuevos fixtures; V11 pausado. No se cierran auditoría general ni incidentes históricos.
+
+
+Revisión de evidencia subject-date-fields — 2026-10-19: 25 omisiones Core identificadas nominalmente
+(9 PANEL, 7 escrituras genéricas, 9 compuesto), por flags de integración ausentes. Nueve casos compuestos
+PG previos reutilizados con runtime/SQL idénticos. Sólo dos ensayos nuevos indispensables: 2 PASS con
+PostgreSQL local validado y un worker. Acreditan valor del ganador concurrente, rollback del guardado
+completo después de auditoría real y ausencia de mutaciones por identidad incompleta; retry/replay
+produce un único efecto. No cambio funcional, suite/build/navegador ni migración repetidos. Evidencia y
+parche de ensayo separados en design/validation/state-update-composite-evidence-review-2026-10-19/.
+Core+migración aditiva primero; Client después; activar modo sólo con ambos compatibles. Tras activación,
+rollback limitado a builds compatibles en ambos, conservando slots/guardas/datos/intenciones. Sin down
+migration/conversión inversa validada. Cápsula y pendientes originales intactos; sin publicación, V11 pausado.
+
+
+Preparación publicación subject-date-fields — 2026-10-19, SIN COMMIT/PUSH/DEPLOY: inventario consolidado
+Core11/Client15 con pruebas y documentación complementarias; runtime funcional idéntico. Checks previos
+y 9+2 integraciones PG reutilizados; sólo lint/typecheck de pruebas nuevas. No suites/build/navegador.
+Lectura origin/main coincide con HEAD/base en ambos. Railway destino Core/production/Postgres validado;
+SELECT READ ONLY productivo confirmó22 aplicadas/0 fallidas/sin divergencias, única pendiente
+20261018000100_state_update_composite_identity. Sin migración ni lectura/escritura de datos de aplicación.
+BLOQUEO previo a migrar: PITR off,sin schedules,único backup listado con expiresAt21-09-2026; no respaldo
+reciente/restauración probada acreditados. Mecanismos CLI/API y dump/restore18.6 identificados, no ejecutados.
+Procedimiento Core+migración habitual -> SUCCESS/SHA/health/readiness -> Client -> bundle/sw.js/API/base
+conservada. No activar modo ni crear configuración/entidad productiva; desplegar no cambia AppViews.
+Rollback post-activación sólo builds compatibles de ambos. Cápsulas anteriores y 402 exclusiones intactas;
+final en design/validation/state-update-composite-publication-prep-2026-10-19/. V11/auditoría general abiertos.

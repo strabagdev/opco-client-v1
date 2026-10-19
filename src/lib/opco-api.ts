@@ -1,3 +1,4 @@
+import { compositeIdentityKey } from "./state-update-identity";
 import { config, trimTrailingSlash } from "./config";
 
 export type ApiEnvelope<T> =
@@ -174,7 +175,7 @@ export type StateUpdateWorkflowConfig = {
   }[];
   subjectFieldId: string;
   targetEntityTypeId: string;
-  uniqueness?: StateUpdateUniqueness;
+  uniqueness?: StateUpdateUniqueness | { mode: StateUpdateUniqueness; definitionId?: string; identityVersion?: 1; fieldIds?: string[] };
   workflowKey: "state-update";
 };
 
@@ -702,17 +703,20 @@ export type AttendanceBatchResponse = {
   results: AttendanceBatchResult[];
 };
 
-export type StateUpdateUniqueness = "none" | "subject" | "subject-date";
+export type StateUpdateUniqueness = "none" | "subject" | "subject-date" | "subject-date-fields";
 export type StateUpdateHistoryMode = "append" | "update-current";
 
 export function normalizeStateUpdateUniqueness(input: unknown): StateUpdateUniqueness {
   const mode = input && typeof input === "object" && !Array.isArray(input)
     ? (input as { mode?: unknown }).mode : input;
-  if (mode === "none" || mode === "subject" || mode === "subject-date") return mode;
+  if (mode === "none" || mode === "subject" || mode === "subject-date" || mode === "subject-date-fields") return mode;
   throw new OpcoApiError("Configuracion de unicidad STATE_UPDATE invalida.", "INVALID_STATE_UPDATE_UNIQUENESS", 200);
 }
 
+export type CompositeStateIdentity = { version: 1; definitionId: string; values: Record<string, string> };
+
 export type StateUpdateWorkflowQuery = {
+  identity?: CompositeStateIdentity;
   date?: string;
   page?: number;
   pageSize?: number;
@@ -800,6 +804,10 @@ export type StateUpdateSummary = {
 };
 
 export type StateUpdateResponse = {
+  identityFields?: StateUpdateField[];
+  identityDefinition?: { version: 1; definitionId: string };
+  identityContext?: CompositeStateIdentity | null;
+  contextRequired?: boolean;
   appView: {
     id: string;
     name: string;
@@ -834,6 +842,7 @@ type StateUpdateRawCurrent = Omit<NonNullable<StateUpdateCurrent>, "stateValues"
 
 type StateUpdateRawItem = Omit<StateUpdateItem, "current"> & {
   current: StateUpdateRawCurrent | null;
+  reports?: { identity: CompositeStateIdentity; current: StateUpdateRawCurrent | null }[];
 };
 
 type StateUpdateRawLatestItem = Omit<StateUpdateLatestItem, "stateValues"> & {
@@ -872,6 +881,7 @@ type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "la
 };
 
 export type StateUpdateEntry = {
+  identity?: CompositeStateIdentity;
   expectedUpdatedAt?: string;
   extraValues?: Record<string, EntityRecordValue>;
   overwrite?: boolean;
@@ -919,6 +929,7 @@ export type StateUpdateBatchResult =
     };
 
 export type StateUpdateBatchResponse = {
+  identity?: CompositeStateIdentity;
   appView: {
     id: string;
     name: string;
@@ -946,6 +957,8 @@ type StateUpdateApiConflictResult = {
     source?: "extra" | "state" | string | null;
   }[];
   existing: {
+    stateValues?: StateUpdateCurrentFieldValue[];
+    extraValues?: Record<string,EntityRecordValue>;
     recordId: string;
     updatedAt: string;
   };
@@ -1692,6 +1705,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("subjectRecordId", query.subjectRecordId.trim());
       }
 
+      if (query.identity) searchParams.set("identity", JSON.stringify(query.identity));
       const serializedQuery = searchParams.toString();
 
       return authenticatedRequest<StateUpdateRawResponse>(
@@ -1829,7 +1843,10 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
   const rawItems = response.subjects ?? response.items ?? [];
   const items = rawItems.map((item) => ({
     ...item,
-    current: normalizeStateUpdateCurrent(item.current, stateFields),
+    current: normalizeStateUpdateCurrent(item.reports ? (() => {
+      if (item.reports.length !== 1 || compositeIdentityKey(item.reports[0].identity) !== compositeIdentityKey(response.identityContext)) throw new Error("STATE_UPDATE_CONTEXT_RESPONSE_MISMATCH");
+      return item.reports[0].current;
+    })() : item.current, stateFields),
   }));
   const rawLatest = normalizeRawStateUpdateLatest(response.latest);
   const latest = rawLatest.items.map((item) => ({
@@ -2061,6 +2078,7 @@ function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): St
 
 function serializeStateUpdateRequest(input: StateUpdateRequest) {
   return {
+    ...(input.identity ? { identity: input.identity } : {}),
     clientRequestId: input.clientRequestId,
     date: input.date,
     expectedUpdatedAt: input.expectedUpdatedAt,
@@ -2089,9 +2107,9 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
 
   return {
     existing: {
-      extraValues: objectFromConflictExtraValues(extraDifferences, "remoteValue"),
+      extraValues: result.existing.extraValues ?? objectFromConflictExtraValues(extraDifferences, "remoteValue"),
       recordId: result.existing.recordId,
-      stateValues: stateDifferences.map((difference) => ({
+      stateValues: result.existing.stateValues ?? stateDifferences.map((difference) => ({
         fieldId: difference.fieldId,
         label: difference.existingLabel ?? null,
         optionId: difference.existingOptionId ?? null,

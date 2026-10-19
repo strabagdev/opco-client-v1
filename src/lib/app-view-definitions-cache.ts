@@ -56,6 +56,8 @@ export type PreparedAppViewDefinition =
       extraFields: EntityField[];
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
+      identityFields?: import("./opco-api").StateUpdateField[];
+      identityDefinition?: { version: 1; definitionId: string };
       sourceEntityTypeId: string;
       sourceEntityTypeName?: string;
       stateFields: StateUpdateField[];
@@ -337,7 +339,7 @@ function readiness({
 
 /** Shared coverage scope for Home, workflow and read-only diagnostics. */
 export function buildStateUpdateCoverageScope(
-  context: { appViewId: string; contractId: string; ownerKey: string; date?: string },
+  context: { appViewId: string; contractId: string; ownerKey: string; date?: string; identity?: import("./opco-api").CompositeStateIdentity },
   definition: Pick<Extract<PreparedAppViewDefinition, { kind: "state-update" }>,
     "dateFieldId" | "historyMode" | "uniqueness" | "targetEntityTypeId">,
 ) {

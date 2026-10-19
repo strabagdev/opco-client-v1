@@ -1,3 +1,4 @@
+import { compositeIdentityKey } from "./state-update-identity";
 import type { OpcoApi } from "./opco-api";
 import type { OfflineRecordStore } from "./offline-records";
 import type { StateUpdateCurrentCoverage, StateUpdateCurrentCoverageScope, StateUpdateOfflineStore } from "./state-update-offline";
@@ -50,9 +51,9 @@ export async function prepareStateUpdateCurrent({
     coverage.requestCount++;
     try {
       const response = await api.getStateUpdateWorkflow(token, scope.contractId, scope.appViewId,
-        { date: scope.date, subjectRecordId, pageSize: 1 });
+        { date: scope.date, identity: scope.identity, subjectRecordId, pageSize: 1 });
       if (signal?.aborted) return;
-      if (response.items.length !== 1 || response.items[0].subject.id !== subjectRecordId ||
+      if ((scope.identity && compositeIdentityKey(response.identityContext) !== compositeIdentityKey(scope.identity)) || response.items.length !== 1 || response.items[0].subject.id !== subjectRecordId ||
         response.targetEntityType.id !== scope.targetEntityTypeId || response.sourceEntityType.id !== scope.sourceEntityTypeId ||
         response.dateFieldId !== scope.dateFieldId || response.uniqueness !== scope.uniqueness || response.historyMode !== scope.historyMode) {
         throw new Error("STATE_UPDATE_CURRENT_RESPONSE_MISMATCH");
@@ -60,6 +61,7 @@ export async function prepareStateUpdateCurrent({
       // subjects[].current is authoritative, including explicit null. Do not fetch history.
       const result = await store.upsertStateUpdateSnapshot({ ...scope, complete: false, projectionDefinition: {
         sourceEntityTypeId: response.sourceEntityType.id, subjectFieldId: response.subjectFieldId,
+        identityFields: response.identityFields, identityDefinition: response.identityDefinition,
         dateFieldId: response.dateFieldId, stateFields: response.stateFields, extraFields: response.extraFields,
       }, items: response.items, latest: [] });
       const current = response.items[0].current;

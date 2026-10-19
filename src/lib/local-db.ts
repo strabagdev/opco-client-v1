@@ -1,3 +1,4 @@
+import { compositeIdentityKey } from "./state-update-identity";
 import { stateUpdateV10Scope, stateUpdateRows, stateUpdateSnapshots, stateUpdateVirtualRecord,
   stateUpdateLogicalRemoteId, stateUpdateRemoteBinding, stateUpdateEventDate,
   persistStateUpdateProjection, persistStateUpdateAuthority, stateUpdateAuthority,
@@ -1959,12 +1960,12 @@ function sortableCachedValue(value: EntityRecordValue | undefined) {
   return JSON.stringify(value);
 }
 
-async function getCachedRecord(input: { contractId: string; entityTypeId: string; ownerKey: string; recordId: string; appViewId?: string; date?: string }) {
+async function getCachedRecord(input: { contractId: string; entityTypeId: string; ownerKey: string; recordId: string; appViewId?: string; date?: string; identity?: import("./opco-api").CompositeStateIdentity }) {
   const db = await getDatabase();
   return getCachedRecordFromDatabase(db, input);
 }
 async function getCachedRecordFromDatabase(db: SQLite.SQLiteDatabase, input: {
-  contractId: string; entityTypeId: string; ownerKey: string; recordId: string; appViewId?: string; date?: string;
+  contractId: string; entityTypeId: string; ownerKey: string; recordId: string; appViewId?: string; date?: string; identity?: import("./opco-api").CompositeStateIdentity;
 }) {
   const { ownerKey, contractId, entityTypeId, recordId } = input;
   const row = await db.getFirstAsync<EntityRecordRow>(`SELECT * FROM entity_records
@@ -1972,18 +1973,22 @@ async function getCachedRecordFromDatabase(db: SQLite.SQLiteDatabase, input: {
     ownerKey, contractId, entityTypeId, recordId, recordId);
   if (input.appViewId) {
     const scope = await stateUpdateV10Scope(db, { ...input, appViewId: input.appViewId, targetEntityTypeId: entityTypeId });
+    const matchesDate = (values: OfflineStateUpdateValues) =>
+      ((scope.uniqueness !== "subject-date" && scope.uniqueness !== "subject-date-fields" && !values.identity) || !input.date ||
+        normalizeStateUpdateLogicalDate(values.date) === normalizeStateUpdateLogicalDate(input.date));
+    const matchesIdentity = (values: OfflineStateUpdateValues) =>
+      scope.uniqueness !== "subject-date-fields" && !values.identity && !scope.identity ||
+      !!scope.identity && compositeIdentityKey(values.identity) === compositeIdentityKey(scope.identity);
     const pending = (await stateUpdateRows(db, scope)).find(r => r.sync_status !== "synced" &&
       (r.local_id === recordId || stateUpdateLogicalRemoteId(r) === recordId) &&
-      (scope.uniqueness !== "subject-date" || !input.date || normalizeStateUpdateLogicalDate(JSON.parse(r.values_json).date) === normalizeStateUpdateLogicalDate(input.date)));
+      matchesDate(JSON.parse(r.values_json)) && matchesIdentity(JSON.parse(r.values_json)));
     if (pending) return mapStateUpdateStorageRow(pending);
     const v = row ? JSON.parse(row.values_json) : null;
-    const owns = v?.appViewId === input.appViewId && (scope.uniqueness !== "subject-date" || !input.date ||
-      normalizeStateUpdateLogicalDate(v.date) === normalizeStateUpdateLogicalDate(input.date)) &&
+    const owns = v?.appViewId === input.appViewId && matchesDate(v) && matchesIdentity(v) &&
       (row?.local_id === recordId || (row && stateUpdateLogicalRemoteId(row) === recordId));
     if (row && owns && row.sync_status !== "synced") return mapStateUpdateStorageRow(row);
     const projection = (await stateUpdateSnapshots(db, scope)).find(p => p.row.local_id === recordId || stateUpdateLogicalRemoteId(p.row) === recordId);
-    if (projection && (scope.uniqueness !== "subject-date" || !input.date ||
-        normalizeStateUpdateLogicalDate(JSON.parse(projection.row.values_json).date) === normalizeStateUpdateLogicalDate(input.date))) return mapStateUpdateStorageRow(projection.row);
+    if (projection && matchesDate(JSON.parse(projection.row.values_json))) return mapStateUpdateStorageRow(projection.row);
     return row && owns ? mapStateUpdateStorageRow(row) : null;
   }
   if (row) return JSON.parse(row.values_json).__opcoStateUpdateRemote ? mapStateUpdateStorageRow(row) : mapRecordRow(row);
@@ -2722,6 +2727,7 @@ async function readSelectedStateUpdateConflict(db: SQLite.SQLiteDatabase, input:
   const values = existing?.values as OfflineStateUpdateValues | undefined;
   if (!existing || existing.localId !== input.localRecordId || existing.syncStatus !== "conflict" ||
       values?.appViewId !== input.appViewId || values?.subjectRecordId !== input.subjectRecordId ||
+      ((input.identity || values?.identity) && compositeIdentityKey(values?.identity) !== compositeIdentityKey(input.identity)) ||
       normalizeStateUpdateLogicalDate(values?.date) !== normalizeStateUpdateLogicalDate(input.date) ||
       !operation || operation.contractId !== input.contractId || operation.entityTypeId !== input.targetEntityTypeId ||
       !input.conflictIdentity || normalizeStateUpdateRecord(existing, operation.clientRequestId).conflictIdentity !== input.conflictIdentity) {
@@ -2735,6 +2741,7 @@ async function saveStateUpdateLocallyWithRecordId(
   resolvedLocalRecordId?: string,
   conflictIdentity?: string,
 ) {
+  if (rawInput.uniqueness === "subject-date-fields" && (!rawInput.identity || !rawInput.date)) throw new Error("COMPOSITE_CONTEXT_REQUIRED");
   const input = {
     ...rawInput,
     date: normalizeStateUpdateLogicalDate(rawInput.date),
@@ -2746,8 +2753,8 @@ async function saveStateUpdateLocallyWithRecordId(
   await db.withTransactionAsync(async (transaction) => {
     if (!resolvedLocalRecordId) {
       const isolated = `state_update_intent_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId,
-        input.appViewId, input.uniqueness, input.uniqueness === "subject-date" ? input.date ?? null : null,
-        input.subjectRecordId, input.historyMode === "append" ? localRecordId : null])}`;
+        input.appViewId, input.uniqueness, input.uniqueness === "subject-date" || input.uniqueness === "subject-date-fields" ? input.date ?? null : null,
+        ...(input.identity ? [compositeIdentityKey(input.identity)] : []), input.subjectRecordId, input.historyMode === "append" ? localRecordId : null])}`;
       const readIdentity = (id: string) => transaction.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=?", id);
       const belongs = (r: EntityRecordRow) => {
         const v = JSON.parse(r.values_json);
@@ -2807,6 +2814,7 @@ async function saveStateUpdateLocallyWithRecordId(
     const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
     const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
     const values: OfflineStateUpdateValues = {
+      identity: input.identity,
       appViewId: input.appViewId,
       date: input.date,
       snapshotConfiguration: projectionScope.configuration,
@@ -2822,6 +2830,7 @@ async function saveStateUpdateLocallyWithRecordId(
       expectedRecordId: resolvedLocalRecordId
         ? (existingRecord?.conflictRemoteValues as OfflineStateUpdateValues | null)?.remoteRecordId ?? existingRecord?.serverId ?? undefined
         : undefined,
+      identity: input.identity,
       appViewId: input.appViewId,
       snapshotConfiguration: projectionScope.configuration,
       snapshotDateFieldId: projectionScope.dateFieldId,
@@ -2841,7 +2850,7 @@ async function saveStateUpdateLocallyWithRecordId(
       : null;
 
     if (!resolvedLocalRecordId && input.preserveIdenticalConfirmedIntent &&
-        input.historyMode === "update-current" && input.uniqueness === "subject-date" &&
+        input.historyMode === "update-current" && (input.uniqueness === "subject-date" || input.uniqueness === "subject-date-fields") &&
         existingRecord?.serverId && existingOperation?.server_record_id === existingRecord.serverId &&
         existingPayload?.overwrite === true && existingPayload.expectedUpdatedAt &&
         stateUpdateIntentsEqual(existingPayload, { ...nextPayload, overwrite: true })) {
@@ -2940,14 +2949,15 @@ async function searchStateUpdateSubjects({
   dateFieldId,
   historyMode,
   uniqueness,
+  identity,
   ownerKey,
   search,
   sourceEntityTypeId,
   targetEntityTypeId,
 }: SearchStateUpdateSubjectsInput) {
-  const currentCoverage = usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness })
+  const currentCoverage = (usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness }) || uniqueness === "subject-date-fields")
     ? await getStateUpdateCurrentCoverage({ appViewId, contractId, date, dateFieldId, historyMode,
-        uniqueness, ownerKey, sourceEntityTypeId, targetEntityTypeId })
+        uniqueness, identity, ownerKey, sourceEntityTypeId, targetEntityTypeId })
     : null;
   const subjects = await listCachedRecords({
     contractId,
@@ -2966,6 +2976,7 @@ async function searchStateUpdateSubjects({
         dateFieldId,
         historyMode,
         uniqueness,
+        identity,
         ownerKey,
         subjectRecordId: record.serverId ?? record.id,
         targetEntityTypeId,
@@ -3062,7 +3073,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
       const localId = receipt?.local_id ?? before?.row.local_id ??
         `state_update_snapshot_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId, input.appViewId, scope.configuration, id])}`;
       const values: OfflineStateUpdateValues = { appViewId: input.appViewId, date: receivedDate,
-        snapshotConfiguration: scope.configuration, snapshotDateFieldId: input.dateFieldId, snapshotEventDate: eventDate ?? null,
+        identity: input.identity, snapshotConfiguration: scope.configuration, snapshotDateFieldId: input.dateFieldId, snapshotEventDate: eventDate ?? null,
         expectedUpdatedAt: current.updatedAt, extraValues: current.extraValues, stateValues: current.stateValues,
         subjectDisplayName: item.subject.displayName, subjectRecordId: item.subject.id };
       const oldValues = receipt ? JSON.parse(receipt.values_json) : null;
@@ -3157,7 +3168,8 @@ async function listStateUpdateConflicts(input: StateUpdateScope) {
     date ?? null,
   );
 
-  return rows.map((row) => normalizeStateUpdateRecord(mapStateUpdateStorageRow(row), row.selected_client_request_id));
+  return rows.filter(row => !input.identity || compositeIdentityKey(JSON.parse(row.values_json).identity) === compositeIdentityKey(input.identity))
+    .map((row) => normalizeStateUpdateRecord(mapStateUpdateStorageRow(row), row.selected_client_request_id));
 }
 
 async function getStateUpdateResolutionOutcome(input: StateUpdateScope & { localRecordId: string; clientRequestId: string }) {
@@ -3171,6 +3183,7 @@ async function getStateUpdateResolutionOutcome(input: StateUpdateScope & { local
     const operation = await getStateUpdatePendingOperation(transaction, input.ownerKey, input.localRecordId);
     const values = record?.values as OfflineStateUpdateValues | undefined;
     if (!record || record.localId !== input.localRecordId || values?.appViewId !== input.appViewId ||
+        ((input.identity || values.identity) && compositeIdentityKey(values.identity) !== compositeIdentityKey(input.identity)) ||
         normalizeStateUpdateLogicalDate(values.date) !== normalizeStateUpdateLogicalDate(input.date) ||
         values.clientRequestId !== input.clientRequestId ||
         (operation && (operation.clientRequestId !== input.clientRequestId || operation.contractId !== input.contractId ||
@@ -3600,6 +3613,7 @@ async function completeStateUpdateOperationInTransaction(
     clientRequestId: operation.clientRequestId,
     appViewId: payload.appViewId,
     date: payload.date,
+    identity: payload.identity,
     expectedUpdatedAt: null,
     extraValues: payload.extraValues,
     stateValues: payload.stateValues.map((value) => ({
@@ -3623,7 +3637,7 @@ async function persistStateUpdateReceipt(db: SQLite.SQLiteDatabase, operation: P
   const decoded = JSON.parse(raw.values_json) as OfflineStateUpdateValues;
   const scope = await stateUpdateV10Scope(db, { ownerKey: operation.ownerKey, contractId: operation.contractId,
     appViewId: payload.appViewId, targetEntityTypeId: operation.entityTypeId, date: payload.date,
-    dateFieldId: payload.snapshotDateFieldId, historyMode: payload.historyMode, uniqueness: payload.uniqueness });
+    identity: payload.identity, dateFieldId: payload.snapshotDateFieldId, historyMode: payload.historyMode, uniqueness: payload.uniqueness });
   scope.configuration = decoded.snapshotConfiguration ?? payload.snapshotConfiguration ?? scope.configuration;
   if (raw.server_id) await rememberStateUpdateRemote(db, scope, raw.server_id);
   const fieldDate = values.stateValues.find(v => v.fieldId === scope.dateFieldId)?.value;
@@ -3808,6 +3822,7 @@ async function markStateUpdateOperationConflict(
   const payload = operation.payload as OfflineStateUpdatePayload;
   const remoteValues: OfflineStateUpdateValues = {
     remoteRecordId: result.existing.recordId,
+    identity: payload.identity,
     appViewId: payload.appViewId,
     date: payload.date,
     expectedUpdatedAt: result.existing.updatedAt,
@@ -5417,11 +5432,12 @@ function stateUpdateCurrentCoverageKey(input: StateUpdateCurrentCoverageScope) {
     fingerprintDiagnosticValue(input.ownerKey), input.contractId, input.appViewId,
     input.sourceEntityTypeId, input.targetEntityTypeId, input.date ?? null,
     input.dateFieldId ?? null, input.uniqueness ?? null, input.historyMode ?? null,
+    ...(input.identity ? [compositeIdentityKey(input.identity)] : []),
   ])}`;
 }
 
 async function getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope): Promise<StateUpdateCurrentCoverage | null> {
-  if (!usesDatedSubjectHistory(input)) return null;
+  if (!usesDatedSubjectHistory(input) && input.uniqueness !== "subject-date-fields") return null;
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM app_metadata WHERE key = ?", stateUpdateCurrentCoverageKey(input));
   if (!row) return null;
@@ -5803,6 +5819,7 @@ function stateUpdateSnapshotCoverageKey({
   contractId,
   date,
   ownerKey,
+  identity,
   targetEntityTypeId,
 }: StateUpdateScope) {
   return [
@@ -5812,6 +5829,7 @@ function stateUpdateSnapshotCoverageKey({
     appViewId,
     targetEntityTypeId,
     normalizeStateUpdateLogicalDate(date) ?? "all",
+    ...(identity ? [compositeIdentityKey(identity)!] : []),
   ].join(":");
 }
 

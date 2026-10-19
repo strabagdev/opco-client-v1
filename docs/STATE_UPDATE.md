@@ -1624,3 +1624,321 @@ Inventario exacto, parche, SHA256SUMS y evidencia sanitizada en
 borrado, commit/push/deploy. Incidente de 2026-10-14T01:07:09Z sigue sin experiencia ni
 causa histórica confirmadas. Cierre del diagnóstico, no resolución del fallo productivo.
 V11 pausado; auditoría general abierta.
+
+
+## Identidad compuesta — primera etapa local implementada — 2026-10-18
+
+Esta sección documenta únicamente la primera etapa de identidad compuesta. Sin publicación.
+V11 sigue pausado. No implementa eliminación desde Client, horarios, duración, calendarios,
+reglas de horómetros ni cambios de REPORT/PANEL.
+
+### Contrato y límites de activación
+
+Core admite `uniqueness.mode = "subject-date-fields"` exclusivamente con `historyMode = "update-current"`.
+Sujeto RELATION simple, DATE explícito y uno o más campos SELECT simples, distintos y ajenos a
+los roles de estado/extra. Son obligatorios para la identidad aunque el campo genérico no sea
+obligatorio. El editor registra `definitionId` e `identityVersion: 1`; no se inventan desde Client.
+Una entidad destino vacía y sin workflows anteriores puede activar el modo. Otras AppViews deben
+reutilizar exactamente esa definición. No hay conversión de entidades pobladas ni reinterpretación
+de configuraciones, snapshots o intenciones anteriores.
+
+Ejemplo genérico de configuración (IDs ilustrativos):
+
+```json
+{
+  "workflowKey": "state-update",
+  "subjectFieldId": "field-subject",
+  "dateFieldId": "field-operational-date",
+  "uniqueness": {
+    "mode": "subject-date-fields",
+    "identityVersion": 1,
+    "definitionId": "registered-definition-id",
+    "fieldIds": ["field-context-one", "field-context-two"]
+  },
+  "historyMode": "update-current"
+}
+```
+
+GET/POST reciben `identity: {version: 1, definitionId, values: {[fieldId]: optionId}}` y fecha
+`YYYY-MM-DD`. Los IDs de opciones son la identidad; los campos de la entidad guardan
+`FieldOption.value` mediante los validadores existentes. Orden canónico por ID de campo, sin labels,
+UTC/local-clock ni número de versión como sustitutos. Las opciones inactivas permiten consultar
+reportes existentes; no crear una combinación nueva. Los valores/roles de identidad no se editan:
+se bloquean cambios semánticos de campos y valores de opciones; pueden cambiar sus etiquetas.
+
+Dos tablas aditivas Core: `StateUpdateIdentityDefinition` gobierna una entidad y sus roles;
+`StateUpdateIdentitySlot` reserva la tupla canónica sujeto/fecha/contexto y referencia el EntityRecord
+existente. No se crea otra tabla de contenido, auditoría o idempotencia. El índice único, bloqueo
+transaccional de la reserva y llave idempotente serializan solicitudes concurrentes entre AppViews.
+Comparación de tupla completa protege la igualdad del hash. Reserva, valores, relaciones, auditoría
+y resultado idempotente se confirman o revierten juntos. DELETE y escrituras genéricas sobre la
+entidad gobernada se bloquean también en PostgreSQL; no pueden eludirlo RECORDS, API, editor o
+importaciones. Esta etapa no permite liberar/reubicar una identidad ni eliminar un reporte equivocado.
+
+GET devuelve `subjects[].reports[]` para el contexto exacto, con un `current` explícito por sujeto,
+y `latest`/resumen del mismo contexto. Sin contexto entrega metadatos, no un supuesto current global.
+POST devuelve la identidad recibida. Los conflictos nuevos incluyen la versión remota completa
+configurada además de las diferencias, necesaria para restaurar con “Usar Opco”. Los modos previos
+conservan su representación y comportamiento.
+
+### Client, cobertura y trabajo durable
+
+Se eligen fecha y SELECT configurados antes de buscar. El contexto queda en parámetros de la ruta
+para conservarlo cuando la carga de definición remonta la experiencia al cambiar conectividad y al
+reabrir esa URL; no se infiere del reloj. No son controles de horarios. Los valores editables siguen
+usando el formulario y los handlers compartidos.
+
+Inicio prepara definición y sujetos, sin recorrer el producto cartesiano de contextos. “Preparar este
+contexto sin conexión” refresca la fuente completa y consulta `subjectRecordId`, `pageSize=1` con el
+pool acotado existente. Cada `reports[0].current`, incluido null confirmado, se persiste antes de
+verificar el sujeto. Sólo una fuente íntegra y todos los sujetos verificados acreditan cobertura de
+vigentes completa para ese contexto. Una página, búsqueda, fallo o interrupción no la acredita;
+latest mantiene su cobertura propia y puede seguir parcial. ACK tampoco equivale a snapshot completo.
+Un sujeto sin reporte no se confunde con consulta faltante: offline, si current es null sin autoridad
+verificada, se informa “Reporte no verificado sin conexión” y se requiere preparación para crearlo.
+
+Snapshots, autoridades, marcadores e intenciones incluyen la definición/contexto en el scope existente
+(usuario/contrato/AppView/entidad/fecha). Ningún cambio de esquema, versión o nombre SQLite:
+`opco-client-v10-epoch2.db`. Las identidades anteriores conservan sus claves. No hay limpieza de caché,
+transferencia de bases ni cola paralela.
+
+El nuevo modo usa intención local durable también online y el sincronizador compartido. Reemplazar
+un reporte remoto conocido utiliza la confirmación existente, ligada al scope, sujeto, versión mostrada,
+valores y extras. Cancelar no escribe. Guardar de nuevo una intención idéntica conserva autorización,
+base, clientRequestId y estado de envío; cambiar contenido requiere nueva confirmación. Un ACK/respuesta
+fuera de identidad no consume la intención. Conflictos y “Usar Opco” operan exclusivamente sobre la
+intención elegida; cambiar contexto no consume otra combinación. No se refresca la base para esquivar
+un cambio remoto posterior. Attendance, append y RECORDS conservan su recorrido.
+
+### Evidencia local y límites
+
+PostgreSQL: URL de Core `.env.local`, validada como `127.0.0.1:5432/opco_development`, rol `opco_dev`,
+y pasada explícitamente a procesos. Migración propia
+`20261018000100_state_update_composite_identity`; únicamente local. Se ajustaron las funciones de
+protección durante su desarrollo local. Tras limpiar los fixtures se reaplicó sólo esa migración propia
+sobre sus tablas vacías: 23 aplicadas, cero fallidas, checksum final coincidente y digest intacto de
+las 22 entradas previas. No se alteran migraciones anteriores. Es necesaria al desplegar
+Core en una etapa futura autorizada, no se ha aplicado fuera de desarrollo.
+
+Fixture exclusivamente sintético: dos sujetos, DATE operacional, dos SELECT de identidad con dos
+opciones cada uno, SELECT de estado, DECIMAL y TEXT de contenido; dos AppViews comparten definición.
+Los textos A/B y horarios son sólo etiquetas del fixture, sin cálculo implementado. Se comprueban:
+misma combinación/misma fila; combinaciones diferentes; concurrencia; repetición idempotente simulando
+respuesta descartada; rechazo de clientRequestId reutilizado; versión base antigua; bloqueo de escrituras
+genéricas/borrado; rollback y limpieza restringida al fixture. Un defecto del primer ensayo convirtió
+DATE mediante la zona de sesión SQL: corregido usando literal `date::date`, con regresión de igualdad.
+
+SQLite real en pruebas automatizadas: adapter de API, caché, reapertura, snapshots/autoridades,
+intenciones distintas, confirmación exacta, autorización idéntica durable, conflictos y restauración de
+una combinación sin consumir otra. Preparación completa, fuente parcial, fallo de sujeto e interrupción.
+
+Chrome/OPFS + Core real: contexto preparado explícitamente, búsqueda TOLVA, creación offline42,
+ACK real; edición confirmada43, cierre completo y reapertura sin red desde el arranque del navegador
+(proxy local inaccesible sólo del ensayo), misma intención/base/autorización, reconexión y misma fila
+remota sin duplicados. Control posterior: local46 confirmado frente a remoto47, un conflicto y una
+outbox conservados, cero elegibles para autosync; tres valores remotos conservados. “Usar Opco” se
+comprobó sobre el conflicto sintético previo, sin resolver datos productivos. La lista de elegibles
+excluye conflictos: cero elegibles no significa cero intenciones. Se distinguieron recargas del shell
+y pestañas restauradas del ensayo; ACCESS_HANDLE_BUSY no es barrera de compatibilidad.
+
+Compatibilidad comprobada: serializador real de Client HEAD
+`1b4bdaab92d120dc42198256a3b65a8aa53e04a3`, contra Core HTTP local, omite la identidad desconocida y
+recibe 400 `COMPOSITE_IDENTITY_REQUIRED`, sin escritura. Vías genéricas quedan rechazadas por el guard.
+Esto no acredita convivencia completa de runtimes ni garantiza que código antiguo no marque una nueva
+operación como fallida; no se publica un claim de compatibilidad total. Los pendientes anteriores no se
+adoptan ni autorizan. Sin prueba productiva ni carga/rendimiento productivos; sin suite completa.
+Los incidentes históricos de SQLite, OPFS y preparación incompleta permanecen independientes.
+
+
+Cierre de esta etapa: 264 pruebas Client (presupuesto CLI de 20s; ver límite de 5s abajo) en 12 archivos afectados y 200 Core en cinco archivos,
+con máximo dos workers; nueve de Core repetidas contra PostgreSQL después de la aplicación limpia de
+la migración final. Typecheck y diff-check aprobados en ambos; lint Core sin advertencias y Client
+sin errores, con dos advertencias require-imports ya presentes en HEAD en
+src/sync/records-sync.local-db-regression.test.ts. No se ejecutó suite completa. Export exclusivamente
+local para OPFS; revisión visual real desktop1440, sin acreditar móvil/intermedio ni rendimiento.
+
+Bundle del recorrido funcional: entry-4fa1cfed7a91b8872d4bf9f7dba0fd41.js. Se repitió el camino afectado por
+la distinción de ausencia: cambiar al contexto no preparado ocultó el conflicto de otra combinación
+sin consumirlo; crear sin autoridad null verificada quedó bloqueado; preparación explícita permitió
+crear otro reporte offline y sincronizarlo, conservando clientRequestId del conflicto ajeno. El
+indicador central terminó; el aviso global de atención siguió accesible. Base real observada:
+./opco-client-v10-epoch2.db. El recorrido completo de cierre/reapertura anterior acredita los caminos
+durables que no cambiaron en este último ajuste de lectura. Las comparaciones de keys/autorización
+exacta adicionales están acreditadas por SQLite real automatizado, no por una sesión productiva.
+
+Limpieza: siete organizaciones sintéticas propias de los ensayos, perfil exclusivo, credenciales
+sintéticas y procesos propios. Digest de identidades/versiones de registros ajenos idéntico antes y
+después. Ningún almacenamiento habitual ni dato remoto productivo fue consultado o borrado.
+Inventario/patches propios y verificaciones en
+[design/validation/state-update-composite-stage1-2026-10-18](../design/validation/state-update-composite-stage1-2026-10-18/inventory.json).
+No es un cierre de publicación ni de la auditoría general.
+
+
+Revisión final de roles: se añadió una regresión con editor real que primero falló al permitir DATE
+simultáneamente como identidad y estado editable. Core rechaza ahora ese solapamiento sólo en el modo
+nuevo (editor y runtime), evitando que contenido sobrescriba la fecha de la reserva. Versionado y los
+modos anteriores siguen admitiendo su configuración actual. Se repitieron los 200 tests focalizados de
+Core y sus checks; no cambia el fixture válido ni los caminos Client/OPFS ya acreditados.
+
+
+Revisión final de lectura directa: una regresión real SQLite falló al consultar un snapshot por ID
+con otra fecha. La ruta getCachedRecord con AppView ahora comprueba fecha e identidad también para
+subject-date-fields, incluidas filas físicas pendientes; no basta con el mismo AppView. Tras el ajuste,
+264 pruebas Client afectadas y checks pasan. Se probó esa frontera con funciones reales del runtime
+en Chrome/OPFS y perfil exclusivo nuevo, bundle entry-aa67ade897355755cfe604791b321382.js: misma fecha/
+contexto devuelve su fila, otra fecha/contexto devuelve null; tras cerrar/reabrir Chrome se mantiene
+una intención y la outbox no cambia por leer. Este último ensayo usa snapshots sintéticos inyectados
+mediante el store público, sin ACK ni sincronización simulados. El recorrido con Core real anterior
+acredita sus caminos válidos; no se presenta este ensayo de lector como una nueva sincronización HTTP.
+
+
+Transición visual de fecha (Core real, 19-10): con búsqueda TOLVA y HTTP local retardado 1800ms,
+el control previo mostraba todavía el estado del día anterior durante la actualización. El handler
+del modo compuesto ahora invalida la solicitud visual y retira resultados/selección/conflicto/avisos
+al cambiar fecha, sin tocar intenciones. Reseleccionar el mismo valor es noop y no invalida una lectura
+en vuelo. Se repitió la pantalla: fecha nueva, fila anterior ausente e indicador central finalizado.
+No hay cambio de criterio temporal ni de Attendance; no se infiere fecha desde el reloj.
+
+Límite de pruebas, explícito: la última invocación estándar de Client (5s/caso) tuvo 21 timeouts en
+state-update-prewarm-current-investigation.test.ts y un EPIPE; la repetición aislada tuvo 14 timeouts
+tras ocho casos completados. No se atribuye a recursos, SQLite productivo ni al cambio funcional.
+Sin modificar pruebas, configuración o workers, la misma selección de 12 archivos completó 264 PASS
+con --maxWorkers=2 --testTimeout=20000. El archivo aislado también completó 22 PASS con ese presupuesto.
+No se oculta ni se acredita aprobada la ejecución estándar: su límite intermitente queda para cierre
+técnico. No hubo suite completa ni investigación ampliada de rendimiento/28.391 lecturas.
+
+
+### Validación estándar aislada — 2026-10-19 (sin cambio funcional)
+
+Se conservó íntegra la cápsula anterior en `before-validation-2026-10-19/`, incluidos parches y
+SHA256SUMS. Se reconstruyeron HEAD 1b4bdaab y candidato mediante archive + patch, mismas dependencias,
+ejecuciones secuenciales con un worker, timeout normal de 5000 ms y archivos SQLite temporales
+independientes por prueba. El archivo `state-update-prewarm-current-investigation.test.ts` pasa
+22/22 en ambos: HEAD 38,18 s (máxima prueba 4265 ms), candidato 36,55 s (máxima 2977 ms).
+El primer fallo histórico fue `bounds requests, preserves all events without duplicates and keeps
+partial latest separate` a 5072 ms; la repetición histórica comenzó a fallar en `repeated partial
+preparation preserves append intentions, conflicts and outbox byte for byte` a 5045 ms. El inventario
+adjunta los nombres exactos de los 21 y 14 timeouts. El stack EPIPE apunta a worker.stdin.write del
+harness Python/SQLite. No demuestra la causa de la primera demora, fuga ni interferencia: esa causa
+histórica no pudo reproducirse y sigue indeterminada. No se aumentaron timeouts ni se alteró el runtime.
+
+La primera suite completa descubrió otro bloqueo de validación: seis fallos del harness de handlers
+de conflictos. HEAD pasa sus siete casos; el candidato arrojaba ReferenceError: identity is not defined
+porque el contexto inyectado omitía la nueva variable léxica. Se añadió identity=undefined para el modo
+anterior y su expectativa exacta, conservando todas las aserciones; se añadieron comprobaciones contra
+errores capturados silenciosamente y para asegurar que el ensayo de respuesta tardía sí envía la
+intención. Siete casos pasan después. No se modificaron confirmación, autorización, resolución ni sync.
+
+Suites completas finales aisladas, un worker: Client 1104/1104 (92 archivos, 60,91 s), timeout normal
+5000 ms, sin EPIPE; Core 1112 PASS y 25 omitidas (111 archivos PASS, 3 omitidos, 42,28 s), configuración
+normal Core 15000 ms. Las nueve pruebas PostgreSQL nuevas requieren habilitación explícita y quedan
+entre las omitidas de esta suite; se reutiliza su PASS real previo porque Core/SQL permanecen idénticos.
+No se presenta esta suite como una nueva ejecución de esas nueve integraciones.
+Typecheck, lint y build pasan en ambos. Client conserva dos warnings de HEAD en
+records-sync.local-db-regression.test.ts:182–183 (no-require-imports), Core cero. Client build mediante
+npm run build. Core build mediante npm run build -- --webpack en el archive con dependencias enlazadas,
+sin tocar configuración; fuera del sandbox y con secretos locales sólo en memoria. Intentos previos:
+Next recibió cero bytes de --showConfig dentro del sandbox, frente a 18094 fuera; el siguiente compiló
+pero falló por AUTH_SECRET omitida. El último build con .env.local selectiva pasó. No se ocultan esos
+intentos ni se relacionan con los timeouts/EPIPE de Vitest.
+
+Verificación local sólo SELECT: 23 migraciones aplicadas, cero fallidas, checksum de la aditiva correcto
+y digest de las 22 anteriores intacto. No se reaplicó migración ni se crearon fixtures. Se conservan las
+restricciones: destino vacío, update-current exclusivamente, puertas genéricas y borrado bloqueados en
+entidades gobernadas; el serializador antiguo recibe 400 COMPOSITE_IDENTITY_REQUIRED sin escribir.
+Los modos anteriores/Attendance conservan su recorrido; las suites incluyen sus regresiones. No se
+reinterpretan datos anteriores. La evidencia Chrome/OPFS local previa se reutiliza con sus límites
+originales, tras verificar igualdad SHA256 de todos los archivos funcionales previos; sólo cambió el
+harness. No constituye evidencia productiva ni nueva revisión móvil.
+
+Lote reconstruible actualizado: 15 archivos Client y 11 Core; inventario, parches, comparación segura,
+checks, preservación y SHA256SUMS en design/validation/state-update-composite-stage1-2026-10-18/.
+Las 402 exclusiones siguen idénticas y los otros pendientes/documentación ajena permanecen preservados.
+Sin publicación, producción, nuevas funciones ni cambios de esquema adicionales. V11 pausado; auditoría
+general e incidentes históricos siguen abiertos, incluida la causa no demostrada de los EPIPE anteriores.
+
+
+### Revisión de evidencia PostgreSQL y despliegue — 2026-10-19 (NO PUBLICADO)
+
+Las 25 omisiones de la suite Core estándar son integraciones condicionadas: 9 en panels.postgres.test.ts
+(PANEL_PG_INTEGRATION_DATABASE_URL), 7 en api-record-writes.postgres.test.ts (RECORD_PATCH_PG_INTEGRATION=1)
+y 9 en state-update-composite.postgres.test.ts (COMPOSITE_PG_INTEGRATION=1). Sus 25 nombres exactos constan
+en el [informe de revisión](../design/validation/state-update-composite-evidence-review-2026-10-19/evidence-review.json).
+No son fallos y no se declara que las 25 se hayan ejecutado. Se reutilizan los nueve casos compuestos
+PostgreSQL previos, con código funcional/SQL verificados idénticos al candidato: combinaciones distintas,
+AppViews compartidas, concurrencia, versión confirmada, idempotencia/replay, rechazos y reservas.
+
+Brecha encontrada en la evidencia, no en la implementación: el rollback previo lanzaba una excepción
+tras reservar identidad, sin llegar a escribir contenido. Se ejecutaron sólo dos casos complementarios
+en el archive candidato con un worker y PostgreSQL real validado desde .env.local: 2 PASS en 1,41 s;
+los nueve originales se filtraron, no se repitieron. Primero se verificó que CREATED/CONFLICT conserva
+en la única fila el valor de la solicitud ganadora. Después se provocó un fallo sólo tras la inserción
+real de auditoría: dentro de la transacción ya habían crecido reservas, registros, valores, relaciones,
+auditoría e idempotencia; después del rollback los seis conteos volvieron exactamente a su base.
+Reintentar la misma petición y hacer replay deja un único efecto. Las peticiones sin identidad o
+incompletas tampoco alteran ninguno de esos seis conteos. El ensayo usa funciones reales y transacción
+PostgreSQL, con excepción controlada en auditoría; no simula ACK ni demuestra pérdida de paquetes de
+navegador. Se limpiaron sólo sus fixtures aleatorios propios por el afterAll existente. Sin nueva
+migración ni cambio funcional. El parche de ensayo adicional queda separado del candidato validado.
+
+Orden obligatorio de una publicación futura, todavía NO autorizada: (1) verificar respaldo y estado
+de migraciones; desplegar Core con la migración aditiva exacta
+prisma/migrations/20261018000100_state_update_composite_identity/migration.sql y runtime compatible,
+sin activar el modo; comprobar health y modos anteriores; (2) desplegar Client compatible y comprobar
+el bundle ejecutado; (3) sólo entonces habilitar configuraciones nuevas en destino vacío, update-current.
+La migración añade Definition/Slot y guardas scoped; no reemplaza las 22 anteriores ni migra SQLite.
+Su checksum y el del inventario original figuran en el informe. No se ejecutó ninguna migración aquí.
+
+Rollback: antes de activar una definición gobernada puede evaluarse volver al runtime previo conservando
+el esquema aditivo, verificando que no existen configuraciones/datos/intenciones del modo nuevo. Después
+de activarlo, Core Y Client sólo pueden volver a builds que entiendan subject-date-fields y su identidad
+durable. No quitar guardas/slots/definiciones, cambiar el modo o reinterpretar registros/pendientes para
+forzar un rollback: no hay conversión inversa ni down migration validada. El rechazo de peticiones antiguas
+incompletas protege Core de esa escritura; no acredita que un Client antiguo pueda manipular con seguridad
+intenciones nuevas en SQLite. No borrar datos ni vaciar pendientes como procedimiento de rollback.
+V11 y auditoría general continúan abiertos. Inventario/parches/hashes originales preservados sin cambios.
+
+
+### Preparación consolidada de publicación — 2026-10-19 (SIN PUBLICAR)
+
+Cápsula final en design/validation/state-update-composite-publication-prep-2026-10-19/.
+Consolida los parches validados y únicamente las pruebas/documentación complementarias propias.
+No modifica contenido funcional: Client 15 archivos; Core 11 archivos, con dos casos PG incorporados
+en el archivo existente. Se reutilizan suites Client1104/Core1112, builds, typecheck/lint y Chrome/OPFS
+con sus límites originales. Los 25 skips pertenecen a la suite anterior; al añadir dos casos PG hay
+27 condicionados (9 PANEL,7 API-write,11 compuesto), no se afirma nueva ejecución completa. Los once
+compuestos están acreditados por nueve previos y dos adicionales reales. Sólo se verificaron lint
+focalizado/typecheck para las nuevas pruebas. No se repiten suite, build ni navegador.
+
+origin/main leído directamente: Client 1b4bdaab92d120dc42198256a3b65a8aa53e04a3 y Core
+6ed194af04717073fedb3087eb4ad836b234014a, coinciden con bases validadas/locales. Railway actual confirma
+Operational Core/production, OPCO Web v1->web.opco.cl y OPCO Client v1->client.opco.cl, desde sus repositorios.
+Referencia privada de Core comprobada en memoria contra Postgres del mismo proyecto. SELECT productivo
+en sesión/transaction READ ONLY: 22 migraciones aplicadas,0 fallidas/rolled-back,checksums coincidentes;
+única pendiente 20261018000100_state_update_composite_identity. Credenciales no impresas ni archivadas.
+No se ejecutó migrate deploy ni se leyeron registros de aplicación.
+
+BLOQUEO previo a migración: no respaldo reciente acreditado. PITR deshabilitado, sin schedules;
+único backup listado creado22-08-2026, expiresAt21-09-2026. No se toma como punto vigente de restauración.
+Railway CLI/API ofrecen create/restore de backups de volumen, pero no se ejercitaron mutaciones ni se
+verificó éxito/permisos de restauración. pg_dump/pg_restore18.6 están disponibles y los scripts Core
+permiten dump custom, checksum, lectura del índice y restauración únicamente en staging/development;
+el script de restore rechaza production. Antes de autorizar la migración deben constar un respaldo
+nuevo verificado (ID/hora/retención) y procedimiento/responsable de recuperación aprobado. No hay restore
+drill ni restauración productiva acreditados; no se crearon backups ni se cambió infraestructura.
+
+Secuencia futura: 1) satisfacer respaldo y revalidar refs/22 checksums; publicar Core conservando
+pre-deploy habitual npm run db:migrate:deploy, que aplicará sólo la migración aditiva exacta; 2) confirmar
+SUCCESS del SHA Core,23 migraciones/0 fallidas/checksum y HTTP200 en /api/v1/health y /api/v1/ready;
+3) sólo después publicar Client;4) confirmar SHA exacto, bundle público y referencia coincidente sw.js,
+API https://web.opco.cl sin destinos locales y base opco-client-v10-epoch2.db conservada. No está autorizado
+ninguno de esos pasos mutantes en esta etapa. No hace falta resetear almacenamiento ni transferir bases.
+
+Publicar no activa el nuevo modo: migración sólo DDL, tablas Definition/Slot inicialmente vacías,
+sin seeds/actualizaciones de AppView. Core registra definición sólo al guardar explícitamente configuración
+subject-date-fields en el editor; Client no escribe esa configuración. No convierte experiencias existentes.
+Activar sobre entidad nueva/vacía queda fuera. Tras activación, rollback sólo a builds compatibles Core Y
+Client; conservar guardas,slots,configuraciones,datos,intenciones/autorización/idempotencia. Antes de activar
+puede evaluarse runtime anterior manteniendo esquema aditivo; no hay down migration/conversión inversa
+validada. Rechazar escrituras antiguas incompletas no certifica manejo local seguro por Client antiguo.
+402 exclusiones y demás pendientes preservados. Auditoría general/incidentes históricos y V11 abiertos.

@@ -1,3 +1,5 @@
+import { compositeIdentityKey } from "./state-update-identity";
+import type { CompositeStateIdentity } from "./opco-api";
 import {
   EntityRecordValue,
   OpcoNetworkDiagnostics,
@@ -20,6 +22,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
 export type OfflineStateUpdatePayload = {
+  identity?: CompositeStateIdentity;
   snapshotConfiguration?: string;
   expectedRecordId?: string;
   appViewId: string;
@@ -41,7 +44,7 @@ export type OfflineStateUpdatePayload = {
   }[];
   subjectDisplayName: string;
   subjectRecordId: string;
-  uniqueness: "none" | "subject" | "subject-date";
+  uniqueness: "none" | "subject" | "subject-date" | "subject-date-fields";
 };
 
 export type StateUpdateRelationValidationIssue = {
@@ -76,6 +79,7 @@ export type StateUpdateSyncErrorDetails = {
 };
 
 export type OfflineStateUpdateValues = {
+  identity?: CompositeStateIdentity;
   __opcoStateUpdateRemote?: { format: 1; recordId: string };
   snapshotConfiguration?: string;
   __opcoStateUpdateIntent?: 1;
@@ -93,6 +97,7 @@ export type OfflineStateUpdateValues = {
 };
 
 export type CachedStateUpdateRecord = {
+  identity?: CompositeStateIdentity;
   clientRequestId?: string;
   conflictIdentity?: string;
   attempts?: number;
@@ -765,12 +770,13 @@ export function usesDatedSubjectHistory(input: Pick<StateUpdateScope, "dateField
 }
 
 export type StateUpdateScope = {
+  identity?: CompositeStateIdentity;
   appViewId: string;
   contractId: string;
   date?: string;
   dateFieldId?: string;
   historyMode?: "append" | "update-current";
-  uniqueness?: "none" | "subject" | "subject-date";
+  uniqueness?: "none" | "subject" | "subject-date" | "subject-date-fields";
   ownerKey: string;
   targetEntityTypeId: string;
 };
@@ -790,7 +796,7 @@ export type SaveStateUpdateLocallyInput = StateUpdateScope & {
   }[];
   subjectDisplayName: string;
   subjectRecordId: string;
-  uniqueness: "none" | "subject" | "subject-date";
+  uniqueness: "none" | "subject" | "subject-date" | "subject-date-fields";
 };
 
 export type ResolveStateUpdateConflictWithLocalInput = SaveStateUpdateLocallyInput & {
@@ -810,6 +816,8 @@ export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
 };
 
 export type StateUpdateProjectionDefinition = {
+  identityFields?: StateUpdateField[];
+  identityDefinition?: { version: 1; definitionId: string };
   sourceEntityTypeId: string;
   subjectFieldId?: string;
   dateFieldId?: string;
@@ -952,16 +960,21 @@ export function resolveStateUpdateClientRequestId({
 }
 
 export function createStateUpdateLocalRecordId(input: {
+  identity?: CompositeStateIdentity;
   appViewId: string;
   date?: string;
   historyMode: "append" | "update-current";
   subjectRecordId: string;
-  uniqueness: "none" | "subject" | "subject-date";
+  uniqueness: "none" | "subject" | "subject-date" | "subject-date-fields";
 }) {
   if (input.historyMode === "append" || input.uniqueness === "none") {
     return `state_update_${encodeStableId(input.appViewId)}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   }
 
+  if (input.uniqueness === "subject-date-fields") {
+    if (!input.identity || !input.date) throw new Error("COMPOSITE_CONTEXT_REQUIRED");
+    return "state_update_" + JSON.stringify([input.appViewId, input.date, compositeIdentityKey(input.identity), input.subjectRecordId]);
+  }
   const datePart = input.uniqueness === "subject-date" ? input.date ?? "no-date" : "current";
 
   return `state_update_${encodeStableId(input.appViewId)}_${encodeStableId(datePart)}_${encodeStableId(input.subjectRecordId)}`;
@@ -972,7 +985,7 @@ export function stateUpdateResultLocalRecordId(input: {
   date?: string;
   historyMode: "append" | "update-current";
   subjectRecordId: string;
-  uniqueness: "none" | "subject" | "subject-date";
+  uniqueness: "none" | "subject" | "subject-date" | "subject-date-fields";
 }) {
   return createStateUpdateLocalRecordId(input);
 }
@@ -988,6 +1001,7 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientReq
     conflictRemoteExtraValues: conflictValues?.extraValues,
     conflictRemoteStateValues: conflictValues?.stateValues,
     conflictRemoteUpdatedAt: record.conflictRemoteUpdatedAt,
+    identity: values.identity,
     date: normalizeStateUpdateLogicalDate(values.date),
     expectedUpdatedAt: values.expectedUpdatedAt,
     extraValues: values.extraValues,
@@ -1064,6 +1078,7 @@ export function stateUpdateIntentsEqual(
 
 export function normalizeStateUpdateIntent(payload: OfflineStateUpdatePayload) {
   return {
+    ...(payload.identity ? { identity: compositeIdentityKey(payload.identity) } : {}),
     appViewId: payload.appViewId,
     date: payload.date ?? null,
     expectedUpdatedAt: payload.expectedUpdatedAt ?? null,

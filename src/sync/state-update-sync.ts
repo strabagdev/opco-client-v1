@@ -1,3 +1,4 @@
+import { compositeIdentityKey } from "../lib/state-update-identity";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
 import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
@@ -99,6 +100,7 @@ async function runSync({
       result.operationsAttempted += 1;
 
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
+        identity: payload.identity,
         clientRequestId: operation.clientRequestId,
         date: payload.date,
         expectedUpdatedAt: payload.expectedUpdatedAt ?? undefined,
@@ -114,6 +116,7 @@ async function runSync({
       }, {
         diagnosticSyncRunId: syncRunId,
       });
+      if (payload.identity && (response.appView.id !== payload.appViewId || compositeIdentityKey(response.identity) !== compositeIdentityKey(payload.identity))) throw new OpcoApiError("La respuesta no corresponde a la identidad enviada.", "STATE_UPDATE_IDENTITY_MISMATCH", 409);
       const operationResult = response.results[0];
 
       if (!operationResult) {
@@ -226,10 +229,12 @@ async function completeOperationIfRemoteStateMatches({
   try {
     const response = await api.getStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
       date: payload.date,
+      identity: payload.identity,
       subjectRecordId: payload.subjectRecordId,
     }, {
       diagnosticSyncRunId: syncRunId,
     });
+    if (payload.identity && (compositeIdentityKey(response.identityContext) !== compositeIdentityKey(payload.identity) || response.date !== payload.date)) return false;
     const item = response.items.find((candidate) => candidate.subject.id === payload.subjectRecordId);
 
     if (!item?.current || !stateUpdateRemoteItemMatchesPayload(item, payload)) {

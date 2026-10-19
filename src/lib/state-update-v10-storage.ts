@@ -1,3 +1,4 @@
+import { compositeIdentityKey } from "./state-update-identity";
 import type * as SQLite from "expo-sqlite";
 import { normalizePreparedAppViewDefinition } from "./app-view-definitions-cache";
 import type { EntityRecordRow } from "./local-db";
@@ -60,6 +61,7 @@ export async function stateUpdateV10Scope(db: SQLite.SQLiteDatabase, input: Stat
   return { ...effective, configuration: JSON.stringify([
     effective.historyMode ?? "update-current", effective.uniqueness ?? (effective.date ? "subject-date" : "subject"),
     usesDatedSubjectHistory(effective) ? effective.dateFieldId : null, fields,
+    ...(effective.uniqueness === "subject-date-fields" ? [compositeIdentityKey(effective.identity)] : []),
   ]) };
 }
 export function stateUpdateEventDate(row: EntityRecordRow, scope: StateUpdateScope) {
@@ -73,6 +75,7 @@ function compatibleConfiguration(stored: string, current: string) {
   if (stored === current) return true;
   try {
     const a = JSON.parse(stored), b = JSON.parse(current);
+    if (a[1] === "subject-date-fields" || b[1] === "subject-date-fields") return false;
     // First preparation persists before caching its definition. Preserve that known mode/date
     // instead of making those snapshots disappear when the same definition becomes available.
     return a[3] === null && a.slice(0, 3).every((value: unknown, index: number) => value === b[index]);
@@ -159,7 +162,10 @@ export async function stateUpdateRows(db: SQLite.SQLiteDatabase, input: StateUpd
   const scope = await stateUpdateV10Scope(db, input);
   const all = await db.getAllAsync<EntityRecordRow>(`SELECT * FROM entity_records WHERE owner_key=? AND contract_id=? AND entity_type_id=?`,
     scope.ownerKey, scope.contractId, scope.targetEntityTypeId);
-  const legacy = all.filter(row => JSON.parse(row.values_json).appViewId === scope.appViewId);
+  const legacy = all.filter(row => {
+    const values = JSON.parse(row.values_json);
+    return values.appViewId === scope.appViewId && (scope.uniqueness !== "subject-date-fields" || (!!scope.identity && compositeIdentityKey(values.identity) === compositeIdentityKey(scope.identity)));
+  });
   const snapshots = await stateUpdateSnapshots(db, scope);
   const manifest = await read<{ ids: string[] }>(db, manifestKey(scope));
   const remote = new Map<string, EntityRecordRow>();
@@ -205,11 +211,12 @@ export async function invalidateStateUpdateAuthorities(db: SQLite.SQLiteDatabase
   const prefix = CURRENT + JSON.stringify(parts(scope).slice(0, 4)).slice(0, -1) + ",";
   const rows = await db.getAllAsync<{ key: string }>("SELECT key FROM app_metadata WHERE substr(key,1,length(?))=?", prefix, prefix);
   for (const row of rows) {
-    try { if (JSON.parse(row.key.slice(CURRENT.length)).at(-1) === subject) await db.runAsync("DELETE FROM app_metadata WHERE key=?", row.key); } catch { /* Unrecognized marker is not authority. */ }
+    try { const key = JSON.parse(row.key.slice(CURRENT.length)); if ((!scope.identity || key[4] === scope.configuration) && key.at(-1) === subject) await db.runAsync("DELETE FROM app_metadata WHERE key=?", row.key); } catch { /* Unrecognized marker is not authority. */ }
   }
   const coverageRows = await db.getAllAsync<{ key: string; value: string }>("SELECT key,value FROM app_metadata WHERE substr(key,1,30)='state_update_current_coverage:'");
   for (const row of coverageRows) {
     const key = JSON.parse(row.key.slice("state_update_current_coverage:".length));
+    if (scope.identity && key[9] !== compositeIdentityKey(scope.identity)) continue;
     if (key[1] !== scope.contractId || key[2] !== scope.appViewId || key[4] !== scope.targetEntityTypeId) continue;
     // Scope keys contain an owner fingerprint; use the existing scope-specific snapshot key prefix above
     // and compare the fingerprint before changing coverage (same algorithm as local-db diagnostics).

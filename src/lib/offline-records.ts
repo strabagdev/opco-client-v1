@@ -166,7 +166,7 @@ export type OfflineRecordStore = {
   clearOrphanedFailedRecordNotice(input: RecordIdentityInput): Promise<CachedEntityRecord>;
   createLocalRecord(input: CreateLocalRecordInput): Promise<CachedEntityRecord>;
   discardFailedRecord(input: DiscardFailedRecordInput): Promise<CachedEntityRecord | null>;
-  getCachedRecord(input: RecordIdentityInput & { appViewId?: string; date?: string }): Promise<CachedEntityRecord | null>;
+  getCachedRecord(input: RecordIdentityInput & { appViewId?: string; date?: string; identity?: import("./opco-api").CompositeStateIdentity }): Promise<CachedEntityRecord | null>;
   getRecordCacheStatusCounts(input: BaseScopedInput): Promise<RecordCacheStatusCounts>;
   getRecordOutboxConsistency(input: BaseScopedInput): Promise<RecordOutboxConsistency>;
   getRecordsSyncSummary(input: RecordsSyncSummaryInput): Promise<RecordsSyncSummary>;

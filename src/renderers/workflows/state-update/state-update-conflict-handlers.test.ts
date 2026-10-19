@@ -24,7 +24,7 @@ function fixture(outcome = "confirmed") {
   return {
     ownerKey: "local:user", selectedContractId: "contract", appView: { id: "view", name: "Fixture" },
     response: { historyMode: "append", uniqueness: "none", stateFields: [], targetEntityType: { id: "target" } },
-    date: "2026-10-03", hasDate: true, isSaving: false, isOnline: true,
+    date: "2026-10-03", identity: undefined, hasDate: true, isSaving: false, isOnline: true,
     requestSequenceRef: { current: 0 }, resolutionInFlightRef: { current: false }, resolutionMountedRef: { current: true },
     resolutionScope: "selected-scope", resolutionScopeRef: { current: "selected-scope" },
     definitionCache: {
@@ -42,6 +42,7 @@ describe("selected conflict renderer handlers", () => {
   it.each(["pending", "conflict", "failed", "superseded"])("global sync completion does not confirm selected %s intent", async (outcome) => {
     const context = fixture(outcome);
     await handler("handleUseLocalConflictChange", context)(selected);
+    expect(context.recordVisibleError).not.toHaveBeenCalled();
     expect(context.syncPendingRecords).toHaveBeenCalledOnce();
     expect(context.reportWriteFeedback.mock.calls.some(([feedback]) => feedback.kind === "server-confirmed")).toBe(false);
     expect(context.setResolutionFeedback).toHaveBeenLastCalledWith(expect.objectContaining({ outcome }));
@@ -52,6 +53,7 @@ describe("selected conflict renderer handlers", () => {
   it("announces confirmation only after reading the selected durable receipt", async () => {
     const context = fixture();
     await handler("handleUseLocalConflictChange", context)(selected);
+    expect(context.recordVisibleError).not.toHaveBeenCalled();
     expect(context.definitionCache.getStateUpdateResolutionOutcome).toHaveBeenCalledOnce();
     expect(context.reportWriteFeedback).toHaveBeenCalledWith(expect.objectContaining({ kind: "server-confirmed" }));
     expect(context.setSuccessMessage).toHaveBeenLastCalledWith("Cambio confirmado por Opco.");
@@ -59,8 +61,9 @@ describe("selected conflict renderer handlers", () => {
   it("Use Opco passes the durable selection and reports local resolution without syncing", async () => {
     const context = fixture();
     await handler("handleUseRemoteConflictChange", context)(selected);
+    expect(context.recordVisibleError).not.toHaveBeenCalled();
     expect(context.definitionCache.discardStateUpdateLocalChange).toHaveBeenCalledWith({
-      localRecordId: selected.localRecordId, conflictIdentity: selected.conflictIdentity, ownerKey: "local:user", contractId: "contract", appViewId: "view", targetEntityTypeId: "target", subjectRecordId: "subject", date: "2026-10-03",
+      localRecordId: selected.localRecordId, conflictIdentity: selected.conflictIdentity, ownerKey: "local:user", contractId: "contract", appViewId: "view", targetEntityTypeId: "target", subjectRecordId: "subject", date: "2026-10-03", identity: undefined,
     });
     expect(context.syncPendingRecords).not.toHaveBeenCalled();
     expect(context.reportWriteFeedback).not.toHaveBeenCalled();
@@ -70,6 +73,7 @@ describe("selected conflict renderer handlers", () => {
     const context = fixture();
     context.syncPendingRecords.mockImplementation(async () => { context.resolutionScopeRef.current = "another-view"; });
     await handler("handleUseLocalConflictChange", context)(selected);
+    expect(context.syncPendingRecords).toHaveBeenCalledOnce();
     expect(context.reportWriteFeedback).not.toHaveBeenCalled();
     expect(context.setSuccessMessage.mock.calls.filter(([message]) => message !== null)).toHaveLength(0);
     expect(context.loadWorkflow).not.toHaveBeenCalled();
