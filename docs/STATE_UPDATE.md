@@ -1942,3 +1942,123 @@ Client; conservar guardas,slots,configuraciones,datos,intenciones/autorización/
 puede evaluarse runtime anterior manteniendo esquema aditivo; no hay down migration/conversión inversa
 validada. Rechazar escrituras antiguas incompletas no certifica manejo local seguro por Client antiguo.
 402 exclusiones y demás pendientes preservados. Auditoría general/incidentes históricos y V11 abiertos.
+
+### Preparación automática del contexto compuesto — implementación local, SIN PUBLICAR — 2026-10-20
+
+Base Client main `fa3d625efa5b1e564e2ddafb3cbadec02de0d1f6`; Core publicado
+`58a2a2a076718d3aa003cbc8dfe8f2967c321e26`, sin cambios funcionales. El nuevo comportamiento es
+genérico para `subject-date-fields`; no contiene condiciones por contrato, entidad, experiencia,
+turno o grupo del caso productivo. No cambia Inicio ni prepara combinaciones no seleccionadas.
+La configuración productiva anterior sigue usando el runtime publicado hasta una publicación posterior.
+
+**Activación y repetición.** Al disponer de definición y contexto completos (DATE real de calendario
+y opciones configuradas por ID), con conexión y sesión/readiness disponibles, se programa la preparación
+existente. Se espera que termine la sincronización pendiente antes de iniciar esa lectura. Se reutilizan
+el coordinador `activePrewarms`, `refreshEntityRecordsCache`, `prepareStateUpdateCurrent`, el pool de
+concurrencia 4 y la persistencia/lectura de cobertura existentes. No otro motor, cola, endpoint ni SQLite.
+
+| Situación | Decisión |
+| --- | --- |
+| Contexto incompleto o fecha inválida | Explicar fecha/campos configurados faltantes; no consultar sujetos ni preparar. La definición necesaria se obtiene una vez por apertura/configuración y se comparte; editar un contexto todavía incompleto no repite esa solicitud. |
+| Primera selección completa online | Consultar el marcador mediante su lector existente. Si sigue completo/verificable, reutilizarlo sin descargar; si está ausente/parcial, una preparación automática. |
+| Renders, búsquedas, respuestas ordinarias o edición de contenido | No reinician preparación. Buscar/seleccionar/editar online no depende del botón ni espera a que termine el preparador. |
+| Fallo o fuente/contenido no verificables | Estado terminal fallido/parcial, con datos conservados y botón de reintento. No reintento por render, búsqueda o por volver a seleccionar un intento fallido en la misma generación. |
+| Reconexión real offline → online | Una nueva comprobación, después de las barreras de sesión/readiness/sync. Sólo descarga si el lector ya no acredita cobertura completa. Un cambio meramente desconocido/checking no inventa reconexión. |
+| Señal compartida de refresh tras sync | Nueva comprobación por generación de la señal existente; permite recuperar un marcador invalidado por el ACK. El ACK no acredita completitud. |
+| Actualización/reintento manual | Misma función con force=true: vuelve a consultar aunque hubiera marcador completo. Comparte cualquier ejecución concurrente del mismo scope. |
+| Reentrada en un contexto ya intentado | Releer su marcador local para presentar la disponibilidad correcta, sin convertir esa navegación en descarga/reintento automático. |
+| Offline/reapertura offline | Leer marcador y datos persistidos del contexto exacto. Sin preparador remoto; mensaje distingue completo de disponibilidad no verificada, e historial de vigentes. |
+
+No se introduce TTL: el criterio vigente es `getStateUpdateCurrentCoverage`, que revalida fuente y
+contenido persistido. Complete acredita esa preparación local verificada, no frescura remota en tiempo
+real ni todo el historial. Para actualizar expresamente existe el botón. Los intentos se acotan por
+scope + época de reconexión + señal de sync durante el montaje; al volver a abrir se consulta de nuevo
+el marcador persistido. Un intento cancelado puede retomarse al seleccionar otra vez ese contexto.
+
+**Aislamiento y terminalidad.** La clave del coordinador incluye usuario, contrato, AppView, fuente,
+destino, fecha, campo DATE, modo/historial y definición/valores canónicos de identidad. Al cambiar de
+scope o salir de online, se cancela su publicación visual y la planificación restante. Las peticiones
+ya en vuelo conservan su timeout existente; sus resultados cancelados no hidratan/acreditan otro scope.
+Un A → B → A espera a que termine el escritor A cancelado antes de volver a escribir su marcador;
+distintos scopes no se fusionan. Un finally antiguo no apaga el indicador nuevo. Un fallo concurrente
+al releer un marcador tampoco termina una preparación activa. No se borra historial, snapshot, intención
+o conflicto; las transacciones y overlays siguen en el runtime v10 existente. Se exige además que la
+fecha devuelta por el preparador compuesto coincida con la consultada; no basta el mismo contexto SELECT.
+
+El hook sólo programa y presenta estado; la descarga/verificación sigue en el preparador común.
+La cabecera existente suma esa actividad a las lecturas concurrentes. El cuerpo conserva resultados,
+ofrece mensajes estáticos y muestra fallos mediante el diagnóstico visible STATE_UPDATE existente.
+El botón sirve para actualizar/reintentar; deja de ser un paso obligatorio. Fecha/contexto siguen
+bloqueados durante una edición/guardado, no por una preparación de fondo. No cambia handlers de
+guardado/confirmación/resolución, base remota, autorización, clientRequestId ni sincronizador.
+
+**Regresiones y evidencia nueva.**
+
+- 149 pruebas focalizadas PASS en nueve archivos, máximo dos workers. Incluyen coordinador real,
+  programación automática, coalescencia, invalidación/reintento, fecha/contexto incompatibles, cancelación
+  A/B/A, respuestas tardías, desconexión y señal de sync. Incluyen regresiones existentes de Attendance,
+  confirmación offline, modos previos y actividad central. No suite completa.
+- SQLite real de archivo: adaptador API → refresco de fuente → preparador compartido → persistencia →
+  reapertura. Current y cobertura del contexto sobreviven; repetir con cobertura completa no consulta
+  otra vez. Intención autorizada de otra combinación conserva exactamente operación, clientRequestId,
+  base y overwrite. Los casos existentes cubren parcial/fallo/interrupción, conflictos y restauración.
+- Typecheck PASS. Lint PASS sin errores; dos advertencias previas no modificadas en
+  `src/sync/records-sync.local-db-regression.test.ts:182/183` (`require()`). Diff-check PASS.
+- Core/PostgreSQL exclusivamente locales: `.env.local` validado como 127.0.0.1:5432/opco_development,
+  usuario opco_dev, URL pasada explícitamente a cada proceso y destino confirmado por SELECT.
+  Migración compuesta ya existente comprobada; ninguna migración ejecutada. Fixture propio nuevo:
+  dos sujetos (uno sin reporte), dos contextos y un reporte distinto en cada uno. Sin acceso productivo.
+- Chrome 154 Windows, CDP sin Playwright, perfiles exclusivos. Corrida final con bundle
+  `entry-f8dc3295b5f27c33eb171b16a4050a0c.js`, API sólo `http://127.0.0.1:20330`, SW
+  `9490e12fa2dc41b6`; Client local puerto20331. SQLite OPFS real, crossOriginIsolated y SW controlador.
+  Antes/completando contexto incompleto: mismos contadores, sin nuevas solicitudes. Al completarlo,
+  una preparación añade 1 GET de fuente + 2 GET de current; fuente completa, 2/2 sujetos verificados,
+  incluido null confirmado. Dos búsquedas posteriores añaden sólo sus consultas ordinarias: ningún
+  GET adicional de fuente/current del preparador. No se pulsó el botón manual.
+- Cambio rápido de contexto con latencia de ensayo650ms y búsqueda habilitada: cada contexto termina
+  completo y conserva un evento/ID distinto; volver al primero muestra123.4 y no456.7. La primera
+  corrida detectó pérdida del estado visible al volver a un marcador ya preparado: se corrigió su
+  relectura local y se añadió regresión. Se repitió el recorrido con el bundle final arriba identificado.
+- Lectura offline correcta. La captura inmediata inicial todavía tenía actividad transitoria de lectura;
+  no se usa como evidencia de estado terminal. Cierre completo verificado: cero procesos del perfil.
+  Se detuvieron Core y servidor Client propios; reapertura del mismo perfil desde about:blank con
+  red emulada offline ANTES de navegar. Bundle final recuperado por SW; contexto y123.4 correctos,
+  cobertura completa/sourceComplete, 2/2 verificados, un evento sin duplicados, cero pendientes,
+  cero respuestas API exitosas y cabecera terminal sin animación. Captura final revisada visualmente.
+
+Límites: prueba de navegador local sintética de lectura/preparación y reapertura, no nueva prueba
+productiva, móvil/iPhone, escrituras/sync ni conflictos en navegador. Fallo/reintento, reconexión y
+protección durable de pendientes/conflictos se acreditan mediante las pruebas automatizadas indicadas.
+El primer export de ensayo contenía un endpoint LOCAL anterior; fue descartado y regenerado con
+endpoint comprobado dentro del bundle. No se atribuye ese problema del arnés a conectividad productiva.
+El acceso CDP WSL→Windows requirió ejecutar el arnés con Node de Windows; no se modificó infraestructura
+ni firewall. La preparación general y el incidente histórico «11/11 procesadas, 1 fallo» siguen separados.
+V11 y auditoría general permanecen abiertos.
+
+Archivos propios: `src/lib/app-view-prewarm.ts`, `src/lib/state-update-current-prewarm.ts`,
+`src/lib/state-update-context-preparation.test.ts` (nuevo), `src/lib/state-update-composite.test.ts`,
+`src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`, `state-update-workflow-logic.ts` y su
+prueba, `use-context-preparation.ts` y su prueba (nuevos), más esta sección y STATUS. No incluir
+`state-update-conflict-resolution.test.ts` ni los otros diagnósticos/experimentos pendientes en el lote.
+402 exclusiones y todos los pendientes ajenos preservados; sin staging/commit/push/deploy.
+
+Limpieza del ensayo: fixture propio eliminado (organización/usuario/definición/slots/reportes locales),
+con digest de IDs/versiones de registros ajenos idéntico antes/después; cero definiciones/slots propios
+restantes. Core y servidor Client temporales detenidos. Chrome propio cerrado, relay local detenido
+y tres perfiles sintéticos retirados. Remove-Item reportó acceso denegado; la eliminación de esos
+mismos directorios propios se completó y verificó desde WSL, sin cambiar ACLs ni tocar perfiles
+habituales. Export/capturas sanitizadas del ensayo permanecen fuera de Git en /tmp/opco-context-auto-20261020/.
+
+
+**Cierre técnico aislado, 2026-10-20.** Implementación y pruebas sin cambios respecto del inventario
+local final anterior; reconstrucción sobre HEAD fa3d625, excluyendo las secciones documentales ajenas.
+11 archivos/24 hunks. Suite completa 1125 PASS/94 archivos, un worker y timeouts estándar (sin aumentos,
+cero omitidas); typecheck, lint (0 errores/2 warnings previos de HEAD), build web y diff-check PASS.
+No nueva corrida de navegador: se reutiliza exclusivamente el bundle local f8dc3295b5f27c33eb171b16a4050a0c
+con Core/OPFS para lectura/preparación/contextos/reapertura; otros escenarios mantienen la evidencia
+automatizada indicada arriba. El export de cierre usa API pública explícita y no acredita despliegue.
+Inventario de hunks, parche aplicable a HEAD y SHA256SUMS en /home/dannysilver/dev2026/backups/state-update-context-auto-close/2026-10-20/.
+Detalles de checks, separación documental, preservación y límites en STATUS, subsección Cierre técnico
+aislado de esta fecha. Listo para publicación posterior; ninguna publicación autorizada/ejecutada aquí.
+Sin horarios, nuevos selectores de fecha, menús, cambios de Core, esquema, persistencia o sync.
+402 exclusiones conservadas; V11/auditoría/incidente histórico independientes y abiertos.

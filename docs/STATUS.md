@@ -2533,3 +2533,89 @@ Procedimiento Core+migración habitual -> SUCCESS/SHA/health/readiness -> Client
 conservada. No activar modo ni crear configuración/entidad productiva; desplegar no cambia AppViews.
 Rollback post-activación sólo builds compatibles de ambos. Cápsulas anteriores y 402 exclusiones intactas;
 final en design/validation/state-update-composite-publication-prep-2026-10-19/. V11/auditoría general abiertos.
+
+## STATE_UPDATE compuesto — preparación automática del contexto — 2026-10-20, LOCAL SIN PUBLICAR
+
+Sobre main/fa3d625, sin cambios Core ni configuración productiva. Al completar fecha válida e identidad
+configurada, prepara automáticamente con el coordinador/pool/preparador existentes. Cobertura completa
+se reutiliza sólo cuando su lector sigue verificándola; no se añade TTL. Ausente/parcial: un intento por
+scope/época online/señal de sync; fallo terminal, reintento manual o reconexión real, sin bucles de render.
+Inicio sin cambios y sin descargar combinaciones no elegidas. Buscar/editar online no depende del botón.
+El manual actualiza/reintenta. Respuestas canceladas quedan en su scope; A→B→A espera al escritor previo.
+Al volver a un contexto intentado se relee el marcador local, sin nueva descarga. Offline sólo datos y
+cobertura persistidos, distinguiendo current de latest; cabecera existente, sin otra animación de lectura.
+
+149 pruebas focalizadas PASS/9 archivos/máximo2 workers, incluyendo SQLite real+reapertura y protección
+exacta de intención autorizada ajena, Attendance/modos previos, fallos/reintento y respuestas tardías.
+Typecheck PASS; lint0 errores/2 warnings require() previos ajenos; diff-check PASS. Sin suite completa.
+Export local indispensable OPFS: bundle entry-f8dc3295b5f27c33eb171b16a4050a0c.js, API localhost20330,
+SW9490e12fa2dc41b6. Chrome154/perfil exclusivo/CDP sin Playwright, Core publicado aislado y PostgreSQL
+local validado desde .env.local (127.0.0.1:5432/opco_development/opco_dev), sin migraciones. Fixture nuevo
+2 sujetos/2 contextos, uno sin reporte. Contexto incompleto no añade solicitudes; completo añade1GET
+fuente+2GET current sin botón; búsquedas no duplican preparación. Ambos contextos completos y un evento
+por combinación. Un defecto nuevo de presentación al regresar a contexto preparado fue corregido,
+con regresión y recorrido repetido sobre el bundle final. No se presenta la corrida anterior como final.
+Lectura offline correcta; reapertura tras cero procesos y servidores propios detenidos: mismo bundle,
+contexto123.4 correcto, current completo2/2, un evento, cero API exitosas y cabecera sin animación terminal.
+Captura inmediata del primer paso offline tenía actividad transitoria: la prueba terminal es la reapertura.
+
+Reconexión, fallos/reintento y conservación de intenciones/conflictos: evidencia automatizada; navegador
+sólo preparación/lectura/contextos/reapertura con datos sintéticos, no sync de escrituras ni producción.
+Primer export con puerto local anterior descartado; endpoint verificado en el export final. Documentación
+y alcance exacto en STATE_UPDATE. 402 exclusiones y demás pendientes ajenos preservados. Sin staging,
+commit/push/deploy. V11/auditoría general y «11/11 procesadas, 1 fallo» siguen abiertos e independientes.
+
+Limpieza acreditada: fixture propio retirado; IDs/versiones ajenas locales intactas, sin definición/slot
+propio restante. Servidores y relay propios detenidos, Chrome cerrado y tres perfiles de ensayo borrados
+tras resolver únicamente su eliminación local (sin ACLs ni perfiles habituales). Export/capturas fuera de Git.
+
+
+### Cierre técnico aislado — preparación automática del contexto — 2026-10-20
+
+LISTO PARA PUBLICACIÓN POSTERIOR; sin commit, push ni deploy. Base main/fa3d625efa5b1e564e2ddafb3cbadec02de0d1f6.
+Candidato reconstruido aislado: 11 archivos / 24 hunks, tres archivos nuevos. Los nueve archivos de
+implementación/pruebas conservan exactamente los SHA-256 del inventario de entrada en
+/tmp/opco-context-auto-20261020/inventory.json. Ningún ajuste funcional durante este cierre.
+El parche inicial contextualizaba los dos documentos sobre sus pendientes anteriores: el parche final
+aplica a HEAD y añade sólo las secciones propias; NO incluye las secciones documentales ajenas.
+
+Suite COMPLETA aislada PASS: 1125/1125 pruebas, 94/94 archivos, cero omitidas/fallidas, un worker,
+timeouts estándar sin overrides ni aumentos; 61,024 s de proceso local. Typecheck PASS. Lint PASS:
+0 errores y 2 advertencias preexistentes en src/sync/records-sync.local-db-regression.test.ts:182/183,
+no-require-imports, mismo contenido que HEAD. Build web PASS (npm run build), sin leer .env, API
+https://web.opco.cl explícita y caché temporal de Metro aislada. Bundle LOCAL del cierre:
+entry-949b57fa62390b3cf96915e3ed4c905e.js, SW e2fcd4112d66f26b con referencia coincidente,
+sin destinos API locales; SQLite v10/opco-client-v10-epoch2.db conservados. No es un despliegue.
+Diff-check del candidato y del árbol principal PASS; revisión del parche sin secretos, .env,
+configuración local, bases, capturas, exports ni logs publicables.
+
+Inventario exacto: implementación en app-view-prewarm.ts, state-update-current-prewarm.ts,
+StateUpdateWorkflow.tsx, state-update-workflow-logic.ts y use-context-preparation.ts (nuevo);
+pruebas en state-update-context-preparation.test.ts (nuevo), state-update-composite.test.ts,
+state-update-workflow-logic.test.ts y use-context-preparation.test.ts (nuevo); únicamente las secciones
+propias de docs/STATE_UPDATE.md y docs/STATUS.md. Rutas completas, hunks y hashes en el inventario.
+Respaldo durable fuera de /tmp: /home/dannysilver/dev2026/backups/state-update-context-auto-close/2026-10-20/inventory.json,
+context-auto-preparation.patch y SHA256SUMS; incluye procedimiento de reconstrucción, resultados
+sanitizados y procedencia de la evidencia. Reconstrucción independiente por parche/hashes requerida
+y verificada en el informe del respaldo. No usar hashes de los documentos completos del árbol sucio
+como hashes del candidato: el inventario final distingue ambas representaciones.
+
+Revisión: coordinador/pool/marcadores existentes, scopes completos, un intento por contexto/época
+online/señal de sync, reutilización sólo tras verificar cobertura persistida, fallo terminal y reintento
+explícito. Contexto incompleto no dispara preparación; petición inicial de definición reutilizada.
+Búsquedas no duplican preparación. Respuestas canceladas no acreditan otro contexto; A/B/A espera
+al escritor cancelado. Sin otro motor, TTL, descarga cartesiana ni cambios de Inicio. Cobertura current
+separada de latest parcial; sólo persistencia verificada de todos los sujetos acredita complete,
+incluido null confirmado. Guardado/autorización/outbox/sync y Attendance sin cambios funcionales.
+No se incorporan horarios, nuevos selectores de fecha ni menús desplegables.
+
+Se reutiliza la corrida Chrome/OPFS final con Core/PostgreSQL locales y bundle f8dc3295b5f27c33eb171b16a4050a0c:
+preparación automática, búsqueda sin duplicación, cambio de contexto, lectura offline y reapertura
+completa con servidores detenidos. Igualdad funcional verificada por SHA-256; las diferencias del
+bundle del cierre provienen de construir para API pública y del entorno de export, sin visita productiva.
+Sin nuevo navegador en este cierre. Reintentos, reconexión, respuestas tardías y pendientes/conflictos:
+evidencia automatizada, no nueva prueba de escritura/sync en navegador ni en producción/móvil.
+Captura offline inicial transitoria no acredita indicador terminal; sí lo acredita la reapertura final.
+402 exclusiones verificadas byte a byte; demás pendientes y prefijos documentales ajenos, índice y HEAD
+conservados. Core intacto. Fixtures/perfiles/procesos del ensayo anterior ya limpiados; aquí no se crean.
+V11 pausado; auditoría general e incidente histórico «11/11 procesadas, 1 fallo» siguen abiertos.

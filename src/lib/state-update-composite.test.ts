@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
-import { runWithConcurrency } from "./app-view-prewarm";
+import { runWithConcurrency, prepareStateUpdateContextOnce } from "./app-view-prewarm";
 import { createOpcoApi } from "./opco-api";
 import { compositeConfirmationKey, compositeIdentityKey, parseCompositeContextValues, hasVerifiedCompositeAbsence } from "./state-update-identity";
 const sqlite = vi.hoisted(() => ({
@@ -191,4 +191,25 @@ it("scoped direct lookups reject another operational date or identity, including
  const saved=await store.saveStateUpdateLocally({...input(),overwrite:true,expectedUpdatedAt:event.updatedAt});
  expect(await store.getCachedRecord({...lookup,identity:compositeB.identity,recordId:saved.localRecordId})).toBeNull();
  expect(await store.getCachedRecord({...lookup,recordId:saved.localRecordId})).not.toBeNull();
+});
+
+
+it("prepares the selected context through the shared coordinator, survives reopen and preserves a different pending identity", async () => {
+ await fileDatabase();await cacheCompositeDefinition();await seedSubject();
+ const pending=await store.saveStateUpdateLocally({...input(compositeB),overwrite:true,expectedUpdatedAt:event.updatedAt});
+ const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];
+ const records=[{id:subject.id,displayName:subject.displayName,updatedAt:event.updatedAt,values:{}}];let sourceRequests=0,currentRequests=0;
+ const api=createOpcoApi({apiUrl:"https://synthetic.test",fetcher:async url=>{
+  const parsed=new URL(String(url));
+  if(!parsed.pathname.includes("workflow/state-update")){sourceRequests++;return new Response(JSON.stringify({ok:true,data:{records,pagination:{page:1,pageSize:100,total:1,totalPages:1,hasMore:false}}}),{status:200});}
+  currentRequests++;const requested=JSON.parse(parsed.searchParams.get("identity")!);expect(requested).toEqual(identityA);
+  return new Response(JSON.stringify({ok:true,data:{appView:{id:compositeA.appViewId,name:"Synthetic",slug:"synthetic"},date:scope.date,dateFieldId:"date",subjectFieldId:"subject-field",sourceEntityType:{id:"source",name:"Subjects"},targetEntityType:{id:scope.targetEntityTypeId,name:"Reports"},historyMode:"update-current",uniqueness:{mode:"subject-date-fields"},stateFields:[],extraFields:[],identityContext:identityA,subjects:[{subject,reports:[{identity:identityA,current:{...event,recordId:"coordinated-report",states:{}}}]}],latest:[]}}),{status:200});
+ }});
+ const selected={...compositeA,sourceEntityTypeId:"source"};
+ const prepare=()=>prepareStateUpdateContextOnce({api,store,scope:selected,token:"synthetic",signal:new AbortController().signal});
+ await Promise.all([prepare(),prepare()]);await reopenFile();
+ expect(await remoteCurrent(compositeA)).toBe("coordinated-report");expect((await store.getStateUpdateCurrentCoverage(selected))?.status).toBe("complete");
+ await prepare();expect(sourceRequests).toBe(1);expect(currentRequests).toBe(1);
+ const after=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(after).toEqual(before);expect(after.clientRequestId).toBe(pending.clientRequestId);
+ expect((await search(compositeB))[0].current?.recordId).not.toBe("coordinated-report");
 });

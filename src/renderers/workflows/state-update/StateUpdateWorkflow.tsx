@@ -1,7 +1,5 @@
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
-import { prepareStateUpdateCurrent } from "@/lib/state-update-current-prewarm";
-import { runWithConcurrency, PREWARM_CONCURRENCY } from "@/lib/app-view-prewarm";
-import { refreshEntityRecordsCache } from "@/lib/offline-records";
+import { useContextPreparation } from "./use-context-preparation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -47,6 +45,7 @@ import {
   buildStateUpdateLatestRows,
   buildStateUpdateConflictRows,
   currentStateValue,
+  compositeContextInstruction,
   defaultStateValues,
   firstBlockingStateUpdateResult,
   formValueFromStateValue,
@@ -131,9 +130,22 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const selectedIdentityJson = JSON.stringify(response?.appView.id === appView.id ? selectCompositeIdentity(response?.identityDefinition, response?.identityFields, identityValues) : undefined);
   const identity = useMemo(() => selectedIdentityJson ? JSON.parse(selectedIdentityJson) as import("@/lib/opco-api").CompositeStateIdentity : undefined, [selectedIdentityJson]);
   const identityKey = compositeIdentityKey(identity);
-  const contextPreparationRef = useRef<AbortController | null>(null);
-  const contextReady = !compositeMode || Boolean(identity && /^\d{4}-\d{2}-\d{2}$/.test(date));
-  const [isPreparingContext, setIsPreparingContext] = useState(false);
+  const contextReady = !compositeMode || Boolean(identity && attentionDate(date));
+  const preparationSourceId = response?.sourceEntityType.id;
+  const preparationTargetId = response?.targetEntityType.id;
+  const preparationDateFieldId = response?.dateFieldId;
+  const preparationUniqueness = response?.uniqueness;
+  const preparationHistoryMode = response?.historyMode;
+  const preparationInput = useMemo(() => compositeMode && contextReady && identity && preparationSourceId && preparationTargetId && token && ownerKey && selectedContractId
+    ? { api, token, store: definitionCache, scope: { identity, ownerKey, contractId: selectedContractId,
+        appViewId: appView.id, sourceEntityTypeId: preparationSourceId, targetEntityTypeId: preparationTargetId,
+        date, dateFieldId: preparationDateFieldId, uniqueness: preparationUniqueness, historyMode: preparationHistoryMode } }
+    : null, [compositeMode, contextReady, identity, preparationSourceId, preparationTargetId,
+      preparationDateFieldId, preparationUniqueness, preparationHistoryMode, api, token, ownerKey, selectedContractId, appView.id, date, definitionCache]);
+  const contextPreparation = useContextPreparation({ input: preparationInput, connectivityStatus,
+    canPrepare: !isAuthSessionRestoring && !isOperationalCoreReadinessChecking && !isPendingWorkSyncing,
+    refreshKey: stateUpdateReconnectRefreshKey });
+  const isPreparingContext = contextPreparation.isPreparing;
   const [verifiedOfflineAbsences, setVerifiedOfflineAbsences] = useState<{scope:string;ids:string[]}>({scope:"",ids:[]});
   const [confirmContextExit, setConfirmContextExit] = useState(false);
   const [items, setItems] = useState<StateUpdateItem[]>([]);
@@ -151,6 +163,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [visibleErrorDiagnostics, setVisibleErrorDiagnostics] =
     useState<StateUpdateVisibleErrorDiagnostics | null>(null);
   const [readRequests, setReadRequests] = useState<Record<string, number>>({});
+  const contextDefinitionLoads = useRef(new Map<string, Promise<StateUpdateResponse>>());
   const readScope = JSON.stringify([ownerKey, selectedContractId, appView.id, date, ...(compositeMode ? [identityKey] : [])]);
   const activeReadCount = (readRequests[readScope] ?? 0) + Number(isPreparingContext);
   const [isLoading, setIsLoading] = useState(true);
@@ -160,7 +173,6 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [offlineHistoryState, setOfflineHistoryState] = useState<StateUpdateOfflineHistoryState>(null);
   const requestSequenceRef = useRef(0);
   const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, ...(compositeMode ? [identityKey] : [])]);
-  useEffect(() => () => contextPreparationRef.current?.abort(), [resolutionScope]);
   const resolutionScopeRef = useRef(resolutionScope);
   useLayoutEffect(() => { resolutionScopeRef.current = resolutionScope; }, [resolutionScope]);
   const resolutionInFlightRef = useRef(false);
@@ -207,7 +219,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     successMessage,
     visibleError,
   });
-  const experienceErrorCode = refreshError
+  const experienceErrorCode = contextPreparation.error ? "STATE_UPDATE_CONTEXT_PREPARATION_FAILED" : refreshError
     ? "STATE_UPDATE_REFRESH_FAILED"
     : error && !visibleResponse
       ? "STATE_UPDATE_ACTIVITY_FAILED"
@@ -283,6 +295,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       void definitionCache.recordStateUpdateVisibleErrorEvent(ownerKey, event).catch(() => undefined);
     }
   }, [currentStateUpdateSyncRunId, definitionCache, ownerKey, setVisibleErrorDiagnostics]);
+
+  const recordedPreparationError = useRef<unknown>(null);
+  useEffect(() => {
+    if (!contextPreparation.error || recordedPreparationError.current === contextPreparation.error) return;
+    recordedPreparationError.current = contextPreparation.error;
+    recordVisibleError({ error: contextPreparation.error, operation: "refresh", resolution: "refresh_failed" });
+  }, [contextPreparation.error, recordVisibleError]);
 
   const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; requestId?: number; search?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
@@ -472,14 +491,24 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         return;
       }
 
-      const nextResponse = await api.getStateUpdateWorkflow(token, selectedContractId, appView.id, {
-        date: hasDate && date ? date : undefined,
+      const queryInput = {
+        date: hasDate && date && contextReady ? date : undefined,
         identity: contextReady ? identity : undefined,
         page: latestPageToLoad,
         pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
         search: contextReady ? query.search : undefined,
         subjectRecordId: contextReady ? query.subjectRecordId : undefined,
-      });
+      };
+      const definitionKey = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config]);
+      let definitionLoad = compositeMode && !contextReady ? contextDefinitionLoads.current.get(definitionKey) : undefined;
+      if (!definitionLoad) {
+        definitionLoad = api.getStateUpdateWorkflow(token, selectedContractId, appView.id, queryInput);
+        if (compositeMode && !contextReady) {
+          contextDefinitionLoads.current.set(definitionKey, definitionLoad);
+          void definitionLoad.catch(() => contextDefinitionLoads.current.delete(definitionKey));
+        }
+      }
+      const nextResponse = await definitionLoad;
 
       if (!isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
@@ -1038,25 +1067,6 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }
   }
 
-  async function prepareSelectedContext() {
-    if (!response || !identity || !contextReady || !isOnline || !token || !ownerKey || !selectedContractId || isPreparingContext) return;
-    const selectedScope = resolutionScope;
-    const controller = new AbortController();contextPreparationRef.current = controller;
-    setIsPreparingContext(true);setError(null);
-    try {
-      let sourceRemoteTotal: number | undefined;let sourceFetched=0;
-      const source = await refreshEntityRecordsCache({ api, token, ownerKey, contractId: selectedContractId, entityTypeId: response.sourceEntityType.id, store: definitionCache,
-        onDiagnostics: d => { sourceRemoteTotal=d.remoteTotal ?? undefined;sourceFetched=d.recordsFetched; } });
-      await prepareStateUpdateCurrent({ api, token, store: definitionCache, signal: controller.signal, concurrency: PREWARM_CONCURRENCY, runWithConcurrency,
-        scope: { identity, appViewId: appView.id, ownerKey, contractId: selectedContractId, sourceEntityTypeId: response.sourceEntityType.id,
-          targetEntityTypeId: response.targetEntityType.id, date, dateFieldId: response.dateFieldId, uniqueness: response.uniqueness, historyMode: response.historyMode },
-        sourceRemoteTotal, sourceFetched, sourceCacheTotal: source.pagination.total });
-      const coverage = await definitionCache.getStateUpdateCurrentCoverage({ identity, appViewId: appView.id, ownerKey, contractId: selectedContractId, sourceEntityTypeId: response.sourceEntityType.id, targetEntityTypeId: response.targetEntityType.id, date, dateFieldId: response.dateFieldId, uniqueness: response.uniqueness, historyMode: response.historyMode });
-      if (resolutionScopeRef.current === selectedScope) { setSuccessMessage(coverage?.status === "complete" ? "Contexto preparado para uso sin conexión." : "Preparación parcial: faltan sujetos o reportes por verificar.");await loadWorkflow({ operation: "refresh" }); }
-    } catch (error) { if (resolutionScopeRef.current === selectedScope) setError(error instanceof Error ? error.message : "No fue posible preparar este contexto."); }
-    finally { setIsPreparingContext(false); }
-  }
-
   function loadMoreLatest() {
     if (isLoadingMore || !latestPagination?.hasMore) {
       return;
@@ -1128,15 +1138,21 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       {compositeMode ? <View style={styles.form}>
         <Text style={styles.label}>Contexto del reporte</Text>
-        <TextInput accessibilityLabel="Fecha operacional" editable={!selectedItem && !isSaving && !isPreparingContext} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" style={styles.input} />
+        <TextInput accessibilityLabel="Fecha operacional" editable={!selectedItem && !isSaving} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" style={styles.input} />
         {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.fieldGroup}>
-          <Text style={styles.label}>{field.label}</Text><View style={styles.optionList}>{field.options.map(option => <Pressable key={option.optionId} disabled={!!selectedItem || isSaving || isPreparingContext}
+          <Text style={styles.label}>{field.label}</Text><View style={styles.optionList}>{field.options.map(option => <Pressable key={option.optionId} disabled={!!selectedItem || isSaving}
             accessibilityRole="button" accessibilityState={{ selected: identityValues[field.fieldId] === option.optionId }}
             onPress={()=>{if(identityValues[field.fieldId]===option.optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:option.optionId}));setItems([]);setConflict(null);setSuccessMessage(null);}}
             style={[styles.optionButton, identityValues[field.fieldId]===option.optionId && styles.optionButtonSelected]}><Text style={[styles.optionText, identityValues[field.fieldId]===option.optionId && styles.optionTextSelected]}>{option.label}{option.active===false ? " (inactivo)" : ""}</Text></Pressable>)}</View>
         </View>)}
-        {!contextReady ? <Text>Selecciona fecha y todos los campos de contexto antes de buscar.</Text> : null}
-        <Pressable accessibilityRole="button" disabled={!contextReady || !isOnline || isPreparingContext || !!selectedItem} onPress={()=>void prepareSelectedContext()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Preparar este contexto sin conexión</Text></Pressable>
+        {!contextReady ? <Text>{compositeContextInstruction(date, response?.identityFields ?? [], identityValues)}</Text> : null}
+        {contextReady && contextPreparation.phase === "ready" ? <Text>Contexto preparado para uso sin conexión.</Text> : null}
+        {contextReady && contextPreparation.phase === "partial" ? <Text>Preparación parcial: faltan sujetos o reportes por verificar. Puedes reintentar.</Text> : null}
+        {contextPreparation.error ? <Text style={styles.error}>{stateUpdateRefreshErrorMessage(contextPreparation.error)}</Text> : null}
+        {contextReady && !isOnline ? <Text>{contextPreparation.coverage?.status === "complete"
+          ? "Sin conexión. Contexto verificado disponible; el historial puede estar incompleto."
+          : "Sin conexión. Disponibilidad del contexto no verificada por completo; sólo se muestran los datos guardados."}</Text> : null}
+        <Pressable accessibilityRole="button" disabled={!contextReady || !isOnline || isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>{contextPreparation.phase === "failed" || contextPreparation.phase === "partial" ? "Reintentar preparación del contexto" : "Actualizar contexto sin conexión"}</Text></Pressable>
       </View> : null}
       <View style={styles.searchBlock}>
         <TextInput
@@ -1151,7 +1167,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             setSuccessMessage(null);
             setResolutionFeedback(null);
           }}
-          editable={contextReady && !isPreparingContext}
+          editable={contextReady}
           placeholder="Buscar"
           style={styles.searchInput}
           value={searchText}

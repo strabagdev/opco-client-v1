@@ -53,7 +53,7 @@ export async function prepareStateUpdateCurrent({
       const response = await api.getStateUpdateWorkflow(token, scope.contractId, scope.appViewId,
         { date: scope.date, identity: scope.identity, subjectRecordId, pageSize: 1 });
       if (signal?.aborted) return;
-      if ((scope.identity && compositeIdentityKey(response.identityContext) !== compositeIdentityKey(scope.identity)) || response.items.length !== 1 || response.items[0].subject.id !== subjectRecordId ||
+      if ((scope.identity && (response.date !== scope.date || compositeIdentityKey(response.identityContext) !== compositeIdentityKey(scope.identity))) || response.items.length !== 1 || response.items[0].subject.id !== subjectRecordId ||
         response.targetEntityType.id !== scope.targetEntityTypeId || response.sourceEntityType.id !== scope.sourceEntityTypeId ||
         response.dateFieldId !== scope.dateFieldId || response.uniqueness !== scope.uniqueness || response.historyMode !== scope.historyMode) {
         throw new Error("STATE_UPDATE_CURRENT_RESPONSE_MISMATCH");

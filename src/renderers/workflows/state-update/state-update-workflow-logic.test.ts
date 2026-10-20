@@ -4,6 +4,7 @@ import { CachedStateUpdateRecord } from "@/lib/state-update-offline";
 import { EntityField, EntityRecordValue, StateUpdateBatchResult, StateUpdateField, StateUpdateResponse } from "@/lib/opco-api";
 import {
   buildEffectiveStateSnapshot,
+  compositeContextInstruction,
   buildStateUpdateLatestRows,
   buildStateUpdateConflictRows,
   defaultStateValues,
@@ -780,4 +781,12 @@ describe("DATE state labels in online/offline current subtitles", () => {
       expect(formatStateValueLabel(field, { fieldId: field.fieldId, label, value: null, optionId: null })).toBe(label);
     }
   });
+});
+
+
+it("explains missing configured context and rejects impossible calendar dates without inferring today", () => {
+ const fields = [{fieldId:"shift",label:"Jornada",type:"SELECT",required:true,options:[{optionId:"a",label:"A"}]},{fieldId:"group",label:"Grupo",type:"SELECT",required:true,options:[{optionId:"one",label:"1"}]}] satisfies StateUpdateField[];
+ expect(compositeContextInstruction("",fields,{})).toContain("una fecha válida (YYYY-MM-DD), Jornada, Grupo");
+ expect(compositeContextInstruction("2026-02-30",fields,{shift:"a",group:"one"})).toContain("fecha válida");
+ expect(compositeContextInstruction("2026-10-20",fields,{shift:"a"})).toBe("Completa Grupo antes de buscar.");
 });

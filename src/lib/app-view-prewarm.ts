@@ -17,14 +17,15 @@ import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records
 import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
 import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendance-snapshot-cache";
-import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore } from "./state-update-offline";
+import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore, type StateUpdateCurrentCoverageScope } from "./state-update-offline";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
+import { compositeIdentityKey } from "./state-update-identity";
 
 export const PREWARM_CONCURRENCY = 4;
 export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
 export const OFFLINE_PREPARATION_SLOW_THRESHOLD_MS = 10_000;
 
-const activePrewarms = new Map<string, Promise<void>>();
+const activePrewarms = new Map<string, { promise: Promise<void>; signal?: AbortSignal }>();
 let offlinePreparationRunSequence = 0;
 
 export type OfflinePreparationTrigger =
@@ -116,10 +117,60 @@ export function prewarmAssignedAppViewsOnce(params: {
   const key = `${params.ownerKey}:${params.contractId}`;
 
   if (!activePrewarms.has(key)) {
-    activePrewarms.set(key, prewarmAssignedAppViews(params).finally(() => activePrewarms.delete(key)));
+    activePrewarms.set(key, { promise: prewarmAssignedAppViews(params).finally(() => activePrewarms.delete(key)) });
   }
 
-  return activePrewarms.get(key)!;
+  return activePrewarms.get(key)!.promise;
+}
+
+export function stateUpdateContextPreparationKey(scope: StateUpdateCurrentCoverageScope) {
+  return JSON.stringify([scope.ownerKey, scope.contractId, scope.appViewId, scope.sourceEntityTypeId,
+    scope.targetEntityTypeId, scope.date, scope.dateFieldId, scope.uniqueness, scope.historyMode,
+    compositeIdentityKey(scope.identity)]);
+}
+
+export type StateUpdateContextPreparationInput = {
+  api: Pick<OpcoApi, "getEntityRecords" | "getStateUpdateWorkflow">;
+  token: string;
+  scope: StateUpdateCurrentCoverageScope;
+  store: Parameters<typeof refreshEntityRecordsCache>[0]["store"] &
+    Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot">;
+  signal: AbortSignal;
+  force?: boolean;
+};
+
+/** Same coordinator, source refresh, bounded pool and persisted proof as manual preparation. */
+export function prepareStateUpdateContextOnce(input: StateUpdateContextPreparationInput): Promise<void> {
+  const key = `context:${stateUpdateContextPreparationKey(input.scope)}`;
+  const previous = activePrewarms.get(key);
+  if (previous) {
+    // A rapid A -> B -> A must wait for the cancelled A writer before replacing its marker.
+    return previous.promise.catch(error => {
+      if (!previous.signal?.aborted) throw error;
+    }).then(() => previous.signal?.aborted && !input.signal.aborted
+      ? prepareStateUpdateContextOnce(input) : undefined);
+  }
+  const promise = (async () => {
+    const coverage = await input.store.getStateUpdateCurrentCoverage(input.scope);
+    if (input.signal.aborted || (!input.force && coverage?.status === "complete")) return;
+    let sourceRemoteTotal: number | undefined;
+    let sourceFetched = 0;
+    const source = await refreshEntityRecordsCache({
+      api: input.api, token: input.token, ownerKey: input.scope.ownerKey,
+      contractId: input.scope.contractId, entityTypeId: input.scope.sourceEntityTypeId, store: input.store,
+      onDiagnostics: diagnostics => {
+        sourceRemoteTotal = diagnostics.remoteTotal ?? undefined;
+        sourceFetched = diagnostics.recordsFetched;
+      },
+    });
+    if (input.signal.aborted) return;
+    await prepareStateUpdateCurrent({ ...input, sourceRemoteTotal, sourceFetched,
+      sourceCacheTotal: source.pagination.total, runWithConcurrency, concurrency: PREWARM_CONCURRENCY });
+  })().finally(() => {
+    if (activePrewarms.get(key)?.promise === promise) activePrewarms.delete(key);
+  });
+  activePrewarms.set(key, { promise, signal: input.signal });
+  return promise;
 }
 
 export async function prewarmAssignedAppViews({

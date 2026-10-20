@@ -606,6 +606,14 @@ function formatStateUpdateDateLikeValue(value: string, type: "DATE" | "DATETIME"
   });
 }
 
+export function compositeContextInstruction(date: string, fields: StateUpdateField[], values: Record<string, string>) {
+  const missing = [
+    ...(!isValidStateDateValue(date) ? ["una fecha válida (YYYY-MM-DD)"] : []),
+    ...fields.filter(field => !field.options.some(option => option.optionId === values[field.fieldId])).map(field => field.label),
+  ];
+  return missing.length ? `Completa ${missing.join(", ")} antes de buscar.` : "Selecciona un contexto válido antes de buscar.";
+}
+
 function isValidStateDateValue(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 
