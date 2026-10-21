@@ -9,32 +9,33 @@ import {
   formatDateInputValue,
   formatTimeInputValue,
   splitDateTimeValue,
-} from "@/lib/record-form";
+} from "../../lib/record-form";
 
-type TemporalFieldInputProps = {
-  onChange(value: string): void;
-  required: boolean;
-  value: string;
-};
+import { logicalDatePickerValue, temporalSelectionAllowed, type TemporalFieldInputProps } from "./temporal-input.types";
 
-export function DateFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
+export function DateFieldInput({ onChange, required, value, label, disabled, min, max }: TemporalFieldInputProps) {
   return (
     <NativePickerInput
       clearLabel="Limpiar fecha"
-      displayValue={formatHumanDate(value)}
+      label={label ?? "Fecha"} disabled={disabled} min={min} max={max}
+      displayValue={formatHumanDate(logicalDatePickerValue(value))}
       mode="date"
-      onChange={(date) => onChange(formatDateInputValue(date))}
+      onChange={(date) => { const next = formatDateInputValue(date); if (temporalSelectionAllowed(next, { required, min, max })) onChange(next); }}
       onClear={() => onChange("")}
-      pickerValue={datePickerValueFromDate(value)}
+      pickerValue={datePickerValueFromDate(logicalDatePickerValue(value))}
       required={required}
     />
   );
 }
 
-export function TimeFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
+export function MonthFieldInput(props: TemporalFieldInputProps) {
+  return <DateFieldInput {...props} label={props.label ?? "Mes"} value={props.value ? `${props.value}-01` : ""} onChange={value => props.onChange(value.slice(0, 7))} />;
+}
+
+export function TimeFieldInput({ onChange, required, value, label, disabled }: TemporalFieldInputProps) {
   return (
     <NativePickerInput
-      clearLabel="Limpiar hora"
+      clearLabel="Limpiar hora" label={label ?? "Hora"} disabled={disabled}
       displayValue={value || "Seleccionar hora"}
       mode="time"
       onChange={(date) => onChange(formatTimeInputValue(date))}
@@ -45,8 +46,9 @@ export function TimeFieldInput({ onChange, required, value }: TemporalFieldInput
   );
 }
 
-export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  const [{ date, time }, setParts] = useState(() => splitDateTimeValue(value));
+export function DateTimeFieldInput({ onChange, required, value, label, disabled }: TemporalFieldInputProps) {
+  const [draft, setParts] = useState(() => ({ source: value, ...splitDateTimeValue(value) }));
+  const { date, time } = draft.source === value ? draft : splitDateTimeValue(value);
 
   function updatePart(nextPart: "date" | "time", nextValue: string) {
     const nextParts = {
@@ -55,12 +57,13 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
       [nextPart]: nextValue,
     };
 
-    setParts(nextParts);
-    onChange(composeDateTimeValue(nextParts.date, nextParts.time));
+    const composedValue = composeDateTimeValue(nextParts.date, nextParts.time);
+    setParts({ source: composedValue, ...nextParts });
+    onChange(composedValue);
   }
 
   function clear() {
-    setParts({ date: "", time: "" });
+    setParts({ source: "", date: "", time: "" });
     onChange("");
   }
 
@@ -68,14 +71,14 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
     <View style={styles.dateTimeGroup}>
       <View style={styles.dateTimePart}>
         <Text style={styles.subLabel}>Fecha</Text>
-        <DateFieldInput onChange={(nextValue) => updatePart("date", nextValue)} required={required} value={date} />
+        <DateFieldInput label={label ? `${label}: fecha` : "Fecha"} disabled={disabled} onChange={(nextValue) => updatePart("date", nextValue)} required={required} value={date} />
       </View>
       <View style={styles.dateTimePart}>
         <Text style={styles.subLabel}>Hora</Text>
-        <TimeFieldInput onChange={(nextValue) => updatePart("time", nextValue)} required={required} value={time} />
+        <TimeFieldInput label={label ? `${label}: hora` : "Hora"} disabled={disabled} onChange={(nextValue) => updatePart("time", nextValue)} required={required} value={time} />
       </View>
       {!required && (date || time || value) ? (
-        <Pressable onPress={clear} style={styles.clearButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Limpiar ${label ?? "fecha y hora"}`} disabled={disabled} onPress={clear} style={styles.clearButton}>
           <Text style={styles.clearText}>Limpiar</Text>
         </Pressable>
       ) : null}
@@ -85,6 +88,7 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
 
 type NativePickerInputProps = {
   clearLabel: string;
+  label?: string; disabled?: boolean; min?: string; max?: string;
   displayValue: string;
   mode: "date" | "time";
   onChange(date: Date): void;
@@ -95,6 +99,7 @@ type NativePickerInputProps = {
 
 function NativePickerInput({
   clearLabel,
+  label, disabled, min, max,
   displayValue,
   mode,
   onChange,
@@ -109,7 +114,7 @@ function NativePickerInput({
       setShowAndroidPicker(false);
     }
 
-    if (event.type === "dismissed" || !selectedDate) {
+    if (disabled || event.type === "dismissed" || !selectedDate) {
       return;
     }
 
@@ -118,6 +123,10 @@ function NativePickerInput({
 
   const picker = (
     <DateTimePicker
+      accessibilityLabel={label}
+      disabled={disabled}
+      minimumDate={min ? datePickerValueFromDate(min) : undefined}
+      maximumDate={max ? datePickerValueFromDate(max) : undefined}
       display={Platform.OS === "ios" ? "compact" : "default"}
       mode={mode}
       onChange={handlePickerChange}
@@ -128,9 +137,9 @@ function NativePickerInput({
   if (Platform.OS === "ios") {
     return (
       <View style={styles.nativeRow}>
-        <View style={styles.iosPicker}>{picker}</View>
+        <View style={[styles.iosPicker, disabled && { opacity: 0.6 }]}>{picker}</View>
         {!required && displayValue !== "Seleccionar fecha" && displayValue !== "Seleccionar hora" ? (
-          <Pressable accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
+          <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
             <Text style={styles.clearText}>Limpiar</Text>
           </Pressable>
         ) : null}
@@ -140,11 +149,11 @@ function NativePickerInput({
 
   return (
     <View style={styles.nativeRow}>
-      <Pressable onPress={() => setShowAndroidPicker(true)} style={styles.nativeButton}>
+      <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={() => setShowAndroidPicker(true)} style={[styles.nativeButton, disabled && { opacity: 0.6 }]}>
         <Text style={styles.nativeButtonText}>{displayValue}</Text>
       </Pressable>
       {!required && displayValue !== "Seleccionar fecha" && displayValue !== "Seleccionar hora" ? (
-        <Pressable accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
+        <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
           <Text style={styles.clearText}>Limpiar</Text>
         </Pressable>
       ) : null}

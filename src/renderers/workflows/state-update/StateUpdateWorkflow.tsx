@@ -1,3 +1,5 @@
+import { CompactSelect } from "@/components/compact-select";
+import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "@/renderers/records/temporal-input";
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
 import { useContextPreparation } from "./use-context-preparation";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -40,7 +42,6 @@ import {
 } from "@/lib/opco-api";
 import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
 import {
-  activeStateOptions,
   buildEffectiveStateSnapshot,
   buildStateUpdateLatestRows,
   buildStateUpdateConflictRows,
@@ -1138,12 +1139,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       {compositeMode ? <View style={styles.form}>
         <Text style={styles.label}>Contexto del reporte</Text>
-        <TextInput accessibilityLabel="Fecha operacional" editable={!selectedItem && !isSaving} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" style={styles.input} />
+        <DateFieldInput label="Fecha operacional" required disabled={!!selectedItem || isSaving} value={date} onChange={setDate} />
         {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.fieldGroup}>
-          <Text style={styles.label}>{field.label}</Text><View style={styles.optionList}>{field.options.map(option => <Pressable key={option.optionId} disabled={!!selectedItem || isSaving}
-            accessibilityRole="button" accessibilityState={{ selected: identityValues[field.fieldId] === option.optionId }}
-            onPress={()=>{if(identityValues[field.fieldId]===option.optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:option.optionId}));setItems([]);setConflict(null);setSuccessMessage(null);}}
-            style={[styles.optionButton, identityValues[field.fieldId]===option.optionId && styles.optionButtonSelected]}><Text style={[styles.optionText, identityValues[field.fieldId]===option.optionId && styles.optionTextSelected]}>{option.label}{option.active===false ? " (inactivo)" : ""}</Text></Pressable>)}</View>
+          <Text style={styles.label}>{field.label}</Text>
+          <CompactSelect label={field.label} required disabled={!!selectedItem || isSaving} value={identityValues[field.fieldId] ?? ""}
+            options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
+            onChange={value => { const optionId = String(value); if(identityValues[field.fieldId]===optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:optionId}));setItems([]);setConflict(null);setSuccessMessage(null); }} />
         </View>)}
         {!contextReady ? <Text>{compositeContextInstruction(date, response?.identityFields ?? [], identityValues)}</Text> : null}
         {contextReady && contextPreparation.phase === "ready" ? <Text>Contexto preparado para uso sin conexión.</Text> : null}
@@ -1201,13 +1202,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             {hasDate && !compositeMode ? (
               <View style={styles.fieldGroup}>
                 <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  onChangeText={setDate}
-                  placeholder="YYYY-MM-DD"
-                  style={styles.input}
-                  value={date}
-                />
+                <DateFieldInput label={visibleResponse.dateField?.name ?? "Campo de fecha"} required value={date} onChange={setDate} />
               </View>
             ) : null}
             {visibleResponse.stateFields.map((field) => (
@@ -1416,23 +1411,18 @@ function StateFieldInput({
     return (
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{field.label}</Text>
-        <View style={styles.optionList}>
-          {activeStateOptions(field).map((option) => {
-            const selected = value === option.optionId;
-
-            return (
-              <Pressable
-                key={option.optionId}
-                onPress={() => onChange(selected && !field.required ? "" : option.optionId)}
-                style={[styles.optionButton, selected && styles.optionButtonSelected]}
-              >
-                <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        <CompactSelect label={field.label} required={field.required} value={typeof value === "string" ? value : ""}
+          options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
+          onChange={value => onChange(String(value))} />
       </View>
     );
+  }
+
+  if (type === "DATE" || type === "TIME" || type === "DATETIME") {
+    const Input = type === "DATE" ? DateFieldInput : type === "TIME" ? TimeFieldInput : DateTimeFieldInput;
+    return <View style={styles.fieldGroup}><Text style={styles.label}>{field.label}</Text>
+      <Input label={field.label} required={field.required} value={typeof value === "string" ? value : ""} onChange={onChange} />
+    </View>;
   }
 
   if (type === "BOOLEAN") {
@@ -1458,7 +1448,7 @@ function StateFieldInput({
         autoCapitalize="none"
         keyboardType={type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default"}
         onChangeText={onChange}
-        placeholder={type === "DATE" ? "YYYY-MM-DD" : field.required ? "Obligatorio" : ""}
+        placeholder={field.required ? "Obligatorio" : ""}
         style={styles.input}
         value={typeof value === "string" ? value : ""}
       />

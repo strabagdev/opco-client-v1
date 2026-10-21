@@ -1,25 +1,25 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { composeDateTimeValue, splitDateTimeValue } from "@/lib/record-form";
-import { stableTextInputStyle } from "@/lib/visual-stability";
+import { composeDateTimeValue, splitDateTimeValue } from "../../lib/record-form";
+import { stableTextInputStyle } from "../../lib/visual-stability";
+import { logicalDatePickerValue, temporalSelectionAllowed, type TemporalFieldInputProps } from "./temporal-input.types";
 
-type TemporalFieldInputProps = {
-  onChange(value: string): void;
-  required: boolean;
-  value: string;
-};
-
-export function DateFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  return <TemporalWebInput onChange={onChange} required={required} type="date" value={value} />;
+export function DateFieldInput(props: TemporalFieldInputProps) {
+  return <TemporalWebInput {...props} value={logicalDatePickerValue(props.value)} type="date" />;
 }
 
-export function TimeFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  return <TemporalWebInput onChange={onChange} required={required} step={60} type="time" value={value} />;
+export function MonthFieldInput(props: TemporalFieldInputProps) {
+  return <TemporalWebInput {...props} type="month" />;
 }
 
-export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldInputProps) {
-  const [{ date, time }, setParts] = useState(() => splitDateTimeValue(value));
+export function TimeFieldInput(props: TemporalFieldInputProps) {
+  return <TemporalWebInput {...props} step={60} type="time" />;
+}
+
+export function DateTimeFieldInput({ onChange, required, value, label, disabled }: TemporalFieldInputProps) {
+  const [draft, setParts] = useState(() => ({ source: value, ...splitDateTimeValue(value) }));
+  const { date, time } = draft.source === value ? draft : splitDateTimeValue(value);
 
   function updatePart(nextPart: "date" | "time", nextValue: string) {
     const nextParts = {
@@ -28,12 +28,13 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
       [nextPart]: nextValue,
     };
 
-    setParts(nextParts);
-    onChange(composeDateTimeValue(nextParts.date, nextParts.time));
+    const composedValue = composeDateTimeValue(nextParts.date, nextParts.time);
+    setParts({ source: composedValue, ...nextParts });
+    onChange(composedValue);
   }
 
   function clear() {
-    setParts({ date: "", time: "" });
+    setParts({ source: "", date: "", time: "" });
     onChange("");
   }
 
@@ -41,16 +42,16 @@ export function DateTimeFieldInput({ onChange, required, value }: TemporalFieldI
     <View style={styles.dateTimeGroup}>
       <View style={styles.dateTimePart}>
         <Text style={styles.subLabel}>Fecha</Text>
-        <DateFieldInput onChange={(nextValue) => updatePart("date", nextValue)} required={required} value={date} />
+        <DateFieldInput label={label ? `${label}: fecha` : "Fecha"} disabled={disabled} onChange={(nextValue) => updatePart("date", nextValue)} required={required} value={date} />
       </View>
       <View style={styles.dateTimePart}>
         <Text style={styles.subLabel}>Hora</Text>
-        <TimeFieldInput onChange={(nextValue) => updatePart("time", nextValue)} required={required} value={time} />
+        <TimeFieldInput label={label ? `${label}: hora` : "Hora"} disabled={disabled} onChange={(nextValue) => updatePart("time", nextValue)} required={required} value={time} />
       </View>
       {!required && (date || time || value) ? (
-        <Pressable onPress={clear} style={styles.clearButton}>
+        <ClearButton accessibilityRole="button" accessibilityLabel={`Limpiar ${label ?? "fecha y hora"}`} disabled={disabled} onPress={clear} style={styles.clearButton}>
           <Text style={styles.clearText}>Limpiar</Text>
-        </Pressable>
+        </ClearButton>
       ) : null}
     </View>
   );
@@ -60,31 +61,30 @@ export function getTemporalWebInputProps(type: "date" | "time") {
   return type === "time" ? { step: 60, type } : { type };
 }
 
-type TemporalWebInputProps = {
-  onChange(value: string): void;
-  required: boolean;
-  step?: number;
-  type: "date" | "time";
-  value: string;
-};
+type TemporalWebInputProps = TemporalFieldInputProps & { step?: number; type: "date" | "time" | "month" };
 
-function TemporalWebInput({ onChange, required, step, type, value }: TemporalWebInputProps) {
+function TemporalWebInput({ onChange, required, step, type, value, label, disabled, min, max }: TemporalWebInputProps) {
+  const [focused, setFocused] = useState(false);
   return (
     <View style={styles.webInputRow}>
-      <TextInput
-        onChangeText={onChange}
-        style={styles.input}
-        value={value}
-        {...getTemporalWebInputProps(type)}
-        {...(step ? { step } : {})}
-      />
+      <input aria-label={label ?? (type === "time" ? "Hora" : type === "month" ? "Mes" : "Fecha")}
+        type={type} value={value} required={required} disabled={disabled} min={min} max={max} step={step}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        onChange={event => { const next = event.target.value; if (temporalSelectionAllowed(next, { required, min, max })) onChange(next); else event.currentTarget.value = value; }}
+        style={{ background: "white", border: "1px solid #8795A8", borderRadius: 8, color: "#202B3A", minHeight: 44, padding: "8px 12px", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", fontSize: 16, minWidth: 0, width: "100%", boxSizing: "border-box", opacity: disabled ? 0.6 : 1, outline: focused ? "3px solid #315DA8" : undefined, outlineOffset: 2 }} />
       {!required && value ? (
-        <Pressable onPress={() => onChange("")} style={styles.clearButton}>
+        <ClearButton accessibilityRole="button" accessibilityLabel={`Limpiar ${label ?? (type === "time" ? "hora" : "fecha")}`} disabled={disabled} onPress={() => onChange("")} style={styles.clearButton}>
           <Text style={styles.clearText}>Limpiar</Text>
-        </Pressable>
+        </ClearButton>
       ) : null}
     </View>
   );
+}
+
+function ClearButton(props: React.ComponentProps<typeof Pressable>) {
+  const [focused, setFocused] = useState(false);
+  return <Pressable {...props} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+    style={[styles.clearButton, focused && { borderColor: "#315DA8", borderWidth: 3 }, props.disabled && { opacity: 0.6 }]} />;
 }
 
 const styles = StyleSheet.create({

@@ -1,3 +1,4 @@
+import { CompactSelect } from "@/components/compact-select";
 import { usePublishDesktopCatalog } from "@/components/desktop-navigation";
 import { desktopNavigation } from "@/lib/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
@@ -269,30 +270,9 @@ export default function HomeScreen() {
   }, [refreshOfflineAvailability, views]);
 
   const contractSelector = context && context.contracts.length > 1 ? (
-    <View style={[styles.contractList, isWideLayout ? styles.contractListWide : null]}>
-      {context.contracts.map((contract) => {
-        const isSelected = contract.id === selectedContractId;
-
-        return (
-          <Pressable
-            key={contract.id}
-            onPress={() => setSelectedContractId(contract.id)}
-            style={[
-              styles.contractButton,
-              isWideLayout ? styles.contractButtonWide : null,
-              isSelected ? styles.contractButtonSelected : null,
-            ]}
-          >
-            <Text style={[styles.contractName, isSelected ? styles.contractNameSelected : null]}>
-              {contract.name}
-            </Text>
-            <Text style={[styles.contractRole, isSelected ? styles.contractRoleSelected : null]}>
-              {contract.role}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
+    <CompactSelect label="Contrato activo" required value={selectedContractId ?? ""}
+      options={context.contracts.map(contract => ({ value: contract.id, label: `${contract.name} · ${contract.role}` }))}
+      onChange={value => { void setSelectedContractId(String(value)); }} />
   ) : null;
 
   const operationalContextSection = (

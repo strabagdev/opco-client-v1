@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Text, TextInput, Pressable, StyleSheet, View } from "react-native";
 
-import { stableTextInputStyle } from "@/lib/visual-stability";
-import { EntityField } from "@/lib/opco-api";
-import { isFieldUnsupported, isRelationFieldMultiple, RecordRelationOption } from "@/lib/record-form";
+import { CompactSelect } from "../../components/compact-select";
+import { stableTextInputStyle } from "../../lib/visual-stability";
+import { EntityField } from "../../lib/opco-api";
+import { isFieldUnsupported, isRelationFieldMultiple, RecordRelationOption } from "../../lib/record-form";
 
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./temporal-input";
 
@@ -67,34 +68,10 @@ export function RecordFieldInput({
     return (
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{field.name}</Text>
-        <View style={styles.optionList}>
-          {(field.options ?? [])
-            .filter((option) => option.active !== false)
-            .sort((a, b) => a.order - b.order)
-            .map((option) => {
-              const selected = selectedValues.includes(option.value);
-
-              return (
-                <Pressable
-                  key={option.id}
-                  onPress={() => {
-                    if (isMultiple) {
-                      onChange(
-                        selected
-                          ? selectedValues.filter((item) => item !== option.value)
-                          : [...selectedValues, option.value],
-                      );
-                    } else {
-                      onChange(selected ? "" : option.value);
-                    }
-                  }}
-                  style={[styles.optionButton, selected && styles.optionButtonSelected]}
-                >
-                  <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
-        </View>
+        <CompactSelect label={field.name} required={field.required} multiple={isMultiple}
+          value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
+          options={[...(field.options ?? [])].sort((a, b) => a.order - b.order).map(option => ({ value: option.value, label: option.label, disabled: option.active === false }))}
+          onChange={onChange} />
         <FieldError error={error} />
       </View>
     );
@@ -123,13 +100,13 @@ export function RecordFieldInput({
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{field.name}</Text>
         {field.type === "DATE" ? (
-          <DateFieldInput onChange={onChange} required={field.required} value={textValue} />
+          <DateFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
         {field.type === "TIME" ? (
-          <TimeFieldInput onChange={onChange} required={field.required} value={textValue} />
+          <TimeFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
         {field.type === "DATETIME" ? (
-          <DateTimeFieldInput onChange={onChange} required={field.required} value={textValue} />
+          <DateTimeFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
         <FieldError error={error} />
       </View>
@@ -142,6 +119,7 @@ export function RecordFieldInput({
     <View style={styles.fieldGroup}>
       <Text style={styles.label}>{field.name}</Text>
       <TextInput
+        accessibilityLabel={field.name}
         autoCapitalize="none"
         keyboardType={getKeyboardType(field.type)}
         multiline={multiline}
@@ -202,6 +180,7 @@ function RelationFieldInput({
       {targetEntityTypeId ? (
         <>
           <TextInput
+            accessibilityLabel={`Buscar ${field.name}`}
             autoCapitalize="none"
             onChangeText={(value) => { setSearch(value); onSearch?.(value); }}
             placeholder="Buscar en catalogo"
@@ -218,39 +197,10 @@ function RelationFieldInput({
           {!optionsLoading && !optionsError && options.length === 0 ? (
             <Text style={styles.fieldError}>No hay registros disponibles en el catalogo para seleccionar.</Text>
           ) : null}
-          <View style={styles.optionList}>
-            {filteredOptions.map((option) => {
-              const selected = selectedValues.includes(option.id);
-
-              return (
-                <Pressable
-                  key={option.id}
-                  onPress={() => {
-                    if (isMultiple) {
-                      onChange(
-                        selected
-                          ? selectedValues.filter((item) => item !== option.id)
-                          : [...selectedValues.filter((item) => optionIds.has(item)), option.id],
-                      );
-                    } else {
-                      onChange(selected ? "" : option.id);
-                    }
-                  }}
-                  style={[styles.optionButton, selected && styles.optionButtonSelected]}
-                >
-                  <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option.displayName}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          {selectedValues.length > 0 ? (
-            <Pressable
-              onPress={() => onChange(isMultiple ? [] : "")}
-              style={styles.clearButton}
-            >
-              <Text style={styles.clearButtonText}>Limpiar seleccion</Text>
-            </Pressable>
-          ) : null}
+          <CompactSelect label={field.name} required={field.required} multiple={isMultiple}
+            value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
+            options={[...filteredOptions, ...options.filter(option => selectedValues.includes(option.id) && !filteredOptions.some(filtered => filtered.id === option.id))].map(option => ({ value: option.id, label: option.displayName }))}
+            onChange={onChange} />
         </>
       ) : (
         <Text style={styles.fieldError}>Este campo de relacion no tiene un catalogo configurado.</Text>

@@ -2619,3 +2619,84 @@ Captura offline inicial transitoria no acredita indicador terminal; sí lo acred
 402 exclusiones verificadas byte a byte; demás pendientes y prefijos documentales ajenos, índice y HEAD
 conservados. Core intacto. Fixtures/perfiles/procesos del ensayo anterior ya limpiados; aquí no se crean.
 V11 pausado; auditoría general e incidente histórico «11/11 procesadas, 1 fallo» siguen abiertos.
+
+
+## Selectores compartidos de fecha y opciones — implementación local — 2026-10-21
+
+Lote UI sobre ba3dd784: calendarios DATE y períodos REPORT reutilizando temporal-input; CompactSelect
+simple/múltiple para RECORDS, contextos/estados STATE_UPDATE, contextos Attendance y filtros PANEL.
+Relaciones conservan opciones cargadas y handlers; los límites por renderer constan en el cierre.
+No se descargan catálogos completos.
+Inicio usa los contratos de sesión existentes en un desplegable compacto; sidebar sin cambios.
+Sin defaults nuevos, cambios de IDs/valores, handlers de guardado, consultas ni lógica de preparación.
+DATE lógico incluido ISO histórico sin desplazamiento UTC; DATETIME conserva su composición previa.
+Sólo Attendance limita a hoy y conserva guardas de ruta/estado/reanudación/cambio de día.
+
+206 pruebas / 15 archivos afectados PASS con un worker y timeouts estándar; typecheck, lint afectado
+y diff-check PASS. Lint general: cero errores, dos advertencias previas en records-sync.local-db-regression.test.ts,
+archivo intacto. Sin suite completa ni build de cierre; export temporal exclusivamente para revisión UI.
+Navegador local exclusivo: renderers reales con sesión/API/store sintéticos, tres viewports
+1440×900/1024×768/390×844; calendarios, selección múltiple, teclado/foco, sin recortes/overflow,
+resize con valores sin solicitudes y contexto compuesto que habilita búsqueda/preparación.
+Confirmaciones/conflictos: pruebas automatizadas de handlers/SQLite; no nueva escritura Core ni OPFS.
+No se acredita Safari/iPhone físico, binarios nativos ni Inicio autenticado completo. PANEL valida
+filtros: el fixture no entrega el dataset del módulo de resultados. Matriz y límites en STATE_UPDATE.
+
+Respaldo duradero: `/home/dannysilver/dev2026/backups/client-form-controls/2026-10-21/`, con inventario,
+parche UI/documental aislado, hashes y evidencia sintética. Prefijos documentales previos, trabajo y
+regresiones de horarios, 402 exclusiones y demás pendientes preservados. Sin Core, esquema, migración,
+namespace, producción, commit, push ni deploy. V11 pausado; incidentes y auditoría general abiertos.
+
+
+## Cierre técnico — client-form-controls — 2026-10-21
+
+**LISTO TÉCNICAMENTE PARA PUBLICACIÓN ACOTADA; NO PUBLICADO.** Reconstrucción inicial exacta del
+respaldo client-form-controls/2026-10-21 sobre ba3dd784: 15 archivos / 44 hunks, con SHA-256 verificados.
+La revisión no cambia implementación ni pruebas: los 13 archivos funcionales/de pruebas conservan
+sus hashes. Sólo se precisan los límites documentales y se añade este cierre y su sección canónica.
+
+Candidato aislado: suite completa **1137/1137 pruebas, 96 archivos, cero fallos/cero omitidas**, un
+worker, timeout estándar 5 s sin overrides. Duración total 64,69 s; prueba más larga 3189 ms. Typecheck,
+lint y build web PASS; diff-check de candidato y árbol principal PASS. Lint: cero errores y dos warnings
+no-require-imports, líneas182/183 de records-sync.local-db-regression.test.ts, idéntico a HEAD.
+El build es el Client completo, no el arnés sintético; API configurada explícitamente https://web.opco.cl,
+sin cargar .env ni visitar producción. Dist/service worker generados sólo en el clon temporal, fuera
+del lote. El primer build terminó pero la inspección detectó API vacía en su bundle; ese artefacto
+se rechazó. Se repitió sólo el build con TMPDIR/caché temporal exclusivos (sin borrar cachés previas):
+entry-90d61a13f7b667a42469cce32e6c2b15.js contiene la API pública y epoch2; index/sw coinciden
+(sw c4821a3900c41698). Causa de la API vacía inicial NO DETERMINADA, sin atribuirla al lote ni dar
+por corregidas las herramientas. Sin fallos de pruebas, timeouts ni EPIPE en esta corrida; no se
+explican los incidentes históricos. Checks reutilizables tras cambios exclusivamente documentales.
+
+Inventario confirmado: CompactSelect simple/múltiple y temporal-input compartidos, aplicación a
+formulario RECORDS, estados/contextos/extras STATE_UPDATE, fecha/contextos Attendance, filtros PANEL,
+mes/rango REPORT y contrato de Inicio. Se conservan calendario local/guardas de Attendance, DATE
+lógico e ISO histórico sin conversión, composición DATETIME, IDs/valores y handlers. No cambian API,
+consultas, paginación, snapshots, outbox, autorizaciones, conflictos, preparación ni sincronización.
+
+**No es cobertura universal de relaciones ni de todos los escenarios:** RECORDS consulta página1
+hasta100 opciones y filtra localmente (RecordFormScreen no conecta onRelationSearch); PANEL conserva
+búsqueda remota por texto, página1 hasta100 y filtros escalares. Sus selecciones múltiples no tienen
+recorrido capturable acreditado. Extras RELATION de STATE_UPDATE no reciben catálogo/opciones desde
+su caller; quedan sin selector editable, como en HEAD. Estas limitaciones son anteriores, verificadas
+contra HEAD, y no se amplían en este cierre. Boolean de formularios y acciones de guardado Attendance
+siguen como botones; BOARD/DASHBOARD conservan UI de no soportado. Matriz ampliada en STATE_UPDATE.
+
+Se reutilizan las 26 capturas y ensayos previos al comprobar los hashes de ocho archivos web. Sin
+nuevo navegador: renderers reales en 1440/1024/390 con respuestas/sesión/store sintéticos. No Safari
+físico/iPhone/PWA, binarios nativos ni recorrido Core/OPFS/sincronización acreditados. Inicio completo
+no visitado; PANEL sólo filtros sin dataset de resultados; editar RECORDS reutiliza controles, sin
+nuevo ensayo visual de guardado. Estos límites no se convierten en validaciones por pasar el build.
+
+Regresiones experimentales de horarios expresamente FUERA del candidato: archivo de ensayo
+state-update-schedule-previous-runtime.test.ts, respaldo schedule-runtime-compatibility/2026-10-21.
+Resultado previo 5 PASS de caracterización y 2 RED de conservación (alta/actualización); no rerun,
+no skip ni eliminación para lograr PASS. Hash6af3a7899e24934b22eab14b6c1bea43eca38c3690c519c088db7e48fe8ed1d6
+conservado. Ningún horario integrado/activado, ni revisión de compatibilidad/migraciones/namespace.
+
+Respaldo final independiente, conservando intacto el respaldo fuente:
+`/home/dannysilver/dev2026/backups/client-form-controls-close/2026-10-21/`.
+Inventario/parche final/hashes, checks sanitizados, reconstrucción exacta y referencias de evidencia.
+15 archivos / 44 hunks: 11 implementación, 2 pruebas, 2 secciones documentales. 402 exclusiones,
+demás pendientes, prefijos documentales ajenos/horarios, HEAD e índice preservados byte a byte.
+Sin Core, datos productivos, migraciones, commit, push ni deploy. V11 pausado; auditoría abierta.

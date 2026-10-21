@@ -1,3 +1,4 @@
+import { CompactSelect } from "@/components/compact-select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutChangeEvent,
@@ -462,22 +463,19 @@ function PanelFilters({
           {field.type === "BOOLEAN" ? (
             <View style={styles.booleanFilter}>
               <Text style={styles.filterLabel}>{filter.label || field.name}</Text>
-              {([{ label: "Todos", value: "" }, { label: "Sí", value: "true" }, { label: "No", value: "false" }] as const).map((option) => (
-                <Pressable accessibilityRole="button" key={option.value} onPress={() => onChange(filter.id, option.value)}
-                  style={[styles.filterChoice, value === option.value && styles.filterChoiceSelected]}>
-                  <Text>{option.label}</Text>
-                </Pressable>
-              ))}
+              <CompactSelect label={filter.label || field.name} value={value} required={filter.required}
+                options={[{ label: "Sí", value: "true" }, { label: "No", value: "false" }]}
+                onChange={next => onChange(filter.id, String(next))} />
             </View>
           ) : <RecordFieldInput
-            field={field}
+            field={{ ...field, required: filter.required ?? false }}
             onChange={(next) => onChange(filter.id, typeof next === "string" ? next : "")}
             onRelationSearch={target ? (search) => onRelationSearch(target, search) : undefined}
             relationOptions={target ? relationOptions[target] ?? [] : []}
             relationTargetEntityTypeId={target}
             value={value}
           />}
-          {value && field.type !== "BOOLEAN" ? <Pressable accessibilityRole="button" onPress={() => onChange(filter.id, "")}>
+          {value && !filter.required && field.type !== "BOOLEAN" && field.type !== "SELECT" && field.type !== "DATE" && field.type !== "RELATION" ? <Pressable accessibilityRole="button" onPress={() => onChange(filter.id, "")}>
             <Text style={styles.filterClear}>Limpiar</Text>
           </Pressable> : null}
           {filter.required && !value ? <Text style={styles.filterRequired}>Selección requerida</Text> : null}

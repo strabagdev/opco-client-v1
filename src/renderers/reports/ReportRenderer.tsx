@@ -1,3 +1,4 @@
+import { DateFieldInput, MonthFieldInput } from "@/renderers/records/temporal-input";
 import { useEffect, useMemo, useState } from "react";
 import {
   Pressable,
@@ -24,7 +25,6 @@ import {
   isCurrentStatusReport,
 } from "./report-renderer-logic";
 import {
-  formatMonthLabel,
   initialReportPeriod,
   normalizeReportTimeFilter,
   reportPeriodToRange,
@@ -246,7 +246,7 @@ function PeriodControl({
         >
           <Text style={styles.monthButtonText}>‹</Text>
         </Pressable>
-        <Text style={styles.monthLabel}>{formatMonthLabel(period.month)}</Text>
+        <View style={{ flexShrink: 1, minWidth: 140 }}><MonthFieldInput label="Mes del informe" required disabled={!allowChange} value={period.month} onChange={month => onChange({ mode: "MONTH", month })} /></View>
         <Pressable
           accessibilityLabel="Mes siguiente"
           accessibilityRole="button"
@@ -297,13 +297,7 @@ function DateInput({
   return (
     <View style={styles.dateControl}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <TextInput
-        inputMode="numeric"
-        onChangeText={onChangeText}
-        placeholder="YYYY-MM-DD"
-        style={[stableTextInputStyle, styles.input]}
-        value={value}
-      />
+      <DateFieldInput label={label} required onChange={onChangeText} value={value} />
     </View>
   );
 }

@@ -2062,3 +2062,118 @@ Detalles de checks, separación documental, preservación y límites en STATUS, 
 aislado de esta fecha. Listo para publicación posterior; ninguna publicación autorizada/ejecutada aquí.
 Sin horarios, nuevos selectores de fecha, menús, cambios de Core, esquema, persistencia o sync.
 402 exclusiones conservadas; V11/auditoría/incidente histórico independientes y abiertos.
+
+
+## Interfaz de fecha/contexto y selección — implementación local — 2026-10-21
+
+Se reutilizan temporal-input y RecordFieldInput y se incorpora CompactSelect compartido. Contexto
+compuesto: fecha lógica con calendario y SELECT por optionId, manteniendo campos obligatorios,
+opciones inactivas y el bloqueo de identidad durante edición. Los mismos setDate/setIdentityValues,
+secuencia de solicitudes, router, scopes y useContextPreparation siguen a cargo del recorrido;
+completar el desplegable dispara la preparación existente, sin botón obligatorio ni motor nuevo.
+Los estados SELECT usan optionId; extras usan valores canónicos por RecordFieldInput. DATE, TIME y
+DATETIME usan sus controles temporales y validaciones existentes; DATETIME no se trata como DATE.
+Attendance conserva sus acciones directas de guardado, confirmaciones y límite local de hoy; sólo
+su selector recibe ese máximo. No se extiende dicho límite a STATE_UPDATE ni a otros renderers.
+
+Regresiones afectadas PASS (206/15 archivos, un worker), typecheck/lint afectado/diff-check PASS.
+Ensayo de renderer real con API/store sintéticos: contexto incompleto, completado con preparación
+sin pulsar botón, búsqueda habilitada y edición que bloquea identidad; escritorio/compacto con
+formularios abiertos y sin overflow. Es evidencia de interfaz/coordinación, NO de snapshot durable,
+Core real, OPFS ni sincronización. Cobertura por experiencia y límites en la matriz siguiente.
+Ningún cambio de persistencia, outbox, autorización, idempotencia, cobertura o coordinación de datos.
+
+La propuesta y regresiones de horarios se conservan íntegras y detenidas. No se aborda compatibilidad
+entre runtimes, migración, namespace, activación ni V11. Inventario/parche verificables del lote UI:
+`/home/dannysilver/dev2026/backups/client-form-controls/2026-10-21/`.
+
+
+### Inventario y evidencia de los controles compartidos
+
+Lote exclusivamente de interfaz sobre Client ba3dd784. Se inventariaron RecordFieldInput y sus
+consumidores (RECORDS crear/editar, extras STATE_UPDATE y filtros PANEL), fechas/contextos de
+Attendance/STATE_UPDATE, período REPORT y selector compacto de contrato de Inicio. La barra lateral
+ya usa un desplegable de contrato y se conserva. Los botones de Attendance que ejecutan un guardado,
+Boolean de formularios, confirmaciones, navegación/paginación y acciones no se convierten en opciones.
+
+Se amplían los temporal-input existentes: HTML date/time/month en web y picker instalado en nativo;
+DATE mantiene el string lógico, incluso la presentación del ISO histórico sin convertir de zona ni
+escribir al renderizar. DATETIME sigue usando splitDateTimeValue/composeDateTimeValue y su instante;
+el borrador de sus partes ahora también refleja cambios externos de valor sin remontar el formulario.
+REPORT conserva MONTH/RANGE, flechas mensuales, períodos fijos y handlers. Sólo Attendance pasa el
+máximo hoy a su selector, reutilizando su calendario local, guardas de ruta/estado y cambio de día.
+
+CompactSelect comparte presentación simple/múltiple, sin elegir opciones por renderizar. Web simple
+usa select del navegador; múltiple abre un menú en Modal/portal, desplazable y acotado al viewport,
+con selección por teclado, Escape, foco y regreso al activador. Nativo reutiliza Modal/Pressable.
+Valores no disponibles siguen explícitos, sin sustituirlos; opciones desactivadas no se pueden añadir.
+Se pueden retirar valores múltiples desactivados ya elegidos sin vaciar un campo obligatorio.
+Limpiar sólo se ofrece a opcionales; una múltiple obligatoria conserva al menos una selección.
+DATE requerido rechaza vaciado y límites inválidos también si el picker del navegador ofrece Clear.
+Controles mínimos de 44 px, borde #8795A8, texto #202B3A, foco #315DA8 y selección #E8EFFA.
+Relaciones conservan buscador, páginas/opciones ya cargadas y handlers: el desplegable no consulta
+la red ni completa catálogos. RecordFieldInput usa FieldOption.value y relaciones recordId; los
+workflows conservan optionId y sus adaptadores actuales. Inicio mantiene el mismo cambio de contrato.
+
+| Experiencia | Controles cubiertos | Evidencia local |
+| --- | --- | --- |
+| RECORDS | DATE/TIME/DATETIME, SELECT/MULTISELECT y RELATION en formulario compartido | RecordFormScreen real en navegador; fecha, selección múltiple, foco, calendario y resize con valores; test SSR de valores/relaciones. Modo crear visitado; editar reutiliza los mismos controles, sin nuevo ensayo de guardar. |
+| Attendance | Fecha con máximo hoy y SELECT de contexto | Renderer real con búsqueda/persona/formulario en 1440/1024/390; fecha pasada aceptada y futura rechazada, Siguiente bloqueado hoy. Botones de registro intactos. Confirmaciones/conflictos/SQLite: regresiones automatizadas, sin envío real en navegador. |
+| STATE_UPDATE | Contexto compuesto, fecha de modos previos, estados SELECT/temporales y extras | Renderer real: contexto incompleto no prepara; al completarlo prepara automáticamente y habilita búsqueda; al editar bloquea identidad. Formulario abierto compuesto y subject-date en tres tamaños. |
+| PANEL | Filtros que reutilizan RecordFieldInput y selección booleana | Renderer real con filtros DATE/SELECT en tres tamaños; lógica de filtros automatizada. Fixture no proporciona dataset para el módulo de resultados: no acredita una tabla/PANEL completo ni nuevas consultas reales. |
+| REPORT | Selectores desde/hasta y mes | Renderer real RANGE/MONTH en tres tamaños, sin overflow; contrato de rango/mes mediante pruebas existentes. |
+| Inicio | Contratos existentes en un único control compacto | Revisión de código y componente compartido; Inicio autenticado completo no visitado en este ensayo. Sidebar conservada. |
+
+Navegador: Chrome local con perfil exclusivo y renderers reales importados en un arnés temporal de
+Expo Router. Sesión/API y almacenamiento son sintéticos/en memoria; no Core, OPFS ni sync acreditados
+por ese ensayo. Viewports 1440×900, 1024×768 y 390×844; este último comprueba presentación compacta,
+no Safari físico, iPhone/PWA ni binarios Android/iOS. Calendar de Chrome abierto y selección de día
+mediante teclado acreditadas. Selección múltiple sin recortes, Escape/foco, opción desactivada y resize
+sin solicitudes ni pérdida de campos comprobados. No se han probado todos los catálogos/dispositivos.
+El aspecto/localización del calendario depende del navegador/sistema; el valor sigue YYYY-MM-DD.
+
+Checks finales: 206 pruebas afectadas / 15 archivos PASS, un worker y timeouts estándar; typecheck,
+lint afectado y diff-check PASS. Lint general: cero errores y dos warnings preexistentes no-require-imports
+en records-sync.local-db-regression.test.ts, archivo intacto. Sin suite completa ni build de cierre;
+se generó sólo export temporal sintético para navegador. Se corrigieron antes de la evidencia final
+un atributo aria-checked omitido del nuevo control, una colisión de nombre local al adaptar DATETIME
+y errores del arnés (alias de tests y respuesta sintética PANEL incompleta); no son causas productivas.
+
+Inventario/parche/hashes y capturas sintéticas fuera de Git:
+`/home/dannysilver/dev2026/backups/client-form-controls/2026-10-21/`.
+Las capturas del arnés no se presentan como sesión productiva ni como prueba de persistencia offline.
+Sin cambios de Core/API, consultas, almacenamiento, preparación, outbox, sincronización o namespace;
+no se integra ni activa horarios. 402 exclusiones y documentación previa preservadas byte a byte.
+
+
+### Cierre técnico y límites por consumidor — 2026-10-21
+
+El lote UI se reconstruyó exactamente desde su inventario: 15 archivos/44 hunks sobre ba3dd784.
+Sin cambios funcionales respecto del candidato de implementación; sólo actualización documental.
+Suite aislada completa 1137 pruebas/96 archivos PASS, cero omitidas, un worker/timeouts estándar;
+typecheck/lint/build web y diff-check PASS. Dos warnings lint preexistentes en archivo idéntico a HEAD.
+La composición/validaciones de negocio, reloj de Attendance, filtros mes/rango, API, SQLite y sync
+permanecen idénticos a HEAD; el cambio está en presentación y adaptación de esos controles.
+
+La verificación de callers precisa la cobertura de relaciones, sin afirmar soporte universal:
+
+| Caller | Conexión efectiva verificada en código | Límite conservado y evidencia |
+| --- | --- | --- |
+| RecordFormScreen crear/editar | RecordFieldInput con opciones/carga/error/target; values conserva FieldOption.value o recordId. SELECT/MULTISELECT y RELATION simple/múltiple reutilizan CompactSelect. | RELATION carga página1/pageSize100; no conecta onRelationSearch: busca entre opciones cargadas. No hay catálogo completo ni nueva paginación certificada. Crear en navegador sintético; editar y multiplicidad por código/pruebas compartidas. |
+| STATE_UPDATE | Contexto compuesto por optionId/DATE; estados SELECT/temporales; extras mediante RecordFieldInput. | Extras RELATION no reciben target/opciones/búsqueda del caller y no ofrecen selección editable; idéntico a HEAD. No se implementa esa conexión. No afirmar MULTISELECT como campo de estado (el formulario de estados sigue escalar); múltiple se acredita en extras/formulario compartido. |
+| Attendance | Selector DATE con max=today y setDate/constrainAttendanceDate; SELECT de contexto por optionId. | Guardas de navegación/ruta/estado/medianoche y reanudación existentes. Los estados son acciones de guardado y no se sustituyen por una selección desacoplada. Conflictos/guardado por pruebas existentes, no nueva sincronización de navegador. |
+| PANEL | RecordFieldInput por metadatos y CompactSelect para boolean; required deriva del filtro. RELATION conecta onRelationSearch y opciones. | Búsqueda remota de página1/pageSize100; estado/normalización de filtros escalar; el caller conserva cadenas y convierte arrays en vacío, también en HEAD. No se acredita selección múltiple de filtros ni descarga completa. Visual sólo DATE/SELECT y módulo sin dataset. |
+| REPORT | Período MONTH con MonthFieldInput/flechas y RANGE con DateFieldInput; filtros fijos sin modificación. | Pruebas preservan conversión mes/rango. No se transforma DATE en instantes ni DATETIME en DATE. |
+| Inicio / otros | CompactSelect sólo para contratos de sesión en Inicio; sidebar conserva su selector existente. | Sin visita al Inicio autenticado completo. RECORDS lista/búsqueda, navegación, botones Boolean y renderers no soportados no se presentan como formularios rediseñados. |
+
+Se reutiliza evidencia visual por identidad de los ocho archivos web y las capturas sintéticas
+previas; no se acredita Safari físico, binarios nativos ni recorrido Core/OPFS/sincronización. El
+build de cierre corresponde a la aplicación funcional completa; su éxito no amplía esa evidencia.
+El primer artefacto tenía API vacía pese al proceso exitoso y fue rechazado; la repetición con caché
+TMPDIR exclusiva produjo la API pública y referencias index/sw correctas. Causa inicial no determinada;
+no se borraron cachés ni cambió configuración. Detalle del build final/anomalía en STATUS y checks.
+Las limitaciones de integración de relaciones/multiplicidad anteriores no son regresiones atribuidas
+al lote ni se corrigen aquí. No se añaden funcionalidades ni se cambia preparación/cobertura/outbox.
+Respaldo final: `/home/dannysilver/dev2026/backups/client-form-controls-close/2026-10-21/`.
+Regresiones RED de horarios identificadas y preservadas fuera del candidato; no se integran ni activan.
+V11 pausado; sin publicación y sin declarar cerrada la auditoría general.

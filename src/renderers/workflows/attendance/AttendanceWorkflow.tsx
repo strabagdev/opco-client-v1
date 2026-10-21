@@ -1,3 +1,5 @@
+import { CompactSelect } from "@/components/compact-select";
+import { DateFieldInput } from "@/renderers/records/temporal-input";
 import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { useLocalSearchParams } from "expo-router";
@@ -1302,7 +1304,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         <Pressable onPress={() => changeDate(-1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Anterior</Text>
         </Pressable>
-        <Text style={styles.dateLabel}>{date}</Text>
+        <View style={{ maxWidth: 220, flexShrink: 1 }}><DateFieldInput label="Fecha de asistencia" required value={date} max={today} onChange={value => { clearPersonFlow(); setDate(value); }} /></View>
         <Pressable accessibilityRole="button" accessibilityState={{ disabled: date >= today }} disabled={date >= today} onPress={() => changeDate(1)} style={[styles.dateButton, date >= today && styles.disabledButton]}>
           <Text style={styles.dateButtonText}>Siguiente</Text>
         </Pressable>
@@ -1501,37 +1503,9 @@ function AttendanceContextSelectors({
       {fields.map((field) => (
         <View key={field.id} style={styles.contextField}>
           <Text style={styles.contextLabel}>{field.name}</Text>
-          <View style={styles.contextOptions}>
-            {!field.required ? (
-              <Pressable
-                onPress={() => onChange(field.id, null)}
-                style={[
-                  styles.contextOption,
-                  !values[field.id] && styles.contextOptionSelected,
-                ]}
-              >
-                <Text style={[
-                  styles.contextOptionText,
-                  !values[field.id] && styles.contextOptionSelectedText,
-                ]}>Sin seleccion</Text>
-              </Pressable>
-            ) : null}
-            {field.options.map((option) => {
-              const selected = values[field.id] === option.optionId;
-
-              return (
-                <Pressable
-                  key={option.optionId}
-                  onPress={() => onChange(field.id, option.optionId)}
-                  style={[styles.contextOption, selected && styles.contextOptionSelected]}
-                >
-                  <Text style={[styles.contextOptionText, selected && styles.contextOptionSelectedText]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <CompactSelect label={field.name} required={field.required} value={values[field.id] ?? ""}
+            options={field.options.map(option => ({ value: option.optionId, label: option.label }))}
+            onChange={value => onChange(field.id, String(value) || null)} />
           {errors[field.id] ? <Text style={styles.error}>{errors[field.id]}</Text> : null}
         </View>
       ))}
