@@ -164,8 +164,12 @@ export function prepareStateUpdateContextOnce(input: StateUpdateContextPreparati
       },
     });
     if (input.signal.aborted) return;
-    await prepareStateUpdateCurrent({ ...input, sourceRemoteTotal, sourceFetched,
+    const result = await prepareStateUpdateCurrent({ ...input, sourceRemoteTotal, sourceFetched,
+      retainCoverageUntilComplete: Boolean(coverage),
       sourceCacheTotal: source.pagination.total, runWithConcurrency, concurrency: PREWARM_CONCURRENCY });
+    if (!input.signal.aborted && result?.status !== "complete") {
+      throw new Error("STATE_UPDATE_CURRENT_PREPARATION_INCOMPLETE");
+    }
   })().finally(() => {
     if (activePrewarms.get(key)?.promise === promise) activePrewarms.delete(key);
   });

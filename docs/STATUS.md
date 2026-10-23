@@ -2700,3 +2700,109 @@ Inventario/parche final/hashes, checks sanitizados, reconstrucción exacta y ref
 15 archivos / 44 hunks: 11 implementación, 2 pruebas, 2 secciones documentales. 402 exclusiones,
 demás pendientes, prefijos documentales ajenos/horarios, HEAD e índice preservados byte a byte.
 Sin Core, datos productivos, migraciones, commit, push ni deploy. V11 pausado; auditoría abierta.
+
+
+## Contexto compuesto activo: actualización automática real — 2026-10-23
+
+**LISTO PARA PUBLICACIÓN ACOTADA; NO PUBLICADO.** Base main
+`f1ab73b3b49c5339ec7707f074afe38880bc62b2`. Cobertura `complete` ya no omite la consulta remota al
+entrar/cambiar contexto, reconectar o recibir la señal existente posterior a sync. Se conserva el
+coordinador, pool, guardas de sesión/sync, scopes y preparador existentes. Generaciones agrupan
+señales concurrentes y conservan una actualización posterior cuando llega invalidación durante la
+lectura. Renders/búsquedas no disparan preparación; fallos no generan ciclos. Sin polling ni producto
+cartesiano. Inicio, Attendance y modos anteriores no cambian su política.
+
+El marcador anterior no se sustituye por el avance incompleto de una actualización fallida; se
+revalida la copia sobreviviente sin restaurar un marcador sobre una invalidación de ACK. El resultado
+del intento se comprueba por separado. Cobertura conservada no significa frescura. Sin botón
+permanente de actualización: Reintentar sólo ante fallo/parcial online. Cabecera para actividad;
+offline usa lo persistido, explica límites y detiene la actividad de preparación. Pendientes,
+conflictos, autorización, identidad, claves idempotentes y guardado existentes intactos.
+
+Validación focalizada de implementación: **232/232 pruebas, 16 archivos, cero fallos/cero omitidas**, un worker y
+timeouts estándar. Cinco aserciones RED antes de implementar, ahora PASS. Typecheck PASS; lint PASS
+con cero errores y dos warnings preexistentes no-require-imports en records-sync.local-db-regression.test.ts
+182/183 (archivo intacto). Diff-check PASS. No suite completa ni build de cierre; export local exclusivo
+para OPFS, API local explícita y epoch2 comprobados. Detalle de comandos/hashes en checks.json.
+
+Evidencia real Core/PostgreSQL local + Chrome/OPFS: contexto incompleto sin descarga; completar
+prepara automáticamente (1 GET fuente + 2 GET current, pageSize1); búsquedas repetidas sin nueva
+preparación. Cobertura complete → desconectar → modificar reporte sintético por Core → reconectar
+sin botones: cambio remoto persistido, nuevamente 1+2 GET y sin bucle. Fallo controlado de lectura
+con copia previa: datos/cobertura conservados, estado terminal y Reintentar; posterior intento único
+exitoso. Cierre completo/reapertura con Core y servidor Client detenidos: búsqueda TOLVA muestra
+el cambio desde OPFS, cobertura 2/2, un evento distinto, cero pendientes, cero respuestas API exitosas
+ni animación indefinida. Sólo fixtures sintéticos propios; no almacenamiento/datos productivos.
+Una corrida intermedia terminó con 211 PASS/21 timeouts estándar concentrados en
+state-update-prewarm-current-investigation.test.ts; el primer fallo fue bounds requests, 5149 ms.
+Archivo intacto: 22/22 PASS al ejecutarlo solo en candidato y HEAD, con un worker/5 s. Causa no
+determinada; sin elevar timeouts, omitir casos ni atribuirlo a este cambio. Todas las corridas
+(incluida la fallida y su comprobación posterior) quedan registradas en checks.json.
+La coordinación ACK/sync y protección de pendientes/conflictos se acreditan mediante regresiones,
+no como un nuevo envío real desde navegador. Sin Safari físico. Infraestructura y advertencias del
+ensayo (Turbopack/symlink, CSP local, patrón CDP inicial y caché temporal Metro) precisadas en STATE_UPDATE;
+no explican los timeouts/EPIPE históricos. Bundle local entry-25fd9f67396a9d24ef2fb0e4456bb9d2.js.
+
+Lote: cuatro archivos de implementación (use-context-preparation, StateUpdateWorkflow,
+app-view-prewarm, state-update-current-prewarm), tres pruebas (use-context-preparation,
+state-update-context-preparation, state-update-composite) y sólo estas secciones de STATE_UPDATE/STATUS.
+Inventario/parche/hashes reproducibles fuera de Git:
+`/home/dannysilver/dev2026/backups/state-update-context-refresh/2026-10-23/`.
+402 exclusiones y todos los demás pendientes/prefijos documentales/horarios verificados byte a byte;
+Core intacto, fixture propio retirado y servicios/perfiles sintéticos cerrados/limpiados. Sin cambios de
+esquema/namespace, migraciones, producción, commit, push o deploy. No se integran horarios ni sus
+regresiones RED. Incidente «11/11 procesadas, 1 fallo», problemas SQLite/OPFS y auditoría general
+permanecen abiertos; V11 pausado.
+
+### Cierre técnico aislado — actualización automática — 2026-10-23
+
+**LISTO PARA PUBLICACIÓN ACOTADA; NO PUBLICADO.** Candidato reconstruido sobre
+`f1ab73b3b49c5339ec7707f074afe38880bc62b2` desde el respaldo de implementación: 9 archivos/16 hunks,
+SHA-256 y bytes exactos verificados. Los siete archivos de implementación/pruebas permanecen idénticos;
+este cierre modifica únicamente las dos secciones documentales propias, conservando sus prefijos ajenos.
+
+Revisión del recorrido: generaciones consumidas al iniciar agrupan renders/señales equivalentes;
+una invalidación recibida durante la lectura deja demanda para el siguiente intento. Completar o
+fallar una lectura no emite otra invalidación. La señal post-sync existente sólo se consume tras las
+guardas de sesión/readiness/sync; no se modifica el sincronizador. Cancelación/controlador y clave
+completa aíslan usuario, contrato, AppView, entidades, definición, fecha y combinación. Un fallo
+conserva y revalida la copia anterior, sin restaurar un marcador invalidado ni declararla fresca.
+Las regresiones cubren agrupación, actualización posterior, fallos terminales/reintento, cambio de
+scope/respuestas tardías y conservación durable de pendientes, conflictos, autorización e idempotencia.
+Se mantiene el preparador y su pool; sin polling, nuevos disparadores periódicos ni otras experiencias.
+
+Checks del candidato aislado, sin incorporar pendientes experimentales:
+
+- Suite completa: **1152/1152 pruebas, 96 archivos, cero fallos/cero omitidas**, una corrida con un
+  worker y timeouts estándar (test 5000 ms, hook 10000 ms), sin nuevos overrides. Duración66,02 s;
+  prueba más larga4381 ms. El archivo de los 21 timeouts previos pasó completo. No reaparecieron
+  esos timeouts ni EPIPE. Se conserva la corrida histórica211 PASS/21 timeouts, sus casos/duraciones
+  y contraste aislado22/22 en candidato y HEAD: causa **no determinada**, no explicada por este PASS.
+- `npm run typecheck` PASS. `npm run lint` PASS: cero errores, dos warnings preexistentes
+  no-require-imports en records-sync.local-db-regression.test.ts182/183, idéntico a HEAD.
+- `npm run build` web PASS, con API pública explícita, sin cargar `.env` y con caché TMPDIR temporal
+  propia. Sin warnings/errores de build en esta corrida. No modifica dependencias ni configuración.
+- Artefacto: `entry-2bf6c73c75e7565fc9c1e29990a8676a.js`, SHA-256
+  `279ecd164608a9c65a4e4dc41723c87cf509bff32562be154b4bb8d77f1c701f`;
+  `sw.js` cache `opco-shell-d0048dd572e2d951`, referencia coincidente con index.
+  Módulo config compilado ejecutado aisladamente en VM: API efectiva `https://web.opco.cl`, no vacía;
+  fuente de createOpcoApi conserva ese default. Cero destinos API locales en el bundle.
+  SQLite10 y `opco-client-v10-epoch2.db` comprobados; UI de actualización presente y botón permanente
+  ausente. Es inspección del artefacto local, sin ejecutar la app ni hacer solicitudes productivas.
+- `git diff --check` y diff-check del índice del clon PASS. Parche final reconstruido de nuevo;
+  hashes de cada archivo y ausencia de secretos, `.env`, bases, capturas, dist o logs en el lote verificados.
+
+Se reutiliza íntegra la evidencia Core/PostgreSQL local + Chrome/OPFS por identidad funcional:
+selección completa, cambio remoto mientras offline, actualización al reconectar sin botón, fallo
+controlado/reintento y cierre/reapertura offline del mismo perfil con ambos servidores detenidos.
+ACK, concurrencia y conservación de intenciones siguen acreditados mediante automatización, sin
+convertirlos en nuevo recorrido de escritura Chrome. Sin nuevo navegador ni Safari físico; sin
+estabilidad general, nuevas garantías de multi-tab ni correlación con incidentes productivos.
+
+Respaldo final independiente:
+`/home/dannysilver/dev2026/backups/state-update-context-refresh-close/2026-10-23/`.
+Inventario9 archivos/16 hunks, parche, checks, SHA256SUMS, reconstrucción y evidencia heredada con hashes.
+El respaldo fuente permanece intacto. 402 exclusiones, horarios/RED y demás pendientes conservados
+byte a byte; main/HEAD e índice habituales sin cambios. Core, esquema, namespace y datos productivos
+intactos; sin commit/push/deploy. V11 pausado, auditoría general e incidente «11/11 procesadas,1 fallo»
+abiertos. El cierre no identifica ni resuelve las causas históricas SQLite/OPFS o timeouts/EPIPE.

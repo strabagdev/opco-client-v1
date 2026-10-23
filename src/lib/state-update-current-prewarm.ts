@@ -9,7 +9,7 @@ type CurrentPreparationStore = Pick<OfflineRecordStore, "listCachedRecords"> &
 /** Complete source refresh first; latest and filtered search never certify current. */
 export async function prepareStateUpdateCurrent({
   api, token, scope, store, sourceRemoteTotal, sourceFetched, sourceCacheTotal,
-  runWithConcurrency, concurrency, signal,
+  runWithConcurrency, concurrency, signal, retainCoverageUntilComplete = false,
 }: {
   api: Pick<OpcoApi, "getStateUpdateWorkflow">;
   token: string;
@@ -21,13 +21,16 @@ export async function prepareStateUpdateCurrent({
   runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void>;
   concurrency: number;
   signal?: AbortSignal;
+  /** A refresh must not replace an existing usable marker with its unfinished attempt. */
+  retainCoverageUntilComplete?: boolean;
 }) {
   const started = Date.now();
   const coverage: StateUpdateCurrentCoverage = {
     status: "partial", sourceComplete: false, totalSubjects: sourceCacheTotal,
     subjects: {}, requestCount: 0, durationMs: 0, refreshedAt: new Date().toISOString(),
   };
-  const writeCoverage = () => store.setStateUpdateCurrentCoverage({ ...scope, coverage: {
+  const writeCoverage = () => retainCoverageUntilComplete && coverage.status !== "complete"
+    ? Promise.resolve() : store.setStateUpdateCurrentCoverage({ ...scope, coverage: {
     ...coverage, subjects: { ...coverage.subjects }, durationMs: Date.now() - started,
   } });
   await writeCoverage();
@@ -79,4 +82,5 @@ export async function prepareStateUpdateCurrent({
   coverage.status = !signal?.aborted && !failed && coverage.sourceComplete && verified === sourceRemoteTotal ? "complete" : "partial";
   await writeCoverage();
   if (failed) throw new Error("STATE_UPDATE_CURRENT_PREPARATION_FAILED");
+  return coverage;
 }

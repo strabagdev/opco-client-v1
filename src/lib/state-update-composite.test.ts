@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
 import { runWithConcurrency, prepareStateUpdateContextOnce } from "./app-view-prewarm";
-import { createOpcoApi } from "./opco-api";
+import { createOpcoApi, type StateUpdateField } from "./opco-api";
 import { compositeConfirmationKey, compositeIdentityKey, parseCompositeContextValues, hasVerifiedCompositeAbsence } from "./state-update-identity";
 const sqlite = vi.hoisted(() => ({
   openDatabaseAsync: vi.fn()
@@ -103,7 +103,7 @@ async function fileDatabase() {
  harness = sqliteHarness(temporaryDirectory + "/db.sqlite"); sqlite.openDatabaseAsync.mockResolvedValue(harness.db);
  store = getLocalDatabase(); await store.getSelectedContractId();
 }
-async function cacheCompositeDefinition(){ await store.upsertAppViewDefinition({ownerKey:scope.ownerKey,contractId:scope.contractId,appViewId:compositeA.appViewId,appViewType:"WORKFLOW",workflowKey:"state-update",status:"ready",lastPreparedAt:event.updatedAt,definition:{kind:"state-update",appView:{id:compositeA.appViewId,name:"Synthetic",slug:"synthetic",type:"WORKFLOW",icon:null,sortOrder:0,config:{workflowKey:"state-update",sourceEntityTypeId:"source",targetEntityTypeId:scope.targetEntityTypeId,subjectFieldId:"subject-field",dateFieldId:"date",stateFields:[],uniqueness:{mode:"subject-date-fields"},historyMode:"update-current"}},sourceEntityTypeId:"source",sourceEntityTypeName:"Subjects",targetEntityTypeId:scope.targetEntityTypeId,targetEntityTypeName:"Reports",subjectFieldId:"subject-field",dateFieldId:"date",historyMode:"update-current",uniqueness:"subject-date-fields",stateFields:[],extraFields:[]}}); }
+async function cacheCompositeDefinition(stateFields: StateUpdateField[] = []){ await store.upsertAppViewDefinition({ownerKey:scope.ownerKey,contractId:scope.contractId,appViewId:compositeA.appViewId,appViewType:"WORKFLOW",workflowKey:"state-update",status:"ready",lastPreparedAt:event.updatedAt,definition:{kind:"state-update",appView:{id:compositeA.appViewId,name:"Synthetic",slug:"synthetic",type:"WORKFLOW",icon:null,sortOrder:0,config:{workflowKey:"state-update",sourceEntityTypeId:"source",targetEntityTypeId:scope.targetEntityTypeId,subjectFieldId:"subject-field",dateFieldId:"date",stateFields,uniqueness:{mode:"subject-date-fields"},historyMode:"update-current"}},sourceEntityTypeId:"source",sourceEntityTypeName:"Subjects",targetEntityTypeId:scope.targetEntityTypeId,targetEntityTypeName:"Reports",subjectFieldId:"subject-field",dateFieldId:"date",historyMode:"update-current",uniqueness:"subject-date-fields",stateFields,extraFields:[]}}); }
 async function remoteCurrent(view: typeof compositeA) { const item=(await search(view))[0]; if(!item.current)return null; return (await store.getCachedRecord({ownerKey:view.ownerKey,contractId:view.contractId,entityTypeId:view.targetEntityTypeId,recordId:item.current.recordId,appViewId:view.appViewId,date:view.date,identity:view.identity}))?.serverId; }
 async function seedSubject() {
  await store.upsertRemoteRecords({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "source",
@@ -212,4 +212,49 @@ it("prepares the selected context through the shared coordinator, survives reope
  await prepare();expect(sourceRequests).toBe(1);expect(currentRequests).toBe(1);
  const after=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(after).toEqual(before);expect(after.clientRequestId).toBe(pending.clientRequestId);
  expect((await search(compositeB))[0].current?.recordId).not.toBe("coordinated-report");
+});
+
+it("persists a refreshed complete context across reopening, retains it on failure and protects pending/conflict identities", async () => {
+  await fileDatabase();
+  const stateFields: StateUpdateField[] = [{ fieldId: "counter", label: "Synthetic counter", type: "DECIMAL", required: false, options: [] }];
+  await cacheCompositeDefinition(stateFields); await seedSubject();
+  let remote = 10, fail = false, requests = 0;
+  const records = [{ id: subject.id, displayName: subject.displayName, updatedAt: event.updatedAt, values: {} }];
+  const api = createOpcoApi({ apiUrl: "https://synthetic.test", fetcher: async url => {
+    const parsed = new URL(String(url));
+    if (!parsed.pathname.includes("workflow/state-update")) return new Response(JSON.stringify({ ok: true, data: {
+      records, pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1, hasMore: false },
+    } }), { status: 200 });
+    requests++;
+    if (fail) throw new TypeError("controlled network failure");
+    return new Response(JSON.stringify({ ok: true, data: { appView: { id: compositeA.appViewId, name: "Synthetic", slug: "synthetic" },
+      date: scope.date, dateFieldId: "date", subjectFieldId: "subject-field", sourceEntityType: { id: "source", name: "Subjects" },
+      targetEntityType: { id: scope.targetEntityTypeId, name: "Reports" }, historyMode: "update-current", uniqueness: { mode: "subject-date-fields" },
+      stateFields, extraFields: [], identityContext: identityA, latest: [], subjects: [{ subject, reports: [{ identity: identityA,
+        current: { recordId: "fresh-report", updatedAt: event.updatedAt, date: scope.date, states: { counter: remote } },
+      }] }],
+    } }), { status: 200 });
+  } });
+  const selected = { ...compositeA, sourceEntityTypeId: "source" };
+  const refresh = () => prepareStateUpdateContextOnce({ api, store, scope: selected, token: "synthetic", force: true, signal: new AbortController().signal });
+  await refresh(); await reopenFile();
+  const counter = async () => (await search(compositeA))[0].current?.stateValues.find(value => value.fieldId === "counter")?.value;
+  expect(await counter()).toBe(10);
+  await store.saveStateUpdateLocally({ ...input(compositeB), overwrite: true, expectedUpdatedAt: event.updatedAt });
+  const otherDate = { ...compositeB, date: "2026-10-11" };
+  const conflictIntent = await store.saveStateUpdateLocally({ ...input(otherDate), overwrite: true, expectedUpdatedAt: event.updatedAt });
+  const operation = (await store.listPendingStateUpdateOperations(scope.ownerKey)).find(op => op.localRecordId === conflictIntent.localRecordId)!;
+  await store.markStateUpdateOperationConflict(operation, { result: "CONFLICT", subjectRecordId: subject.id, requested: { stateValues: [] },
+    existing: { recordId: "other-date-report", updatedAt: event.updatedAt, stateValues: [] } });
+  const operationsBefore = await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id");
+  const rowsBefore = await harness.db.getAllAsync("SELECT * FROM entity_records WHERE sync_status IN ('pending_create','pending_update','conflict') ORDER BY local_id");
+  remote = 20; await refresh(); await reopenFile();
+  expect(await counter()).toBe(20); expect(requests).toBe(2);
+  const verified = await store.getStateUpdateCurrentCoverage(selected); expect(verified?.status).toBe("complete");
+  fail = true; await expect(refresh()).rejects.toThrow(); await reopenFile();
+  expect(await counter()).toBe(20); expect(await store.getStateUpdateCurrentCoverage(selected)).toEqual(verified);
+  expect(await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")).toEqual(operationsBefore);
+  expect(await harness.db.getAllAsync("SELECT * FROM entity_records WHERE sync_status IN ('pending_create','pending_update','conflict') ORDER BY local_id")).toEqual(rowsBefore);
+  expect(await store.listStateUpdateConflicts(otherDate)).toHaveLength(1);
+  expect(await store.listStateUpdateConflicts(compositeA)).toHaveLength(0);
 });

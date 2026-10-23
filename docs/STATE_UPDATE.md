@@ -2177,3 +2177,156 @@ al lote ni se corrigen aquí. No se añaden funcionalidades ni se cambia prepara
 Respaldo final: `/home/dannysilver/dev2026/backups/client-form-controls-close/2026-10-21/`.
 Regresiones RED de horarios identificadas y preservadas fuera del candidato; no se integran ni activan.
 V11 pausado; sin publicación y sin declarar cerrada la auditoría general.
+
+
+## Actualización del contexto compuesto activo — 2026-10-23
+
+**Cierre técnico aislado completado; no publicado.** Esta sección sustituye
+exclusivamente la política del 20-10 que reutilizaba `complete` como motivo para omitir una nueva
+lectura. Cobertura y frescura son distintas: `complete` acredita contenido persistido del scope;
+no demuestra que Core permanezca igual ni convierte una relectura del marcador en una consulta remota.
+
+Brechas verificadas contra Client publicado `f1ab73b3b49c5339ec7707f074afe38880bc62b2`:
+el hook llamaba al coordinador con `force:false`, que retornaba al encontrar `complete`; además,
+recordaba contextos ya intentados, por lo que A→B→A podía omitir la actualización. La señal existente
+posterior a sincronización provocaba una comprobación de cobertura, sin exigir lectura remota.
+Al intentar actualizar, el preparador sustituía el marcador anterior por su avance parcial incluso
+si después fallaba. Cinco aserciones focalizadas fallaron antes del cambio y pasan en el candidato.
+La inspección del publicado fue de código/contrato y regresiones locales, sin acceder al almacenamiento
+ni modificar datos productivos.
+
+### Disparadores y conservación
+
+- Contexto completo al entrar, cambio de scope, reconexión real y cambio de la señal existente
+  `stateUpdateReconnectRefreshKey` solicitan actualización remota con el mismo coordinador/preparador.
+  Se reutilizan las guardas de restauración, readiness y sincronización; no se cambia su motor.
+- El hook registra generaciones de demanda, sin un segundo motor de precarga. Señales simultáneas
+  se agrupan; si una invalidación llega durante una lectura, queda una demanda para una lectura
+  posterior. Varias señales antes del siguiente inicio se reducen a una. Un resultado de lectura
+  no crea otra señal: sin polling, TTL nuevo, timers periódicos ni reintentos automáticos de fallos.
+- Renders, búsquedas y cambios de objetos equivalentes no generan demandas. Volver A→B→A sí actualiza.
+  Sólo se prepara la combinación seleccionada, nunca el producto cartesiano. Inicio no cambia.
+- Cancelación/controlador y clave completa conservan aislamiento de usuario, contrato, AppView,
+  entidades, definición, fecha y valores de identidad. El coordinador existente serializa el escritor
+  cancelado del mismo scope antes de su reemplazo. Respuestas antiguas no publican estado del nuevo.
+- Con marcador previo, una actualización no lo reemplaza por su avance incompleto: sólo publica el
+  nuevo marcador tras verificar fuente completa, todos los sujetos (incluido `current=null`) y el
+  contenido efectivamente persistido. Sin marcador previo, se mantiene la evidencia parcial existente.
+  El preparador retorna su resultado para no confundir el marcador conservado con éxito del intento.
+- Ante fallo, se relee la cobertura sobreviviente y se conserva la copia válida. No se restaura un
+  marcador capturado: una invalidación de ACK concurrente debe seguir vigente. El fallo es terminal
+  para esa demanda; otra entrada/reconexión/señal pertinente o un reintento explícito puede recuperarlo.
+  No se afirma frescura del intento fallido ni se convierte latest parcial en cobertura del contexto.
+- Continúan snapshots, overlays pendientes/conflictos, autorización, versión base, `clientRequestId`
+  y mecanismos de sincronización existentes. La lectura no autoriza ni reenvía intenciones.
+
+La cabecera conserva la única actividad de lectura, incluyendo la actualización posterior encolada;
+al desconectar se detiene su actividad de preparación aunque una respuesta vieja esté pendiente.
+Se retira el botón permanente «Actualizar contexto sin conexión». **Reintentar** sólo aparece online
+ante fallo/parcial recuperable; al completar desaparece. Offline se indica la cobertura persistida y
+el posible historial incompleto, sin promesa de frescura remota ni intento de descarga. Si falla una
+actualización con copia anterior, se explica que los datos se conservan y su cobertura no acredita
+que estén actualizados. No cambian búsqueda online ni los handlers de edición/confirmación.
+
+### Evidencia y límites
+
+Pruebas afectadas: hook/coordinador reales, aislamiento y respuestas tardías, agrupación de señales,
+fallo terminal/reintento, invalidación concurrente, API/adaptador y SQLite real con reapertura.
+La regresión SQLite comprueba cambio remoto con marcador completo, conservación ante fallo y
+bytes intactos de fila/outbox de intenciones pendientes/conflictos ajenos, incluida autorización.
+Attendance, sincronizador, snapshots, conflictos e indicador central se incluyen como regresiones;
+no se integran los experimentos RED de horarios. Resultado final y comandos en STATUS/respaldo.
+
+Ensayo real local: Core publicado `58a2a2a076718d3aa003cbc8dfe8f2967c321e26`, PostgreSQL
+`127.0.0.1:5432/opco_development` como `opco_dev`, DATABASE_URL de `.env.local` validada y pasada
+explícitamente. Sin migración. Fixture propio mediante validaciones/mecanismos existentes: dos
+sujetos, dos combinaciones y dos reportes. Chrome 155, perfil exclusivo, service worker, aislamiento
+de origen y SQLite OPFS real. Export local sólo para ese ensayo; bundle
+`entry-25fd9f67396a9d24ef2fb0e4456bb9d2.js`, API exclusivamente local y namespace epoch2.
+
+Contexto incompleto no preparó; al completarlo hubo una consulta de fuente y dos `subjectRecordId`
+con `pageSize=1`; búsquedas repetidas no añadieron preparación. Con cobertura completa y Client
+realmente offline se modificó sólo el reporte propio por Core. Reconectar sin botones obtuvo y
+persistió el nuevo contenido con una consulta de fuente y dos de current; no se repitieron al
+estabilizarse. Bloquear la lectura sintética de fuente con CDP indujo fallo controlado: cobertura y
+datos anteriores conservados, Reintentar visible, sin bucle; al retirar el bloqueo, un reintento
+recuperó el contexto. No se presenta esta inyección como incidente productivo.
+
+Cierre completo y reapertura del mismo perfil, con **ambos servidores locales detenidos**:
+búsqueda TOLVA, contenido actualizado, cobertura 2/2, un evento/ID distinto en el contexto, cero
+pendientes y cero respuestas API exitosas. Sin animación indefinida ni botón permanente.
+Una repetición de las pruebas afectadas produjo 21 timeouts de 5 s en
+state-update-prewarm-current-investigation.test.ts (primer fallo: bounds requests, 5149 ms);
+los otros 211 tests pasaron. El mismo archivo sin modificar pasó 22/22 de forma aislada tanto en
+el candidato como en HEAD, con el mismo límite y un worker. Causa del episodio NO DETERMINADA;
+no se modificaron pruebas/timeouts ni se atribuyó el episodio a SQLite, carga o a este cambio.
+El resumen de corridas, incluida la fallida y su comprobación posterior, se conserva en checks.json.
+La coordinación con ACK, cambios rápidos de contexto y protección de intenciones se acreditan aquí
+mediante automatización; no por un nuevo envío offline en Chrome. Sin Safari físico ni ensayo
+productivo. Horarios no integrados, SQLite v10/`opco-client-v10-epoch2.db` intactos.
+
+Infraestructura del ensayo: el primer arranque temporal de Next/Turbopack rechazó el symlink de
+node_modules fuera de su raíz; se usó el flag webpack existente en el clon temporal. El primer
+servidor de export omitía el origen local en CSP; se corrigió sólo su entorno. Un primer patrón CDP
+no bloqueó la ruta real y no se contó como evidencia de fallo. El export terminó con advertencia
+ENOENT de escritura de caché Metro temporal; se creó su directorio, sin borrar cachés habituales.
+No se atribuyen esas incidencias al producto ni a los timeouts/EPIPE históricos.
+
+Respaldo reproducible: `/home/dannysilver/dev2026/backups/state-update-context-refresh/2026-10-23/`.
+Fixtures y procesos propios retirados; registros locales ajenos conservan IDs/versiones. 402
+exclusiones, documentación previa y horarios preservados byte a byte. Sin cambios Core, esquema,
+namespace ni producción; sin commit/push/deploy. V11 y auditoría general siguen abiertos; este lote
+no identifica la causa histórica de «11/11 procesadas, 1 fallo», SQLite o problemas OPFS independientes.
+
+### Cierre técnico aislado — actualización automática — 2026-10-23
+
+**LISTO PARA PUBLICACIÓN ACOTADA; NO PUBLICADO.** Candidato reconstruido sobre
+`f1ab73b3b49c5339ec7707f074afe38880bc62b2` desde el respaldo de implementación: 9 archivos/16 hunks,
+SHA-256 y bytes exactos verificados. Los siete archivos de implementación/pruebas permanecen idénticos;
+este cierre modifica únicamente las dos secciones documentales propias, conservando sus prefijos ajenos.
+
+Revisión del recorrido: generaciones consumidas al iniciar agrupan renders/señales equivalentes;
+una invalidación recibida durante la lectura deja demanda para el siguiente intento. Completar o
+fallar una lectura no emite otra invalidación. La señal post-sync existente sólo se consume tras las
+guardas de sesión/readiness/sync; no se modifica el sincronizador. Cancelación/controlador y clave
+completa aíslan usuario, contrato, AppView, entidades, definición, fecha y combinación. Un fallo
+conserva y revalida la copia anterior, sin restaurar un marcador invalidado ni declararla fresca.
+Las regresiones cubren agrupación, actualización posterior, fallos terminales/reintento, cambio de
+scope/respuestas tardías y conservación durable de pendientes, conflictos, autorización e idempotencia.
+Se mantiene el preparador y su pool; sin polling, nuevos disparadores periódicos ni otras experiencias.
+
+Checks del candidato aislado, sin incorporar pendientes experimentales:
+
+- Suite completa: **1152/1152 pruebas, 96 archivos, cero fallos/cero omitidas**, una corrida con un
+  worker y timeouts estándar (test 5000 ms, hook 10000 ms), sin nuevos overrides. Duración66,02 s;
+  prueba más larga4381 ms. El archivo de los 21 timeouts previos pasó completo. No reaparecieron
+  esos timeouts ni EPIPE. Se conserva la corrida histórica211 PASS/21 timeouts, sus casos/duraciones
+  y contraste aislado22/22 en candidato y HEAD: causa **no determinada**, no explicada por este PASS.
+- `npm run typecheck` PASS. `npm run lint` PASS: cero errores, dos warnings preexistentes
+  no-require-imports en records-sync.local-db-regression.test.ts182/183, idéntico a HEAD.
+- `npm run build` web PASS, con API pública explícita, sin cargar `.env` y con caché TMPDIR temporal
+  propia. Sin warnings/errores de build en esta corrida. No modifica dependencias ni configuración.
+- Artefacto: `entry-2bf6c73c75e7565fc9c1e29990a8676a.js`, SHA-256
+  `279ecd164608a9c65a4e4dc41723c87cf509bff32562be154b4bb8d77f1c701f`;
+  `sw.js` cache `opco-shell-d0048dd572e2d951`, referencia coincidente con index.
+  Módulo config compilado ejecutado aisladamente en VM: API efectiva `https://web.opco.cl`, no vacía;
+  fuente de createOpcoApi conserva ese default. Cero destinos API locales en el bundle.
+  SQLite10 y `opco-client-v10-epoch2.db` comprobados; UI de actualización presente y botón permanente
+  ausente. Es inspección del artefacto local, sin ejecutar la app ni hacer solicitudes productivas.
+- `git diff --check` y diff-check del índice del clon PASS. Parche final reconstruido de nuevo;
+  hashes de cada archivo y ausencia de secretos, `.env`, bases, capturas, dist o logs en el lote verificados.
+
+Se reutiliza íntegra la evidencia Core/PostgreSQL local + Chrome/OPFS por identidad funcional:
+selección completa, cambio remoto mientras offline, actualización al reconectar sin botón, fallo
+controlado/reintento y cierre/reapertura offline del mismo perfil con ambos servidores detenidos.
+ACK, concurrencia y conservación de intenciones siguen acreditados mediante automatización, sin
+convertirlos en nuevo recorrido de escritura Chrome. Sin nuevo navegador ni Safari físico; sin
+estabilidad general, nuevas garantías de multi-tab ni correlación con incidentes productivos.
+
+Respaldo final independiente:
+`/home/dannysilver/dev2026/backups/state-update-context-refresh-close/2026-10-23/`.
+Inventario9 archivos/16 hunks, parche, checks, SHA256SUMS, reconstrucción y evidencia heredada con hashes.
+El respaldo fuente permanece intacto. 402 exclusiones, horarios/RED y demás pendientes conservados
+byte a byte; main/HEAD e índice habituales sin cambios. Core, esquema, namespace y datos productivos
+intactos; sin commit/push/deploy. V11 pausado, auditoría general e incidente «11/11 procesadas,1 fallo»
+abiertos. El cierre no identifica ni resuelve las causas históricas SQLite/OPFS o timeouts/EPIPE.

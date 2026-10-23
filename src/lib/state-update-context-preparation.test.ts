@@ -58,6 +58,30 @@ describe("selected context uses the existing preparation coordinator", () => {
     expect(f.coverage.get(stateUpdateContextPreparationKey(f.scope))?.status).toBe("complete");
   });
 
+  it("a failed refresh retains the previous verified coverage instead of replacing it with an empty attempt", async () => {
+    const f = fixture(); await prepareStateUpdateContextOnce(f.input);
+    const previous = structuredClone(f.coverage.get(stateUpdateContextPreparationKey(f.scope)));
+    f.api.getStateUpdateWorkflow.mockRejectedValueOnce(new Error("controlled remote failure"));
+    await expect(prepareStateUpdateContextOnce({ ...f.input, force: true })).rejects.toThrow();
+    expect(f.coverage.get(stateUpdateContextPreparationKey(f.scope))).toEqual(previous);
+    expect(f.persisted.size).toBe(1);
+  });
+  it("never treats a retained complete marker as a successfully verified new refresh", async () => {
+    const f = fixture(); await prepareStateUpdateContextOnce(f.input);
+    const previous = structuredClone(f.coverage.get(stateUpdateContextPreparationKey(f.scope)));
+    const actual = f.api.getEntityRecords.getMockImplementation()!;
+    f.api.getEntityRecords.mockImplementationOnce(async () => { const response = await actual(); return { ...response, pagination: { ...response.pagination, total: 3 } }; });
+    await expect(prepareStateUpdateContextOnce({ ...f.input, force: true })).rejects.toThrow("STATE_UPDATE_CURRENT_PREPARATION_INCOMPLETE");
+    expect(f.coverage.get(stateUpdateContextPreparationKey(f.scope))).toEqual(previous);
+  });
+  it("a failed refresh cannot restore complete over an intervening invalidation", async () => {
+    const f = fixture(); await prepareStateUpdateContextOnce(f.input);
+    const key = stateUpdateContextPreparationKey(f.scope), invalidated = { ...f.coverage.get(key)!, status: "partial" as const, subjects: {} };
+    f.api.getStateUpdateWorkflow.mockImplementationOnce(async () => { f.coverage.set(key, invalidated); throw new Error("controlled failure after invalidation"); });
+    await expect(prepareStateUpdateContextOnce({ ...f.input, force: true })).rejects.toThrow();
+    expect(f.coverage.get(key)).toEqual(invalidated);
+  });
+
   it.each(["date", "identity"])("rejects a response from another %s", async difference => {
     const f = fixture(); f.api.getStateUpdateWorkflow.mockImplementation(async () => ({ ...f.response(), ...(difference === "date" ? { date: "2026-10-19" } : { identityContext: { ...f.scope.identity, values: { context: "wrong" } } }) }));
     await expect(prepareStateUpdateContextOnce(f.input)).rejects.toThrow();

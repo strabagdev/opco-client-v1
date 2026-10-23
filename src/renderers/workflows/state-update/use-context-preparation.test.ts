@@ -58,11 +58,67 @@ describe("automatic selected-context scheduling", () => {
     expect(h.prepare).toHaveBeenCalledOnce();
     await TestHarness(input).prepare(); await settle(); expect(h.prepare).toHaveBeenCalledTimes(2); expect(TestHarness(input).phase).toBe("ready");
   });
-  it("reads the persisted marker when returning to an already prepared context, without another preparation", async () => {
+  it("refreshes again on reentry to a complete context", async () => {
     const a = fixture(), b = { ...a, scope: { ...a.scope, date: "2026-10-19" } };
     TestHarness(a); await settle(); TestHarness(b); await settle();
     TestHarness(a); await settle();
     expect(TestHarness(a)).toMatchObject({ phase: "ready", coverage, isPreparing: false });
+    expect(h.prepare).toHaveBeenCalledTimes(3);
+  });
+  it("requests remote freshness rather than reusing a complete marker", async () => {
+    const input = fixture(); TestHarness(input); await settle();
+    expect(h.prepare).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+    TestHarness(input, "offline"); await settle(); TestHarness(input); await settle();
+    expect(h.prepare).toHaveBeenCalledTimes(2);
+    expect(h.prepare).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+  });
+  it("fetches the remote change on reconnect even with complete coverage, through the real coordinator", async () => {
+    const actual = await vi.importActual<typeof import("../../../lib/app-view-prewarm")>("../../../lib/app-view-prewarm");
+    const base = fixture(); let stored = coverage, remote = 10, persisted = 10;
+    const records = [{ id: "subject", serverId: "subject", displayName: "Synthetic", values: {}, updatedAt: "2026-10-20T00:00:00Z" }];
+    const pagination = { page: 1, pageSize: 100, total: 1, totalPages: 1, hasMore: false };
+    const api = {
+      getEntityRecords: vi.fn(async () => ({ records, pagination })),
+      getStateUpdateWorkflow: vi.fn(async () => ({ appView: { id: "view", name: "Synthetic", slug: "synthetic" },
+        sourceEntityType: { id: "source", name: "Synthetic" }, targetEntityType: { id: "target", name: "Synthetic" },
+        date: base.scope.date, dateFieldId: "date", subjectFieldId: "subject-field", uniqueness: "subject-date-fields", historyMode: "update-current",
+        identityContext: base.scope.identity, stateFields: [], extraFields: [], latest: [],
+        items: [{ subject: { id: "subject", displayName: "Synthetic" }, current: { recordId: "report", updatedAt: "2026-10-20T00:00:00Z", stateValues: [{ fieldId: "counter", value: remote }] } }],
+      })),
+    };
+    const input = { ...base, api, store: {
+      getStateUpdateCurrentCoverage: vi.fn(async () => stored),
+      setStateUpdateCurrentCoverage: vi.fn(async ({ coverage: next }: { coverage: typeof coverage }) => { stored = next; }),
+      reconcileRemoteRecordsSnapshot: vi.fn(async () => undefined), listCachedRecords: vi.fn(async () => ({ records, pagination })),
+      upsertStateUpdateSnapshot: vi.fn(async () => { persisted = remote; return { staleSyncedRemoved: 0, contentVerified: true, persistedRemoteEventCount: 1 }; }),
+    } } as unknown as ReturnType<typeof fixture>;
+    h.prepare.mockImplementation(actual.prepareStateUpdateContextOnce);
+    TestHarness(input); await settle(); await h.prepare.mock.results[0].value; await settle();
+    expect(api.getEntityRecords).toHaveBeenCalledOnce(); expect(TestHarness(input).phase).toBe("ready");
+    TestHarness(input, "offline"); await settle(); remote = 20;
+    TestHarness(input); await settle(); await h.prepare.mock.results[1].value; await settle();
+    expect(persisted).toBe(20); expect(api.getStateUpdateWorkflow).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 4; i++) { TestHarness({ ...input }); await settle(); }
+    expect(api.getEntityRecords).toHaveBeenCalledTimes(2);
+  });
+  it("keeps valid persisted coverage distinct from a failed refresh", async () => {
+    const input = fixture(), failure = new Error("controlled refresh failure");
+    h.prepare.mockRejectedValueOnce(failure); TestHarness(input); await settle();
+    expect(TestHarness(input)).toMatchObject({ phase: "failed", coverage, error: failure, isPreparing: false });
+    for (let i = 0; i < 4; i++) { TestHarness({ ...input }); await settle(); }
+    expect(h.prepare).toHaveBeenCalledOnce();
+  });
+  it("coalesces invalidations during a read into one subsequent fresh read", async () => {
+    const input = fixture(), first = deferred(), next = deferred();
+    h.prepare.mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise);
+    TestHarness(input); await settle();
+    TestHarness(input, "online", true, 1); TestHarness(input, "online", true, 2); await settle();
+    expect(h.prepare).toHaveBeenCalledOnce(); first.resolve(); await settle();
+    expect(TestHarness(input, "online", true, 2).isPreparing).toBe(true); await settle();
+    expect(h.prepare).toHaveBeenCalledTimes(2);
+    next.resolve(); await settle();
+    expect(TestHarness(input, "online", true, 2)).toMatchObject({ phase: "ready", isPreparing: false });
+    for (let i = 0; i < 4; i++) { TestHarness({ ...input }, "online", true, 2); await settle(); }
     expect(h.prepare).toHaveBeenCalledTimes(2);
   });
   it("reads persisted offline coverage, never downloads offline and waits for reconnect sync", async () => {
@@ -92,15 +148,31 @@ describe("automatic selected-context scheduling", () => {
     TestHarness(input, "online", true, 1); await settle(); expect(h.prepare).toHaveBeenCalledTimes(2);
     TestHarness(input, "online", true, 1); await settle(); expect(h.prepare).toHaveBeenCalledTimes(2);
   });
+  it("folds reconnect and repeated sync signals behind the existing sync gate into one read", async () => {
+    const input = fixture(); TestHarness(input); await settle();
+    TestHarness(input, "offline"); await settle();
+    TestHarness(input, "online", false, 1); TestHarness(input, "online", false, 2); await settle();
+    expect(h.prepare).toHaveBeenCalledOnce();
+    TestHarness(input, "online", true, 2); await settle();
+    for (let i = 0; i < 4; i++) { TestHarness({ ...input }, "online", true, 2); await settle(); }
+    expect(h.prepare).toHaveBeenCalledTimes(2);
+  });
   it("restarts a cancelled effect replay without concurrent uncontrolled preparation", async () => {
     const input = fixture(), hold = deferred(); h.prepare.mockReturnValueOnce(hold.promise);
     TestHarness(input); await settle(); h.replay(); await settle();
     expect(h.prepare.mock.calls[0][0].signal.aborted).toBe(true); expect(h.prepare).toHaveBeenCalledTimes(2);
     hold.resolve(); await settle(); expect(TestHarness(input).phase).toBe("ready");
   });
-  it.each(["ownerKey", "contractId", "appViewId"] as const)("isolates a changed %s", async field => {
+  it.each(["ownerKey", "contractId", "appViewId", "sourceEntityTypeId", "targetEntityTypeId", "date", "dateFieldId"] as const)("isolates a changed %s", async field => {
     const input = fixture(), hold = deferred(); h.prepare.mockReturnValueOnce(hold.promise); TestHarness(input); await settle();
     const changed = { ...input, scope: { ...input.scope, [field]: "other" } }; TestHarness(changed); await settle(); hold.resolve(); await settle();
+    expect(TestHarness(changed)).toMatchObject({ phase: "ready", isPreparing: false }); expect(h.prepare).toHaveBeenCalledTimes(2);
+  });
+  it.each(["definition", "combination"])("isolates a changed identity %s", async field => {
+    const input = fixture(), hold = deferred(); h.prepare.mockReturnValueOnce(hold.promise); TestHarness(input); await settle();
+    const changed = { ...input, scope: { ...input.scope, identity: { ...input.scope.identity!,
+      ...(field === "definition" ? { definitionId: "other" } : { values: { context: "b" } }) } } };
+    TestHarness(changed); await settle(); hold.resolve(); await settle();
     expect(TestHarness(changed)).toMatchObject({ phase: "ready", isPreparing: false }); expect(h.prepare).toHaveBeenCalledTimes(2);
   });
 });

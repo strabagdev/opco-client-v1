@@ -1147,13 +1147,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             onChange={value => { const optionId = String(value); if(identityValues[field.fieldId]===optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:optionId}));setItems([]);setConflict(null);setSuccessMessage(null); }} />
         </View>)}
         {!contextReady ? <Text>{compositeContextInstruction(date, response?.identityFields ?? [], identityValues)}</Text> : null}
-        {contextReady && contextPreparation.phase === "ready" ? <Text>Contexto preparado para uso sin conexión.</Text> : null}
+        {contextReady && contextPreparation.phase === "ready" ? <Text>Copia del contexto actualizada para uso sin conexión.</Text> : null}
         {contextReady && contextPreparation.phase === "partial" ? <Text>Preparación parcial: faltan sujetos o reportes por verificar. Puedes reintentar.</Text> : null}
         {contextPreparation.error ? <Text style={styles.error}>{stateUpdateRefreshErrorMessage(contextPreparation.error)}</Text> : null}
+        {contextReady && contextPreparation.phase === "failed" && contextPreparation.coverage ? <Text>La actualización falló. Se conservan los datos guardados; su cobertura no acredita que estén actualizados.</Text> : null}
         {contextReady && !isOnline ? <Text>{contextPreparation.coverage?.status === "complete"
           ? "Sin conexión. Contexto verificado disponible; el historial puede estar incompleto."
           : "Sin conexión. Disponibilidad del contexto no verificada por completo; sólo se muestran los datos guardados."}</Text> : null}
-        <Pressable accessibilityRole="button" disabled={!contextReady || !isOnline || isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>{contextPreparation.phase === "failed" || contextPreparation.phase === "partial" ? "Reintentar preparación del contexto" : "Actualizar contexto sin conexión"}</Text></Pressable>
+        {contextReady && isOnline && (contextPreparation.phase === "failed" || contextPreparation.phase === "partial") ? <Pressable accessibilityRole="button" disabled={isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Reintentar</Text></Pressable> : null}
       </View> : null}
       <View style={styles.searchBlock}>
         <TextInput
