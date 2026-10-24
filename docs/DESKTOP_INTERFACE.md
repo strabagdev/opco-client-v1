@@ -239,3 +239,87 @@ performed; habitual caches, snapshots and outbox are never reset. Prior temporar
 failures/ACCESS_HANDLE_BUSY remain independent and undiagnosed; both comparison profiles opened
 OPFS successfully, which does not close that general problem. Core is intact. V11 stays paused,
 productive SQLite correlation and the general audit remain open.
+
+## STATE_UPDATE desktop — implementación local para revisión, 2026-10-24
+
+Extensión del renderer genérico sobre HEAD `dfa8779932f2d2df34c78b008c80e9bf9261df0b`.
+Sin publicar. Reutiliza el breakpoint 900, el espacio restante del shell y los tokens azules
+existentes; no altera Attendance ni otros renderers. No hay condiciones por entidad, nombres de
+campos, opciones o caso de uso. Los límites y la paleta de secciones anteriores siguen vigentes;
+esta sección añade específicamente STATE_UPDATE al alcance desktop.
+
+- Contexto compuesto: una sola superficie, máximo 1000 px, padding 16 y separación 16. Fecha con
+  base 210 px; campos configurados con base 200 y máximo 280, etiquetas completas y wrap según
+  espacio real. Sin tarjetas individuales. Por debajo de 900 vuelve a la distribución apilada.
+- Buscador: ancho disponible, máximo 560 px. Resultados y últimas actualizaciones usan filas con
+  separadores; nombre de 170–280 px según ancho y columnas identificadas por **fieldId**. Conservan
+  los formateadores actuales y los valores históricos que ya exponía latest. Etiquetas visibles,
+  metadatos ajustables/en varias líneas; TEXT/TEXTAREA ocupan el ancho de detalle. No se inventan
+  columnas de negocio ni se convierte latest informativo en una acción.
+- Editor: máximo 900 px; dos columnas sólo desde 900 de viewport **y** con al menos 640 px dentro
+  del formulario, descontando sus paddings. TEXT/TEXTAREA a fila completa. Acciones de ancho natural
+  con wrap. Se conservan RecordFieldInput, DateFieldInput, CompactSelect y StateFieldInput, sus
+  valores, obligatoriedad y callbacks. Conflictos/mensajes permanecen fuera de la grilla; el detalle
+  de confirmación puede desplazarse dentro del modal, limitado al 90% de la altura disponible.
+- Móvil conserva colores, resumen compacto, filas apiladas y botones táctiles. El contexto pierde
+  las tarjetas redundantes y recibe etiqueta visible de fecha. Desktop usa los tokens existentes:
+  #F4F6F8/#FFFFFF, #315DA8, #E8EFFA, #202B3A, auxiliar #536174, borde #DCE2EA y control #7B879A;
+  estados semánticos no recoloreados. Foco visible azul de 3 px en controles y filas accionables;
+  se añadieron nombres accesibles a los inputs/toggle de estado que no los exponían.
+
+### Protección y evidencia nueva
+
+`state-update-presentation.tsx` contiene sólo proyección visual y medidas locales de layout. No hay
+árboles funcionales alternativos por tamaño, nuevas keys de experiencia, efectos de carga ni estado
+paralelo del formulario. Revisión TypeScript AST contra HEAD: **13 funciones operacionales y 18 hooks
+con sus dependencias idénticos**, incluidos preparación/actualización automática, búsqueda, guardado,
+confirmaciones, conflictos y cargar más. Lectores, cachés, SQLite, outbox, sincronización, API, scopes
+y contratos no cambian. `STATE_UPDATE.md` no requiere cambio: no se modifica su contrato/runtime.
+
+Chrome for Testing 153.0.8010.12 local, perfil exclusivo, CDP directo sin Playwright. Se ejecutaron
+**el shell y renderer reales** en export temporal, con sesión/API/almacén en memoria sintéticos;
+la franja de validación lo identifica en todas las capturas. No es una maqueta ni evidencia de
+Core, PostgreSQL, OPFS o sincronización reales. No se accedió a producción ni se guardaron reportes.
+Los archivos funcionales de la copia temporal se comprobaron idénticos a los del lote.
+
+Comparativas antes/después: 1440×900, 1024×768 y 390×844, resultados y formulario. Veinte combinaciones
+adicionales de viewport/escenario: contexto de dos/cinco campos, títulos extensos, vacío, error,
+pendiente, conflicto, modos none/subject/subject-date/subject-date-fields y append/update-current.
+Campos SELECT/DECIMAL/TEXT/TEXTAREA/BOOLEAN/DATE/TIME/DATETIME/MULTISELECT en los escenarios registrados.
+Sin overflow horizontal global ni excepciones JavaScript registradas. No es cobertura universal de
+cada combinación de tipos; no se ensayó una relación paginada ni un catálogo productivo.
+
+Resize con borrador numérico y observación, contexto y búsqueda seleccionados: 1199, 1200, 1024,
+899, 900, 390 y 1440. Se conservaron nodos DOM, valores e intención sin guardar. Tras estabilizar el
+escenario, **21 invocaciones del adaptador antes y después**, cero invocaciones de escritura;
+esto mide llamadas sintéticas, no tráfico HTTP de Core. La presentación no reinició la preparación.
+Se comprobó Tab/foco/Enter sobre resultado; desplegables nativos y calendario abiertos en los tres
+tamaños, selección nativa por teclado a 390 con DATE `2026-10-25` y
+optionId `one`; MULTISELECT abierto a 1440/390, Escape y devolución de foco. El popup nativo requirió
+métricas de pantalla coherentes con el viewport en el harness; no se cambió el control del producto.
+Confirmación real de conflicto abierta y cancelada, cero escrituras. Pendiente visible en la cabecera,
+error con reintento y valores remotos/locales completos. No se confirmó un reemplazo ni se sincronizó.
+El calendario muestra el locale en-US del Chrome de prueba: su valor lógico sigue siendo YYYY-MM-DD.
+A 390, el popup SELECT nativo recorta una etiqueta muy larga; contraste directo con HEAD reproduce
+el mismo límite (capturas before-select-390/after-select-390). El calendario y el modal MULTISELECT
+se muestran dentro del viewport. No se modificó el control compartido ni se afirma ausencia de
+recorte de todas sus opciones. Sin Safari/iPhone físico, lector de pantalla o auditoría accesible
+completa. Diagnóstico conserva sus handlers, pero su ruta de entrada no se recorrió en este harness; cargar más se protege por AST y
+regresiones existentes, no por nueva paginación de navegador.
+
+**152/152 pruebas focalizadas, 12 archivos, un worker y timeouts estándar**: proyección de campos
+(incluidos 0/false e históricos), controles, búsqueda/selección, conflictos, autorización offline de
+Attendance, preparación/refresh compuesto, feedback y modos existentes. Typecheck PASS; lint PASS
+con las dos advertencias preexistentes no-require-imports en
+`records-sync.local-db-regression.test.ts:182/183`; diff-check PASS. No suite completa ni build de
+cierre; sólo exports temporales necesarios para la revisión visual. Un alias no resuelto en el nuevo
+test se corrigió usando imports relativos; las 152 pruebas finales incluyen ese archivo. Los errores
+iniciales del harness (metadata de sesión/activación de controles) y un export desde cwd incorrecto
+se corrigieron/descartaron, sin atribuirles defectos del producto ni usarlos como evidencia válida.
+
+Respaldo durable, inventario, parche, hashes, revisión y comparativas:
+`/home/dannysilver/dev2026/backups/state-update-desktop/2026-10-24/`.
+Capturas/exports/perfiles no forman parte del diff publicable. El lote consta de la implementación,
+helper, prueba y **sólo esta sección** más la sección propia de STATUS; el resto del texto pendiente
+permanece excluido. Sin cierre técnico completo ni autorización de publicación. V11 sigue pausado;
+incidentes históricos de preparación, timeouts/EPIPE, SQLite/OPFS y auditoría general siguen abiertos.

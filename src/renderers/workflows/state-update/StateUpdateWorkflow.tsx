@@ -1,6 +1,9 @@
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "@/renderers/records/temporal-input";
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
+import { StateUpdateFormGrid, StateUpdateReadRows } from "./state-update-presentation";
+import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { desktopStyleColors, desktopPalette } from "@/lib/desktop-presentation";
 import { useContextPreparation } from "./use-context-preparation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
@@ -8,12 +11,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -98,6 +103,7 @@ type StateValues = StateUpdateFormValues;
 const STATE_UPDATE_LATEST_PAGE_SIZE = 20;
 
 export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: StateUpdateWorkflowConfig }>) {
+  const styles = useStateUpdateStyles();
   const {
     api,
     connectivityStatus,
@@ -1092,7 +1098,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }), [connectivityStatus, error, isLoading, visibleResponse]));
 
   return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+    <ScrollView testID="state-update-workflow" contentContainerStyle={styles.content} style={styles.screen}>
+      {Platform.OS === "web" ? <style>{`@media (min-width: ${APP_SHELL_WIDE_BREAKPOINT}px) {
+        [data-testid="state-update-workflow"] input:focus-visible,
+        [data-testid="state-update-workflow"] textarea:focus-visible,
+        [data-testid="state-update-workflow"] select:focus-visible,
+        [data-testid="state-update-workflow"] [role="button"]:focus-visible,
+        [data-testid="state-update-modal"] [role="button"]:focus-visible { outline: 3px solid #315DA8; outline-offset: 2px; }
+      }`}</style> : null}
       <View style={styles.header}>
         <View style={styles.icon}>
           <AppIcon icon={appView.icon} size={26} />
@@ -1137,15 +1150,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
-      {compositeMode ? <View style={styles.form}>
+      {compositeMode ? <View style={styles.contextPanel}>
         <Text style={styles.label}>Contexto del reporte</Text>
-        <DateFieldInput label="Fecha operacional" required disabled={!!selectedItem || isSaving} value={date} onChange={setDate} />
-        {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.fieldGroup}>
+        <View style={styles.contextFields}><View style={styles.contextDate}><Text style={styles.label}>Fecha operacional</Text><DateFieldInput label="Fecha operacional" required disabled={!!selectedItem || isSaving} value={date} onChange={setDate} /></View>
+        {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.contextField}>
           <Text style={styles.label}>{field.label}</Text>
           <CompactSelect label={field.label} required disabled={!!selectedItem || isSaving} value={identityValues[field.fieldId] ?? ""}
             options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
             onChange={value => { const optionId = String(value); if(identityValues[field.fieldId]===optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:optionId}));setItems([]);setConflict(null);setSuccessMessage(null); }} />
-        </View>)}
+        </View>)}</View>
         {!contextReady ? <Text>{compositeContextInstruction(date, response?.identityFields ?? [], identityValues)}</Text> : null}
         {contextReady && contextPreparation.phase === "ready" ? <Text>Copia del contexto actualizada para uso sin conexión.</Text> : null}
         {contextReady && contextPreparation.phase === "partial" ? <Text>Preparación parcial: faltan sujetos o reportes por verificar. Puedes reintentar.</Text> : null}
@@ -1181,14 +1194,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
-          {items.map((item) => (
-            <Pressable key={item.subject.id} onPress={() => void selectSubject(item)} style={styles.subjectRow}>
-              <View style={styles.subjectText}>
-                <Text style={styles.subjectName}>{item.subject.displayName}</Text>
-                <Text style={styles.statusMeta}>{unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : formatCurrentState(response, item) ?? "Sin estado"}</Text>
-              </View>
-            </Pressable>
-          ))}
+          <StateUpdateReadRows fullFieldIds={(response?.stateFields ?? []).filter(field => ["TEXT", "TEXTAREA"].includes(stateFieldType(field))).map(field => field.fieldId)} rows={items.map(item => ({ key: item.subject.id, name: item.subject.displayName,
+            compactText: unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : formatCurrentState(response, item) ?? "Sin estado",
+            fallback: unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : "Sin estado",
+            values: unavailableCompositeAbsence(item) || !item.current ? [] : (response?.stateFields ?? []).flatMap(field => {
+              const value = formatStateValueLabel(field, currentStateValue(item.current?.stateValues ?? [], field.fieldId));
+              return value ? [{ fieldId: field.fieldId, label: field.label, value }] : [];
+            }), onPress: () => void selectSubject(item),
+          }))} />
         </View>
       ) : null}
 
@@ -1199,36 +1212,21 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             <Text style={styles.statusMeta}>Actual: {formatCurrentState(visibleResponse, selectedItem) ?? "Sin estado"}</Text>
           </View>
 
-          <View style={styles.form}>
-            {hasDate && !compositeMode ? (
-              <View style={styles.fieldGroup}>
-                <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
-                <DateFieldInput label={visibleResponse.dateField?.name ?? "Campo de fecha"} required value={date} onChange={setDate} />
-              </View>
-            ) : null}
-            {visibleResponse.stateFields.map((field) => (
-              <StateFieldInput
-                field={field}
-                key={field.fieldId}
-                onChange={(value) => {
-                  setStateValues((current) => ({ ...current, [field.fieldId]: value }));
-                  setError(null);
-                }}
-                value={stateValues[field.fieldId]}
-              />
-            ))}
-
-            {visibleResponse.extraFields.map((field) => (
-              <RecordFieldInput
-                error={extraErrors[field.key]}
-                field={field}
-                key={field.id}
-                onChange={(value) => setExtraValue(field.key, value)}
-                value={extraValues[field.key]}
-              />
-            ))}
-          </View>
-
+          <StateUpdateFormGrid slots={[
+            ...(hasDate && !compositeMode ? [{ key: "report-date", content: <View style={styles.fieldGroup}>
+              <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
+              <DateFieldInput label={visibleResponse.dateField?.name ?? "Campo de fecha"} required value={date} onChange={setDate} />
+            </View> }] : []),
+            ...visibleResponse.stateFields.map(field => ({ key: `state:${field.fieldId}`, full: ["TEXT", "TEXTAREA"].includes(stateFieldType(field)), content:
+              <StateFieldInput field={field} onChange={(value) => {
+                setStateValues((current) => ({ ...current, [field.fieldId]: value }));
+                setError(null);
+              }} value={stateValues[field.fieldId]} /> })),
+            ...visibleResponse.extraFields.map(field => ({ key: `extra:${field.id}`, full: ["TEXT", "TEXTAREA"].includes(field.type), content:
+              <RecordFieldInput error={extraErrors[field.key]} field={field}
+                onChange={(value) => setExtraValue(field.key, value)} value={extraValues[field.key]} /> })),
+          ]} />
+          <View style={styles.formActions}>
           <Pressable
             disabled={isSaving}
             onPress={() => void saveSelected()}
@@ -1237,6 +1235,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             {isSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>{submitLabel}</Text>}
           </Pressable>
           {compositeMode ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Volver a buscar</Text></Pressable> : null}
+          </View>
         </View>
       ) : null}
 
@@ -1252,7 +1251,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
-      <Modal visible={confirmContextExit} transparent onRequestClose={()=>setConfirmContextExit(false)}><View style={styles.modalBackdrop}><View style={styles.modalPanel}>
+      <Modal visible={confirmContextExit} transparent onRequestClose={()=>setConfirmContextExit(false)}><View testID="state-update-modal" style={styles.modalBackdrop}><View style={styles.modalPanel}>
         <Text style={styles.title}>¿Descartar el borrador sin guardar?</Text><Text>Los cambios ya guardados y pendientes se conservan.</Text>
         <Pressable accessibilityRole="button" onPress={()=>setConfirmContextExit(false)} style={styles.secondaryButton}><Text>Continuar editando</Text></Pressable>
         <Pressable accessibilityRole="button" onPress={()=>{clearEditor();setConfirmContextExit(false);}} style={styles.secondaryButton}><Text>Volver a buscar</Text></Pressable>
@@ -1361,6 +1360,7 @@ function LatestList({
   state: StateUpdateOfflineHistoryState;
   readFailed: boolean;
 }) {
+  const styles = useStateUpdateStyles();
   const statusMessage = stateUpdateOfflineHistoryMessage({
     coverage: state,
     hasItems: latest.length > 0,
@@ -1372,18 +1372,7 @@ function LatestList({
       <Text style={styles.sectionTitle}>Últimas actualizaciones</Text>
       {statusMessage ? <Text style={state === "partial" || state === "absent" ? styles.offline : styles.empty}>{statusMessage}</Text> : null}
       {state === null && latest.length === 0 && !readFailed ? <Text style={styles.empty}>Sin actualizaciones</Text> : null}
-      {latest.map((item) => (
-        <View key={item.recordId} style={styles.latestRow}>
-          <View style={styles.subjectText}>
-            <Text style={styles.subjectName}>{item.subject.displayName}</Text>
-            {buildStateUpdateLatestRows(response, item).map((row) => (
-              <Text key={`${item.recordId}:${row.fieldId}`} style={styles.statusMeta}>
-                {row.label}: {row.value}
-              </Text>
-            ))}
-          </View>
-        </View>
-      ))}
+      <StateUpdateReadRows fullFieldIds={[...(response?.stateFields ?? []).filter(field => ["TEXT", "TEXTAREA"].includes(stateFieldType(field))).map(field => field.fieldId), ...(response?.extraFields ?? []).filter(field => ["TEXT", "TEXTAREA"].includes(field.type)).map(field => field.id)]} rows={latest.map(item => ({ key: item.recordId, name: item.subject.displayName, values: buildStateUpdateLatestRows(response, item) }))} />
       {pagination?.hasMore ? (
         <Pressable
           disabled={isLoadingMore}
@@ -1406,6 +1395,7 @@ function StateFieldInput({
   onChange(value: string | boolean): void;
   value: string | boolean | undefined;
 }) {
+  const styles = useStateUpdateStyles();
   const type = stateFieldType(field);
 
   if (type === "SELECT") {
@@ -1432,7 +1422,7 @@ function StateFieldInput({
     return (
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{field.label}</Text>
-        <Pressable
+        <Pressable accessibilityRole="button" accessibilityLabel={`${field.label}: ${selected ? "Si" : "No"}`}
           onPress={() => onChange(!selected)}
           style={[styles.optionButton, selected && styles.optionButtonSelected]}
         >
@@ -1446,6 +1436,7 @@ function StateFieldInput({
     <View style={styles.fieldGroup}>
       <Text style={styles.label}>{field.label}</Text>
       <TextInput
+        accessibilityLabel={field.label}
         autoCapitalize="none"
         keyboardType={type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default"}
         onChangeText={onChange}
@@ -1472,15 +1463,16 @@ function ConflictModal({
   onCancel(): void;
   onConfirm(): void;
 }) {
+  const styles = useStateUpdateStyles();
   const rows = conflict ? buildStateUpdateConflictRows(conflict, fields, extraFields) : [];
 
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
-      <View style={styles.modalBackdrop}>
+      <View testID="state-update-modal" style={styles.modalBackdrop}>
         <View style={styles.modalPanel}>
           <Text style={styles.modalTitle}>{conflict?.subjectName ?? "Registro"}</Text>
           <Text style={styles.modalMessage}>Opco tiene un estado distinto para este registro.</Text>
-          <View style={styles.conflictRows}>
+          <ScrollView style={styles.conflictScroll} contentContainerStyle={styles.conflictRows}>
             {rows.map((row) => (
               <View key={`${row.fieldType ?? "field"}:${row.fieldId}`} style={styles.conflictRow}>
                 <Text style={styles.conflictLabel}>{row.label}</Text>
@@ -1488,7 +1480,7 @@ function ConflictModal({
                 <Text style={styles.conflictText}>Solicitado: {row.requested ?? "Sin estado"}</Text>
               </View>
             ))}
-          </View>
+          </ScrollView>
           <View style={styles.modalActions}>
             <Pressable disabled={isSaving} onPress={onCancel} style={styles.modalSecondaryButton}>
               <Text style={styles.modalSecondaryText}>Cancelar</Text>
@@ -1518,6 +1510,7 @@ function DurableConflictList({
   onUseLocal(record: CachedStateUpdateRecord): void;
   onUseRemote(record: CachedStateUpdateRecord): void;
 }) {
+  const styles = useStateUpdateStyles();
   return (
     <View style={styles.conflictList}>
       <Text style={styles.sectionTitle}>Conflictos por resolver</Text>
@@ -1549,7 +1542,13 @@ function DurableConflictList({
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
+  contextPanel: { gap: 12 },
+  contextFields: { gap: 12 },
+  contextDate: { gap: 8 },
+  contextField: { gap: 8 },
+  formActions: { gap: 12 },
+  conflictScroll: { flexShrink: 1 },
   conflictActions: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1682,6 +1681,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 16,
     maxWidth: 420,
+    maxHeight: "90%",
     padding: 18,
     width: "100%",
   },
@@ -1867,3 +1867,30 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 });
+
+
+const desktopStyles = StyleSheet.create({
+  ...desktopStyleColors(baseStyles),
+  content: { ...baseStyles.content, padding: 24, gap: 20 },
+  headerText: { ...baseStyles.headerText, minWidth: 0 },
+  contextPanel: { gap: 12, maxWidth: 1000, width: "100%", backgroundColor: desktopPalette.surface, borderColor: desktopPalette.border, borderWidth: 1, borderRadius: 8, padding: 16 },
+  contextFields: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: 16 },
+  contextDate: { gap: 8, flexBasis: 210, flexGrow: 0, flexShrink: 1, maxWidth: "100%", minWidth: 0 },
+  contextField: { gap: 8, flexBasis: 200, flexGrow: 1, maxWidth: 280, minWidth: 0 },
+  searchBlock: { ...baseStyles.searchBlock, width: "100%", maxWidth: 560 },
+  searchInput: { ...baseStyles.searchInput, borderColor: desktopPalette.controlBorder, color: desktopPalette.text, minWidth: 0 },
+  editorPanel: { ...baseStyles.editorPanel, borderColor: desktopPalette.border, padding: 20, width: "100%", maxWidth: 900 },
+  fieldGroup: { gap: 8, minWidth: 0 },
+  formActions: { flexDirection: "row", flexWrap: "wrap", gap: 12, alignItems: "flex-start" },
+  primaryButton: { ...baseStyles.primaryButton, backgroundColor: desktopPalette.primary, alignSelf: "flex-start", minWidth: 160 },
+  secondaryButton: { ...baseStyles.secondaryButton, borderColor: desktopPalette.controlBorder, alignSelf: "flex-start", paddingVertical: 10 },
+  input: { ...baseStyles.input, borderColor: desktopPalette.controlBorder, color: desktopPalette.text, minWidth: 0 },
+  list: { gap: 0 },
+  optionButton: { ...baseStyles.optionButton, alignSelf: "flex-start" },
+  modalPanel: { ...baseStyles.modalPanel, maxWidth: 620, maxHeight: "90%" },
+  modalActions: { ...baseStyles.modalActions, flexWrap: "wrap" },
+  conflictListRow: { ...baseStyles.conflictListRow, gap: 12 },
+});
+function useStateUpdateStyles() {
+  return useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
+}

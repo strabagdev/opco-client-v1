@@ -2806,3 +2806,41 @@ El respaldo fuente permanece intacto. 402 exclusiones, horarios/RED y demás pen
 byte a byte; main/HEAD e índice habituales sin cambios. Core, esquema, namespace y datos productivos
 intactos; sin commit/push/deploy. V11 pausado, auditoría general e incidente «11/11 procesadas,1 fallo»
 abiertos. El cierre no identifica ni resuelve las causas históricas SQLite/OPFS o timeouts/EPIPE.
+
+## STATE_UPDATE desktop — IMPLEMENTADO LOCALMENTE, PARA REVISIÓN — 2026-10-24
+
+Lote visual sobre main/HEAD `dfa8779932f2d2df34c78b008c80e9bf9261df0b`: contexto compacto y flexible,
+buscador máximo 560, resultados/latest en filas alineadas por metadata, editor máximo 900 con dos
+columnas si dispone de 640 px internos, textos largos a fila completa y acciones naturales. Móvil
+apilado; mismo breakpoint 900, shell y paleta azul. Sin reglas específicas para Reporte de equipos.
+
+Inventario propio: **5 archivos / 24 hunks**: `StateUpdateWorkflow.tsx`, nuevos `state-update-presentation.tsx` y su prueba,
+y únicamente las secciones 2026-10-24 de `docs/DESKTOP_INTERFACE.md` y este STATUS. No incluir los
+otros hunks documentales, horarios/RED, experimentos o diagnósticos. No se modifica STATE_UPDATE.md:
+contrato, consultas, persistencia y sincronización permanecen iguales. Comparación AST: 13 funciones
+y 18 hooks operacionales idénticos a HEAD. Componentes de fecha/selección, handlers, validaciones,
+confirmaciones, pendientes/conflictos y actualización automática se conservan.
+
+Validación: **152/152 pruebas afectadas, 12 archivos, un worker y timeouts estándar**, typecheck y
+diff-check PASS; lint cero errores y dos warnings preexistentes no-require-imports en líneas 182/183 en
+records-sync.local-db-regression.test.ts. No suite completa ni build de cierre, sólo exports para UI.
+Comparativas del renderer/shell reales a 1440×900,1024×768,390×844 y medidas de resize en 899/900,
+1199/1200. Contexto corto/extenso, resultados/editor, vacío/error/pendiente/conflicto y cuatro modos
+actuales. Cero overflow global/excepciones en los escenarios registrados. Borrador/contexto/búsqueda
+y nodos conservados: contador de adaptador sintético 21→21 tras resize; cero escrituras. Teclado/foco,
+calendario y desplegables abiertos, opciones múltiples y confirmación/cancelación revisados.
+
+**Límite:** shell/renderer reales con respuestas, sesión y almacén en memoria sintéticos. No nueva
+prueba Core/PostgreSQL/OPFS/sync, Safari físico ni comprobación productiva. Pendientes/conflictos fueron
+inyectados para evaluar UI, no creados/sincronizados. A 390 el SELECT nativo recorta una opción muy larga; reproducido también
+en HEAD, se conserva y documenta fuera de este lote. Cargar más y entrada desde Diagnóstico conservan
+código y regresiones existentes, sin nuevo recorrido visual de esas rutas. La matriz por experiencia,
+controles, tipos y límites se detalla en DESKTOP_INTERFACE. No afirmar cobertura universal ni estabilidad
+general del Client. Los intentos inválidos del harness se distinguen de la evidencia final.
+
+Respaldo durable: `/home/dannysilver/dev2026/backups/state-update-desktop/2026-10-24/`;
+parche/inventario/hashes y visor de capturas antes/después. Candidato reconstruible para el cierre
+técnico posterior; no publicado. 402 exclusiones, horarios y demás pendientes ajenos conservados
+byte a byte; HEAD e índice sin cambios. Core/esquema/namespace/datos productivos intactos. Sólo se
+retiran procesos/perfil temporales propios. Sin commit/push/deploy. V11 pausado; auditoría general,
+«11/11 procesadas, 1 fallo», timeouts/EPIPE históricos y problemas SQLite/OPFS siguen abiertos.
