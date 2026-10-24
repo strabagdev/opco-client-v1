@@ -1,3 +1,4 @@
+import { resolveStateUpdateSelectExtra, type StateUpdateExtraValuesFormat } from "../../../lib/state-update-extras";
 import {
   EntityField,
   EntityFieldType,
@@ -54,6 +55,7 @@ export function mergeStateUpdateResponseWithLocalConflicts(
         ...item,
         current: {
           extraValues: local.extraValues,
+          extraValuesFormat: local.extraValuesFormat,
           recordId: local.localRecordId,
           stateValues: local.stateValues,
           updatedAt: local.updatedAt ?? item.current?.updatedAt ?? "",
@@ -88,6 +90,7 @@ export function stateUpdateConflictLatestItem(record: CachedStateUpdateRecord): 
   return {
     date: record.date ?? null,
     extraValues: record.extraValues,
+    extraValuesFormat: record.extraValuesFormat,
     recordId: record.localRecordId,
     stateValues: record.stateValues,
     subject: record.subject,
@@ -459,8 +462,9 @@ export function buildStateUpdateLatestRows(
         dateFieldType,
         fieldId: field.id,
         fallbackType: field.type,
-        value: item.extraValues?.[field.id] ?? item.extraValues?.[field.key],
+        value: item.extraValues && Object.hasOwn(item.extraValues, field.id) ? item.extraValues[field.id] : item.extraValues?.[field.key],
         valueField: field,
+        extraValuesFormat: item.extraValuesFormat,
       }),
     });
   }
@@ -496,14 +500,14 @@ function appendStateUpdateLatestRow(
   rows.push({ fieldId: row.fieldId, label: row.label, value: row.value });
 }
 
-export function formatLatestExtraValue(field: EntityField, value: unknown) {
+export function formatLatestExtraValue(field: EntityField, value: unknown, format?: StateUpdateExtraValuesFormat) {
   if (value === null || value === undefined || value === "") {
     return null;
   }
 
   if (field.type === "SELECT") {
     const normalized = String(value);
-    return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+    return resolveStateUpdateSelectExtra(field, value, format).label ?? normalized;
   }
 
   if (field.type === "MULTISELECT") {
@@ -544,6 +548,7 @@ function formatStateUpdateLatestRowValue({
   fieldId,
   value,
   valueField,
+  extraValuesFormat,
 }: {
   dateFieldId?: string;
   dateFieldType: "DATE" | "DATETIME" | null;
@@ -551,6 +556,7 @@ function formatStateUpdateLatestRowValue({
   fieldId: string;
   value: unknown;
   valueField?: EntityField;
+  extraValuesFormat?: StateUpdateExtraValuesFormat;
 }) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -563,7 +569,7 @@ function formatStateUpdateLatestRowValue({
   }
 
   if (valueField) {
-    return formatLatestExtraValue(valueField, value);
+    return formatLatestExtraValue(valueField, value, extraValuesFormat);
   }
 
   return String(value);
@@ -772,11 +778,11 @@ function extraConflictRows(
       }
 
       return {
-        existing: formatExtraConflictValue(field, existing),
+        existing: formatExtraConflictValue(field, existing, conflict.existing.extraValuesFormat),
         fieldId,
         fieldType: metadata?.fieldType ?? field?.type ?? null,
         label: metadata?.fieldLabel ?? field?.name ?? fallbackFieldLabel(fieldId),
-        requested: formatExtraConflictValue(field, requested),
+        requested: formatExtraConflictValue(field, requested, conflict.requested.extraValuesFormat),
         technicalExisting: existing,
         technicalRequested: requested,
       };
@@ -834,13 +840,13 @@ function readConflictExtraValue(
   return undefined;
 }
 
-function formatExtraConflictValue(field: EntityField | undefined, value: EntityRecordValue | undefined) {
+function formatExtraConflictValue(field: EntityField | undefined, value: EntityRecordValue | undefined, format?: StateUpdateExtraValuesFormat) {
   if (value === undefined || value === null || value === "") {
     return null;
   }
 
   if (field?.type === "SELECT") {
-    return optionLabel(field, value) ?? String(value);
+    return resolveStateUpdateSelectExtra(field, value, format).label ?? String(value);
   }
 
   if (field?.type === "MULTISELECT") {

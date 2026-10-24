@@ -766,6 +766,7 @@ export type StateUpdateConflictExtraValue = {
 };
 
 export type StateUpdateCurrent = {
+  extraValuesFormat?: "field-value";
   extraValues?: Record<string, EntityRecordValue>;
   recordId: string;
   stateValues: StateUpdateCurrentFieldValue[];
@@ -778,6 +779,7 @@ export type StateUpdateItem = {
 };
 
 export type StateUpdateLatestItem = {
+  extraValuesFormat?: "field-value";
   date?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
   fields?: {
@@ -908,12 +910,14 @@ export type StateUpdateBatchResult =
     }
   | {
       existing: {
+        extraValuesFormat?: "field-value";
         extraValues?: Record<string, EntityRecordValue>;
         recordId: string;
         stateValues: StateUpdateCurrentFieldValue[];
         updatedAt: string;
       };
       requested: {
+        extraValuesFormat?: "field-value";
         extraValues?: Record<string, EntityRecordValue>;
         stateValues: StateUpdateCurrentFieldValue[];
       };
@@ -958,6 +962,7 @@ type StateUpdateApiConflictResult = {
   }[];
   existing: {
     stateValues?: StateUpdateCurrentFieldValue[];
+    extraValuesFormat?: "field-value";
     extraValues?: Record<string,EntityRecordValue>;
     recordId: string;
     updatedAt: string;
@@ -2107,6 +2112,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
 
   return {
     existing: {
+      extraValuesFormat: result.existing.extraValuesFormat,
       extraValues: result.existing.extraValues ?? objectFromConflictExtraValues(extraDifferences, "remoteValue"),
       recordId: result.existing.recordId,
       stateValues: result.existing.stateValues ?? stateDifferences.map((difference) => ({
@@ -2119,6 +2125,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
     },
     extraValues: extraDifferences.length > 0 ? extraDifferences : undefined,
     requested: {
+      extraValuesFormat: result.existing.extraValuesFormat,
       extraValues: objectFromConflictExtraValues(extraDifferences, "localValue"),
       stateValues: stateDifferences.map((difference) => ({
         fieldId: difference.fieldId,

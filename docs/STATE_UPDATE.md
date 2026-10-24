@@ -2330,3 +2330,87 @@ El respaldo fuente permanece intacto. 402 exclusiones, horarios/RED y demás pen
 byte a byte; main/HEAD e índice habituales sin cambios. Core, esquema, namespace y datos productivos
 intactos; sin commit/push/deploy. V11 pausado, auditoría general e incidente «11/11 procesadas,1 fallo»
 abiertos. El cierre no identifica ni resuelve las causas históricas SQLite/OPFS o timeouts/EPIPE.
+
+## Extras SELECT simples: contrato corregido — 2026-10-24
+
+Core publica las opciones `{id,value,label,active,order}`, cardinalidad y configuración del extra
+SELECT con el serializador de campos existente. Los **estados** mantienen `optionId`; los **extras**
+se leen y escriben como `FieldOption.value`, indexados por `fieldId`. `current`, `latest` y conflictos
+incluyen los extras configurados y, para las lecturas nuevas, `extraValuesFormat: "field-value"`.
+La comparación de negocio, autorización de reemplazo y selección del vigente no cambian.
+
+Client adapta fieldId/key sólo en el formulario STATE_UPDATE: presenta labels y envía fieldId/valor,
+sin modificar el formulario RECORDS compartido. La procedencia opcional pertenece a cada snapshot o
+recibo JSON, no a la definición ni a la outbox. Se conserva en hidratación, ACK y «Usar Opco»; un ACK
+sigue sin acreditar cobertura completa. SQLite v10 y `opco-client-v10-epoch2.db` permanecen iguales.
+
+Respuestas/cachés antiguas sin marca: se resuelve ID/valor sólo si conduce a un único valor canónico.
+Sin opciones, con opción retirada/desconocida o con ID que colisiona con otro valor, se conserva el
+contenido y se exige revisión explícita antes de guardar; el control no selecciona otra opción por
+coincidencia. Un ID y key incompatibles también requieren revisión. Las opciones inactivas conservan
+su label para consulta y no se ofrecen como selecciones nuevas. Una definición antigua sin opciones
+necesita la actualización online existente para recuperar labels/opciones; no se inventan etiquetas.
+Leer/adaptar no reescribe payloads pendientes, clientRequestId, autorización, base ni estado de envío.
+Operaciones antiguas que ya contienen IDs/keys incorrectos permanecen conservadas y pueden requerir
+corrección explícita: no se cambia silenciosamente su comando ni su hash idempotente.
+
+Evidencia automática: dos RED Core archivados reproducidos antes y verdes después; pruebas del
+adaptador API, control compartido SSR, mapeo de formulario, SQLite real en archivo/reapertura,
+metadata antigua, ambigüedad, opción inactiva, payload durable y aislamiento owner/contrato/AppView.
+325 pruebas Client/14 archivos y 75 Core/3 archivos PASS, un worker; typecheck y lint PASS
+(Client: dos warnings require preexistentes). No suite completa ni build.
+
+Fixture nuevo exclusivamente local: destino validado desde `.env.local` y pasado explícitamente,
+127.0.0.1:5432/opco_development como opco_dev. Core/domain y PostgreSQL reales, transporte HTTP local,
+adaptador/formulario/SQLite/sincronizador reales: alta ALPHA, cierre/reapertura, ACK, replay único,
+edición confirmada BETA en la misma fila, cambio remoto posterior → conflicto con intención/base/ID
+conservados, «Usar Opco», nueva hidratación y reapertura sin red con label Beta. Una fila remota,
+cero outbox al finalizar; 9 llamadas HTTP. Fixtures propios eliminados, IDs/versiones ajenos intactos.
+No es prueba de Chrome/OPFS, interacción visual del navegador ni autenticación de rutas Next;
+control y selección se acreditan mediante SSR y automatización, no Safari físico ni producción.
+
+MULTISELECT permanece **requisito pendiente**, no implementado en extras STATE_UPDATE. Operador y
+Ubicación acreditados actualmente son SELECT simples. RELATION queda fuera de esta corrección.
+Horarios/RED y V11 permanecen separados/pausados; no se declara cerrada la auditoría general.
+
+### Cierre acotado SELECT extras — 2026-10-24
+
+Contenido funcional idéntico al respaldo de implementación: se reutilizan 325 pruebas Client,
+75 Core, typecheck/lint y el recorrido SQLite/sincronización ya acreditado, sin repetirlo. Parches
+reconstruidos y hashes comprobados. Lote final conserva Client 11 archivos/48 hunks y Core 4/12;
+sólo se amplían las secciones documentales propias. No suite completa ni cambios funcionales nuevos.
+
+**Orden obligatorio Core → Client.** Contraste con Client publicado c67b9ea042c4c9e8b35785b2e32b55fb962e7d35
+(bundle público entry-12e32695b30fc673320a40e42f0bc3af.js, hash coincidente con el informe SUCCESS)
+y Core anterior 58a2a2a076718d3aa003cbc8dfe8f2967c321e26. Dominio Core y PostgreSQL locales reales:
+Core corregido + adaptador publicado leen canónicos/labels y conservan optionId de estados; el
+formulario anterior sigue enviando key en vez de fieldId y recibe UNKNOWN_EXTRA_FIELD/400, sin
+mutación. Un comando anterior correctamente codificado con fieldId/valor conserva UNCHANGED.
+No considerar operativa la edición de extras durante esa ventana; actualizar Client después de
+verificar el SHA/health/readiness y el contrato de Core corregido.
+
+El orden inverso es inseguro: Core anterior omite extras en current; el formulario nuevo ve vacío
+un SELECT opcional y envía fieldId:null. En el fixture, un reemplazo confirmado mediante Core
+anterior eliminó el valor sintético existente. No es un fallo del par corregido ni autorización
+para tocar registros reales. No revertir Core al anterior mientras siga ejecutándose Client nuevo;
+puede revertirse Client manteniendo Core corregido. Sin rollback destructivo ni cambios de esquema.
+
+Renderer/shell reales y createOpcoApi comprobados en Chromium/CDP con perfil exclusivo, 1440 y 390:
+SELECT presenta Alfa/Beta; current inicia ALPHA/label Alfa; latest muestra Alfa; elección por ratón/
+teclado devuelve BETA/label Beta. Resize conserva selección con cero lecturas adicionales; cero
+escrituras/excepciones/overflow global. Se revisaron capturas. Respuesta capturada del fixture Core
+local, sesión/caché sintéticas en memoria: no nuevo OPFS, sync, autenticación Next ni Safari físico.
+El primer export visual resolvió el router principal con un stub sin SessionProvider (React130);
+se descartó. Export final con caché temporal independiente y rutas de prueba verificadas; hashes
+del renderer y dependencias funcionales iguales al candidato. No se atribuye el error al producto.
+
+Build web de producción Client PASS: API efectiva https://web.opco.cl ejecutada en VM, no vacía ni
+local, referencias index/sw coincidentes, SQLite10/epoch2 conservados. Core: build de producción
+`npm run build -- --webpack` PASS. El habitual Turbopack queda sin acreditar aquí: primero rechazó
+node_modules enlazado fuera del clon; con copia física apareció fallo de descarga de fuentes, y con
+red habilitada EPERM al abrir el puerto interno PostCSS, límite ya documentado en Core STATUS.
+No se modificó configuración ni se presenta ese intento como PASS.
+
+Respaldo final: `/home/dannysilver/dev2026/backups/state-update-select-extras-close/2026-10-24/`.
+Publicable secuencialmente Core → Client con los límites de build/evidencia indicados; esta etapa
+no publica. MULTISELECT/RELATION y horarios fuera; 402 exclusiones y pendientes ajenos conservados.

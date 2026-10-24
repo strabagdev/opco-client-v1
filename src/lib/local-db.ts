@@ -2822,6 +2822,7 @@ async function saveStateUpdateLocallyWithRecordId(
       ...(existingRecord?.serverId ? { __opcoStateUpdateRemote: stateUpdateRemoteBinding(existingRecord.serverId) } : {}),
       expectedUpdatedAt,
       extraValues: input.extraValues,
+      extraValuesFormat: "field-value",
       stateValues,
       subjectDisplayName: input.subjectDisplayName,
       subjectRecordId: input.subjectRecordId,
@@ -3013,7 +3014,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     const events = new Map<string, { item: StateUpdateItem; eventDate?: string }>();
     for (const event of input.latest ?? []) events.set(event.recordId, {
       item: { subject: event.subject, current: { recordId: event.recordId, updatedAt: event.updatedAt,
-        stateValues: event.stateValues ?? [], extraValues: event.extraValues } },
+        stateValues: event.stateValues ?? [], extraValues: event.extraValues, extraValuesFormat: event.extraValuesFormat } },
       eventDate: normalizeStateUpdateLogicalDate(event.date),
     });
     for (const item of input.items) if (item.current) {
@@ -3022,11 +3023,12 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
       const cached = previous.find(p => stateUpdateLogicalRemoteId(p.row) === item.current!.recordId &&
         p.verified && p.row.remote_updated_at === item.current!.updatedAt);
       const inherited = fromLatest?.item.current?.updatedAt === item.current.updatedAt ? fromLatest.item.current :
-        cached ? { stateValues: JSON.parse(cached.row.values_json).stateValues, extraValues: JSON.parse(cached.row.values_json).extraValues } : null;
+        cached ? { stateValues: JSON.parse(cached.row.values_json).stateValues, extraValues: JSON.parse(cached.row.values_json).extraValues, extraValuesFormat: JSON.parse(cached.row.values_json).extraValuesFormat } : null;
       const states = new Map<string, import("./opco-api").StateUpdateCurrentFieldValue>((inherited?.stateValues ?? []).map((v: import("./opco-api").StateUpdateCurrentFieldValue) => [v.fieldId, v]));
       for (const value of item.current.stateValues) states.set(value.fieldId, value);
       const full = { ...item, current: { ...item.current, stateValues: [...states.values()],
-        extraValues: item.current.extraValues ?? inherited?.extraValues } };
+        extraValues: item.current.extraValues ?? inherited?.extraValues,
+        extraValuesFormat: item.current.extraValues !== undefined ? item.current.extraValuesFormat : inherited?.extraValuesFormat } };
       events.set(item.current.recordId, { item: full, eventDate:
         normalizeStateUpdateLogicalDate(typeof rawDate === "string" ? rawDate : undefined) ?? fromLatest?.eventDate ??
         (cached ? stateUpdateEventDate(cached.row, scope) : undefined) });
@@ -3059,7 +3061,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
           } else {
             // No outbox exists: repair only the matching scoped orphan, retaining its durable local identity.
             const recovered: OfflineStateUpdateValues = { ...values, expectedUpdatedAt: current.updatedAt,
-              stateValues: current.stateValues, extraValues: current.extraValues,
+              stateValues: current.stateValues, extraValues: current.extraValues, extraValuesFormat: current.extraValuesFormat,
               __opcoStateUpdateIntent: 1, __opcoStateUpdateRemote: stateUpdateRemoteBinding(id) };
             await transaction.runAsync(`UPDATE entity_records SET values_json=?,server_id=?,remote_updated_at=?,
               cached_at=?,sync_status='synced',sync_error_code=NULL,sync_error_message=NULL WHERE local_id=?`,
@@ -3074,7 +3076,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
         `state_update_snapshot_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId, input.appViewId, scope.configuration, id])}`;
       const values: OfflineStateUpdateValues = { appViewId: input.appViewId, date: receivedDate,
         identity: input.identity, snapshotConfiguration: scope.configuration, snapshotDateFieldId: input.dateFieldId, snapshotEventDate: eventDate ?? null,
-        expectedUpdatedAt: current.updatedAt, extraValues: current.extraValues, stateValues: current.stateValues,
+        expectedUpdatedAt: current.updatedAt, extraValues: current.extraValues, extraValuesFormat: current.extraValuesFormat, stateValues: current.stateValues,
         subjectDisplayName: item.subject.displayName, subjectRecordId: item.subject.id };
       const oldValues = receipt ? JSON.parse(receipt.values_json) : null;
       if (oldValues?.clientRequestId && receipt?.remote_updated_at === current.updatedAt &&
@@ -3134,7 +3136,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
     : compare(b.cached_at, a.cached_at) || compare(a.local_id, b.local_id));
   return { items: rows.slice((page - 1) * pageSize, page * pageSize).map(row => {
     const record = normalizeStateUpdateRecord(mapStateUpdateStorageRow(row));
-    return { date: record.date ?? null, extraValues: record.extraValues, recordId: record.localRecordId,
+    return { date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
       stateValues: record.stateValues.map(value => ({ ...value, label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label })),
       subject: record.subject, updatedAt: record.updatedAt ?? row.cached_at };
   }), pagination: { page, pageSize, total: rows.length, hasMore: page * pageSize < rows.length } };
@@ -3626,11 +3628,11 @@ async function completeStateUpdateOperationInTransaction(
     subjectRecordId: payload.subjectRecordId,
   };
 
-  await persistStateUpdateReceipt(db, operation, result.recordId, values, result.updatedAt);
+  await persistStateUpdateReceipt(db, operation, result.recordId, values, result.updatedAt, true);
 }
 
 async function persistStateUpdateReceipt(db: SQLite.SQLiteDatabase, operation: PendingOperation,
-  remoteId: string, values: OfflineStateUpdateValues, updatedAt: string | null) {
+  remoteId: string, values: OfflineStateUpdateValues, updatedAt: string | null, inheritIntentExtraFormat = false) {
   const payload = operation.payload as OfflineStateUpdatePayload;
   const raw = await db.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=?", operation.localRecordId);
   if (!raw) throw new Error("La intencion seleccionada ya no existe.");
@@ -3641,7 +3643,8 @@ async function persistStateUpdateReceipt(db: SQLite.SQLiteDatabase, operation: P
   scope.configuration = decoded.snapshotConfiguration ?? payload.snapshotConfiguration ?? scope.configuration;
   if (raw.server_id) await rememberStateUpdateRemote(db, scope, raw.server_id);
   const fieldDate = values.stateValues.find(v => v.fieldId === scope.dateFieldId)?.value;
-  const receiptValues: OfflineStateUpdateValues = { ...values, clientRequestId: operation.clientRequestId, __opcoStateUpdateIntent: 1,
+  const receiptValues: OfflineStateUpdateValues = { ...values,
+    extraValuesFormat: values.extraValuesFormat ?? (inheritIntentExtraFormat ? decoded.extraValuesFormat : undefined), clientRequestId: operation.clientRequestId, __opcoStateUpdateIntent: 1,
     __opcoStateUpdateRemote: stateUpdateRemoteBinding(remoteId), snapshotConfiguration: scope.configuration,
     snapshotDateFieldId: scope.dateFieldId, snapshotEventDate: normalizeStateUpdateLogicalDate(typeof fieldDate === "string" ? fieldDate : undefined) ?? null };
   const now = new Date().toISOString();
@@ -3827,6 +3830,7 @@ async function markStateUpdateOperationConflict(
     date: payload.date,
     expectedUpdatedAt: result.existing.updatedAt,
     extraValues: result.existing.extraValues ?? payload.extraValues,
+    extraValuesFormat: result.existing.extraValues !== undefined ? result.existing.extraValuesFormat : undefined,
     stateValues: result.existing.stateValues,
     subjectDisplayName: payload.subjectDisplayName,
     subjectRecordId: result.subjectRecordId,

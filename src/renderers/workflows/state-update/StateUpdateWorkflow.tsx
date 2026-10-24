@@ -1,3 +1,4 @@
+import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, unavailableStateUpdateExtraInput } from "@/lib/state-update-extras";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "@/renderers/records/temporal-input";
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
@@ -27,7 +28,6 @@ import { buildStateUpdateCoverageScope, hasSuccessfulHydration } from "@/lib/app
 import { createClientRequestId } from "@/lib/client-request-id";
 import {
   buildInitialFormValues,
-  buildSubmitValues,
   RecordFormErrors,
   RecordFormValues,
   validateFormFields,
@@ -161,6 +161,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [stateValues, setStateValues] = useState<StateValues>({});
   const [extraValues, setExtraValues] = useState<RecordFormValues>({});
   const [extraErrors, setExtraErrors] = useState<RecordFormErrors>({});
+  const [extraReadIssues, setExtraReadIssues] = useState<RecordFormErrors>({});
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [durableConflicts, setDurableConflicts] = useState<CachedStateUpdateRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -706,6 +707,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setSelectedItem(null);
     setStateValues(response ? defaultStateValues(response.stateFields) : {});
     setExtraValues(extraDefinition ? buildInitialFormValues(extraDefinition) : {});
+    setExtraReadIssues({});
     setExtraErrors({});
     setConflict(null);
   }
@@ -722,14 +724,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setSuccessMessage(null);
     setResolutionFeedback(null);
     setStateValues(initialStateValues(response, item));
-    setExtraValues(extraDefinition ? buildInitialFormValues(extraDefinition, item.current?.extraValues) : {});
-    setExtraErrors({});
+    const extras = extraDefinition ? buildStateUpdateExtraForm(extraDefinition, item.current?.extraValues, item.current?.extraValuesFormat) : { values: {}, issues: {} };
+    setExtraValues(extras.values);
+    setExtraReadIssues(extras.issues);
+    setExtraErrors(extras.issues);
 
     await loadWorkflow({ operation: "source-load", subjectRecordId: item.subject.id });
   }
 
   function setExtraValue(key: string, value: string | boolean | string[]) {
     setExtraValues((current) => ({ ...current, [key]: value }));
+    setExtraReadIssues(current => { const next = { ...current }; delete next[key]; return next; });
     setExtraErrors((current) => {
       const next = { ...current };
       delete next[key];
@@ -748,7 +753,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       fields: response.stateFields,
       formValues: stateValues,
     });
-    const nextExtraErrors = validateFormFields(response.extraFields, extraValues);
+    const nextExtraErrors = { ...validateFormFields(response.extraFields, extraValues), ...extraReadIssues };
 
     if (stateSnapshot.error || Object.keys(nextExtraErrors).length > 0) {
       setExtraErrors(nextExtraErrors);
@@ -766,8 +771,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       const cached = ownerKey ? await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, entityTypeId: response.targetEntityType.id, recordId: selectedItem.current.recordId }) : null;
       if (resolutionScopeRef.current !== selectedScope || !resolutionMountedRef.current) return;
       if (!cached || cached.serverId) {
-        setConflict({ confirmationKey: compositeConfirmationKey(selectedScope, selectedItem.subject.id, selectedItem.current.updatedAt, stateSnapshot.stateValues, buildSubmitValues(response.extraFields, extraValues)), result: "CONFLICT", subjectRecordId: selectedItem.subject.id, subjectName: selectedItem.subject.displayName,
-          existing: selectedItem.current, requested: { stateValues: stateSnapshot.stateValues.map(v => ({ ...v, label: null, optionId: v.optionId ?? null })), extraValues: buildSubmitValues(response.extraFields, extraValues) } });
+        setConflict({ confirmationKey: compositeConfirmationKey(selectedScope, selectedItem.subject.id, selectedItem.current.updatedAt, stateSnapshot.stateValues, buildStateUpdateExtraSubmit(response.extraFields, extraValues)), result: "CONFLICT", subjectRecordId: selectedItem.subject.id, subjectName: selectedItem.subject.displayName,
+          existing: selectedItem.current, requested: { extraValuesFormat: "field-value", stateValues: stateSnapshot.stateValues.map(v => ({ ...v, label: null, optionId: v.optionId ?? null })), extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues) } });
         return;
       }
     }
@@ -775,7 +780,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     const entry: StateUpdateEntry = {
       identity,
       expectedUpdatedAt,
-      extraValues: buildSubmitValues(response.extraFields, extraValues),
+      extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues),
       overwrite,
       stateValues: stateSnapshot.stateValues,
       subjectRecordId: selectedItem.subject.id,
@@ -800,7 +805,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           date: hasDate ? date : undefined,
           expectedUpdatedAt: expectedUpdatedAt ?? selectedItem.current?.updatedAt ?? null,
           preserveIdenticalConfirmedIntent: compositeMode,
-          extraValues: buildSubmitValues(response.extraFields, extraValues),
+          extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues),
           historyMode: response.historyMode,
           overwrite,
           ownerKey,
@@ -903,7 +908,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
       const item: StateUpdateLatestItem = {
         date: hasDate ? date : null,
-        extraValues: buildSubmitValues(current.extraFields, extraValues),
+        extraValues: buildStateUpdateExtraSubmit(current.extraFields, extraValues),
+        extraValuesFormat: "field-value",
         recordId,
         stateValues: savedStateValues.map((value) => {
           const field = current.stateFields.find((candidate) => candidate.fieldId === value.fieldId);
@@ -944,7 +950,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
-    if (compositeMode && (!selectedItem || !response || conflict.confirmationKey !== compositeConfirmationKey(resolutionScope, selectedItem.subject.id, selectedItem.current?.updatedAt ?? "", buildEffectiveStateSnapshot({currentStateValues:selectedItem.current?.stateValues,fields:response.stateFields,formValues:stateValues}).stateValues, buildSubmitValues(response.extraFields,extraValues)))) {
+    if (compositeMode && (!selectedItem || !response || conflict.confirmationKey !== compositeConfirmationKey(resolutionScope, selectedItem.subject.id, selectedItem.current?.updatedAt ?? "", buildEffectiveStateSnapshot({currentStateValues:selectedItem.current?.stateValues,fields:response.stateFields,formValues:stateValues}).stateValues, buildStateUpdateExtraSubmit(response.extraFields,extraValues)))) {
       setConflict(null);setError("El contexto o el cambio mostrado cambió. Revisa y confirma nuevamente.");return;
     }
     await saveSelected(true, conflict.existing.updatedAt);
@@ -1223,8 +1229,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
                 setError(null);
               }} value={stateValues[field.fieldId]} /> })),
             ...visibleResponse.extraFields.map(field => ({ key: `extra:${field.id}`, full: ["TEXT", "TEXTAREA"].includes(field.type), content:
-              <RecordFieldInput error={extraErrors[field.key]} field={field}
-                onChange={(value) => setExtraValue(field.key, value)} value={extraValues[field.key]} /> })),
+              <RecordFieldInput error={extraErrors[field.key] ?? (field.type === "SELECT" && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
+                onChange={(value) => setExtraValue(field.key, value)} value={field.type === "SELECT" && extraReadIssues[field.key] ? unavailableStateUpdateExtraInput(field, extraValues[field.key]) : extraValues[field.key]} /> })),
           ]} />
           <View style={styles.formActions}>
           <Pressable
@@ -1286,12 +1292,14 @@ function stateUpdateDurableConflictState(record: CachedStateUpdateRecord): Confl
     durableRecord: record,
     existing: {
       extraValues: record.conflictRemoteExtraValues,
+      extraValuesFormat: record.conflictRemoteExtraValuesFormat,
       recordId: record.localRecordId,
       stateValues: record.conflictRemoteStateValues ?? [],
       updatedAt: record.conflictRemoteUpdatedAt ?? "",
     },
     requested: {
       extraValues: record.extraValues,
+      extraValuesFormat: record.extraValuesFormat,
       stateValues: record.stateValues,
     },
     result: "CONFLICT",

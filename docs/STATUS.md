@@ -2844,3 +2844,56 @@ técnico posterior; no publicado. 402 exclusiones, horarios y demás pendientes 
 byte a byte; HEAD e índice sin cambios. Core/esquema/namespace/datos productivos intactos. Sólo se
 retiran procesos/perfil temporales propios. Sin commit/push/deploy. V11 pausado; auditoría general,
 «11/11 procesadas, 1 fallo», timeouts/EPIPE históricos y problemas SQLite/OPFS siguen abiertos.
+
+## Extras SELECT STATE_UPDATE — CORRECCIÓN LOCAL, NO PUBLICADA — 2026-10-24
+
+Corregidos Core (opciones/metadata y lectura canónica separada de estados optionId) y Client
+(fieldId↔key, selección/labels, envío canónico y lectura de cachés anteriores). Procedencia opcional
+por snapshot/recibo; no cambia esquema v10, namespace epoch2, consultas, motor sync ni payloads de
+outbox. Valores ausentes/ambiguos/inactivos se conservan y requieren revisión; no se vacían ni se
+reinterpretan. No MULTISELECT ni adaptación RELATION; ambos campos productivos son SELECT simples.
+
+325/325 pruebas Client en 14 archivos y 75/75 Core en 3 archivos; un worker. Dos RED archivados
+reproducidos antes y PASS tras la corrección. Typecheck, lint y diff-check PASS; Client mantiene dos
+warnings require preexistentes. No suite completa/build. Fixture local Core/PostgreSQL + HTTP y
+Client API/formulario/SQLite/sync reales: alta, reapertura, ACK, actualización confirmada/replay sin
+duplicar, conflicto por cambio remoto con payload/base/ID conservados, «Usar Opco» y lectura offline
+por label. Dos reaperturas SQLite, 9 solicitudes, una fila remota y cero outbox al terminar.
+No Chrome/OPFS ni revisión visual/navegador físico; SSR/control automatizado no acredita esos caminos.
+Inicialmente la prueba de conflicto consultó la lista elegible (que excluye conflictos); se corrigió
+el ensayo para comprobar su outbox durable. No se atribuye a un defecto del producto.
+
+Respaldo reproducible por repositorio: `/home/dannysilver/dev2026/backups/state-update-select-extras/2026-10-24/`;
+parches, inventario, hashes, checks e informe local sanitizado. Detalle de contrato/límites en
+STATE_UPDATE. Se preservan las 402 exclusiones, horarios/RED y pendientes ajenos byte a byte,
+incluidos prefijos documentales e índices/HEAD. Fixtures locales propios limpiados; no acceso ni
+cambios productivos, migraciones, commit/push/deploy. V11 pausado y auditoría general abierta.
+
+### Cierre SELECT extras — LISTO PARA PUBLICACIÓN SECUENCIAL, NO PUBLICADO — 2026-10-24
+
+Client 11 archivos/48 hunks; Core 4/12, funcionalmente idénticos al respaldo previo. Reconstrucción,
+hashes y diff-check PASS. Reutilizados 325 tests Client/75 Core, typecheck y lint (2 warnings previos).
+Build Client producción PASS, API efectiva https://web.opco.cl, index/sw coincidentes y base v10
+opco-client-v10-epoch2.db. Core producción Webpack PASS; habitual Turbopack bloqueado por EPERM al
+abrir su puerto interno PostCSS, sin modificar configuración. Intentos previos de enlace externo de
+dependencias y descarga de fuentes no se cuentan como éxito; límite documentado, no causa funcional.
+
+Orden **Core → verificar SHA/health/readiness/contrato → Client** acreditado con PostgreSQL local.
+El adaptador publicado c67b9ea lee labels/canónicos nuevos y mantiene estados optionId. Su formulario
+antiguo aún manda key: UNKNOWN_EXTRA_FIELD/400 sin mutación; comandos fieldId/canónicos siguen válidos.
+No usar edición SELECT extras durante esa transición. Client nuevo sobre Core anterior es inseguro:
+current omite un SELECT opcional, formulario envía null y reemplazo confirmado lo borra en fixture.
+No revertir Core anterior mientras siga activo Client nuevo. Bundle público actual contrastado por
+SHA-256 con el SUCCESS anterior; no se accedió a registros productivos.
+
+Revisión visual local real: 1440/390, opciones desplegadas, Alfa desde current/latest y selección
+Beta mediante teclado/ratón; cero escrituras, excepciones, overflow global y lecturas extra por resize.
+Sesión/caché en memoria, respuesta capturada de Core local sintético; no nuevo OPFS/sync ni Safari.
+El primer artefacto visual mezcló router principal/stub de sesión y fue descartado; sólo el final
+verificado acredita la revisión. SQLite/reapertura/sync se reutilizan, no se repitieron.
+
+Parche/inventario/checks/SHA256SUMS y capturas sintéticas fuera de Git:
+`/home/dannysilver/dev2026/backups/state-update-select-extras-close/2026-10-24/`.
+Se preservan 402 exclusiones, horarios/RED, HEAD/índices y secciones ajenas. Fixture propio limpiado;
+sin migraciones, cambios productivos, commit/push/deploy. MULTISELECT/RELATION fuera. V11 pausado;
+auditoría general e incidentes independientes permanecen abiertos.

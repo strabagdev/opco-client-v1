@@ -79,6 +79,7 @@ export type StateUpdateSyncErrorDetails = {
 };
 
 export type OfflineStateUpdateValues = {
+  extraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
   __opcoStateUpdateRemote?: { format: 1; recordId: string };
   snapshotConfiguration?: string;
@@ -97,6 +98,8 @@ export type OfflineStateUpdateValues = {
 };
 
 export type CachedStateUpdateRecord = {
+  extraValuesFormat?: "field-value";
+  conflictRemoteExtraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
   clientRequestId?: string;
   conflictIdentity?: string;
@@ -999,12 +1002,14 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientReq
     conflictIdentity: JSON.stringify([record.localId, record.serverId, record.values, record.conflictRemoteValues,
       record.conflictRemoteUpdatedAt, clientRequestId ?? values.clientRequestId]),
     conflictRemoteExtraValues: conflictValues?.extraValues,
+    conflictRemoteExtraValuesFormat: conflictValues?.extraValuesFormat,
     conflictRemoteStateValues: conflictValues?.stateValues,
     conflictRemoteUpdatedAt: record.conflictRemoteUpdatedAt,
     identity: values.identity,
     date: normalizeStateUpdateLogicalDate(values.date),
     expectedUpdatedAt: values.expectedUpdatedAt,
     extraValues: values.extraValues,
+    extraValuesFormat: values.extraValuesFormat,
     localRecordId: record.localId,
     stateValues: values.stateValues,
     subject: {
@@ -1046,6 +1051,7 @@ export function stateUpdateRecordToItem(record: CachedStateUpdateRecord): StateU
   return {
     current: {
       extraValues: record.extraValues,
+      extraValuesFormat: record.extraValuesFormat,
       recordId: record.localRecordId,
       stateValues: record.stateValues,
       updatedAt: record.updatedAt,

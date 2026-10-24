@@ -1,0 +1,101 @@
+{
+  "ok": true,
+  "data": {
+    "appView": {
+      "id": "view_state",
+      "name": "Estado equipos",
+      "slug": "estado-equipos"
+    },
+    "workflow": {
+      "workflowKey": "state-update",
+      "historyMode": "update-current",
+      "uniqueness": {
+        "mode": "subject-date"
+      },
+      "subjectFieldId": "subject_field",
+      "dateFieldId": "date_field"
+    },
+    "date": "2026-08-22",
+    "dateField": {
+      "id": "date_field",
+      "key": "fecha",
+      "name": "Fecha",
+      "required": true,
+      "type": "DATE"
+    },
+    "stateFields": [
+      {
+        "defaultOptionId": null,
+        "field": {
+          "id": "revision_field",
+          "key": "revision",
+          "name": "Revisión",
+          "required": true,
+          "type": "TEXT"
+        },
+        "required": false,
+        "options": []
+      }
+    ],
+    "extraFields": [
+      {
+        "id": "choice_extra",
+        "key": "choice_key",
+        "name": "Campo configurable sintético",
+        "required": false,
+        "type": "SELECT"
+      }
+    ],
+    "subjectEntityType": {
+      "id": "equipment",
+      "name": "Equipos"
+    },
+    "targetEntityType": {
+      "id": "equipment_state",
+      "name": "Estados equipo"
+    },
+    "subjects": [
+      {
+        "subject": {
+          "displayName": "Excavadora",
+          "id": "equipment_1"
+        },
+        "current": {
+          "recordId": "synthetic_event",
+          "states": {
+            "revision_field": null
+          },
+          "updatedAt": "2026-08-22T12:00:00.000Z"
+        }
+      }
+    ],
+    "latest": {
+      "items": [
+        {
+          "recordId": "synthetic_event",
+          "extraValues": {
+            "choice_extra": "opt_alpha"
+          },
+          "subject": {
+            "displayName": "Sujeto sintético",
+            "id": "equipment_1"
+          },
+          "date": "2026-08-22T00:00:00.000Z",
+          "states": {
+            "revision_field": null
+          },
+          "updatedAt": "2026-08-22T12:00:00.000Z"
+        }
+      ],
+      "pagination": {
+        "hasMore": false,
+        "page": 1,
+        "pageSize": 20,
+        "total": 1
+      }
+    },
+    "summary": {
+      "totalRegistered": 0
+    }
+  }
+}
