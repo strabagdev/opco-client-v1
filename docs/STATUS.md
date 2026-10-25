@@ -2957,3 +2957,25 @@ las capacidades viables. V11 pausado; auditoría general e incidentes histórico
 | Timeouts de preparación | Una pasada tuvo 21 timeouts en state-update-prewarm-current-investigation.test.ts; primera prueba aislada PASS tanto HEAD como candidato con 5 s. No causa atribuida ni timeout aumentado. Resultado final separado en STATUS. |
 
 Sin borrado habitual, cambios de esquema/namespace, motor sync nuevo, producción ni cierre de auditoría.
+
+
+## Corrección local del parser decimal — 2026-10-25, SIN PUBLICAR
+
+Alcance actualizado por el usuario: únicamente decimalPlaces en el editor. Operador permanece SELECT
+simple; la transición a MULTISELECT está cancelada. No hubo cambios funcionales de transición que
+revertir; el soporte MULTISELECT publicado, opciones, outbox y configuración productiva no se alteran.
+
+Core entityFieldSchema.validation declara decimalPlaces opcional, entero de 0 a 6. El control y la
+lectura del input ya lo admitían, pero el parser lo eliminaba. Contra Core79034ef fallaron seis casos
+del parser y dos integraciones PostgreSQL por pérdida de la regla. Con la corrección: 101 PASS
+focalizadas en cuatro archivos, más 2 PASS PostgreSQL locales, un worker; typecheck y lint afectado
+PASS. Control real SSR y petición multipart Request/FormData, validación, permisos/dominio,
+persistencia, lectura del editor/API y reapertura del editor acreditados. Se conserva 12.34 existente
+sin redondeo al editar sólo configuración; el exceso de precisión se rechaza al validar una escritura.
+No sesión Next autenticada ni navegador nuevos; no suite completa ni build.
+
+Lote reconstruible: Core5 archivos/6 hunks; Client sólo esta sección documental (1 archivo/1 hunk).
+Respaldo, checks y hashes:
+`/home/dannysilver/dev2026/backups/decimal-precision-editor-fix/2026-10-25/`.
+Sin activación productiva, migraciones, commit, push o deploy. 402 exclusiones, horarios/RED y todos
+los prefijos documentales anteriores preservados. V11 pausado; auditoría general abierta.
