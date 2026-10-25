@@ -2414,3 +2414,84 @@ No se modificó configuración ni se presenta ese intento como PASS.
 Respaldo final: `/home/dannysilver/dev2026/backups/state-update-select-extras-close/2026-10-24/`.
 Publicable secuencialmente Core → Client con los límites de build/evidencia indicados; esta etapa
 no publica. MULTISELECT/RELATION y horarios fuera; 402 exclusiones y pendientes ajenos conservados.
+
+## Seis capacidades genéricas — implementación local delimitada — 2026-10-25
+
+Base Client `403be589` / Core `a4dc7f0`. Sin activación, configuración ni datos productivos;
+SQLite 10 y `opco-client-v10-epoch2.db` conservados. V11 y auditoría general abiertos.
+
+- **MULTISELECT extra**: editor/validadores Core lo admiten sólo como contenido, no como estado ni
+  identidad. Metadata completa con opciones/actividad; JSON de valores canónicos `FieldOption.value[]`
+  por fieldId, sin cambiar optionId de estados/identidad. Client reutiliza CompactSelect múltiple;
+  fieldId/key se resuelven en la frontera. Espacio activa el checkbox web mediante el mismo
+  handler (Enter conserva la activación existente); corrige una brecha comprobada con foco real. ID legacy sólo se normaliza si es inequívoco; selecciones
+  inactivas, desconocidas o ambiguas permanecen guardadas y requieren revisión explícita. La UI no
+  transmite sus sentinels de presentación ni reduce el arreglo a un elemento.
+- **RELATION extra**: Core entrega target/cardinalidad y current/latest/conflicto con `{id,displayName}`
+  o arreglo, conservando IDs. Identificar el sujeto por sourceFieldId evita confundirlo con otra
+  relación. Client usa el control compartido, búsqueda y páginas de 25 del catálogo autorizado,
+  persistencia RECORDS y scope owner/contrato/entidad; no hay descarga de todo el catálogo ni API
+  por etiqueta. Offline consulta sólo lo cacheado, excluye altas de catálogo aún sin ID remoto y
+  advierte disponibilidad no certificada. No cambia los marcadores para certificar ese catálogo.
+  Una definición anterior sin metadata de catálogo bloquea guardar hasta actualizarla; no se
+  interpreta su valor ausente como autorización de limpiar. No se reescribe outbox para reparar labels.
+- **DECIMAL**: `config.validation.decimalPlaces` opcional, entero 0–6 por DECIMAL(20,6). Editor y
+  Core rechazan precisión excesiva; Client valida antes de guardar. Es máximo de decimales, no
+  regla de redondeo: valores incompatibles existentes se muestran íntegros y requieren corrección
+  explícita al escribir. Presentación compatible completa ceros; formularios conservan el texto.
+  DECIMAL configurado se envía como string exacto admitido por Core, evitando conversión por
+  parseFloat. Sin configuración se conserva el comportamiento anterior. No se crean reglas de
+  horómetros, cálculos, defaults, cambios de identidad ni migración.
+- **Cancelación sólo local**: alta propia con prueba JSON durable `localDelivery=never-dispatched`,
+  fila pending_create sin vínculo/base remota y attempts=0. El claim de envío retira la prueba antes
+  del POST en la misma transacción. Cancelar confirma y revalida scope, fecha, identidad, sujeto,
+  localId y requestId; elimina exclusivamente esa fila/outbox. Leer/abrir/cancelar el diálogo no escribe.
+  Operaciones anteriores sin prueba, enviadas, inciertas, conflictos y ediciones remotas se bloquean.
+  Un runtime anterior que pierda la prueba deja de poder cancelar; attempts=0 por sí solo no basta.
+
+**Horarios, no integrados ni activados:** respaldo `schedule-runtime-compatibility/2026-10-21`
+intacto. Ensayo repetido sobre el último Client publicado `403be589`: cinco caracterizaciones PASS,
+dos regresiones de conservación RED tras editar/reabrir. Leer y guardar idéntico confirmado
+conservan metadata; editar alta/actualización la pierde y el envío omite horario. El rechazo HTTP
+controlado no demuestra un ACK Core. Corregir sólo el runtime nuevo no impide la pérdida en el
+publicado: sigue faltando un mecanismo de exclusión de consumidores antiguos. No se cambia namespace,
+no se integra un catálogo parcial y no se presenta SQLite v10 como prueba de compatibilidad.
+
+**Borrado remoto, bloqueado y no implementado:** decisión confirmada: sólo administradores del
+contrato, auditoría preservada y recreación explícita con reporte/idempotencia nuevos. La reserva
+StateUpdateIdentitySlot actual no tiene generación/tombstone; poner recordId=null y borrar permitiría
+que un POST pendiente de alta reclamase otra vez la misma clave, y un recibo anterior podría rehidratar
+lo eliminado. Hace falta cercar generación en escritura/replay, lectura/snapshot/intención y recreación,
+además de una acción de auditoría de eliminación y preservación de referencias. Es un cambio de protocolo
+fuera de la cancelación acotada, no una decisión de negocio pendiente. No se abre DELETE inseguro,
+no se reutiliza el borrado web que elimina auditoría, no se crea cola DELETE ni estado anulado.
+
+Publicación futura de los puntos viables: Core primero (metadata/validación) y después Client;
+activar nuevos campos/precisión sólo con Client actualizado. Client nuevo con Core anterior no acredita
+catálogos nuevos ni debe guardar una definición sin metadata. Horarios y borrado remoto quedan fuera
+hasta resolver sus bloqueos; no existe activación automática ni una migración en este lote.
+
+Evidencia: PostgreSQL local validado desde .env.local como opco_dev, base opco_development en
+127.0.0.1:5432. Dominio Core real: arreglo canónico, ID/label RELATION current/latest, escala inválida
+sin mutación, permiso denegado y replay de único efecto. SQLite en archivo/reapertura: payload y
+requestId conservados, conflicto mantiene ambos contenidos, cancelación rechaza request/scope obsoleto,
+claim de envío y filas antiguas sin prueba; cien lecturas concurrentes por lotes drenan la cola.
+Chrome real, perfil exclusivo, controles 1440/1024/390, OPFS y Core/PostgreSQL: preparación existente,
+guardado offline, cierre, reapertura, labels y payload intactos, reconexión con ACK y cero outbox.
+Sesión/puente HTTP sintéticos, no prueba end-to-end de autenticación Next ni Safari físico. La primera
+apertura del arnés omitía prewarm; se corrigió el arnés. Una reapertura con dos páginas propias encontró
+una READY/una BUSY; con una sola página pasó sin borrar almacenamiento. No demuestra soporte multitab.
+Checks e inventario finales: sección del mismo día en STATUS y respaldo `opco-six-capabilities/2026-10-25`.
+
+La validación de un extra DECIMAL en compuesto tenía una excepción sin mapear. Regresión PostgreSQL
+RED comprobada; se mapean únicamente errores conocidos después del rollback, devolviendo HTTP400
+INVALID_FIELD_VALUE. Errores inesperados mantienen su propagación. Prueba real: ninguna reserva,
+fila o idempotencia parcial, y corrección/reintento exitoso. Extras tipados en dos AppViews compuestas
+se probaron también concurrentemente: un CREATED/un CONFLICT, sin sobrescritura; otro contexto
+independiente, replay único y cliente antiguo incompleto rechazado sin mutación.
+
+Recorrido integrado final repetido con el código funcional exacto: build de prueba
+entry-9cbf68440834ad6a925d0db9ef3d4732.js; guardado de dos valores + relación + decimales
+string exactos, cierre completo y reapertura offline, payload/requestId intactos, ACK y outbox vacío.
+Chrome lanzado sin ventana inicial y una sola página; no se borró OPFS. Fotografías y reporte
+separan esta evidencia de la primera contención y de las pruebas automatizadas.

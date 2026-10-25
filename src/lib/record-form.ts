@@ -1,3 +1,4 @@
+import { decimalPlaces, decimalFractionLength } from "./decimal-precision";
 import { EntityDefinition, EntityField, EntityRecordValue, OpcoApiError } from "./opco-api";
 
 export type RecordFormValues = Record<string, string | boolean | string[]>;
@@ -77,9 +78,22 @@ export function validateFormFields(fields: EntityField[], values: RecordFormValu
     }
 
     const value = values[field.key];
+    if ((field.type === "SELECT" || field.type === "MULTISELECT") && field.options) {
+      const selected = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
+      if (selected.some(entry => !field.options!.some(option => option.value === entry && option.active !== false))) {
+        errors[field.key] = "Una selección ya no está disponible. Revisa todas las opciones antes de guardar.";
+      }
+    }
 
     if (typeof value !== "string" || !value.trim()) {
       return;
+    }
+
+    if (field.type === "DECIMAL") {
+      const places = decimalPlaces(field.config);
+      const fraction = decimalFractionLength(value);
+      if (fraction === null || !Number.isFinite(Number(value))) errors[field.key] = "Ingresa un número decimal válido.";
+      else if (places !== undefined && fraction > places) errors[field.key] = `Admite como máximo ${places} decimales; no se redondea automáticamente.`;
     }
 
     if (field.type === "DATE" && !isValidDateValue(value.trim())) {
@@ -239,6 +253,8 @@ function recordValueFromFormValue(
 
     return Number.isNaN(parsed) ? textValue : parsed;
   }
+
+  if (field.type === "DECIMAL" && decimalPlaces(field.config) !== undefined) return textValue;
 
   if (field.type === "DECIMAL" || field.type === "MONEY") {
     const parsed = Number.parseFloat(textValue);

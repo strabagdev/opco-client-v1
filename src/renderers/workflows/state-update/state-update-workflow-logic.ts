@@ -1,3 +1,4 @@
+import { decimalPlaces, decimalFractionLength, formatConfiguredDecimal } from "../../../lib/decimal-precision";
 import { resolveStateUpdateSelectExtra, type StateUpdateExtraValuesFormat } from "../../../lib/state-update-extras";
 import {
   EntityField,
@@ -311,7 +312,9 @@ function normalizeScalarStateValue(field: StateUpdateField, value: string | bool
       return { error: `${field.label} debe ser un decimal valido.`, hasValue: false, value: null };
     }
 
-    return { error: null, hasValue: true, value: Number.parseFloat(textValue) };
+    const places = stateFieldType(field) === "DECIMAL" ? decimalPlaces(field.config) : undefined;
+    if (places !== undefined && decimalFractionLength(textValue)! > places) return { error: `${field.label}: máximo ${places} decimales; sin redondeo.`, hasValue: false, value: null };
+    return { error: null, hasValue: true, value: places === undefined ? Number.parseFloat(textValue) : textValue };
   }
 
   if (stateFieldType(field) === "DATE" && !isValidStateDateValue(textValue)) {
@@ -401,6 +404,8 @@ function formatStateScalarLabel(field: StateUpdateField, value: unknown) {
   if (type === "BOOLEAN") {
     return value === true ? "Si" : "No";
   }
+
+  if (type === "DECIMAL") return formatConfiguredDecimal(value, field.config);
 
   if (type === "DATE" || type === "DATETIME") {
     return formatStateUpdateDateLikeValue(String(value), type);
@@ -505,6 +510,15 @@ export function formatLatestExtraValue(field: EntityField, value: unknown, forma
     return null;
   }
 
+  if (field.type === "RELATION") {
+    const values = Array.isArray(value) ? value : [value];
+    return values.map(item => {
+      if (item && typeof item === "object" && "displayName" in item && typeof item.displayName === "string") return item.displayName;
+      const id = item && typeof item === "object" && "id" in item ? item.id : item;
+      return field.options?.find(option => option.value === id)?.label ?? "Registro relacionado no disponible en esta copia";
+    }).join(", ");
+  }
+
   if (field.type === "SELECT") {
     const normalized = String(value);
     return resolveStateUpdateSelectExtra(field, value, format).label ?? normalized;
@@ -515,12 +529,14 @@ export function formatLatestExtraValue(field: EntityField, value: unknown, forma
     const labels = values
       .map((item) => {
         const normalized = String(item);
-        return field.options?.find((option) => option.id === normalized || option.value === normalized)?.label ?? normalized;
+        return resolveStateUpdateSelectExtra(field, item, format).label ?? normalized;
       })
       .filter((item) => item.trim().length > 0);
 
     return labels.length > 0 ? labels.join(", ") : null;
   }
+
+  if (field.type === "DECIMAL") return formatConfiguredDecimal(value, field.config);
 
   if (field.type === "DATE" || field.type === "DATETIME") {
     return formatStateUpdateDateLikeValue(String(value), field.type);
@@ -531,7 +547,7 @@ export function formatLatestExtraValue(field: EntityField, value: unknown, forma
   }
 
   if (Array.isArray(value)) {
-    return value.map(String).join(", ");
+    return value.map(item => typeof item === "object" && item && "displayName" in item ? String(item.displayName) : String(item)).join(", ");
   }
 
   if (typeof value === "object") {

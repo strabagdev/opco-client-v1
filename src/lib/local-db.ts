@@ -304,6 +304,8 @@ export function getLocalDatabase(): LocalDatabase {
 	    discardStateUpdateLocalChange,
     resolveStateUpdateConflictWithLocal,
     saveStateUpdateLocally,
+    getStateUpdateLocalCancellation,
+    cancelNeverDispatchedStateUpdate,
     searchStateUpdateSubjects,
     setSelectedContractId,
     setAttendanceContextSelection,
@@ -873,6 +875,12 @@ export function subscribeLocalDatabaseCacheChanges(listener: () => void) {
 
 export async function retryLocalDatabaseInitialization() {
   const state = getLocalDatabaseGlobalState();
+  // Another explicit retry (or a normal caller) may already be opening the singleton.
+  // Never discard that promise or its operation queue while it is in use.
+  if (state.storageState.status !== "unavailable" && state.databasePromise) {
+    await state.databasePromise;
+    return state.database!;
+  }
 
   state.databasePromise = null;
   state.coordinatedDatabase = null;
@@ -2710,6 +2718,43 @@ async function clearOrphanedFailedRecordNotice({
   return record;
 }
 
+// A durable proof, atomically removed before dispatch, is required in addition to attempts=0.
+// Old intentions without proof are deliberately ineligible, including uncertain sends.
+async function readNeverDispatchedStateUpdate(db: SQLite.SQLiteDatabase, input: StateUpdateScope & { localRecordId: string; subjectRecordId: string; clientRequestId?: string }) {
+  const row = await db.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=? AND owner_key=? AND contract_id=? AND entity_type_id=?", input.localRecordId, input.ownerKey, input.contractId, input.targetEntityTypeId);
+  const operation = await getStateUpdatePendingOperation(db, input.ownerKey, input.localRecordId);
+  if (!row || row.sync_status !== "pending_create" || stateUpdateLogicalRemoteId(row) || !operation || operation.serverRecordId || operation.attempts !== 0 ||
+      operation.contractId !== input.contractId || operation.entityTypeId !== input.targetEntityTypeId ||
+      (input.clientRequestId && operation.clientRequestId !== input.clientRequestId)) return null;
+  const values = JSON.parse(row.values_json) as OfflineStateUpdateValues;
+  const payload = operation.payload as OfflineStateUpdatePayload & { localDelivery?: string };
+  if (payload.localDelivery !== "never-dispatched" || values.remoteRecordId || values.expectedUpdatedAt || payload.expectedUpdatedAt || payload.expectedRecordId || payload.clientRequestId !== operation.clientRequestId ||
+      values.appViewId !== input.appViewId || payload.appViewId !== input.appViewId ||
+      payload.subjectRecordId !== input.subjectRecordId || values.subjectRecordId !== input.subjectRecordId ||
+      normalizeStateUpdateLogicalDate(payload.date) !== normalizeStateUpdateLogicalDate(input.date) ||
+      normalizeStateUpdateLogicalDate(values.date) !== normalizeStateUpdateLogicalDate(input.date) ||
+      compositeIdentityKey(values.identity) !== compositeIdentityKey(input.identity) ||
+      compositeIdentityKey(payload.identity) !== compositeIdentityKey(input.identity)) return null;
+  return operation;
+}
+
+async function getStateUpdateLocalCancellation(input: StateUpdateScope & { localRecordId: string; subjectRecordId: string }) {
+  const db = await getDatabase();
+  const operation = await readNeverDispatchedStateUpdate(db, input);
+  return operation ? { clientRequestId: operation.clientRequestId } : null;
+}
+
+async function cancelNeverDispatchedStateUpdate(input: StateUpdateScope & { localRecordId: string; subjectRecordId: string; clientRequestId: string }) {
+  const db = await getDatabase();
+  await db.withTransactionAsync(async transaction => {
+    const operation = await readNeverDispatchedStateUpdate(transaction, input);
+    if (!operation) throw new Error("El reporte ya fue enviado, cambió o no permite cancelación local segura. No se eliminó nada.");
+    await transaction.runAsync("DELETE FROM pending_operations WHERE id=? AND client_request_id=?", operation.id, input.clientRequestId);
+    await transaction.runAsync("DELETE FROM entity_records WHERE local_id=? AND owner_key=?", input.localRecordId, input.ownerKey);
+  }, "transaction:state-update-cancel-never-dispatched");
+  notifyLocalDatabaseCacheChangeListeners();
+}
+
 async function saveStateUpdateLocally(rawInput: SaveStateUpdateLocallyInput) {
   return saveStateUpdateLocallyWithRecordId(rawInput);
 }
@@ -2871,6 +2916,8 @@ async function saveStateUpdateLocallyWithRecordId(
     const payload: OfflineStateUpdatePayload = {
       ...nextPayload,
       clientRequestId,
+      ...(!existingOperation || (existingOperation.attempts === 0 && (existingPayload as Record<string, unknown> | null)?.localDelivery === "never-dispatched")
+        ? { localDelivery: "never-dispatched" } : {}),
     };
     const syncStatus: RecordSyncStatus = existingRecord?.serverId || expectedUpdatedAt ? "pending_update" : "pending_create";
 
@@ -3469,7 +3516,7 @@ async function markStateUpdateOperationSyncing(operationId: string, expectedRequ
         !Array.isArray((operation.payload as OfflineStateUpdatePayload).stateValues) ||
         !await isCurrentStateUpdateOperation(transaction, operation)) return;
     await transaction.runAsync(`UPDATE pending_operations SET attempts=attempts+1,updated_at=?,last_error_code=NULL,last_error_message=NULL,
-      payload_json=json_remove(payload_json,'$.lastErrorDetails','$.lastErrorHttpStatus') WHERE id=? AND client_request_id=?`,
+      payload_json=json_remove(payload_json,'$.lastErrorDetails','$.lastErrorHttpStatus','$.localDelivery') WHERE id=? AND client_request_id=?`,
       new Date().toISOString(), operation.id, operation.clientRequestId);
     await transaction.runAsync("UPDATE entity_records SET sync_status='syncing',sync_error_code=NULL,sync_error_message=NULL WHERE local_id=?", operation.localRecordId);
     claimed = true;

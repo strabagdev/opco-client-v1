@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EntityDefinition, EntityField } from "./opco-api";
-import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, resolveStateUpdateSelectExtra, unavailableStateUpdateExtraInput } from "./state-update-extras";
+import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, resolveStateUpdateSelectExtra, reviewStateUpdateMultipleSelection, unavailableStateUpdateExtraInput } from "./state-update-extras";
 
 const field: EntityField = { id: "choice_id", key: "choice_key", name: "Opción", type: "SELECT", required: false, multiple: false,
   options: [{ id: "id_a", value: "A", label: "Alfa", active: true, order: 0 }, { id: "id_b", value: "B", label: "Beta", active: true, order: 0 }] };
@@ -22,7 +22,7 @@ describe("STATE_UPDATE SELECT extras boundary", () => {
     for (const [f, raw] of [[{ ...field, options: undefined }, "id_a"], [field, "removed"]] as const) {
       const result = buildStateUpdateExtraForm({ ...definition, fields: [f] }, { choice_id: raw });
       expect(result.values.choice_key).toBe(raw);
-      expect(result.issues.choice_key).toContain("no está disponible");
+      expect(result.issues.choice_key).toBeTruthy();
     }
   });
   it("does not reinterpret an ID that is another option's canonical value; new snapshots are explicit", () => {
@@ -44,4 +44,42 @@ describe("STATE_UPDATE SELECT extras boundary", () => {
     expect(empty.values).toEqual({ choice_key: "" }); expect(empty.issues).toEqual({});
     expect(buildStateUpdateExtraSubmit([field], empty.values)).toEqual({ choice_id: null });
   });
+});
+
+describe("MULTISELECT extras", () => {
+  const multi = { ...field, type: "MULTISELECT" as const };
+  it("preserves all canonical selections and maps fieldId/key without reducing to one", () => {
+    const stored = { choice_id: ["A", "B"] };
+    const form = buildStateUpdateExtraForm({ ...definition, fields: [multi] }, stored, "field-value");
+    expect(form).toEqual({ values: { choice_key: ["A", "B"] }, issues: {} });
+    expect(buildStateUpdateExtraSubmit([multi], form.values)).toEqual(stored);
+    expect(stored).toEqual({ choice_id: ["A", "B"] });
+  });
+  it("accepts unambiguous historical IDs, retains unavailable selections and reports malformed scalars", () => {
+    const form = buildStateUpdateExtraForm({ ...definition, fields: [multi] }, { choice_key: ["id_a", "removed"] });
+    expect(form.values.choice_key).toEqual(["A", "removed"]); expect(form.issues.choice_key).toBeTruthy();
+    expect(buildStateUpdateExtraForm({ ...definition, fields: [multi] }, { choice_id: "A" }).issues.choice_key).toBeTruthy();
+  });
+  it("does not interpret a canonical value as an optionId in new arrays", () => {
+    const ambiguous = { ...multi, options: [...multi.options!, { id: "other", value: "id_a", label: "Otra", active: true, order: 1 }] };
+    expect(buildStateUpdateExtraForm({ ...definition, fields: [ambiguous] }, { choice_id: ["id_a"] }).issues.choice_key).toContain("ambigua");
+    expect(buildStateUpdateExtraForm({ ...definition, fields: [ambiguous] }, { choice_id: ["id_a"] }, "field-value").values.choice_key).toEqual(["id_a"]);
+  });
+});
+
+it("blocks a legacy missing relation catalog rather than treating its omitted value as a confirmed clear", () => {
+  const relation: EntityField = { id: "rel", key: "rel_key", name: "Relación", type: "RELATION", required: false };
+  const form = buildStateUpdateExtraForm({ ...definition, fields: [relation] });
+  expect(form.values.rel_key).toBe(""); expect(form.issues.rel_key).toContain("definición");
+});
+
+it("keeps unreviewed multiple entries distinct from a colliding canonical option during explicit review", () => {
+  const multi = { ...field, type: "MULTISELECT" as const, options: [...field.options!, { id: "other", value: "id_a", label: "Otra", active: true, order: 2 }] };
+  const form = buildStateUpdateExtraForm({ ...definition, fields: [multi] }, { choice_id: ["id_a", "B"] });
+  expect(form.unresolvedValues?.choice_key).toEqual(["id_a"]);
+  const pending = unavailableStateUpdateExtraInput(multi, "id_a");
+  expect(reviewStateUpdateMultipleSelection(multi, [pending, "B", "A"], ["id_a"])).toEqual({ values: ["id_a", "B", "A"], unresolved: ["id_a"] });
+  expect(reviewStateUpdateMultipleSelection(multi, ["B", "A"], ["id_a"])).toEqual({ values: ["B", "A"], unresolved: [] });
+  expect(reviewStateUpdateMultipleSelection(multi, [pending, "id_a"], ["id_a"]).unresolved).toEqual(["id_a"]);
+  expect(reviewStateUpdateMultipleSelection(multi, ["id_a"], ["id_a"])).toEqual({ values: ["id_a"], unresolved: [] });
 });

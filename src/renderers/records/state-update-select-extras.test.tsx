@@ -155,3 +155,56 @@ describe("SELECT extras: real API adapter, form control and SQLite cache",()=>{
   expect(html).toContain("Selección no disponible");expect(html).toContain("ambigua");expect(html).not.toContain('value="opt_alpha" selected=""');expect(form.values[f.key]).toBe("opt_alpha");
  });
 });
+
+describe("additional extras and safe local cancellation: real SQLite reopen", () => {
+  it("preserves multi canonical values and relation IDs through reopen, conflict and explicit restoration", async () => {
+    const r = await correctedResponse(); r.extraFields = [
+      { ...r.extraFields[0], type: "MULTISELECT", multiple: true },
+      { id: "rel", key: "place", name: "Ubicación", type: "RELATION", required: false, config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } },
+    ];
+    await cache(r); let store = getLocalDatabase();
+    const form = buildStateUpdateExtraForm(definition(r), { choice_extra: ["ALPHA", "BETA"], rel: { id: "place-1", displayName: "Patio" } }, "field-value");
+    expect(form.values).toEqual({ choice_key: ["ALPHA", "BETA"], place: "place-1" });
+    const extraValues = buildStateUpdateExtraSubmit(r.extraFields, form.values);
+    await store.saveStateUpdateLocally({ ...scope, historyMode: "update-current", uniqueness: "subject-date", stateFields: r.stateFields, stateValues: [{ fieldId: "revision_field", value: "revision" }], extraValues, subjectRecordId: "new-subject", subjectDisplayName: "Sintético" });
+    const before = (await store.listPendingStateUpdateOperations(scope.ownerKey))[0]; store = await reopen();
+    const operation = (await store.listPendingStateUpdateOperations(scope.ownerKey))[0];
+    expect(operation.clientRequestId).toBe(before.clientRequestId); expect(operation.payload).toEqual(before.payload);
+    expect((operation.payload as any).extraValues).toEqual({ choice_extra: ["ALPHA", "BETA"], rel: "place-1" });
+    await store.markStateUpdateOperationConflict(operation, { result: "CONFLICT", subjectRecordId: "new-subject", existing: { recordId: "remote", updatedAt: "2026-10-25T10:00:00.000Z", extraValues: { choice_extra: ["GAMMA"], rel: { id: "place-2", displayName: "Bodega" } }, extraValuesFormat: "field-value" }, requested: {} } as any);
+    store = await reopen(); const conflict = (await store.listStateUpdateConflicts(scope))[0];
+    expect(conflict.extraValues).toEqual(extraValues); expect(conflict.conflictRemoteExtraValues?.choice_extra).toEqual(["GAMMA"]);
+    expect(conflict.conflictRemoteExtraValues?.rel).toEqual({ id: "place-2", displayName: "Bodega" });
+  });
+  it("atomically cancels only a proven never-dispatched exact intention; dispatch and legacy rows block deletion", async () => {
+    const r = await correctedResponse(); await cache(r); let store = getLocalDatabase();
+    const input = { ...scope, historyMode: "update-current" as const, uniqueness: "subject-date" as const, stateFields: r.stateFields, stateValues: [{ fieldId: "revision_field", value: "new" }], subjectRecordId: "new-subject", subjectDisplayName: "Sintético" };
+    const row = await store.saveStateUpdateLocally(input); store = await reopen();
+    const selected = { ...scope, localRecordId: row.localRecordId, subjectRecordId: "new-subject" };
+    const proof = await store.getStateUpdateLocalCancellation!(selected); expect(proof).toBeTruthy();
+    await expect(store.cancelNeverDispatchedStateUpdate!({ ...selected, clientRequestId: "stale" })).rejects.toThrow();
+    await expect(store.cancelNeverDispatchedStateUpdate!({ ...selected, appViewId: "another", ...proof! })).rejects.toThrow();
+    expect((await store.listPendingStateUpdateOperations(scope.ownerKey))).toHaveLength(1);
+    await store.cancelNeverDispatchedStateUpdate!({ ...selected, ...proof! }); expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+    const second = await store.saveStateUpdateLocally(input); const operation = (await store.listPendingStateUpdateOperations(scope.ownerKey))[0];
+    await harness.db.runAsync("UPDATE entity_records SET values_json=json_set(values_json,'$.__opcoStateUpdateRemote',json(?)) WHERE local_id=?", JSON.stringify({ format: 1, recordId: "remote-binding" }), second.localRecordId);
+    expect(await store.getStateUpdateLocalCancellation!({ ...selected, localRecordId: second.localRecordId })).toBeNull();
+    await harness.db.runAsync("UPDATE entity_records SET values_json=json_remove(values_json,'$.__opcoStateUpdateRemote') WHERE local_id=?", second.localRecordId);
+    await store.markStateUpdateOperationSyncing(operation.id, operation.clientRequestId);
+    await expect(store.cancelNeverDispatchedStateUpdate!({ ...selected, localRecordId: second.localRecordId, clientRequestId: operation.clientRequestId })).rejects.toThrow();
+    expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toHaveLength(1);
+    await harness.db.runAsync("UPDATE entity_records SET sync_status='pending_create' WHERE local_id=?", second.localRecordId);
+    await harness.db.runAsync("UPDATE pending_operations SET attempts=0,payload_json=json_remove(payload_json,'$.localDelivery') WHERE id=?", operation.id);
+    expect(await store.getStateUpdateLocalCancellation!({ ...selected, localRecordId: second.localRecordId })).toBeNull();
+  });
+  it("repeated reads drain the shared queue and keep one connection without changing pending payload", async () => {
+    const r = await correctedResponse(); await cache(r); const store = getLocalDatabase();
+    await store.saveStateUpdateLocally({ ...scope, historyMode: "append", uniqueness: "none", stateFields: r.stateFields, stateValues: [{fieldId:"revision_field",value:"kept"}], subjectRecordId:"pending",subjectDisplayName:"Sintético" });
+    const before = JSON.stringify(await store.listPendingStateUpdateOperations(scope.ownerKey));
+    const openCount = sqlite.openDatabaseAsync.mock.calls.length;
+    for (let batch = 0; batch < 5; batch++) await Promise.all(Array.from({ length: 20 }, () => store.listStateUpdateLatest(scope)));
+    expect(JSON.stringify(await store.listPendingStateUpdateOperations(scope.ownerKey))).toBe(before);
+    expect(sqlite.openDatabaseAsync.mock.calls.length).toBe(openCount);
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({ active: null, waitingTotal: 0 });
+  });
+});

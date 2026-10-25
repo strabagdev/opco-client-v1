@@ -2897,3 +2897,63 @@ Parche/inventario/checks/SHA256SUMS y capturas sintéticas fuera de Git:
 Se preservan 402 exclusiones, horarios/RED, HEAD/índices y secciones ajenas. Fixture propio limpiado;
 sin migraciones, cambios productivos, commit/push/deploy. MULTISELECT/RELATION fuera. V11 pausado;
 auditoría general e incidentes independientes permanecen abiertos.
+
+## Seis pendientes OPCO — candidato local — 2026-10-25
+
+Implementados: MULTISELECT extra canónico con revisión de selecciones anteriores; RELATION extra con
+metadata/labels/catálogo autorizado paginado y fallback offline explícitamente parcial; DECIMAL opcional
+0–6 sin redondeo silencioso; cancelación confirmada de altas locales con prueba de nunca despachadas;
+coalescencia de retry explícito SQLite. No se convierte SELECT existente ni se extiende identidad.
+
+Horarios permanecen respaldados sin integrar: ensayo sobre publicado 403be589 mantiene 5 PASS/2 RED;
+edición pierde metadata y envío la omite. Borrado remoto no implementado: política administrativa y
+recreación ya confirmadas, pero faltan generación/tombstone cercados en escritura/replay/intenciones
+y auditoría de eliminación. No se habilita un DELETE que permita resucitar o modificar la recreación.
+
+PostgreSQL local real + Chrome/OPFS con sesión/puente sintéticos: opciones, dos valores, relación por
+label, guardado offline, cierre, reapertura y ACK sin duplicados; outbox vacío. Primer intento sin
+prewarm y contención por dos páginas propios del ensayo documentados, sin ocultarlos ni correlación
+con producción. SQLite real acredita conflictos, cancelación segura y cola drenada tras cien lecturas.
+No Safari físico, autenticación Next completa, estabilidad general ni horarios/borrado remoto acreditados.
+
+Cierre proporcional final: Client1182 PASS / 101 archivos; Core1120 PASS / 28 omitidas de tres
+integraciones opt-in, más 12 PASS PostgreSQL locales activadas. Typecheck ambos PASS; lint Core PASS
+y Client PASS con dos require warnings anteriores. Builds normales Expo y Next/Turbopack PASS; API
+pública efectiva y namespace epoch2 verificados en artefacto local. Diff-check PASS. Una validación
+compuesta de extras que escapaba sin mapear se corrigió tras RED PostgreSQL; rollback y reintento
+GREEN. El caso de concurrencia PostgreSQL que asumía entidad vacía ahora usa otra fecha y conserva
+la comprobación de todas las filas anteriores, sin debilitar la garantía.
+
+La pasada intermedia de Client con 21 timeouts a 5 s se conserva: primer caso de
+state-update-prewarm-current-investigation.test.ts:121, después fallos sucesivos del mismo archivo;
+primero aislado PASS en HEAD403be589 y candidato, y suite final PASS con timeouts normales. No causa
+atribuida ni aumento del límite. La primera suite Core tuvo seis fixtures Attendance sin sourceFieldId;
+se completaron sus proyecciones reales y todas las aserciones permanecen.
+
+Revisión real final 1440/1024/390: MULTISELECT por Espacio, relación por teclado, sin overflow ni
+peticiones de resize; escala inválida bloqueada antes de POST y outbox vacío. Recorrido integrado
+final con el mismo código funcional del candidato, Chrome/OPFS y Core/PostgreSQL local: decimales
+como strings exactos, dos selecciones, ID/label de relación, payload/requestId intactos tras cierre
+y reapertura offline, ACK y un solo reporte; outbox vacío. Se repitió sólo el recorrido afectado
+por la precisión exacta y la revisión de opciones. No se presenta como autenticación Next end-to-end.
+
+Inventario/parches/checks verificables en respaldo durable `opco-six-capabilities/2026-10-25/`.
+Prefijos documentales ajenos, las 402 exclusiones y trabajo de horarios se conservan; sin commit,
+push, deploy, migraciones ni configuración/datos productivos. Core → Client antes de activar sólo
+las capacidades viables. V11 pausado; auditoría general e incidentes históricos abiertos.
+
+## Inventario abierto contrastado — seis capacidades — 2026-10-25
+
+| Hallazgo | Estado actual y evidencia nueva |
+| --- | --- |
+| Colisiones v10 entre AppViews / current-latest | Correcciones publicadas de representación e identidad siguen vigentes; no se repite ni reabre V11. |
+| Current autoritativo y preparación / ACK Attendance | Correcciones publicadas conservadas; regresiones del candidato mantienen Attendance y modos anteriores. |
+| Apertura/recuperación OPFS | Defecto nuevo reproducido: dos retry explícitos reiniciaban la promesa y abrían dos handles. Regresión RED 3 opens (fallo+2 retries), GREEN 2 (fallo+retry compartido), sin reset ni pérdida. No reintento automático nuevo. |
+| Reapertura con contención | Perfil de ensayo presentó dos páginas, una READY con pendiente y otra ACCESS_HANDLE_BUSY. Cerradas sólo páginas propias, una página abrió la misma OPFS offline y sincronizó la intención. No se atribuye el origen de las dos páginas ni se asume soporte multitab. |
+| Lecturas repetitivas / crecimiento de cola | Cien lecturas en SQLite real (5×20), un singleton, pending/outbox intactos y waitingTotal=0 al terminar. No prueba estabilidad prolongada, equivalencia con las 28.391 lecturas antiguas ni ausencia de scans costosos de app_metadata. No optimización especulativa. |
+| Invalid VFS state / Error finalizing statement históricos | Causa y correlación productiva siguen abiertas; BUSY no es una barrera de seguridad. |
+| «11/11 procesadas, 1 fallo» | Sólo su pérdida de detalle diagnóstico fue corregida anteriormente; causa histórica sin confirmar. |
+| Coexistencia de horarios | Client publicado 403be589 aún pierde metadata al editar; dos RED preservadas fuera del candidato. No activación ni rediseño de generaciones. |
+| Timeouts de preparación | Una pasada tuvo 21 timeouts en state-update-prewarm-current-investigation.test.ts; primera prueba aislada PASS tanto HEAD como candidato con 5 s. No causa atribuida ni timeout aumentado. Resultado final separado en STATUS. |
+
+Sin borrado habitual, cambios de esquema/namespace, motor sync nuevo, producción ni cierre de auditoría.

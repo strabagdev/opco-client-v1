@@ -913,6 +913,8 @@ export type StateUpdateOfflineStore = {
   retryFailedStateUpdateOperations(input: { ownerKey: string; manualRetryToken?: string | null }): Promise<number>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
   saveStateUpdateLocally(input: SaveStateUpdateLocallyInput): Promise<CachedStateUpdateRecord>;
+  getStateUpdateLocalCancellation?(input: StateUpdateScope & { localRecordId: string; subjectRecordId: string }): Promise<{ clientRequestId: string } | null>;
+  cancelNeverDispatchedStateUpdate?(input: StateUpdateScope & { localRecordId: string; subjectRecordId: string; clientRequestId: string }): Promise<void>;
   recordStateUpdateSessionTermination(ownerKey: string, event: StateUpdateSessionTerminationTelemetry): Promise<void>;
   recordStateUpdateVisibleErrorEvent(ownerKey: string, event: StateUpdateVisibleErrorTelemetry): Promise<void>;
   resolveStateUpdateVisibleErrorEvent(ownerKey: string, resolution: StateUpdateVisibleErrorResolution): Promise<void>;

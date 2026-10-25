@@ -734,6 +734,7 @@ export type StateUpdateOption = {
 };
 
 export type StateUpdateField = {
+  config?: EntityField["config"];
   defaultOptionId?: string;
   fieldType?: EntityFieldType | string | null;
   fieldId: string;
@@ -1956,6 +1957,7 @@ function normalizeStateUpdateField(field: StateUpdateRawField): StateUpdateField
   return {
     defaultOptionId: field.defaultOptionId ?? undefined,
     fieldId: coreField?.id ?? "",
+    config: coreField?.config,
     key: coreField?.key,
     label: coreField?.name ?? "",
     name: coreField?.name,

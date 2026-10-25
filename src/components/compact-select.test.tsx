@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { changeCompactSelection, CompactSelect } from "./compact-select";
+import { activateCompactCheckboxFromKeyboard, changeCompactSelection, CompactSelect } from "./compact-select";
 vi.mock("react-native", async () => import("react-native-web"));
 
 describe("shared compact selection", () => {
@@ -34,4 +34,13 @@ describe("shared compact selection", () => {
     expect(changeCompactSelection(["a"], "b", true, true)).toEqual(["a", "b"]);
     expect(changeCompactSelection(["a"], "b", false, true)).toBe("b");
   });
+});
+
+it("Space activates a multiple choice once, preserving required/disabled semantics; Enter stays delegated", () => {
+  let values=["A"]; const event={key:" ",repeat:false,preventDefault(){},stopPropagation(){}};
+  const activate=()=>{ values=changeCompactSelection(values,"B",true,true) as string[]; };
+  expect(activateCompactCheckboxFromKeyboard(event,false,activate)).toBe(true);expect(values).toEqual(["A","B"]);
+  expect(activateCompactCheckboxFromKeyboard({...event,repeat:true},false,activate)).toBe(false);expect(values).toEqual(["A","B"]);
+  expect(activateCompactCheckboxFromKeyboard(event,true,activate)).toBe(false);expect(values).toEqual(["A","B"]);
+  expect(activateCompactCheckboxFromKeyboard({...event,key:"Enter"},false,activate)).toBe(false);expect(values).toEqual(["A","B"]);
 });

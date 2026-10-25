@@ -1,4 +1,7 @@
-import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, unavailableStateUpdateExtraInput } from "@/lib/state-update-extras";
+import { LocalReportCancellation } from "./local-report-cancellation";
+import { useExtraRelations } from "./use-extra-relations";
+import { relationValueLabels } from "@/lib/state-update-relations";
+import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, stateUpdateExtraMetadataErrors, reviewStateUpdateMultipleSelection, unavailableStateUpdateExtraInput } from "@/lib/state-update-extras";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "@/renderers/records/temporal-input";
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
@@ -27,6 +30,7 @@ import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { buildStateUpdateCoverageScope, hasSuccessfulHydration } from "@/lib/app-view-definitions-cache";
 import { createClientRequestId } from "@/lib/client-request-id";
 import {
+  getRelationTargetEntityTypeId,
   buildInitialFormValues,
   RecordFormErrors,
   RecordFormValues,
@@ -161,6 +165,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [stateValues, setStateValues] = useState<StateValues>({});
   const [extraValues, setExtraValues] = useState<RecordFormValues>({});
   const [extraErrors, setExtraErrors] = useState<RecordFormErrors>({});
+  const [unresolvedExtraValues, setUnresolvedExtraValues] = useState<Record<string, string[]>>({});
   const [extraReadIssues, setExtraReadIssues] = useState<RecordFormErrors>({});
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [durableConflicts, setDurableConflicts] = useState<CachedStateUpdateRecord[]>([]);
@@ -192,6 +197,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
   const visibleResponse = response && response.appView.id === appView.id && (!compositeMode || (contextReady && compositeIdentityKey(response.identityContext) === identityKey)) && (!response.date || normalizeStateUpdateLogicalDate(response.date) === date) ? response : null;
+  const relationCatalogs = useExtraRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
+    fields: visibleResponse?.extraFields ?? [], online: isOnline, scope: resolutionScope });
+  const relationReadCount = Object.values(relationCatalogs.catalogs).filter(catalog => catalog.loading).length;
+  const presentationExtraFields = (visibleResponse?.extraFields ?? []).map(field => field.type !== "RELATION" ? field : ({ ...field,
+    options: (relationCatalogs.catalogs[field.id]?.options ?? []).map((option, order) => ({ ...option, value: option.id, label: option.displayName, active: true, order })),
+  }));
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const currentStateUpdateSyncRunId =
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
@@ -252,8 +263,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }, [appView.id, date, identity, ownerKey, selectedContractId, visibleResponse]);
   useExperienceActivityReporter(appView, {
     stateUpdateCoverage,
-    activeCount: Math.max(activeReadCount, Number(isLoading) + Number(isSearching)) + Number(isLoadingMore) + Number(isSaving),
-    readCount: activeReadCount + Number(!isOnline && isLoading && !isLoadingMore),
+    activeCount: relationReadCount + Math.max(activeReadCount, Number(isLoading) + Number(isSearching)) + Number(isLoadingMore) + Number(isSaving),
+    readCount: relationReadCount + activeReadCount + Number(!isOnline && isLoading && !isLoadingMore),
     readMode: visibleResponse ? "refresh" : "initial",
     errorCode: experienceErrorCode,
     result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isLoadingMore && !isSaving ? "success" : null,
@@ -707,7 +718,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setSelectedItem(null);
     setStateValues(response ? defaultStateValues(response.stateFields) : {});
     setExtraValues(extraDefinition ? buildInitialFormValues(extraDefinition) : {});
-    setExtraReadIssues({});
+    setExtraReadIssues({}); setUnresolvedExtraValues({});
     setExtraErrors({});
     setConflict(null);
   }
@@ -724,17 +735,24 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     setSuccessMessage(null);
     setResolutionFeedback(null);
     setStateValues(initialStateValues(response, item));
-    const extras = extraDefinition ? buildStateUpdateExtraForm(extraDefinition, item.current?.extraValues, item.current?.extraValuesFormat) : { values: {}, issues: {} };
+    const extras = extraDefinition ? buildStateUpdateExtraForm(extraDefinition, item.current?.extraValues, item.current?.extraValuesFormat) : { values: {}, issues: {}, unresolvedValues: {} };
     setExtraValues(extras.values);
-    setExtraReadIssues(extras.issues);
+    setExtraReadIssues(extras.issues); setUnresolvedExtraValues(extras.unresolvedValues ?? {});
     setExtraErrors(extras.issues);
 
     await loadWorkflow({ operation: "source-load", subjectRecordId: item.subject.id });
   }
 
   function setExtraValue(key: string, value: string | boolean | string[]) {
+    const field = response?.extraFields.find(field => field.key === key);
+    let unresolved = unresolvedExtraValues[key] ?? [];
+    if (field?.type === "MULTISELECT" && Array.isArray(value)) {
+      const reviewed = reviewStateUpdateMultipleSelection(field, value, unresolved);
+      value = reviewed.values; unresolved = reviewed.unresolved;
+      setUnresolvedExtraValues(current => ({ ...current, [key]: reviewed.unresolved }));
+    }
     setExtraValues((current) => ({ ...current, [key]: value }));
-    setExtraReadIssues(current => { const next = { ...current }; delete next[key]; return next; });
+    setExtraReadIssues(current => { const next = { ...current }; if (!unresolved.length) delete next[key]; return next; });
     setExtraErrors((current) => {
       const next = { ...current };
       delete next[key];
@@ -753,7 +771,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       fields: response.stateFields,
       formValues: stateValues,
     });
-    const nextExtraErrors = { ...validateFormFields(response.extraFields, extraValues), ...extraReadIssues };
+    const nextExtraErrors = { ...validateFormFields(response.extraFields, extraValues), ...extraReadIssues, ...stateUpdateExtraMetadataErrors(response.extraFields) };
 
     if (stateSnapshot.error || Object.keys(nextExtraErrors).length > 0) {
       setExtraErrors(nextExtraErrors);
@@ -1148,7 +1166,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       {durableConflicts.length > 0 && visibleResponse ? (
         <DurableConflictList
           conflicts={[...durableConflicts].sort((a, b) => Number(b.localRecordId === attentionParams.attentionRecordId) - Number(a.localRecordId === attentionParams.attentionRecordId))}
-          extraFields={visibleResponse.extraFields}
+          extraFields={presentationExtraFields}
           fields={visibleResponse.stateFields}
           isSaving={isSaving}
           onUseLocal={openDurableConflict}
@@ -1229,8 +1247,16 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
                 setError(null);
               }} value={stateValues[field.fieldId]} /> })),
             ...visibleResponse.extraFields.map(field => ({ key: `extra:${field.id}`, full: ["TEXT", "TEXTAREA"].includes(field.type), content:
-              <RecordFieldInput error={extraErrors[field.key] ?? (field.type === "SELECT" && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
-                onChange={(value) => setExtraValue(field.key, value)} value={field.type === "SELECT" && extraReadIssues[field.key] ? unavailableStateUpdateExtraInput(field, extraValues[field.key]) : extraValues[field.key]} /> })),
+              <RecordFieldInput error={extraErrors[field.key] ?? (["SELECT", "MULTISELECT"].includes(field.type) && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
+                relationTargetEntityTypeId={getRelationTargetEntityTypeId(field)}
+                relationOptions={[...new Map([...relationValueLabels(selectedItem.current?.extraValues?.[field.id]), ...(relationCatalogs.catalogs[field.id]?.options ?? [])].map(option => [option.id, option])).values()]}
+                relationOptionsError={relationCatalogs.catalogs[field.id]?.error ?? (relationCatalogs.catalogs[field.id]?.offline ? "Sin conexión: sólo se muestran registros del catálogo guardados en este dispositivo; disponibilidad no certificada." : null)}
+                relationOptionsLoading={relationCatalogs.catalogs[field.id]?.loading}
+                onRelationSearch={search => relationCatalogs.search(field.id, search)}
+                onRelationLoadMore={relationCatalogs.catalogs[field.id]?.hasMore ? () => relationCatalogs.more(field.id) : undefined}
+                onChange={(value) => setExtraValue(field.key, value)} value={field.type === "SELECT" && extraReadIssues[field.key] ? unavailableStateUpdateExtraInput(field, extraValues[field.key])
+                  : field.type === "MULTISELECT" && Array.isArray(extraValues[field.key]) ? (extraValues[field.key] as string[]).map(value => unresolvedExtraValues[field.key]?.includes(value) ? unavailableStateUpdateExtraInput(field, value) : value)
+                  : extraValues[field.key]} /> })),
           ]} />
           <View style={styles.formActions}>
           <Pressable
@@ -1240,6 +1266,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           >
             {isSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>{submitLabel}</Text>}
           </Pressable>
+          {ownerKey && selectedContractId && selectedItem.current ? <LocalReportCancellation store={definitionCache}
+            scope={{ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, identity }}
+            observedUpdatedAt={selectedItem.current.updatedAt} localRecordId={selectedItem.current.recordId} subjectRecordId={selectedItem.subject.id}
+            onCancelled={() => { setSelectedItem(null); void loadWorkflow({ operation: "refresh" }); }} /> : null}
           {compositeMode ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Volver a buscar</Text></Pressable> : null}
           </View>
         </View>
@@ -1251,7 +1281,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           latest={latest}
           onLoadMore={loadMoreLatest}
           pagination={latestPagination}
-          response={visibleResponse}
+          response={visibleResponse ? { ...visibleResponse, extraFields: presentationExtraFields } : null}
           state={offlineHistoryState}
           readFailed={Boolean(visibleError && !visibleResponse)}
         />
@@ -1264,7 +1294,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       </View></View></Modal>
       <ConflictModal
         conflict={conflict}
-        extraFields={response?.extraFields ?? []}
+        extraFields={presentationExtraFields}
         fields={response?.stateFields ?? []}
         isSaving={isSaving}
         onCancel={() => setConflict(null)}

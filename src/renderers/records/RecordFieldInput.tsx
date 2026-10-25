@@ -1,3 +1,4 @@
+import { decimalPlaces } from "../../lib/decimal-precision";
 import { useMemo, useState } from "react";
 import { Text, TextInput, Pressable, StyleSheet, View } from "react-native";
 
@@ -14,6 +15,7 @@ type FieldInputProps = {
   onBlur?(): void;
   onChange(value: string | boolean | string[]): void;
   onRelationSearch?(search: string): void;
+  onRelationLoadMore?(): void;
   relationOptions?: RecordRelationOption[];
   relationOptionsError?: string | null;
   relationOptionsLoading?: boolean;
@@ -27,6 +29,7 @@ export function RecordFieldInput({
   onBlur,
   onChange,
   onRelationSearch,
+  onRelationLoadMore,
   relationOptions = [],
   relationOptionsError = null,
   relationOptionsLoading = false,
@@ -84,6 +87,7 @@ export function RecordFieldInput({
         field={field}
         onChange={onChange}
         onSearch={onRelationSearch}
+        onLoadMore={onRelationLoadMore}
         options={relationOptions}
         optionsError={relationOptionsError}
         optionsLoading={relationOptionsLoading}
@@ -131,6 +135,7 @@ export function RecordFieldInput({
         style={[styles.input, multiline && styles.textarea]}
         value={textValue}
       />
+      {field.type === "DECIMAL" && decimalPlaces(field.config) !== undefined ? <Text style={styles.help}>Máximo {decimalPlaces(field.config)} decimales; sin redondeo automático.</Text> : null}
       <FieldError error={error} />
     </View>
   );
@@ -141,6 +146,7 @@ function RelationFieldInput({
   field,
   onChange,
   onSearch,
+  onLoadMore,
   options,
   optionsError,
   optionsLoading,
@@ -151,6 +157,7 @@ function RelationFieldInput({
   field: EntityField;
   onChange(value: string | boolean | string[]): void;
   onSearch?(search: string): void;
+  onLoadMore?(): void;
   options: RecordRelationOption[];
   optionsError: string | null;
   optionsLoading: boolean;
@@ -201,6 +208,7 @@ function RelationFieldInput({
             value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
             options={[...filteredOptions, ...options.filter(option => selectedValues.includes(option.id) && !filteredOptions.some(filtered => filtered.id === option.id))].map(option => ({ value: option.id, label: option.displayName }))}
             onChange={onChange} />
+          {onLoadMore ? <Pressable accessibilityRole="button" disabled={optionsLoading} onPress={onLoadMore} style={styles.clearButton}><Text>Más opciones</Text></Pressable> : null}
         </>
       ) : (
         <Text style={styles.fieldError}>Este campo de relacion no tiene un catalogo configurado.</Text>

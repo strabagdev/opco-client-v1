@@ -1,3 +1,4 @@
+import { formatConfiguredDecimal } from "./decimal-precision";
 import { EntityDefinition, EntityField, EntityRecord, EntityRecordValue } from "./opco-api";
 
 export type RecordListItem = {
@@ -78,6 +79,7 @@ export function formatRecordValue(value: EntityRecordValue | undefined, field?: 
   }
 
   if (typeof value === "number" || typeof value === "string") {
+    if (field?.type === "DECIMAL") return formatConfiguredDecimal(value, field.config);
     if (field?.type === "SELECT") {
       return getOptionLabel(field, value) ?? String(value);
     }

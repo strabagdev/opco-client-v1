@@ -3177,6 +3177,17 @@ describe("local database singleton", () => {
     expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
   });
 
+  it("coalesces concurrent explicit recovery and keeps ready operations on the singleton", async () => {
+    sqliteMock.openDatabaseAsync.mockRejectedValueOnce(new Error("open failed")).mockResolvedValue(db);
+    const store = getLocalDatabase();
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ code: "SQLITE_UNAVAILABLE" });
+    await Promise.all([retryLocalDatabaseInitialization(), retryLocalDatabaseInitialization()]);
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+    await retryLocalDatabaseInitialization();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+  });
+
   it("keeps storage unavailable when retry fails again", async () => {
     sqliteMock.openDatabaseAsync.mockRejectedValue(new Error("open failed"));
     const store = getLocalDatabase();

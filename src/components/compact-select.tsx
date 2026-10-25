@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type GestureResponderEvent } from "react-native";
 
 export type CompactOption = { value: string; label: string; disabled?: boolean };
 export type CompactSelectProps = {
@@ -66,9 +66,18 @@ export function CompactSelect({ label, options, value, onChange, required = fals
     </Modal>
   </View>;
 }
+export function activateCompactCheckboxFromKeyboard(event: { key: string; repeat?: boolean; preventDefault(): void; stopPropagation(): void }, disabled: boolean, activate: () => void) {
+  if (disabled || event.repeat || (event.key !== " " && event.key !== "Spacebar")) return false;
+  event.preventDefault(); event.stopPropagation(); activate(); return true;
+}
+
 function FocusOption({ selected, ...props }: React.ComponentProps<typeof Pressable> & { selected?: boolean }) {
   const [focused, setFocused] = useState(false);
-  return <Pressable {...props} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+  const keyboard = Platform.OS === "web" && props.accessibilityRole === "checkbox" ? {
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => activateCompactCheckboxFromKeyboard(event, props.disabled === true,
+      () => props.onPress?.(event as unknown as GestureResponderEvent)),
+  } : {};
+  return <Pressable {...props} {...keyboard} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
     style={[styles.option, selected && styles.selected, props.disabled && styles.disabled, focused && styles.focus]} />;
 }
 const webControl = { backgroundColor: "#fff", border: "1px solid #8795A8", borderRadius: 8, color: "#202B3A", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", fontSize: 16, minHeight: 44, padding: "8px 30px 8px 12px", width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box" as const };
