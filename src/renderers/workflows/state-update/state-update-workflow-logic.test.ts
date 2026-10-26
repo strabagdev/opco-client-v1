@@ -790,3 +790,16 @@ it("explains missing configured context and rejects impossible calendar dates wi
  expect(compositeContextInstruction("2026-02-30",fields,{shift:"a",group:"one"})).toContain("fecha válida");
  expect(compositeContextInstruction("2026-10-20",fields,{shift:"a"})).toBe("Completa Grupo antes de buscar.");
 });
+
+it("a successful read preserves the scheduled local conflict envelope in both current and latest",()=>{
+  const application={schemaVersion:1 as const,bindingId:"binding",revisionId:"local-r1",revisionDigest:"local-digest",scheduleRecordId:"schedule",operationalDate:"2030-01-06",applied:{name:"Night",startTime:"20:00",endTime:"08:00",endDayOffset:1,timeZone:"America/Santiago",nominalMinutes:720,durationPolicy:"civil-clock" as const}};
+  const remoteApplication={...application,revisionId:"remote-r2",revisionDigest:"remote-digest"};
+  const subject={id:"subject",displayName:"Synthetic"};
+  const remote:StateUpdateResponse={appView:{id:"view",name:"Synthetic",slug:"synthetic"},sourceEntityType:{id:"source",name:"Subjects"},targetEntityType:{id:"target",name:"Reports"},subjectFieldId:"subject-field",extraFields:[],stateFields:[],uniqueness:"subject-date-fields",historyMode:"update-current",items:[{subject,current:{recordId:"remote",stateValues:[],updatedAt:"2030-01-06T12:00:00Z",scheduleApplication:remoteApplication}}],latest:[]};
+  const local:CachedStateUpdateRecord={localRecordId:"local",subject,syncStatus:"conflict",stateValues:[],updatedAt:"2030-01-06T11:00:00Z",scheduleApplication:application,conflictRemoteScheduleApplication:remoteApplication};
+  const result=mergeStateUpdateResponseWithLocalConflicts(remote,[local]);
+  expect(result.items[0].current?.scheduleApplication).toEqual(application);
+  expect(result.latest?.[0].scheduleApplication).toEqual(application);
+  expect(local.conflictRemoteScheduleApplication).toEqual(remoteApplication);
+  expect(remote.items[0].current?.scheduleApplication).toEqual(remoteApplication);
+});

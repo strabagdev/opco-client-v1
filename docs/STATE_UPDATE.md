@@ -2495,3 +2495,236 @@ entry-9cbf68440834ad6a925d0db9ef3d4732.js; guardado de dos valores + relación +
 string exactos, cierre completo y reapertura offline, payload/requestId intactos, ACK y outbox vacío.
 Chrome lanzado sin ventana inicial y una sola página; no se borró OPFS. Fotografías y reporte
 separan esta evidencia de la primera contención y de las pruebas automatizadas.
+
+
+## Horarios — compatibilidad opcional local — 2026-10-25, DESACTIVADOS
+
+Puente de conservación/transporte, NO horarios completos. Incorpora únicamente los cuatro
+requisitos positivos del respaldo schedule-runtime-compatibility-review/2026-10-25; las fuentes
+originales y sus caracterizaciones del runtime anterior se conservan intactas fuera del lote.
+
+- Metadata opcional schedule (schemaVersion1, bindingId, revisionId, revisionDigest) y
+  scheduleApplication (referencia y snapshot aplicado: DATE operacional, horas/offset, zona y nominal
+  civil). Ausencia no es legacy; kind=legacy exige marcador explícito. Se valida forma sin resolver
+  catálogo, calcular horarios, reemplazar referencias ni modificar la identidad compuesta.
+- Guardado fila/outbox atómico: conserva referencia/snapshot de la intención o reporte al editar.
+  Una outbox con referencia conserva el snapshot coincidente de su fila; discrepancias requieren
+  revisión. Una intención offline con referencia sin snapshot no se encola. Guardado idéntico conserva
+  requestId, overwrite, base y entrega. El cambio semántico sigue el comando/confirmación existente;
+  la igualdad ahora distingue revisión/snapshot. Cambiar la revisión fijada o refrescar su base por
+  otra implícitamente se bloquea sin escribir. El futuro flujo explícito de revisión aún no existe.
+- Confirmación incluye horario exacto; sin metadata conserva los bytes de la clave anterior.
+  DTO/current/latest, proyecciones, recibos y conflictos transportan metadata. Usar Opco conserva la
+  aplicación REMOTA y sólo consume la intención elegida; Usar local conserva la LOCAL y la base
+  explícitamente confirmada. Respuestas tardías no consumen una edición nueva. Una respuesta que
+  omite un horario ya conocido no degrada el snapshot ni verifica el refresco. ACK sigue sin certificar
+  cobertura completa; recuperación por igualdad también exige el horario cuando la intención lo lleva.
+- El DTO local con horario conserva localExpectedUpdatedAt sólo para intenciones sin confirmar;
+  el handler usa esa base (null para alta), no el timestamp de caché. No se persiste ni envía el
+  atributo del DTO. Operaciones sin horario no lo reciben.
+- Sync/API envían la referencia exacta persistida, no un snapshot arbitrario como autoridad Core.
+  Formatos desconocidos/incompletos quedan para revisión sin borrarlos. La igualdad opaca permite
+  terminar un comando inválido y continuar la cola, pero no lo valida ni permite transmitirlo.
+- Sin horario: sin nuevos campos en payload/clave de confirmación, cambios de idempotencia, identidad,
+  autorización o versión. Attendance, SELECT/MULTISELECT/RELATION, modos existentes y SQLite10/
+  opco-client-v10-epoch2.db permanecen iguales. No cambia preparación, consultas ni namespace.
+
+Core de este lote RECHAZA cualquier schedule/scheduleApplication de nivel superior, incluso null,
+con HTTP400 SCHEDULE_NOT_SUPPORTED antes de idempotencia/escritura; no acepta para descartarlo.
+No hay catálogo/editor, política activa, columnas, migración ni escrituras productivas.
+
+Validación del candidato aislado:372 PASS Client (15 archivos),77 PASS Core (2), worker1/timeouts
+estándar; cuatro RED previas→GREEN, typecheck/lint afectado/diff-check PASS. Dos controles de payload
+exacto sin horario pasaron también sobre HEAD publicado ea8223a: Attendance y STATE_UPDATE, guardado,
+reapertura, confirmación, sync y conflicto. Regresiones existentes de confirmación/cancelación,
+resolución, append, idempotencia y respuestas tardías incluidas. SQLite real en archivo vía Python;
+transporte/replay/ACK controlados. Guard Core real como función con Prisma simulado; NO aceptación
+PostgreSQL, Chrome/OPFS, Safari ni navegador nuevos. Sin suite completa ni build.
+
+Activación sigue bloqueada frente a runtimes anteriores: ea8223a no conserva esta metadata al editar.
+Publicar puente/SW no excluye JS viejo. Primero Core con guard→Client compatible, aún sin horarios;
+después acreditar adopción/cierre de perfiles anteriores y completar catálogo/editor/aplicación/
+preparación y revisión explícita, en otra etapa. Rollback de futuras intenciones sólo a builds
+compatibles. No se añade cerco de versiones ni se autoriza activar/borrar/transmitir bases antiguas.
+Respaldo reconstruible: /home/dannysilver/dev2026/backups/schedule-runtime-compatibility-bridge/2026-10-25/.
+402 exclusiones y pendientes ajenos preservados; V11 pausado, auditoría general abierta.
+
+## Horarios: integración local de catálogo, aplicación y preparación — 2026-10-25
+
+**IMPLEMENTADO LOCALMENTE; sin publicación ni activación productiva.** Continúa el puente
+respaldado en `backups/schedule-runtime-compatibility-bridge/2026-10-25`; no sustituye ese
+respaldo ni el diagnóstico previo. Alcance opt-in: `subject-date-fields` + `update-current`.
+Attendance y operaciones sin horario conservan payload, autorización, identidad y recorrido.
+
+- Core añade catálogo por contrato sobre dos entidades REFERENCE/EAV administradas, revisiones
+  inmutables y una política compartida en la entidad destino. El editor de la AppView compuesta
+  permite crear catálogo/zona IANA, publicar códigos/revisiones, retirar por fecha y activar
+  explícitamente las vinculaciones optionId→horario. Guardar AppView no activa horarios.
+- GET distingue `schedulePolicy`/`scheduleResolution` para NUEVAS altas del `scheduleApplication`
+  de cada current/latest/recibo. Editar mantiene la aplicación original, incluso retirada o con
+  revisión posterior. Reportes previos devuelven legacy explícito, sin completar su historia.
+- La selección se fija al abrir el formulario. DATE es día operacional explícito; se muestran
+  inicio/término, +1 día, zona y horas nominales civiles. No hay inferencia de turnos, UTC elapsed,
+  descansos, horas trabajadas ni cálculos de horómetro.
+- El preparador/coordinador actual descarga una resolución del contexto seleccionado y las
+  lecturas autoritativas por sujeto con su concurrencia existente. No enumera combinaciones.
+  El marcador de revisiones en `app_metadata` está aislado por propietario/contrato/AppView/
+  destino/DATE/configuración/identidad/binding. Su disponibilidad no acredita sujetos/current ni
+  latest completo; una resolución unavailable tampoco habilita altas. La cobertura current usa
+  binding adicional para no certificar metadata nueva con marcadores anteriores.
+- Revisión y snapshot viajan en la intención/recibo JSON existentes, atómicos con fila/outbox.
+  No cambian SQLite v10, `opco-client-v10-epoch2.db`, local_id ni identidad del reporte. Una
+  respuesta sin la metadata requerida no certifica contenido; conserva la copia válida anterior.
+  Una intención antigua sin horario tampoco se consume por coincidir sólo sus valores con un
+  snapshot remoto que sí tiene horario.
+- `SCHEDULE_REVISION_CHANGED` es rechazo terminal, sin retry automático. «Revisar horario
+  rechazado» ofrece confirmación explícita para una alta rechazada, con ambas aplicaciones.
+  Sólo admite la intención exacta, sin identidad remota/base y con rechazo durable de Core tras
+  intento. Confirmar cambia únicamente referencia/snapshot y clientRequestId como comando nuevo;
+  conserva contenido, autorización, base y local_id. Cancelar no escribe. Un envío incierto, un
+  conflicto o una edición histórica no adquieren ese permiso. Una respuesta del comando viejo
+  no consume el nuevo. La acción se muestra sólo para altas rechazadas, no para un pendiente
+  normal; una revisión idéntica no renueva requestId ni modifica la intención. Si otro escritor ya aplicó otro horario, Core conserva un conflicto;
+  no convierte una edición de contenido en reasignación de horario.
+
+**Evidencia nueva (cierre local 2026-10-26).** 370 pruebas focalizadas Client más 23 de resolución en candidato aislado (393 en total); 149 Core, incluidas suites PostgreSQL
+reales de horarios y compuesto. Reapertura SQLite en archivo, payloads sin horario exactos,
+conservación de autorización/base/requestId, replay, rollback, pendientes ajenos y respuestas
+sobrepasadas. Core prueba fecha/vigencia/retiro, publicación concurrente, integridad y permisos.
+No son suites completas ni se aumentaron los timeouts.
+La ruta nueva de revisión recupera la fila fallida directamente: la lista de autosync excluye
+fallidos y no se amplía. Online, la selección recupera sólo la alta rechazada del sujeto/contexto
+exactos mediante el lector existente. El overlay de conflictos conserva la metadata en current
+y latest. Una finalización tardía de revisión libera actividad sin publicar en otro scope.
+
+Chrome exclusivo + OPFS real + Next/API/Auth/PostgreSQL locales: administrador sintético crea
+catálogo y dos revisiones desde el editor, activa sólo el fixture; selección nocturna prepara sin
+botón. Alta offline aceptada por Core local; edición offline con confirmación, cierre completo,
+reapertura conservando hash de payload/identidad/autorización/revisión, reconexión automática a
+la misma fila, un reporte y cero outbox; recuperación de cobertura tras lectura completa. Otro
+cierre/reapertura sin red conserva contenido editado y horario. Bundle ejecutado final local:
+`entry-04cc18b13d36afff29e82364d65d88e7.js` en el control de revisión final; API local explícita; namespace epoch2.
+La edición/reapertura anterior usó b6a3dd92; los ajustes posteriores afectaron la revisión rechazada
+y el overlay de conflicto, no el camino reutilizado de guardado/ACK. El camino de revisión se
+repitió íntegramente con 04cc18b1; los overlays se verifican con funciones reales en tests.
+El último export local ejecutado es `entry-e0c8fc80ed6dee7cbc955bf4af3d0bfe.js`.
+El ajuste de visibilidad/rechazo de revisión idéntica se verifica con SQLite/handlers
+automatizados; su control visual final usa una intención sintética sembrada por el store real,
+con Core detenido y sin atribuirle una aceptación remota adicional.
+Control adicional real: alta offline R1, publicación local R2 incompatible, rechazo sin reporte,
+R1 conservada; cancelar no escribe. Confirmación explícita crea R2 con nuevo requestId y mismo
+local_id/contenido/autorización/base; cierre/reapertura conserva el payload y reconexión crea un
+solo reporte, manteniendo R1 en el reporte previo.
+Conflictos/«Usar Opco» y respuestas tardías: funciones reales con SQLite y transporte controlado,
+complementadas con conflictos/versiones reales en PostgreSQL; no se atribuye a navegador la
+resolución completa de esos controles. Sin Safari físico ni prueba de estabilidad general.
+
+**Límites del ensayo.** Primer export apuntaba a otro puerto local (20330), se rechazó; export
+con reconstrucción explícita comprobó 24110. No se adjudica causa general al caché por ello.
+La primera reapertura restauró dos páginas y bloqueó OPFS; otra página alcanzó a sincronizar el
+alta, por lo que esa tentativa NO acredita reapertura offline de la intención. El control válido
+repitió con edición confirmada, una sola página, mismo almacenamiento y cierre completo. Un
+probe de lectura posterior al ACK necesitó corregir su envoltorio async; se verificó después sin
+otra escritura. No se usaron esos errores como protección de compatibilidad ni se borró la base.
+
+**Bloqueo de activación/publicación.** El puente aún no está publicado y un JS anterior puede
+alterar metadata nueva en la base compartida. Desplegar un SW no retira ese runtime. Producción
+permanece sin horarios; se requiere una etapa explícita de entrega compatible y exclusión
+verificada de runtimes anteriores antes de activar. No se declara resuelta esa coexistencia.
+Core requiere dos migraciones locales nuevas descritas en su STATE_UPDATE; las 23 anteriores
+quedan intactas. Rollback de una entidad activada sólo a builds que comprendan política,
+guardas, aplicación y transporte. Auditoría general, incidente productivo y V11 siguen abiertos.
+
+## Horarios: publicación desactivada frente a activación — evaluación 2026-10-26
+
+Esta evaluación acota la afirmación conjunta de bloqueo del informe local del 25-10: **el bloqueo
+por runtimes anteriores afecta a activar/producir intenciones con horario, no a desplegar el soporte
+desactivado**. No cambia el candidato funcional ni sus migraciones; respaldo original intacto.
+
+1. **Soporte desactivado compatible.** Core → ambas migraciones aditivas → verificar Core → Client,
+   sin activar ninguna política consumer ni generar intenciones con horario. Las columnas nullable
+   no tienen default/backfill; las guardas no restringen entidades con scheduleConfig NULL. GET no
+   incorpora política/aplicación sin activación; Client no añade el envelope ni la petición de revisión.
+   Los payloads, identidad, autorización, hash/replay y namespace sin horario conservan el contrato.
+   La activación exige la acción administrativa explícita, no la publicación ni guardar la AppView.
+   Se conservan las limitaciones operativas de migraciones: DDL puede esperar locks y requiere el
+   preflight/respaldo autorizado al publicar; esta evaluación no ejecutó migraciones productivas.
+2. **Activación condicionada.** El publicado ea8223a (src equivalente a05864ba) comparte epoch2.
+   Nueva intención → mismo almacenamiento → JS anterior todavía residente o cargado desde un shell
+   antiguo → editar contenido: saveStateUpdateLocally reconstruye payload/values sin schedule y
+   scheduleApplication, cambia requestId y conserva overwrite/base. Sin editar, sync y el adaptador
+   API proyectan sólo los campos conocidos y omiten schedule en el HTTP. Las regresiones archivadas
+   reproducen esas pérdidas con SQLite y reapertura; no se repitieron ni se debilitaron sus RED.
+   Core nuevo rechaza el envío incompleto sin nueva mutación; un recibo previo cuyo hash difiere
+   devuelve IDEMPOTENCY_KEY_REUSED. El rechazo remoto no restituye metadata ya perdida localmente.
+   El puente/candidato sí conserva y transmite la metadata. SW skipWaiting/clients.claim no sustituye
+   el JS residente; no hay cola de escrituras autónoma en ese service worker. OPFS ocupado no excluye
+   versiones ni acredita compatibilidad.
+
+**Condición mínima, para el único usuario y dispositivos confirmados:** publicar soporte desactivado;
+antes de activar, sincronizar/resolver explícitamente las intenciones sin horario del destino que se
+activará (incluidas failed/conflict), sin descartar ni reautorizar. No hace falta vaciar otros scopes
+ni borrar snapshots. Cerrar todas las instancias antiguas sin perder borradores; cargar online el nuevo
+Client en cada perfil utilizado de computador y Safari/iPhone y comprobar «Bundle de esta página»
+contra el bundle compatible publicado y «Base local del runtime» = opco-client-v10-epoch2.db. Cerrar y
+reabrir offline en esos perfiles y volver a comprobar el bundle ejecutado. La PWA antigua permanece
+fuera de uso; no se asume borrado ni actualización por retirar un icono. Sólo con esa adopción y ausencia
+verificadas de consumidores anteriores puede autorizarse la activación, preparar el contexto y crear
+intenciones nuevas. No reutilizar después perfiles/builds antiguos. Si no se puede acreditar esa
+condición, mantener horarios desactivados: no se implementó una exclusión técnica automática.
+
+Antes de activar, rollback de aplicaciones sin horario puede conservar las columnas/guardas aditivas;
+no requiere down migration. Después de activar/producir metadata, sólo builds compatibles. El
+procedimiento no traslada ni borra bases, no cambia namespace/infraestructura y no reactiva V11.
+No requiere otra decisión de negocio ni implementación para el caso operativo confirmado; exigir
+exclusión técnica automática de cualquier runtime sería otro alcance, sujeto a consulta previa.
+
+**Evidencia nueva:** 13 PASS/2 archivos, worker1 y configuración estándar, Core e3a0a995 archivado con
+Prisma6.19.3 generado desde SU esquema anterior (se comprueba ausencia de ambos campos nuevos), sobre
+PostgreSQL local con las25 migraciones ya aplicadas. Comprueba columnas nullable/checksums, cero consumer
+activo y12 regresiones reales de edición/identidad/concurrencia/replay/rollback de compuesto sin horario;
+fixtures propios retirados. Reutiliza los393 PASS Client/149 Core del candidato y las9 pruebas de
+caracterización del publicado (5 PASS/4 RED esperadas), no vuelve a ejecutarlos. Sin suites/builds/
+navegador nuevos. La referencia publicada procede del último informe verificado: Client ea8223a,
+Core e3a0a995. Una lectura pública actual devolvió HTTP403; no acredita un nuevo bundle ni el ejecutado
+en dispositivos. Las comprobaciones manuales de adopción siguen pendientes.
+
+Informe, prueba complementaria y tiempos medidos:
+`/home/dannysilver/dev2026/backups/schedule-publication-evaluation/2026-10-26/`.
+Sin cambios funcionales, configuración/datos productivos, commit/push/deploy. Se preservan402 exclusiones,
+los parches/hashes del candidato y todos los pendientes. Auditoría general abierta; V11 pausado.
+
+## Horarios — cierre técnico desactivado — 2026-10-26
+
+Candidato combinado con el puente, integración y evaluación de compatibilidad consolidado sin cambios
+funcionales.18 archivos/92 hunks Client y16/46 Core; el inventario final identifica hashes y anexos
+propios.393 PASS Client/149 Core,13 comprobaciones adicionales Core/Prisma anteriores contra las dos
+migraciones locales y evidencia Chrome/OPFS reutilizados sólo por igualdad de hashes funcionales.
+Sin nuevas suites ni navegador. Typecheck/lint afectados previos reutilizados; Next realiza también
+su comprobación TypeScript en el build final. Diff-check/reconstrucción final PASS.
+
+Build Core Next/Turbopack habitual PASS con URL exclusivamente local validada; sin cambiar bundler,
+configuración ni dependencias. El ensayo aislado rechazó inicialmente un symlink fuera de su raíz y
+un intento con copia de dependencias aún no confirmada. Client export de producción+SW PASS tras
+rechazar dos artefactos con apiUrl vacío: primero se pasó una variable incorrecta; al corregirla el
+export cacheado siguió vacío. Se aceptó sólo el export con caché Metro reiniciada y la variable real
+EXPO_PUBLIC_OPCO_API_URL. Esto no resuelve ni explica el artefacto vacío histórico de otro lote.
+Artefacto final local: entry-9ee75c127094752676339359803a570d.js, API efectiva https://web.opco.cl,
+index/sw.js coincidentes, SQLite v10 y opco-client-v10-epoch2.db sin cambios. No está publicado.
+
+Las dos migraciones inventariadas permanecen aditivas/opt-in: sin default/backfill ni activación de
+políticas. Orden posterior Core+migraciones→SUCCESS/health/readiness→Client, horarios desactivados.
+Se conserva la compatibilidad acreditada con los publicados ea8223a/e3a0a995. Antes de activar:
+sincronizar/resolver intenciones sin horario del destino, cerrar runtimes antiguos y comprobar bundle
+EJECUTADO online y tras reapertura offline en cada perfil usado del computador y Safari/iPhone;
+PWA antigua fuera de uso. No borrar pendientes ni transferir bases. No hay exclusión técnica automática.
+Rollback antes de activar puede conservar columnas/guardas; después, sólo builds compatibles.
+
+**Resultado de salida: bloqueado para publicación hasta acreditar un respaldo productivo actualizado.**
+El único respaldo lógico localizado y verificado por hash es19-10-2026, con22 migraciones y restauración
+local acreditada entonces; no constituye copia actual de los cambios posteriores. No se creó otro ni
+se accedió a producción. La restauración anterior conserva sus límites de owners/ACL/collation/secuencias.
+El cierre de código/build queda acreditado; ese requisito operativo no se sustituye por las pruebas.
+Respaldo final: `/home/dannysilver/dev2026/backups/schedule-technical-close/2026-10-26/`.
+402 exclusiones, pendientes/prefijos ajenos y respaldos anteriores intactos. Sin implementación nueva,
+commit/push/deploy, migraciones productivas ni activación. Sin lectura de códigos; V11 pausado.

@@ -34,6 +34,13 @@ export async function prepareStateUpdateCurrent({
     ...coverage, subjects: { ...coverage.subjects }, durationMs: Date.now() - started,
   } });
   await writeCoverage();
+  if (scope.scheduleBindingId) {
+    const response=await api.getStateUpdateWorkflow(token,scope.contractId,scope.appViewId,{date:scope.date,identity:scope.identity,pageSize:1});
+    if (signal?.aborted) return;
+    if (response.appView.id!==scope.appViewId || response.targetEntityType.id!==scope.targetEntityTypeId || response.date!==scope.date ||
+      compositeIdentityKey(response.identityContext)!==compositeIdentityKey(scope.identity) || response.schedulePolicy?.bindingId!==scope.scheduleBindingId) throw new Error("SCHEDULE_CONTEXT_RESPONSE_MISMATCH");
+    await store.upsertStateUpdateSnapshot({...scope,complete:false,items:[],latest:[],schedulePolicy:response.schedulePolicy,scheduleResolution:response.scheduleResolution});
+  }
   const ids = new Set<string>();
   let pages = 1;
   let stableCache = true;
@@ -62,7 +69,9 @@ export async function prepareStateUpdateCurrent({
         throw new Error("STATE_UPDATE_CURRENT_RESPONSE_MISMATCH");
       }
       // subjects[].current is authoritative, including explicit null. Do not fetch history.
-      const result = await store.upsertStateUpdateSnapshot({ ...scope, complete: false, projectionDefinition: {
+      if (scope.scheduleBindingId && response.schedulePolicy?.bindingId!==scope.scheduleBindingId) throw new Error("SCHEDULE_CONTEXT_RESPONSE_MISMATCH");
+      const result = await store.upsertStateUpdateSnapshot({ ...scope, complete: false,
+        schedulePolicy:response.schedulePolicy,scheduleResolution:response.scheduleResolution, projectionDefinition: {
         sourceEntityTypeId: response.sourceEntityType.id, subjectFieldId: response.subjectFieldId,
         identityFields: response.identityFields, identityDefinition: response.identityDefinition,
         dateFieldId: response.dateFieldId, stateFields: response.stateFields, extraFields: response.extraFields,

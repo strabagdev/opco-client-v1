@@ -126,7 +126,7 @@ export function prewarmAssignedAppViewsOnce(params: {
 export function stateUpdateContextPreparationKey(scope: StateUpdateCurrentCoverageScope) {
   return JSON.stringify([scope.ownerKey, scope.contractId, scope.appViewId, scope.sourceEntityTypeId,
     scope.targetEntityTypeId, scope.date, scope.dateFieldId, scope.uniqueness, scope.historyMode,
-    compositeIdentityKey(scope.identity)]);
+    compositeIdentityKey(scope.identity), ...(scope.scheduleBindingId ? [scope.scheduleBindingId] : [])]);
 }
 
 export type StateUpdateContextPreparationInput = {
@@ -1116,6 +1116,7 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     extraFields: response.extraFields ?? [],
     historyMode: response.historyMode,
     kind: "state-update",
+    ...(response.schedulePolicy ? {schedulePolicy: response.schedulePolicy} : {}),
     sourceEntityTypeId: response.sourceEntityType.id,
     sourceEntityTypeName: response.sourceEntityType.name,
     stateFields: response.stateFields ?? [],

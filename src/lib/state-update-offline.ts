@@ -1,3 +1,4 @@
+import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, stateUpdateScheduleIntentFingerprint, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
 import type { CompositeStateIdentity } from "./opco-api";
 import {
@@ -21,7 +22,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
-export type OfflineStateUpdatePayload = {
+export type OfflineStateUpdatePayload = StateUpdateScheduleMetadata & {
   identity?: CompositeStateIdentity;
   snapshotConfiguration?: string;
   expectedRecordId?: string;
@@ -78,7 +79,7 @@ export type StateUpdateSyncErrorDetails = {
   fields: StateUpdateSyncErrorFieldDetails[];
 };
 
-export type OfflineStateUpdateValues = {
+export type OfflineStateUpdateValues = StateUpdateScheduleMetadata & {
   extraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
   __opcoStateUpdateRemote?: { format: 1; recordId: string };
@@ -97,7 +98,9 @@ export type OfflineStateUpdateValues = {
   subjectRecordId: string;
 };
 
-export type CachedStateUpdateRecord = {
+export type CachedStateUpdateRecord = StateUpdateScheduleMetadata & {
+  conflictRemoteSchedule?: StateUpdateScheduleMetadata["schedule"];
+  conflictRemoteScheduleApplication?: StateUpdateScheduleMetadata["scheduleApplication"];
   extraValuesFormat?: "field-value";
   conflictRemoteExtraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
@@ -773,6 +776,7 @@ export function usesDatedSubjectHistory(input: Pick<StateUpdateScope, "dateField
 }
 
 export type StateUpdateScope = {
+  scheduleBindingId?: string;
   identity?: CompositeStateIdentity;
   appViewId: string;
   contractId: string;
@@ -784,7 +788,7 @@ export type StateUpdateScope = {
   targetEntityTypeId: string;
 };
 
-export type SaveStateUpdateLocallyInput = StateUpdateScope & {
+export type SaveStateUpdateLocallyInput = StateUpdateScope & StateUpdateScheduleMetadata & {
   // Attendance may repeat an already-confirmed immutable intent without resetting its delivery.
   preserveIdenticalConfirmedIntent?: boolean;
   expectedUpdatedAt?: string | null;
@@ -830,6 +834,8 @@ export type StateUpdateProjectionDefinition = {
 };
 
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
+  schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
+  scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
   projectionDefinition?: StateUpdateProjectionDefinition;
   sourceEntityTypeId?: string;
   complete?: boolean;
@@ -885,7 +891,15 @@ export type AttendanceDaySnapshotScope = StateUpdateScope & {
   date: string;
 };
 
+export type ReviewStateUpdateScheduleInput = StateUpdateScope & {
+  localRecordId:string;subjectRecordId:string;clientRequestId:string;
+  previousApplication: import("./state-update-schedule").StateUpdateScheduleApplication;
+  application: import("./state-update-schedule").StateUpdateScheduleApplication;
+};
 export type StateUpdateOfflineStore = {
+  getStateUpdateScheduleReviewCandidate?(input:StateUpdateScope & {subjectRecordId:string}):Promise<StateUpdateItem|null>;
+  reviewStateUpdateSchedule?(input:ReviewStateUpdateScheduleInput):Promise<void>;
+  getStateUpdateScheduleContext?(input: StateUpdateScope & {policy: import("./state-update-schedule").StateUpdateSchedulePolicy}): Promise<import("./state-update-schedule").CachedStateUpdateScheduleContext | null>;
   getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope): Promise<StateUpdateCurrentCoverage | null>;
   setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }): Promise<void>;
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
@@ -1003,6 +1017,9 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientReq
     clientRequestId: clientRequestId ?? (typeof values.clientRequestId === "string" ? values.clientRequestId : undefined),
     conflictIdentity: JSON.stringify([record.localId, record.serverId, record.values, record.conflictRemoteValues,
       record.conflictRemoteUpdatedAt, clientRequestId ?? values.clientRequestId]),
+    ...stateUpdateScheduleMetadata(values),
+    ...(conflictValues?.schedule !== undefined ? { conflictRemoteSchedule: conflictValues.schedule } : {}),
+    ...(conflictValues?.scheduleApplication !== undefined ? { conflictRemoteScheduleApplication: conflictValues.scheduleApplication } : {}),
     conflictRemoteExtraValues: conflictValues?.extraValues,
     conflictRemoteExtraValuesFormat: conflictValues?.extraValuesFormat,
     conflictRemoteStateValues: conflictValues?.stateValues,
@@ -1052,6 +1069,10 @@ export function stateUpdateRecordToItem(record: CachedStateUpdateRecord): StateU
 
   return {
     current: {
+      ...stateUpdateScheduleMetadata(record),
+      ...(record.scheduleApplication && record.syncStatus==="failed" && record.syncErrorCode==="SCHEDULE_REVISION_CHANGED" && !record.expectedUpdatedAt ? {localScheduleReviewRequired:true} : {}),
+      ...(Object.keys(stateUpdateScheduleMetadata(record)).length && record.syncStatus !== "synced"
+        ? { localExpectedUpdatedAt: record.expectedUpdatedAt ?? null } : {}),
       extraValues: record.extraValues,
       extraValuesFormat: record.extraValuesFormat,
       recordId: record.localRecordId,
@@ -1073,7 +1094,9 @@ export function stateUpdateRemoteItemMatchesPayload(
   const remoteStateValues = normalizeStateUpdateCurrentStateValues(item.current);
   const remoteExtraValues = item.current.extraValues ?? {};
 
-  return stateUpdateRequestedStatesMatch(remoteStateValues, payload.stateValues) &&
+  const hasSchedule = Object.keys(stateUpdateScheduleMetadata(payload)).length || Object.keys(stateUpdateScheduleMetadata(item.current)).length;
+  return (!hasSchedule || stateUpdateSchedulesEqual(item.current, payload)) &&
+    stateUpdateRequestedStatesMatch(remoteStateValues, payload.stateValues) &&
     stateUpdateRequestedExtrasMatch(remoteExtraValues, payload.extraValues);
 }
 
@@ -1085,7 +1108,9 @@ export function stateUpdateIntentsEqual(
 }
 
 export function normalizeStateUpdateIntent(payload: OfflineStateUpdatePayload) {
+  const schedule = stateUpdateScheduleIntentFingerprint(payload);
   return {
+    ...(schedule !== undefined ? { schedule } : {}),
     ...(payload.identity ? { identity: compositeIdentityKey(payload.identity) } : {}),
     appViewId: payload.appViewId,
     date: payload.date ?? null,

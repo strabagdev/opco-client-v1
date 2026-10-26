@@ -1,3 +1,4 @@
+import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, scheduleForStateUpdateEdit, formatAppliedSchedule, type StateUpdateScheduleMetadata } from "@/lib/state-update-schedule";
 import { LocalReportCancellation } from "./local-report-cancellation";
 import { useExtraRelations } from "./use-extra-relations";
 import { relationValueLabels } from "@/lib/state-update-relations";
@@ -131,6 +132,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
   const [searchText, setSearchText] = useState("");
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
+  const [scheduleReview,setScheduleReview]=useState<import("@/lib/state-update-offline").ReviewStateUpdateScheduleInput|null>(null);
   const [contextSelection, setContextSelection] = useState({ route: attentionParams.reportContext, value: parseCompositeContextValues(attentionParams.reportContext) });
   const identityValues = contextSelection.route === attentionParams.reportContext ? contextSelection.value : parseCompositeContextValues(attentionParams.reportContext);
   function setIdentityValues(next: (current: Record<string,string>) => Record<string,string>) {
@@ -147,12 +149,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const preparationDateFieldId = response?.dateFieldId;
   const preparationUniqueness = response?.uniqueness;
   const preparationHistoryMode = response?.historyMode;
+  const preparationScheduleBindingId = response?.schedulePolicy?.bindingId;
   const preparationInput = useMemo(() => compositeMode && contextReady && identity && preparationSourceId && preparationTargetId && token && ownerKey && selectedContractId
     ? { api, token, store: definitionCache, scope: { identity, ownerKey, contractId: selectedContractId,
         appViewId: appView.id, sourceEntityTypeId: preparationSourceId, targetEntityTypeId: preparationTargetId,
-        date, dateFieldId: preparationDateFieldId, uniqueness: preparationUniqueness, historyMode: preparationHistoryMode } }
+        date, scheduleBindingId:preparationScheduleBindingId, dateFieldId: preparationDateFieldId, uniqueness: preparationUniqueness, historyMode: preparationHistoryMode } }
     : null, [compositeMode, contextReady, identity, preparationSourceId, preparationTargetId,
-      preparationDateFieldId, preparationUniqueness, preparationHistoryMode, api, token, ownerKey, selectedContractId, appView.id, date, definitionCache]);
+      preparationDateFieldId, preparationUniqueness, preparationHistoryMode, preparationScheduleBindingId, api, token, ownerKey, selectedContractId, appView.id, date, definitionCache]);
   const contextPreparation = useContextPreparation({ input: preparationInput, connectivityStatus,
     canPrepare: !isAuthSessionRestoring && !isOperationalCoreReadinessChecking && !isPendingWorkSyncing,
     refreshKey: stateUpdateReconnectRefreshKey });
@@ -160,7 +163,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [verifiedOfflineAbsences, setVerifiedOfflineAbsences] = useState<{scope:string;ids:string[]}>({scope:"",ids:[]});
   const [confirmContextExit, setConfirmContextExit] = useState(false);
   const [items, setItems] = useState<StateUpdateItem[]>([]);
-  const [selectedItem, setSelectedItem] = useState<StateUpdateItem | null>(null);
+  const [selectedItem, setSelectedItem] = useState<(StateUpdateItem & {scheduleSelection?:StateUpdateScheduleMetadata}) | null>(null);
   const [latestPage, setLatestPage] = useState(1);
   const [stateValues, setStateValues] = useState<StateValues>({});
   const [extraValues, setExtraValues] = useState<RecordFormValues>({});
@@ -257,6 +260,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         historyMode: visibleResponse.historyMode,
         uniqueness: visibleResponse.uniqueness,
         targetEntityTypeId: visibleResponse.targetEntityType.id,
+        schedulePolicy:visibleResponse.schedulePolicy,
       }),
       sourceEntityTypeId: visibleResponse.sourceEntityType.id,
     };
@@ -341,6 +345,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     const definition = prepared.definition;
     if (compositeMode && !contextReady) {
       setResponse({ appView: { id: appView.id, name: appView.name, slug: appView.slug }, date, dateFieldId: definition.dateFieldId,
+        ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
         extraFields: definition.extraFields, stateFields: definition.stateFields, subjectFieldId: definition.subjectFieldId,
         historyMode: definition.historyMode, uniqueness: definition.uniqueness, items: [], latest: [],
@@ -362,6 +367,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       date,
       ownerKey,
     }, definition);
+    const scheduleContext=definition.schedulePolicy ? await definitionCache.getStateUpdateScheduleContext?.({...scope,policy:definition.schedulePolicy}) : null;
     const latestPageToLoad = query.page ?? 1;
     const [summary, latestResult, localConflicts, storedCoverage, currentCoverage] = await Promise.all([
       definitionCache.getStateUpdateSummary(scope),
@@ -409,6 +415,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         name: appView.name,
         slug: appView.slug,
       },
+      ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy,scheduleResolution:scheduleContext?.resolution} : {}),
       date: scope.date,
       dateField: definition.dateFieldId
         ? [...definition.stateFields.map((field) => ({
@@ -422,7 +429,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
         : null,
       dateFieldId: definition.dateFieldId,
-      identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
+      ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
+        identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
       extraFields: definition.extraFields,
       historyMode: definition.historyMode,
       items: nextItems,
@@ -539,7 +547,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", sourceEntityTypeId: nextResponse.sourceEntityType.id,
             sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
             dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
-            identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
+            schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
         return;
       }
       const localConflicts = ownerKey
@@ -573,6 +581,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
+        if(nextResponse.schedulePolicy) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
         const pagination = nextResponse.latestPagination ?? {
           hasMore: false,
           page: latestPageToLoad,
@@ -582,6 +591,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         const snapshotResult = await definitionCache.upsertStateUpdateSnapshot({
           appViewId: appView.id,
           identity,
+          schedulePolicy:nextResponse.schedulePolicy, scheduleResolution:nextResponse.scheduleResolution,
           complete: !query.search && !query.subjectRecordId && pagination.page === 1 && !pagination.hasMore,
           expectedRemoteEventCount: pagination.page === 1 && !pagination.hasMore ? pagination.total : undefined,
           contractId: selectedContractId,
@@ -728,7 +738,17 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }
   async function selectSubject(item: StateUpdateItem) {
     if (unavailableCompositeAbsence(item)) { setError("Prepara este contexto con conexión antes de crear un reporte sin conexión.");return; }
-    setSelectedItem(item);
+    if(response?.schedulePolicy && isOnline && !item.current && ownerKey && selectedContractId && definitionCache.getStateUpdateScheduleReviewCandidate) {
+      const capturedScope=resolutionScope;
+      const local=await definitionCache.getStateUpdateScheduleReviewCandidate({ownerKey,contractId:selectedContractId,appViewId:appView.id,targetEntityTypeId:response.targetEntityType.id,
+        date,dateFieldId:response.dateFieldId,uniqueness:response.uniqueness,historyMode:response.historyMode,identity,subjectRecordId:item.subject.id});
+      if(resolutionScopeRef.current!==capturedScope || !resolutionMountedRef.current)return;
+      if(local)item=local;
+    }
+    let scheduleSelection:StateUpdateScheduleMetadata;
+    try { scheduleSelection=scheduleForStateUpdateEdit(response??{},item.current); }
+    catch(error){setError(error instanceof Error?error.message:"Horario no disponible.");return;}
+    setSelectedItem({...item,scheduleSelection});
     setConflict(null);
     setError(null);
     setRefreshError(null);
@@ -761,8 +781,46 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     });
   }
 
+  async function openScheduleReview() {
+    if(!ownerKey || !selectedContractId || !selectedItem?.current || !visibleResponse?.schedulePolicy || !definitionCache.reviewStateUpdateSchedule) return;
+    const capturedScope=resolutionScope;
+    const record=await definitionCache.getCachedRecord({ownerKey,contractId:selectedContractId,entityTypeId:visibleResponse.targetEntityType.id,recordId:selectedItem.current.recordId});
+    const clientRequestId=record?.values.clientRequestId;
+    if(resolutionScopeRef.current!==capturedScope || !resolutionMountedRef.current) return;
+    try {
+      const previous=stateUpdateScheduleMetadata(selectedItem.current).scheduleApplication;
+      const next=scheduleForStateUpdateEdit(visibleResponse,null).scheduleApplication;
+      if(!record || record.syncStatus!=="failed" || record.syncErrorCode!=="SCHEDULE_REVISION_CHANGED" || typeof clientRequestId!=="string" || !clientRequestId || !previous || !next) throw new Error("Sólo puede revisarse una alta rechazada explícitamente por un cambio de horario. Los envíos inciertos se conservan.");
+      if(stateUpdateSchedulesEqual({scheduleApplication:previous},{scheduleApplication:next}))throw new Error("No hay una revisión diferente preparada. Actualiza el contexto con conexión; la intención original se conserva.");
+      setScheduleReview({ownerKey,contractId:selectedContractId,appViewId:appView.id,targetEntityTypeId:visibleResponse.targetEntityType.id,date,dateFieldId:visibleResponse.dateFieldId,identity,
+        localRecordId:record.localId,subjectRecordId:selectedItem.subject.id,clientRequestId,previousApplication:previous,application:next});
+    }catch(error){setError(error instanceof Error?error.message:"No fue posible revisar el horario.");}
+  }
+  async function confirmScheduleReview() {
+    if(!scheduleReview || isSaving || resolutionInFlightRef.current || !definitionCache.reviewStateUpdateSchedule) return;
+    const selected=scheduleReview, capturedScope=resolutionScope;
+    if(selected.ownerKey!==ownerKey || selected.contractId!==selectedContractId || selected.appViewId!==appView.id || selected.date!==date || compositeIdentityKey(selected.identity)!==identityKey) {setScheduleReview(null);return;}
+    resolutionInFlightRef.current=true;
+    setIsSaving(true);
+    try {
+      await definitionCache.reviewStateUpdateSchedule(selected);
+      if(resolutionScopeRef.current!==capturedScope || !resolutionMountedRef.current) return;
+      setScheduleReview(null);clearEditor();await refreshRecordsSyncSummary();
+      if(isOnline){await syncPendingRecords();await loadWorkflow({operation:"refresh"});}
+    }catch(error){if(resolutionScopeRef.current===capturedScope)setError(error instanceof Error?error.message:"El cambio se conserva para revisión.");}
+    finally{resolutionInFlightRef.current=false;if(resolutionMountedRef.current)setIsSaving(false);}
+  }
+
   async function saveSelected(overwrite = false, expectedUpdatedAt?: string) {
     if (!response || !selectedItem || !selectedContractId || isSaving || !contextReady) {
+      return;
+    }
+
+    let selectedSchedule:StateUpdateScheduleMetadata;
+    try {
+      selectedSchedule=selectedItem.scheduleSelection ?? scheduleForStateUpdateEdit(response,selectedItem.current);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "El horario guardado requiere revisión.");
       return;
     }
 
@@ -789,13 +847,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       const cached = ownerKey ? await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, entityTypeId: response.targetEntityType.id, recordId: selectedItem.current.recordId }) : null;
       if (resolutionScopeRef.current !== selectedScope || !resolutionMountedRef.current) return;
       if (!cached || cached.serverId) {
-        setConflict({ confirmationKey: compositeConfirmationKey(selectedScope, selectedItem.subject.id, selectedItem.current.updatedAt, stateSnapshot.stateValues, buildStateUpdateExtraSubmit(response.extraFields, extraValues)), result: "CONFLICT", subjectRecordId: selectedItem.subject.id, subjectName: selectedItem.subject.displayName,
+        setConflict({ confirmationKey: compositeConfirmationKey(selectedScope, selectedItem.subject.id, selectedItem.current.updatedAt, stateSnapshot.stateValues, buildStateUpdateExtraSubmit(response.extraFields, extraValues), selectedItem.current), result: "CONFLICT", subjectRecordId: selectedItem.subject.id, subjectName: selectedItem.subject.displayName,
           existing: selectedItem.current, requested: { extraValuesFormat: "field-value", stateValues: stateSnapshot.stateValues.map(v => ({ ...v, label: null, optionId: v.optionId ?? null })), extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues) } });
         return;
       }
     }
     const savingScope = resolutionScope;
     const entry: StateUpdateEntry = {
+      ...selectedSchedule,
       identity,
       expectedUpdatedAt,
       extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues),
@@ -817,11 +876,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         }
 
         const localRecord = await definitionCache.saveStateUpdateLocally({
+          ...selectedSchedule,
           appViewId: appView.id,
           identity,
           contractId: selectedContractId,
           date: hasDate ? date : undefined,
-          expectedUpdatedAt: expectedUpdatedAt ?? selectedItem.current?.updatedAt ?? null,
+          expectedUpdatedAt: !overwrite && selectedItem.current?.localExpectedUpdatedAt !== undefined
+            ? selectedItem.current.localExpectedUpdatedAt : expectedUpdatedAt ?? selectedItem.current?.updatedAt ?? null,
           preserveIdenticalConfirmedIntent: compositeMode,
           extraValues: buildStateUpdateExtraSubmit(response.extraFields, extraValues),
           historyMode: response.historyMode,
@@ -837,6 +898,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         if (compositeMode && resolutionScopeRef.current !== savingScope) return;
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         insertSavedLatestItem({
+          ...stateUpdateScheduleMetadata(localRecord),
           recordId: localRecord.localRecordId,
           stateValues: stateSnapshot.stateValues,
           subject: selectedItem.subject,
@@ -884,6 +946,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
         if (successfulResult) {
           insertSavedLatestItem({
+            ...stateUpdateScheduleMetadata(successfulResult),
             recordId: successfulResult.recordId,
             stateValues: stateSnapshot.stateValues,
             subject: selectedItem.subject,
@@ -905,11 +968,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   }
 
   function insertSavedLatestItem({
+    schedule,
+    scheduleApplication,
     recordId,
     stateValues: savedStateValues,
     subject,
     updatedAt,
-  }: {
+  }: StateUpdateScheduleMetadata & {
     recordId: string;
     stateValues: StateUpdateEntry["stateValues"];
     subject: StateUpdateItem["subject"];
@@ -925,6 +990,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
 
       const item: StateUpdateLatestItem = {
+        ...stateUpdateScheduleMetadata({ schedule, scheduleApplication }),
         date: hasDate ? date : null,
         extraValues: buildStateUpdateExtraSubmit(current.extraFields, extraValues),
         extraValuesFormat: "field-value",
@@ -968,7 +1034,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       return;
     }
 
-    if (compositeMode && (!selectedItem || !response || conflict.confirmationKey !== compositeConfirmationKey(resolutionScope, selectedItem.subject.id, selectedItem.current?.updatedAt ?? "", buildEffectiveStateSnapshot({currentStateValues:selectedItem.current?.stateValues,fields:response.stateFields,formValues:stateValues}).stateValues, buildStateUpdateExtraSubmit(response.extraFields,extraValues)))) {
+    if (compositeMode && (!selectedItem || !response || conflict.confirmationKey !== compositeConfirmationKey(resolutionScope, selectedItem.subject.id, selectedItem.current?.updatedAt ?? "", buildEffectiveStateSnapshot({currentStateValues:selectedItem.current?.stateValues,fields:response.stateFields,formValues:stateValues}).stateValues, buildStateUpdateExtraSubmit(response.extraFields,extraValues), selectedItem.current ?? undefined))) {
       setConflict(null);setError("El contexto o el cambio mostrado cambió. Revisa y confirma nuevamente.");return;
     }
     await saveSelected(true, conflict.existing.updatedAt);
@@ -998,6 +1064,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     try {
       const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
+        ...(record.schedule ? { schedule: record.schedule } : {}),
+        ...(record.scheduleApplication ? { scheduleApplication: record.scheduleApplication } : {}),
         conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
         identity,
@@ -1183,6 +1251,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
             onChange={value => { const optionId = String(value); if(identityValues[field.fieldId]===optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:optionId}));setItems([]);setConflict(null);setSuccessMessage(null); }} />
         </View>)}</View>
+        {visibleResponse?.schedulePolicy ? <Text accessibilityLiveRegion="polite">{selectedItem?.scheduleSelection?.scheduleApplication
+          ? formatAppliedSchedule(selectedItem.scheduleSelection.scheduleApplication)
+          : visibleResponse.scheduleResolution?.status==="resolved" ? `Horario para nuevas altas: ${formatAppliedSchedule(visibleResponse.scheduleResolution.application)}`
+          : "Sin horario aplicable preparado para nuevas altas. Los reportes existentes conservan su horario registrado."}</Text> : null}
         {!contextReady ? <Text>{compositeContextInstruction(date, response?.identityFields ?? [], identityValues)}</Text> : null}
         {contextReady && contextPreparation.phase === "ready" ? <Text>Copia del contexto actualizada para uso sin conexión.</Text> : null}
         {contextReady && contextPreparation.phase === "partial" ? <Text>Preparación parcial: faltan sujetos o reportes por verificar. Puedes reintentar.</Text> : null}
@@ -1270,6 +1342,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             scope={{ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, identity }}
             observedUpdatedAt={selectedItem.current.updatedAt} localRecordId={selectedItem.current.recordId} subjectRecordId={selectedItem.subject.id}
             onCancelled={() => { setSelectedItem(null); void loadWorkflow({ operation: "refresh" }); }} /> : null}
+          {visibleResponse?.schedulePolicy && selectedItem.current?.localScheduleReviewRequired===true ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>void openScheduleReview()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Revisar horario rechazado</Text></Pressable> : null}
           {compositeMode ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Volver a buscar</Text></Pressable> : null}
           </View>
         </View>
@@ -1287,6 +1360,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
+      <Modal visible={!!scheduleReview} transparent onRequestClose={()=>{if(!isSaving)setScheduleReview(null);}}><View style={styles.modalBackdrop}><View style={styles.modalPanel}>
+        <Text style={styles.label}>Confirmar nueva revisión de horario</Text><Text>El contenido, la autorización y la versión base se conservan. Se creará un comando nuevo sólo para esta intención rechazada.</Text>
+        <Text>Guardado: {formatAppliedSchedule(scheduleReview?.previousApplication)}</Text><Text>Revisado: {formatAppliedSchedule(scheduleReview?.application)}</Text>
+        <View style={styles.formActions}><Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setScheduleReview(null)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Cancelar</Text></Pressable><Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>void confirmScheduleReview()} style={styles.primaryButton}><Text style={styles.primaryText}>Confirmar horario revisado</Text></Pressable></View>
+      </View></View></Modal>
       <Modal visible={confirmContextExit} transparent onRequestClose={()=>setConfirmContextExit(false)}><View testID="state-update-modal" style={styles.modalBackdrop}><View style={styles.modalPanel}>
         <Text style={styles.title}>¿Descartar el borrador sin guardar?</Text><Text>Los cambios ya guardados y pendientes se conservan.</Text>
         <Pressable accessibilityRole="button" onPress={()=>setConfirmContextExit(false)} style={styles.secondaryButton}><Text>Continuar editando</Text></Pressable>
@@ -1321,6 +1399,7 @@ function stateUpdateDurableConflictState(record: CachedStateUpdateRecord): Confl
   return {
     durableRecord: record,
     existing: {
+      ...stateUpdateScheduleMetadata({ schedule: record.conflictRemoteSchedule, scheduleApplication: record.conflictRemoteScheduleApplication }),
       extraValues: record.conflictRemoteExtraValues,
       extraValuesFormat: record.conflictRemoteExtraValuesFormat,
       recordId: record.localRecordId,
@@ -1328,6 +1407,7 @@ function stateUpdateDurableConflictState(record: CachedStateUpdateRecord): Confl
       updatedAt: record.conflictRemoteUpdatedAt ?? "",
     },
     requested: {
+      ...stateUpdateScheduleMetadata(record),
       extraValues: record.extraValues,
       extraValuesFormat: record.extraValuesFormat,
       stateValues: record.stateValues,

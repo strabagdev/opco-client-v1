@@ -1,3 +1,4 @@
+import { stateUpdateScheduleMetadata } from "../../../lib/state-update-schedule";
 import { decimalPlaces, decimalFractionLength, formatConfiguredDecimal } from "../../../lib/decimal-precision";
 import { resolveStateUpdateSelectExtra, type StateUpdateExtraValuesFormat } from "../../../lib/state-update-extras";
 import {
@@ -55,6 +56,7 @@ export function mergeStateUpdateResponseWithLocalConflicts(
       return {
         ...item,
         current: {
+          ...stateUpdateScheduleMetadata(local),
           extraValues: local.extraValues,
           extraValuesFormat: local.extraValuesFormat,
           recordId: local.localRecordId,
@@ -89,6 +91,7 @@ function stateUpdateConflictReplacesLatest(
 
 export function stateUpdateConflictLatestItem(record: CachedStateUpdateRecord): StateUpdateLatestItem {
   return {
+    ...stateUpdateScheduleMetadata(record),
     date: record.date ?? null,
     extraValues: record.extraValues,
     extraValuesFormat: record.extraValuesFormat,

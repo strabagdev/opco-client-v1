@@ -1,3 +1,4 @@
+import { stateUpdateScheduleMetadata, stateUpdateScheduleRequest, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
 import { config, trimTrailingSlash } from "./config";
 
@@ -766,7 +767,10 @@ export type StateUpdateConflictExtraValue = {
   remoteValue?: EntityRecordValue;
 };
 
-export type StateUpdateCurrent = {
+export type StateUpdateCurrent = StateUpdateScheduleMetadata & {
+  // Local read model only: an unsent scheduled intention can have no remote base.
+  localExpectedUpdatedAt?: string | null;
+  localScheduleReviewRequired?: boolean;
   extraValuesFormat?: "field-value";
   extraValues?: Record<string, EntityRecordValue>;
   recordId: string;
@@ -779,7 +783,7 @@ export type StateUpdateItem = {
   subject: StateUpdateSubject;
 };
 
-export type StateUpdateLatestItem = {
+export type StateUpdateLatestItem = StateUpdateScheduleMetadata & {
   extraValuesFormat?: "field-value";
   date?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
@@ -807,6 +811,8 @@ export type StateUpdateSummary = {
 };
 
 export type StateUpdateResponse = {
+  schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
+  scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
   identityFields?: StateUpdateField[];
   identityDefinition?: { version: 1; definitionId: string };
   identityContext?: CompositeStateIdentity | null;
@@ -883,7 +889,7 @@ type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "la
   subjects?: StateUpdateRawItem[];
 };
 
-export type StateUpdateEntry = {
+export type StateUpdateEntry = StateUpdateScheduleMetadata & {
   identity?: CompositeStateIdentity;
   expectedUpdatedAt?: string;
   extraValues?: Record<string, EntityRecordValue>;
@@ -904,20 +910,22 @@ export type StateUpdateRequest = StateUpdateEntry & {
 
 export type StateUpdateBatchResult =
   | {
+      scheduleApplication?: StateUpdateScheduleMetadata["scheduleApplication"];
+      schedule?: StateUpdateScheduleMetadata["schedule"];
       recordId: string;
       result: "CREATED" | "UNCHANGED" | "UPDATED";
       subjectRecordId: string;
       updatedAt: string;
     }
   | {
-      existing: {
+      existing: StateUpdateScheduleMetadata & {
         extraValuesFormat?: "field-value";
         extraValues?: Record<string, EntityRecordValue>;
         recordId: string;
         stateValues: StateUpdateCurrentFieldValue[];
         updatedAt: string;
       };
-      requested: {
+      requested: StateUpdateScheduleMetadata & {
         extraValuesFormat?: "field-value";
         extraValues?: Record<string, EntityRecordValue>;
         stateValues: StateUpdateCurrentFieldValue[];
@@ -961,14 +969,14 @@ type StateUpdateApiConflictResult = {
     requestedValue?: EntityRecordValue;
     source?: "extra" | "state" | string | null;
   }[];
-  existing: {
+  existing: StateUpdateScheduleMetadata & {
     stateValues?: StateUpdateCurrentFieldValue[];
     extraValuesFormat?: "field-value";
     extraValues?: Record<string,EntityRecordValue>;
     recordId: string;
     updatedAt: string;
   };
-  requested: {
+  requested: StateUpdateScheduleMetadata & {
     states: Record<string, EntityRecordValue>;
   };
   result: "CONFLICT";
@@ -2085,6 +2093,7 @@ function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): St
 
 function serializeStateUpdateRequest(input: StateUpdateRequest) {
   return {
+    ...stateUpdateScheduleRequest(input),
     ...(input.identity ? { identity: input.identity } : {}),
     clientRequestId: input.clientRequestId,
     date: input.date,
@@ -2114,6 +2123,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
 
   return {
     existing: {
+      ...stateUpdateScheduleMetadata(result.existing),
       extraValuesFormat: result.existing.extraValuesFormat,
       extraValues: result.existing.extraValues ?? objectFromConflictExtraValues(extraDifferences, "remoteValue"),
       recordId: result.existing.recordId,
@@ -2127,6 +2137,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
     },
     extraValues: extraDifferences.length > 0 ? extraDifferences : undefined,
     requested: {
+      ...stateUpdateScheduleMetadata(result.requested),
       extraValuesFormat: result.existing.extraValuesFormat,
       extraValues: objectFromConflictExtraValues(extraDifferences, "localValue"),
       stateValues: stateDifferences.map((difference) => ({

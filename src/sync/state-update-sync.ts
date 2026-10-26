@@ -1,3 +1,4 @@
+import { StateUpdateScheduleReviewError, stateUpdateScheduleMetadata } from "../lib/state-update-schedule";
 import { compositeIdentityKey } from "../lib/state-update-identity";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
@@ -100,6 +101,7 @@ async function runSync({
       result.operationsAttempted += 1;
 
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
+        ...stateUpdateScheduleMetadata(payload),
         identity: payload.identity,
         clientRequestId: operation.clientRequestId,
         date: payload.date,
@@ -268,6 +270,9 @@ function shouldAttemptRemoteStateUpdateReconcile(
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {
+  if (error instanceof StateUpdateScheduleReviewError) {
+    return { action: "fail", code: error.code, message: error.message };
+  }
   if (error instanceof OpcoApiError && error.code === "IDEMPOTENCY_KEY_REUSED") {
     return {
       action: "fail",

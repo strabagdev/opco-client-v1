@@ -56,6 +56,7 @@ export type PreparedAppViewDefinition =
       extraFields: EntityField[];
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
+      schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
       identityFields?: import("./opco-api").StateUpdateField[];
       identityDefinition?: { version: 1; definitionId: string };
       sourceEntityTypeId: string;
@@ -341,7 +342,7 @@ function readiness({
 export function buildStateUpdateCoverageScope(
   context: { appViewId: string; contractId: string; ownerKey: string; date?: string; identity?: import("./opco-api").CompositeStateIdentity },
   definition: Pick<Extract<PreparedAppViewDefinition, { kind: "state-update" }>,
-    "dateFieldId" | "historyMode" | "uniqueness" | "targetEntityTypeId">,
+    "dateFieldId" | "historyMode" | "uniqueness" | "targetEntityTypeId" | "schedulePolicy">,
 ) {
   return {
     ...context,
@@ -350,5 +351,6 @@ export function buildStateUpdateCoverageScope(
     historyMode: definition.historyMode,
     uniqueness: definition.uniqueness,
     targetEntityTypeId: definition.targetEntityTypeId,
+    ...(definition.schedulePolicy ? {scheduleBindingId:definition.schedulePolicy.bindingId} : {}),
   };
 }

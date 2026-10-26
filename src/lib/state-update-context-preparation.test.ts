@@ -118,3 +118,23 @@ describe("selected context uses the existing preparation coordinator", () => {
     expect(stateUpdateContextPreparationKey({ ...f.scope, identity: { ...f.scope.identity, definitionId: "other" } })).not.toBe(key);
   });
 });
+
+it("prepares the selected schedule revision through the existing coordinator without loading other combinations",async()=>{
+ const f=fixture();f.input.scope={...f.scope,scheduleBindingId:"binding"};
+ const policy={schemaVersion:1 as const,kind:"consumer" as const,bindingId:"binding",catalogEntityTypeId:"catalog",sourceFieldId:"context",dateFieldId:"date",activeFrom:"2020-01-01",optionBindings:[{optionId:"option-a",scheduleRecordId:"schedule"}],requirement:"required-for-new-records" as const,operationalDatePolicy:"explicit-start-date" as const,durationPolicy:"civil-clock" as const};
+ const application={schemaVersion:1 as const,bindingId:"binding",revisionId:"r1",revisionDigest:"digest",scheduleRecordId:"schedule",operationalDate:f.scope.date,applied:{name:"Synthetic",startTime:"20:00",endTime:"08:00",endDayOffset:1,timeZone:"America/Santiago",nominalMinutes:720,durationPolicy:"civil-clock" as const}};
+ const resolution={schemaVersion:1 as const,bindingId:"binding",sourceFieldId:"context",dateFieldId:"date",operationalDate:f.scope.date,optionId:"option-a",status:"resolved" as const,application};
+ f.api.getStateUpdateWorkflow.mockImplementation(async(_t,_c,_v,query)=>({...f.response(query.identity,query.subjectRecordId),schedulePolicy:policy,scheduleResolution:resolution}));
+ await Promise.all([prepareStateUpdateContextOnce(f.input),prepareStateUpdateContextOnce(f.input)]);
+ expect(f.api.getStateUpdateWorkflow).toHaveBeenCalledTimes(3); // one resolution, then two authoritative subject reads
+ expect(f.store.upsertStateUpdateSnapshot).toHaveBeenCalledWith(expect.objectContaining({schedulePolicy:policy,scheduleResolution:resolution,items:[],latest:[],complete:false}));
+ for(const call of f.api.getStateUpdateWorkflow.mock.calls)expect(call[3].identity).toEqual(f.scope.identity);
+ expect(f.coverage.get(stateUpdateContextPreparationKey(f.input.scope))?.status).toBe("complete");
+});
+
+it("an absent schedule policy response cannot certify an activated context or retry indefinitely",async()=>{
+ const f=fixture();f.input.scope={...f.scope,scheduleBindingId:"binding"};
+ await expect(prepareStateUpdateContextOnce(f.input)).rejects.toThrow("SCHEDULE_CONTEXT_RESPONSE_MISMATCH");
+ expect(f.api.getStateUpdateWorkflow).toHaveBeenCalledTimes(1);expect(f.store.upsertStateUpdateSnapshot).not.toHaveBeenCalled();
+ expect(f.coverage.get(stateUpdateContextPreparationKey(f.input.scope))?.status).toBe("partial");
+});

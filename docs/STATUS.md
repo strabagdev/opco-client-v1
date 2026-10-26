@@ -2979,3 +2979,87 @@ Respaldo, checks y hashes:
 `/home/dannysilver/dev2026/backups/decimal-precision-editor-fix/2026-10-25/`.
 Sin activación productiva, migraciones, commit, push o deploy. 402 exclusiones, horarios/RED y todos
 los prefijos documentales anteriores preservados. V11 pausado; auditoría general abierta.
+
+
+## Horarios — puente local de compatibilidad — 2026-10-25, SIN PUBLICAR
+
+Sin catálogo/editor ni activación. Client conserva revisión/snapshot opcionales en guardado,
+comparación, confirmación, DTO/snapshot, sync, recibos y restauración. El guardado idéntico conserva
+requestId/autorización/base/entrega; revisión diferente se distingue y no sustituye la intención
+fijada sin revisión explícita. No se añade todavía el comando de selección de otra revisión.
+Core rechaza schedule/scheduleApplication con400 SCHEDULE_NOT_SUPPORTED antes de idempotencia o
+escritura. No se acepta un horario para descartarlo; ninguna migración ni namespace nuevo.
+
+Candidato aislado:372 PASS Client/15 archivos y77 PASS Core/2, worker1/timeouts estándar, sin omitidos;
+cuatro RED archivadas→GREEN. Typecheck/lint afectado/diff-check PASS. Payload exacto sin horario de
+Attendance y STATE_UPDATE acreditado en HEAD publicado y candidato; regresiones de confirmación,
+cancelación, reapertura, sync/conflictos/append/respuestas tardías incluidas. SQLite real en archivo;
+transporte/ACK/replay simulados y guard Core con Prisma simulado. Sin aceptación de horarios en Core/
+PostgreSQL, nuevo Chrome/OPFS/Safari, suite completa ni build. No se presenta como horarios completos.
+
+Activación aún bloqueada por consumidores previos al puente: SW no excluye JS residente. Primero
+Core guard→Client compatible desactivado; acreditar adopción en perfiles antes de catálogo/aplicación
+completa y activación posterior. Rollback compatible. Sin cambios de comportamientos sin horario,
+configuración/datos productivos, schema, commit/push/deploy;402 exclusiones/horarios previos intactos.
+Inventario, parches, hashes y evidencia sanitizada:
+/home/dannysilver/dev2026/backups/schedule-runtime-compatibility-bridge/2026-10-25/.
+V11 pausado; no se reabre ni se declara cerrada la auditoría general.
+
+## Horarios: catálogo/editor e integración local completa de primera etapa — 2026-10-25
+
+Se retoma el alcance posterior al puente: editor real de catálogo/revisiones/activación explícita
+en Core, aplicación transaccional y preparación offline del contexto en Client. Sólo compuesto
+update-current, sin horarios productivos activados; SQLite v10 y epoch2 sin cambios. Véase la
+sección nueva de STATE_UPDATE para contrato, controles de revisión y límites.
+
+Validación focalizada: **370 PASS Client + 23 PASS de resolución aislada / 149 PASS Core**, con PostgreSQL local real; pruebas
+sin horario de Attendance/STATE_UPDATE, reapertura, confirmación, conflictos, replay y protección
+contra respuestas tardías. Typecheck, lint afectado y diff-check se registran en checks.json.
+Sin suite completa ni build de cierre; export local final para OPFS. Next/editor y Client/API/Auth
+reales: preparación automática, aplicación nocturna, edición offline confirmada, cierre/reapertura,
+ACK de la misma fila, cola vacía y cobertura recuperada por refresco; posterior reapertura offline.
+No se confunde este recorrido con aceptación simulada ni con resolución de conflictos en navegador.
+
+Respaldo reproducible: `/home/dannysilver/dev2026/backups/schedule-catalog-local-integration/2026-10-25/`.
+Incluye inventario, parches incremental y combinado con el puente, hashes, checks y evidencia
+sanitizada. Preserva 402 exclusiones, experimentos, documentación ajena y respaldos anteriores.
+Dos migraciones aditivas aplicadas sólo a PostgreSQL local; sin cambios productivos, commit,
+push ni deploy. Activación/publicación bloqueadas por runtimes anteriores todavía no excluidos;
+no se atribuye seguridad a ACCESS_HANDLE_BUSY/Invalid VFS state. V11 pausado; auditoría abierta.
+
+## Horarios — evaluación de publicación y activación — 2026-10-26
+
+Se corrige el alcance del bloqueo anterior: **soporte desactivado compatible para avanzar en orden
+Core→Client**; la activación sigue condicionada a excluir operativamente runtimes anteriores y cerrar
+mediante sync/resolución explícita las intenciones sin horario del destino. Sin borrar pendientes,
+namespace nuevo ni cambios de infraestructura. El procedimiento concreto está en la nueva sección de
+STATE_UPDATE: comprobar bundle EJECUTADO en computador/Safari iPhone, incluida reapertura offline,
+cerrar instancias antiguas y mantener fuera de uso la PWA antigua. No es exclusión técnica automática.
+
+Nueva comprobación indispensable:13 PASS/2 archivos sobre Core/Prisma publicados y PostgreSQL local con
+ambas migraciones ya aplicadas; sin aplicar otras migraciones, sin suites/builds/navegador repetidos.
+Se reutilizan393 PASS Client/149 Core y caracterización previa de pérdida/transporte. Último publicado
+según informe:ea8223a/e3a0a995; consulta pública actual HTTP403, sin prueba nueva del bundle en dispositivos.
+No cambios funcionales ni publicación/activación ejecutadas. Respaldo original intacto,402 exclusiones
+y demás pendientes preservados. Informe complementario y tiempos medidos en:
+`/home/dannysilver/dev2026/backups/schedule-publication-evaluation/2026-10-26/`.
+V11 pausado; la auditoría general no se declara cerrada.
+
+## Horarios — cierre técnico sin publicación — 2026-10-26
+
+Lote final combinado: Client18 archivos/92 hunks; Core16/46. Código y pruebas idénticos a lo acreditado:
+393 PASS Client/149 Core y13 comprobaciones de compatibilidad adicionales reutilizadas, con límites de
+Chrome/OPFS originales. Builds finales Client/Next-Turbopack PASS; API pública efectiva, index/SW y
+namespace epoch2 verificados en el artefacto local aceptado. Intentos de build rechazados documentados,
+sin ocultarlos ni atribuirles regresión funcional. Typecheck/lint reutilizados por hash; diff-check y
+reconstrucción exacta finales PASS. Sin nuevas suites/navegador ni cambios funcionales.
+
+**Bloqueo para publicación: respaldo productivo actualizado aún no acreditado.** Se verificó la copia
+lógica19-10 (22 migraciones), hash/restauración histórica; no se creó respaldo ni accedió a producción.
+Después de resolverlo y autorizar publicación: Core+migraciones→verificaciones→Client sin activar.
+Activación es otra etapa condicionada a adopción de runtimes compatibles y resolver/sincronizar los
+comandos sin horario del destino, sin borrados. Rollback compatible tras activar; detalles en STATE_UPDATE.
+Inventario/parches/checks/hashes/tiempos:
+`/home/dannysilver/dev2026/backups/schedule-technical-close/2026-10-26/`.
+402 exclusiones y todos los pendientes/respaldos previos intactos; sin commit/push/deploy/migración
+productiva/activación. No se inició lectura de códigos. V11 pausado; auditoría general abierta.

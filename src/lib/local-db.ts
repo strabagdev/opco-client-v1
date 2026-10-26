@@ -1,3 +1,5 @@
+import { validateScheduleResolution, type CachedStateUpdateScheduleContext, type StateUpdateSchedulePolicy } from "./state-update-schedule";
+import { pinnedStateUpdateScheduleMetadata, stateUpdateScheduleMetadata, stateUpdateScheduleRequest, stateUpdateSchedulesEqual, canonicalScheduleMetadata, StateUpdateScheduleReviewError } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
 import { stateUpdateV10Scope, stateUpdateRows, stateUpdateSnapshots, stateUpdateVirtualRecord,
   stateUpdateLogicalRemoteId, stateUpdateRemoteBinding, stateUpdateEventDate,
@@ -262,6 +264,9 @@ export function getLocalDatabase(): LocalDatabase {
 	    getAttendanceDaySnapshotHydration,
 	    getStateUpdateSnapshotCoverage,
       getStateUpdateCurrentCoverage,
+    getStateUpdateScheduleContext,
+    getStateUpdateScheduleReviewCandidate,
+    reviewStateUpdateSchedule,
       setStateUpdateCurrentCoverage,
 	    getOfflinePreparationDiagnostics,
     getAttendanceContextSelection,
@@ -2856,9 +2861,26 @@ async function saveStateUpdateLocallyWithRecordId(
           STATE_UPDATE_OPERATION,
         )
       : null;
-    const expectedUpdatedAt = input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
+    const pinnedPayload = existingOperation ? parsePendingStateUpdatePayload(existingOperation.payload_json) : null;
+    const durableSchedule = pinnedStateUpdateScheduleMetadata(existingRecord?.values, pinnedPayload);
+    const requestedSchedule = stateUpdateScheduleMetadata(input);
+    if (Object.keys(durableSchedule).length && Object.keys(requestedSchedule).length && !stateUpdateSchedulesEqual(durableSchedule, requestedSchedule)) {
+      // This compatibility delivery has no revision-selection command. Never reinterpret a pinned intention.
+      throw new StateUpdateScheduleReviewError();
+    }
+    const schedule = Object.keys(durableSchedule).length ? durableSchedule : requestedSchedule;
+    if (schedule.schedule && !schedule.scheduleApplication) throw new StateUpdateScheduleReviewError();
+    if (schedule.scheduleApplication && "operationalDate" in schedule.scheduleApplication && schedule.scheduleApplication.operationalDate !== input.date) {
+      throw new StateUpdateScheduleReviewError();
+    }
+    if (Object.keys(schedule).length && pinnedPayload && !resolvedLocalRecordId && input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== pinnedPayload.expectedUpdatedAt) {
+      throw new StateUpdateScheduleReviewError();
+    }
+    const expectedUpdatedAt = Object.keys(schedule).length && pinnedPayload && !resolvedLocalRecordId
+      ? pinnedPayload.expectedUpdatedAt ?? null : input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
     const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
     const values: OfflineStateUpdateValues = {
+      ...schedule,
       identity: input.identity,
       appViewId: input.appViewId,
       date: input.date,
@@ -2873,6 +2895,7 @@ async function saveStateUpdateLocallyWithRecordId(
       subjectRecordId: input.subjectRecordId,
     };
     const nextPayload: OfflineStateUpdatePayload = {
+      ...schedule,
       expectedRecordId: resolvedLocalRecordId
         ? (existingRecord?.conflictRemoteValues as OfflineStateUpdateValues | null)?.remoteRecordId ?? existingRecord?.serverId ?? undefined
         : undefined,
@@ -2991,6 +3014,7 @@ async function saveStateUpdateLocallyWithRecordId(
 }
 
 async function searchStateUpdateSubjects({
+  scheduleBindingId,
   appViewId,
   contractId,
   date,
@@ -3004,7 +3028,7 @@ async function searchStateUpdateSubjects({
   targetEntityTypeId,
 }: SearchStateUpdateSubjectsInput) {
   const currentCoverage = (usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness }) || uniqueness === "subject-date-fields")
-    ? await getStateUpdateCurrentCoverage({ appViewId, contractId, date, dateFieldId, historyMode,
+    ? await getStateUpdateCurrentCoverage({ scheduleBindingId, appViewId, contractId, date, dateFieldId, historyMode,
         uniqueness, identity, ownerKey, sourceEntityTypeId, targetEntityTypeId })
     : null;
   const subjects = await listCachedRecords({
@@ -3050,9 +3074,14 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
   const db = await getDatabase();
   const cachedAt = new Date().toISOString();
   let staleSyncedRemoved = 0, contentVerified = true, reconciledFromSnapshot = false;
-  const ids = new Set<string>();
+  const ids = new Set<string>(), missingSchedule = new Set<string>();
   await db.withTransactionAsync(async transaction => {
     const scope = await stateUpdateV10Scope(transaction, input, input.projectionDefinition);
+    if (input.schedulePolicy) {
+      const resolution=validateScheduleResolution(input.schedulePolicy,input.scheduleResolution,input);
+      await transaction.runAsync("INSERT INTO app_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        stateUpdateScheduleContextKey({...input,policy:input.schedulePolicy}),JSON.stringify({resolution,refreshedAt:cachedAt}));
+    }
     const dated = usesDatedSubjectHistory(input);
     const physical = await transaction.getAllAsync<EntityRecordRow>(
       "SELECT * FROM entity_records WHERE owner_key=? AND contract_id=? AND entity_type_id=? AND json_extract(values_json,'$.appViewId')=?",
@@ -3060,7 +3089,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     const previous = await stateUpdateSnapshots(transaction, scope);
     const events = new Map<string, { item: StateUpdateItem; eventDate?: string }>();
     for (const event of input.latest ?? []) events.set(event.recordId, {
-      item: { subject: event.subject, current: { recordId: event.recordId, updatedAt: event.updatedAt,
+      item: { subject: event.subject, current: { ...stateUpdateScheduleMetadata(event), recordId: event.recordId, updatedAt: event.updatedAt,
         stateValues: event.stateValues ?? [], extraValues: event.extraValues, extraValuesFormat: event.extraValuesFormat } },
       eventDate: normalizeStateUpdateLogicalDate(event.date),
     });
@@ -3070,10 +3099,10 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
       const cached = previous.find(p => stateUpdateLogicalRemoteId(p.row) === item.current!.recordId &&
         p.verified && p.row.remote_updated_at === item.current!.updatedAt);
       const inherited = fromLatest?.item.current?.updatedAt === item.current.updatedAt ? fromLatest.item.current :
-        cached ? { stateValues: JSON.parse(cached.row.values_json).stateValues, extraValues: JSON.parse(cached.row.values_json).extraValues, extraValuesFormat: JSON.parse(cached.row.values_json).extraValuesFormat } : null;
+        cached ? { ...stateUpdateScheduleMetadata(JSON.parse(cached.row.values_json)), stateValues: JSON.parse(cached.row.values_json).stateValues, extraValues: JSON.parse(cached.row.values_json).extraValues, extraValuesFormat: JSON.parse(cached.row.values_json).extraValuesFormat } : null;
       const states = new Map<string, import("./opco-api").StateUpdateCurrentFieldValue>((inherited?.stateValues ?? []).map((v: import("./opco-api").StateUpdateCurrentFieldValue) => [v.fieldId, v]));
       for (const value of item.current.stateValues) states.set(value.fieldId, value);
-      const full = { ...item, current: { ...item.current, stateValues: [...states.values()],
+      const full = { ...item, current: { ...stateUpdateScheduleMetadata(inherited), ...item.current, stateValues: [...states.values()],
         extraValues: item.current.extraValues ?? inherited?.extraValues,
         extraValuesFormat: item.current.extraValues !== undefined ? item.current.extraValuesFormat : inherited?.extraValuesFormat } };
       events.set(item.current.recordId, { item: full, eventDate:
@@ -3082,6 +3111,16 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     }
     for (const [id, { item, eventDate }] of events) {
       const current = item.current!;
+      if (input.schedulePolicy && (!current.scheduleApplication || (!('kind' in current.scheduleApplication) && current.scheduleApplication.bindingId !== input.schedulePolicy.bindingId))) {
+        contentVerified=false;missingSchedule.add(id);ids.add(id);continue;
+      }
+      const knownSchedule = previous.find(p => stateUpdateLogicalRemoteId(p.row) === id)?.row ??
+        physical.find(r => r.sync_status === "synced" && stateUpdateLogicalRemoteId(r) === id);
+      if (knownSchedule && Object.keys(stateUpdateScheduleMetadata(JSON.parse(knownSchedule.values_json))).length &&
+          !Object.keys(stateUpdateScheduleMetadata(current)).length) {
+        // An older/incomplete response cannot erase an applied schedule or certify this refresh.
+        contentVerified = false; missingSchedule.add(id); ids.add(id); continue;
+      }
       const receivedDate = eventDate ?? (dated ? undefined : normalizeStateUpdateLogicalDate(input.date));
       // Preserve existing exact snapshot recovery, but never infer an append ACK or resolve a conflict.
       if ((scope.historyMode ?? "update-current") === "update-current" && scope.uniqueness !== "none" &&
@@ -3107,7 +3146,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
             reconciledFromSnapshot = true;
           } else {
             // No outbox exists: repair only the matching scoped orphan, retaining its durable local identity.
-            const recovered: OfflineStateUpdateValues = { ...values, expectedUpdatedAt: current.updatedAt,
+            const recovered: OfflineStateUpdateValues = { ...values, ...stateUpdateScheduleMetadata(current), expectedUpdatedAt: current.updatedAt,
               stateValues: current.stateValues, extraValues: current.extraValues, extraValuesFormat: current.extraValuesFormat,
               __opcoStateUpdateIntent: 1, __opcoStateUpdateRemote: stateUpdateRemoteBinding(id) };
             await transaction.runAsync(`UPDATE entity_records SET values_json=?,server_id=?,remote_updated_at=?,
@@ -3121,7 +3160,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
       const before = previous.find(p => stateUpdateLogicalRemoteId(p.row) === id);
       const localId = receipt?.local_id ?? before?.row.local_id ??
         `state_update_snapshot_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId, input.appViewId, scope.configuration, id])}`;
-      const values: OfflineStateUpdateValues = { appViewId: input.appViewId, date: receivedDate,
+      const values: OfflineStateUpdateValues = { ...stateUpdateScheduleMetadata(current), appViewId: input.appViewId, date: receivedDate,
         identity: input.identity, snapshotConfiguration: scope.configuration, snapshotDateFieldId: input.dateFieldId, snapshotEventDate: eventDate ?? null,
         expectedUpdatedAt: current.updatedAt, extraValues: current.extraValues, extraValuesFormat: current.extraValuesFormat, stateValues: current.stateValues,
         subjectDisplayName: item.subject.displayName, subjectRecordId: item.subject.id };
@@ -3148,7 +3187,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     contentVerified &&= [...ids].every(id => available.has(id));
     for (const item of input.items) {
       await persistStateUpdateAuthority(transaction, scope, item.subject.id, item.current?.recordId ?? null,
-        !item.current || available.has(item.current.recordId), input.sourceEntityTypeId !== undefined);
+        !item.current || (available.has(item.current.recordId) && !missingSchedule.has(item.current.recordId)), input.sourceEntityTypeId !== undefined);
     }
     if (input.expectedRemoteEventCount !== undefined && ids.size !== input.expectedRemoteEventCount) contentVerified = false;
     if (input.complete && contentVerified) staleSyncedRemoved = await reconcileStateUpdateProjections(transaction, scope, [...ids]);
@@ -3183,7 +3222,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
     : compare(b.cached_at, a.cached_at) || compare(a.local_id, b.local_id));
   return { items: rows.slice((page - 1) * pageSize, page * pageSize).map(row => {
     const record = normalizeStateUpdateRecord(mapStateUpdateStorageRow(row));
-    return { date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
+    return { ...stateUpdateScheduleMetadata(record), date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
       stateValues: record.stateValues.map(value => ({ ...value, label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label })),
       subject: record.subject, updatedAt: record.updatedAt ?? row.cached_at };
   }), pagination: { page, pageSize, total: rows.length, hasMore: page * pageSize < rows.length } };
@@ -3658,7 +3697,14 @@ async function completeStateUpdateOperationInTransaction(
       (payload.expectedRecordId && result.recordId !== payload.expectedRecordId)) {
     throw new OpcoApiError("Opco devolvio un registro distinto de la intencion seleccionada.", "STATE_UPDATE_RESULT_IDENTITY_MISMATCH", 422);
   }
+  const sentSchedule = stateUpdateScheduleMetadata(payload);
+  const acknowledgedSchedule = stateUpdateScheduleMetadata(result);
+  if (Object.keys(acknowledgedSchedule).length && canonicalScheduleMetadata(stateUpdateScheduleRequest(sentSchedule)) !== canonicalScheduleMetadata(stateUpdateScheduleRequest(acknowledgedSchedule))) {
+    throw new StateUpdateScheduleReviewError();
+  }
   const values: OfflineStateUpdateValues = {
+    ...sentSchedule,
+    ...acknowledgedSchedule,
     clientRequestId: operation.clientRequestId,
     appViewId: payload.appViewId,
     date: payload.date,
@@ -3871,6 +3917,7 @@ async function markStateUpdateOperationConflict(
   const now = new Date().toISOString();
   const payload = operation.payload as OfflineStateUpdatePayload;
   const remoteValues: OfflineStateUpdateValues = {
+    ...stateUpdateScheduleMetadata(result.existing),
     remoteRecordId: result.existing.recordId,
     identity: payload.identity,
     appViewId: payload.appViewId,
@@ -3925,6 +3972,9 @@ async function discardStateUpdateLocalChange(input: DiscardStateUpdateConflictIn
     const { existing, operation } = await readSelectedStateUpdateConflict(transaction, input);
 
     const conflictValues = existing.conflictRemoteValues as Record<string, EntityRecordValue> | null;
+    if (Object.keys(stateUpdateScheduleMetadata(operation.payload)).length && !Object.keys(stateUpdateScheduleMetadata(conflictValues)).length) {
+      throw new StateUpdateScheduleReviewError();
+    }
 
     await transaction.runAsync(
       `DELETE FROM pending_operations WHERE id = ? AND client_request_id = ? AND operation = ?`,
@@ -5484,6 +5534,7 @@ function stateUpdateCurrentCoverageKey(input: StateUpdateCurrentCoverageScope) {
     input.sourceEntityTypeId, input.targetEntityTypeId, input.date ?? null,
     input.dateFieldId ?? null, input.uniqueness ?? null, input.historyMode ?? null,
     ...(input.identity ? [compositeIdentityKey(input.identity)] : []),
+    ...(input.scheduleBindingId ? [input.scheduleBindingId] : []),
   ])}`;
 }
 
@@ -5513,7 +5564,10 @@ async function getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageSc
   const available = new Set([...snapshots.filter(s => s.verified).map(s => s.row),
     ...legacy.filter(row => !JSON.parse(row.values_json).__opcoStateUpdateRemote &&
       !snapshots.some(s => stateUpdateLogicalRemoteId(s.row) === row.server_id))]
-    .filter(row => !!stateUpdateEventDate(row, input))
+    .filter(row => !!stateUpdateEventDate(row, input) && (!input.scheduleBindingId || (()=>{
+      const application=stateUpdateScheduleMetadata(JSON.parse(row.values_json)).scheduleApplication;
+      return application && ("kind" in application || application.bindingId===input.scheduleBindingId);
+    })()))
     .map(row => JSON.stringify([JSON.parse(row.values_json).subjectRecordId, stateUpdateLogicalRemoteId(row)])));
   const subjects = Object.fromEntries(Object.entries(outcomes).map(([id, outcome]) => [id,
     outcome?.status === "verified" && (outcome.remoteRecordId === null ||
@@ -6409,4 +6463,48 @@ function normalizeStateUpdateVisibleErrorResolution(value: unknown): StateUpdate
     value === "unresolved"
     ? value
     : "unresolved";
+}
+
+function stateUpdateScheduleContextKey(input: StateUpdateScope & {policy:StateUpdateSchedulePolicy}) {
+  return "state_update_schedule_context:"+JSON.stringify([input.ownerKey,input.contractId,input.appViewId,input.targetEntityTypeId,input.date??null,
+    input.dateFieldId??null,input.uniqueness??null,input.historyMode??null,compositeIdentityKey(input.identity),input.policy.bindingId]);
+}
+async function getStateUpdateScheduleContext(input: StateUpdateScope & {policy:StateUpdateSchedulePolicy}):Promise<CachedStateUpdateScheduleContext|null> {
+  const db=await getDatabase(),row=await db.getFirstAsync<{value:string}>("SELECT value FROM app_metadata WHERE key=?",stateUpdateScheduleContextKey(input));
+  if (!row) return null;
+  try {const parsed=JSON.parse(row.value) as CachedStateUpdateScheduleContext;validateScheduleResolution(input.policy,parsed.resolution,input);
+    return typeof parsed.refreshedAt==="string" && Number.isFinite(Date.parse(parsed.refreshedAt)) ? parsed : null;
+  } catch {return null;}
+}
+
+/** Only an explicitly rejected, not accepted create may pin another schedule as a NEW command. */
+async function reviewStateUpdateSchedule(input:import("./state-update-offline").ReviewStateUpdateScheduleInput) {
+  const db=await getDatabase();
+  const metadata=stateUpdateScheduleMetadata({scheduleApplication:input.application});
+  if (!metadata.scheduleApplication || "kind" in metadata.scheduleApplication || metadata.scheduleApplication.operationalDate!==input.date) throw new StateUpdateScheduleReviewError();
+  const reviewedApplication=metadata.scheduleApplication;
+  await db.withTransactionAsync(async tx=>{
+    const row=await tx.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=? AND owner_key=? AND contract_id=? AND entity_type_id=?",input.localRecordId,input.ownerKey,input.contractId,input.targetEntityTypeId);
+    const operation=await getStateUpdatePendingOperation(tx,input.ownerKey,input.localRecordId);
+    const payload=operation?.payload as OfflineStateUpdatePayload|undefined;
+    if(!row || row.sync_status!=="failed" || row.sync_error_code!=="SCHEDULE_REVISION_CHANGED" || stateUpdateLogicalRemoteId(row) || !operation || operation.clientRequestId!==input.clientRequestId || operation.attempts<1 || (payload as (OfflineStateUpdatePayload & {lastErrorHttpStatus?:number}) | undefined)?.lastErrorHttpStatus!==400 || operation.lastErrorCode!=="SCHEDULE_REVISION_CHANGED" || operation.serverRecordId || payload?.expectedUpdatedAt || payload?.expectedRecordId ||
+      operation.contractId!==input.contractId || operation.entityTypeId!==input.targetEntityTypeId || payload?.appViewId!==input.appViewId || payload.subjectRecordId!==input.subjectRecordId || payload.date!==input.date || compositeIdentityKey(payload.identity)!==compositeIdentityKey(input.identity)) throw new StateUpdateScheduleReviewError();
+    const previous=pinnedStateUpdateScheduleMetadata(JSON.parse(row.values_json),payload);
+    if(stateUpdateSchedulesEqual(previous,metadata))throw new StateUpdateScheduleReviewError();
+    if(canonicalScheduleMetadata(previous.scheduleApplication)!==canonicalScheduleMetadata(input.previousApplication) || "kind" in input.previousApplication || input.previousApplication.bindingId!==reviewedApplication.bindingId) throw new StateUpdateScheduleReviewError();
+    const nextPayload={...payload,...metadata,...stateUpdateScheduleRequest(metadata),localDelivery:"never-dispatched"} as OfflineStateUpdatePayload & {lastErrorDetails?:unknown;lastErrorHttpStatus?:number};
+    delete nextPayload.lastErrorDetails;delete nextPayload.lastErrorHttpStatus;
+    const clientRequestId=resolveStateUpdateClientRequestId({existingClientRequestId:undefined,existingPayload:null,nextPayload});
+    const values={...JSON.parse(row.values_json),...metadata,clientRequestId};
+    await tx.runAsync("UPDATE entity_records SET values_json=?,sync_status='pending_create',sync_error_code=NULL,sync_error_message=NULL WHERE local_id=?",JSON.stringify(values),input.localRecordId);
+    await tx.runAsync("UPDATE pending_operations SET payload_json=?,client_request_id=?,attempts=0,last_error_code=NULL,last_error_message=NULL,updated_at=? WHERE id=?",JSON.stringify({...nextPayload,clientRequestId}),clientRequestId,new Date().toISOString(),operation.id);
+  },"transaction:state-update-schedule-review");
+  notifyLocalDatabaseCacheChangeListeners();
+}
+
+async function getStateUpdateScheduleReviewCandidate(input:StateUpdateScope & {subjectRecordId:string}):Promise<import("./opco-api").StateUpdateItem|null> {
+  if(input.uniqueness!=="subject-date-fields")return null;
+  const record=await findStateUpdateRecordForSubject(input);
+  if(!record || record.syncStatus!=="failed" || record.syncErrorCode!=="SCHEDULE_REVISION_CHANGED" || record.serverId || record.values.expectedUpdatedAt) return null;
+  return stateUpdateRecordToItem(normalizeStateUpdateRecord(record));
 }
