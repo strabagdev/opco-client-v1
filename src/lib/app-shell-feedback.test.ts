@@ -285,6 +285,11 @@ describe("app shell feedback", () => {
     });
   });
 
+  it("does not label a missing Home prerequisite as a completed preparation or a fictitious AppView failure", () => {
+    expect(resolveAppShellStatusIndicator({ ...baseInput, offlinePreparationStatus: "failed", offlinePreparationHomeListFailed: true,
+      offlinePreparationProgress: { total: 3, completed: 0, failed: 0 } })).toMatchObject({ state: "pending", label: "Preparación incompleta · No se guardó Inicio" });
+  });
+
   it("resolves the header status indicator for offline connectivity", () => {
     expect(resolveAppShellStatusIndicator({
       ...baseInput,

@@ -20,6 +20,7 @@ import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendanc
 import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore, type StateUpdateCurrentCoverageScope } from "./state-update-offline";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
 import { compositeIdentityKey } from "./state-update-identity";
+import { persistAppViews, type AppNavigationCache, type AppViewsCacheWrite } from "./app-navigation-cache";
 
 export const PREWARM_CONCURRENCY = 4;
 export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
@@ -71,6 +72,7 @@ export type OfflinePreparationAppViewTelemetry = {
 };
 
 export type OfflinePreparationDiagnostics = {
+  homeList?: { status: "pending" | "persisted" | "error"; count: number; syncedAt: string | null; errorCode: string | null; requestId: string | null };
   appViews: {
     completed: number;
     failed: number;
@@ -90,7 +92,7 @@ export type OfflinePreparationDiagnostics = {
   trigger?: OfflinePreparationTrigger | null;
 };
 
-export type AppViewPrewarmStore = AppViewDefinitionCache & {
+export type AppViewPrewarmStore = AppViewDefinitionCache & Pick<AppNavigationCache, "upsertAppViews"> & {
   getOfflinePreparationDiagnostics?(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   setOfflinePreparationDiagnostics?(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string): Promise<{
@@ -104,6 +106,7 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & {
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export function prewarmAssignedAppViewsOnce(params: {
+  homeListWrite?: Promise<AppViewsCacheWrite>;
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
@@ -178,6 +181,7 @@ export function prepareStateUpdateContextOnce(input: StateUpdateContextPreparati
 }
 
 export async function prewarmAssignedAppViews({
+  homeListWrite,
   api,
   appViews,
   contractId,
@@ -188,6 +192,7 @@ export async function prewarmAssignedAppViews({
   trigger = "other",
   signal,
 }: {
+  homeListWrite?: Promise<AppViewsCacheWrite>;
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
   contractId: string;
@@ -202,6 +207,7 @@ export async function prewarmAssignedAppViews({
   const startedMs = Date.now();
   const runId = createOfflinePreparationRunId(startedMs);
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
+  let homeList: NonNullable<OfflinePreparationDiagnostics["homeList"]> = { status: "pending", count: appViews.length, syncedAt: null, errorCode: null, requestId: null };
   const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
   const loadEntityDefinition: EntityDefinitionLoader = (entityTypeId) => {
     const existing = entityDefinitionLoads.get(entityTypeId);
@@ -219,6 +225,7 @@ export async function prewarmAssignedAppViews({
 
   await recordOfflinePreparationTelemetry({
     diagnostics: buildOfflinePreparationDiagnostics({
+      homeList,
       appViewTelemetry,
       contractId,
       ownerKey,
@@ -235,6 +242,12 @@ export async function prewarmAssignedAppViews({
   });
 
   try {
+    const saved = await (homeListWrite ?? persistAppViews({ cache: store, ownerKey, contractId, views: appViews, syncedAt: startedAt }));
+    const sameScope = saved.scope.ownerKey === ownerKey && saved.scope.contractId === contractId &&
+      JSON.stringify([...saved.scope.appViewIds].sort()) === JSON.stringify(appViews.map(view => view.id).sort());
+    homeList = { status: sameScope ? saved.status : "error", count: saved.count, syncedAt: saved.syncedAt, requestId: saved.requestId,
+      errorCode: sameScope ? saved.errorCode : "HOME_CACHE_SCOPE_MISMATCH" };
+    if (homeList.status !== "persisted" || signal?.aborted) throw new Error("HOME_LIST_PREPARATION_INCOMPLETE");
     await store.reconcileAppViewDefinitions(ownerKey, contractId, appViews.map((view) => view.id));
     await runWithConcurrency(appViews, PREWARM_CONCURRENCY, async (appView) => {
       const initial = createAppViewTelemetry(appView);
@@ -242,6 +255,7 @@ export async function prewarmAssignedAppViews({
       appViewTelemetry.set(appView.id, initial);
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
+          homeList,
           appViewTelemetry,
           contractId,
           ownerKey,
@@ -277,6 +291,7 @@ export async function prewarmAssignedAppViews({
       appViewTelemetry.set(appView.id, nextTelemetry);
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
+          homeList,
           appViewTelemetry,
           contractId,
           ownerKey,
@@ -295,6 +310,7 @@ export async function prewarmAssignedAppViews({
 
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
+        homeList,
         appViewTelemetry,
         contractId,
         ownerKey,
@@ -314,6 +330,7 @@ export async function prewarmAssignedAppViews({
   } catch {
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
+        homeList,
         appViewTelemetry,
         contractId,
         ownerKey,
@@ -783,6 +800,7 @@ function completeAppViewTelemetry(
 }
 
 function buildOfflinePreparationDiagnostics({
+  homeList,
   appViewTelemetry,
   completedAt = null,
   completedMs,
@@ -795,6 +813,7 @@ function buildOfflinePreparationDiagnostics({
   total,
   trigger,
 }: {
+  homeList: OfflinePreparationDiagnostics["homeList"];
   appViewTelemetry: Map<string, OfflinePreparationAppViewTelemetry>;
   completedAt?: string | null;
   completedMs?: number;
@@ -823,6 +842,7 @@ function buildOfflinePreparationDiagnostics({
     .slice(0, 3);
 
   return {
+    homeList,
     appViews: {
       completed,
       failed,
@@ -920,6 +940,12 @@ export function normalizeOfflinePreparationDiagnostics(
   }
 
   return {
+    ...(value.homeList && ["pending", "persisted", "error"].includes(value.homeList.status) ? { homeList: {
+      status: value.homeList.status, count: normalizeCount(value.homeList.count),
+      syncedAt: normalizeNullableString(value.homeList.syncedAt),
+      errorCode: value.homeList.status === "error" ? value.homeList.errorCode === "HOME_CACHE_SCOPE_MISMATCH" ? "HOME_CACHE_SCOPE_MISMATCH" : "HOME_CACHE_WRITE_FAILED" : null,
+      requestId: typeof value.homeList.requestId === "string" && /^home-views-\d+-\d+$/.test(value.homeList.requestId) ? value.homeList.requestId : null,
+    } } : {}),
     appViews: {
       completed: normalizeCount(value.appViews?.completed),
       failed: normalizeCount(value.appViews?.failed),

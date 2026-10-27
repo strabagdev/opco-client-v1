@@ -1500,10 +1500,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
       );
     },
-    getAppViews(token: string, contractId: string) {
+    getAppViews(token: string, contractId: string, diagnostics?: { diagnosticRequestId: string }) {
       return authenticatedRequest<AppViewsResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views`,
         token,
+        diagnostics ? { headers: { "X-Opco-Request-Id": diagnostics.diagnosticRequestId } } : undefined,
       );
     },
     getEntityDefinition(token: string, contractId: string, entityTypeId: string) {

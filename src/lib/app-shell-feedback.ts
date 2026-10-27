@@ -40,6 +40,7 @@ export type AppShellFeedbackInput = {
   isOfflinePreparationRunning: boolean;
   offlinePreparationProgress?: { completed: number; failed: number; total: number } | null;
   offlinePreparationStatus?: "idle" | "running" | "completed" | "failed" | null;
+  offlinePreparationHomeListFailed?: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   localStorageRecoveryNotice?: string | null;
@@ -184,6 +185,7 @@ function resolveAppShellStatusBase({
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
   offlinePreparationProgress = null,
+  offlinePreparationHomeListFailed = false,
   offlinePreparationStatus = null,
   pendingCount,
   syncConfirmationVisible = false,
@@ -267,7 +269,7 @@ function resolveAppShellStatusBase({
 
   if (offlinePreparationStatus === "failed") {
     const failed = normalizePreparationCount(offlinePreparationProgress?.failed);
-    const failureCount = failed === 1 ? "1 fallo" : failed + " fallos";
+    const failureCount = offlinePreparationHomeListFailed ? "No se guardó Inicio" : failed === 1 ? "1 fallo" : failed + " fallos";
 
     return {
       accessibilityLabel: "Preparacion incompleta. " + failureCount + ". Abre Diagnostico para revisar el detalle",

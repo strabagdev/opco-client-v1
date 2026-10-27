@@ -311,8 +311,22 @@ contract -> GET /views -> app_views cache -> AppView definition prewarm -> regis
 On an online route opening, the owner-scoped `app_views` read and `GET /views` start together.
 A useful cached assignment may render first, but a busy SQLite queue cannot prevent a successful
 remote assignment from mounting its renderer. Persisting that remote navigation snapshot remains
-best-effort and does not hold the online response. On a network failure, the same authorized cache
-promise is still awaited as the offline fallback; no empty assignment is fabricated.
+asynchronous and does not hold the online response, but now returns an explicit persistence result.
+Preparation cannot complete until this owner+contract assignment list has been saved successfully.
+The receipt must match the exact scope and assigned AppView IDs. Read results distinguish a valid
+list (including zero assignments), absence and read/decoding failure. On a network failure, the same
+authorized cache promise remains the offline fallback; a timeout does not clear a valid displayed list.
+Without that list, Home explains absence or failure to read; definitions alone cannot reconstruct
+assignments or permissions. Old or departed Home loads cannot publish callbacks or start preparation
+for the new scope, and a late cache read cannot replace a completed remote response.
+
+Home navigation diagnostics retain at most 30 events in memory: cache read/write and the correlated
+`/views` transport, count, timestamps, safe code and owner/contract fingerprints. Exact scope matching
+is internal; fingerprints never authorize access. Existing Diagnostics → Sincronización displays and
+copies these events. Preparation also persists its `homeList` prerequisite through existing run
+telemetry; historical runs without it remain unverified for this new requirement. PWA navigation
+readiness now requires a valid read or successful write, rather than merely a selected contract.
+No schema/namespace change, assignment reconstruction, extra remote request or automatic retry loop.
 
 Known `AppView.type` values:
 
@@ -632,6 +646,10 @@ Connectivity is a runtime signal only. It is not proof that a backend write succ
 
 Definition prewarm:
 
+- First persist the exact assigned list needed to open Home offline. Normal callers reuse the
+  navigation load's write receipt; a direct prewarm writes that prerequisite itself. A failed save
+  ends the run incomplete before definition reconciliation, preserving prior content. An explicit
+  later retry can complete; empty assignments are still a valid list that must be persisted.
 - AppView definitions for assigned AppViews.
 - RECORDS entity definitions.
 - Workflow metadata for `state-update` and `attendance`.

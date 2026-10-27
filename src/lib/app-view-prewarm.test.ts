@@ -23,6 +23,7 @@ import {
   UpsertStateUpdateSnapshotInput,
 } from "./state-update-offline";
 import { currentMonthDateKeys } from "./attendance-snapshot-cache";
+import { persistAppViews } from "./app-navigation-cache";
 
 describe("app view prewarm", () => {
   let store: MemoryPrewarmStore;
@@ -30,6 +31,25 @@ describe("app view prewarm", () => {
   beforeEach(() => {
     store = new MemoryPrewarmStore();
     vi.useRealTimers();
+  });
+
+  it("requires the Home list to persist before preparing definitions, including an empty assignment list", async () => {
+    vi.spyOn(store, "upsertAppViews").mockRejectedValueOnce(new Error("private cache failure"));
+    const api = { getEntityDefinition: vi.fn(), getEntityRecords: vi.fn(), getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn() };
+    await prewarmAssignedAppViewsOnce({ api, appViews: [], contractId: "contract", ownerKey: "owner", store, token: "synthetic" });
+    expect(store.offlinePreparationDiagnostics).toMatchObject({ status: "failed", homeList: { status: "error", count: 0, errorCode: "HOME_CACHE_WRITE_FAILED" } });
+    expect(api.getEntityDefinition).not.toHaveBeenCalled();
+    await prewarmAssignedAppViewsOnce({ api, appViews: [], contractId: "contract", ownerKey: "owner", store, token: "synthetic" });
+    expect(store.offlinePreparationDiagnostics).toMatchObject({ status: "completed", homeList: { status: "persisted", count: 0 } });
+    expect(parseOfflinePreparationDiagnostics(JSON.stringify(store.offlinePreparationDiagnostics))?.homeList?.status).toBe("persisted");
+  });
+
+  it("does not certify a list receipt from another scope or another assignment set", async () => {
+    const homeListWrite = persistAppViews({ cache: store, ownerKey: "different-owner", contractId: "contract", views: [], syncedAt: "2026-10-26T12:00:00Z" });
+    await prewarmAssignedAppViewsOnce({ api: { getEntityDefinition: vi.fn(), getEntityRecords: vi.fn(), getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn() },
+      homeListWrite, appViews: [], contractId: "contract", ownerKey: "owner", store, token: "synthetic" });
+    expect(store.offlinePreparationDiagnostics).toMatchObject({ status: "failed", homeList: { status: "error", errorCode: "HOME_CACHE_SCOPE_MISMATCH" } });
+    expect(JSON.stringify(store.offlinePreparationDiagnostics)).not.toContain("different-owner");
   });
 
   it("can report 11 processed and one failure without any Attendance operation", async () => {
@@ -1055,6 +1075,10 @@ describe("app view prewarm", () => {
 });
 
 class MemoryPrewarmStore implements AppViewDefinitionCache {
+  navigation = new Map<string, { views: AppView[]; syncedAt: string }>();
+  async upsertAppViews(ownerKey: string, contractId: string, views: AppView[], syncedAt: string) {
+    this.navigation.set(JSON.stringify([ownerKey, contractId]), { views, syncedAt });
+  }
   definitions = new Map<string, CachedAppViewDefinition>();
   entityDefinitions = new Map<string, EntityDefinition>();
   failDefinitionUpsertFor: string | null = null;

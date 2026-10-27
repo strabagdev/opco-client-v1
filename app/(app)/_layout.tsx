@@ -5,7 +5,8 @@ import { LOCAL_DATABASE_NAME, subscribeLocalDatabaseCacheChanges } from "@/lib/l
 import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
 import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { getHomeNavigationEvents, homeNavigationCachePresent, homeNavigationRows, subscribeHomeNavigationEvents } from "@/lib/home-navigation-diagnostics";
 import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -95,6 +96,7 @@ export default function AppLayout() {
   const recordsOpeningHistory = useRecordsOpeningHistory();
   const experienceActivity = useExperienceActivitySnapshot();
   const reducedMotion = useReducedMotion();
+  const navigationEvents = useSyncExternalStore(subscribeHomeNavigationEvents, getHomeNavigationEvents, getHomeNavigationEvents);
   const writeFeedbackSnapshot = useWriteFeedbackSnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
   const isHome = pathname === "/";
@@ -107,7 +109,7 @@ export default function AppLayout() {
   const writeFeedback = writeFeedbackSnapshot.scopeKey === visibleWriteScope ? writeFeedbackSnapshot : null;
   const diagnosticsModalHeight = getDiagnosticsModalHeight({ height, width });
   const offlineReadiness = useOfflineReadiness({
-    navigationCachePresent: Boolean(selectedContractId),
+    navigationCachePresent: homeNavigationCachePresent(navigationEvents, ownerKey, selectedContractId),
     sessionSnapshotPresent: Boolean(ownerKey && me && context),
     sqliteReady: localDatabaseStorageState.status === "ready",
   });
@@ -164,6 +166,7 @@ export default function AppLayout() {
     offlineReadiness: offlineReadiness.offlineReadiness,
     offlinePreparationProgress: offlinePreparationDiagnostics?.appViews ?? null,
     offlinePreparationStatus: offlinePreparationDiagnostics?.status ?? null,
+    offlinePreparationHomeListFailed: offlinePreparationDiagnostics?.homeList?.status === "error",
     pendingCount: pendingRecordsCount,
     syncConfirmationVisible: toast?.id === "sync-success",
     writeFeedback,
@@ -788,6 +791,9 @@ function SyncStatusDiagnosticsPanel({
   getSQLiteDiagnostics: () => SQLiteCoordinatorDiagnostics;
   history: SyncStatusHistory;
 }) {
+  const { ownerKey, selectedContractId } = useSession();
+  const navigationEvents = useSyncExternalStore(subscribeHomeNavigationEvents, getHomeNavigationEvents, getHomeNavigationEvents);
+  const navigationRows = homeNavigationRows(navigationEvents, ownerKey, selectedContractId);
   const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
   const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSince = [...history.events].reverse().find((event) => event.process === "Indicador")?.at ?? null;
@@ -799,7 +805,7 @@ function SyncStatusDiagnosticsPanel({
     }
 
     try {
-      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history, getSQLiteDiagnostics()));
+      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history, getSQLiteDiagnostics()) + "\n\nInicio — lista offline (historial en memoria, máximo 30 eventos)\n" + navigationRows.map(([label, value]) => `${label}: ${value}`).join("\n"));
       setCopyState("success");
       copyResetTimeout.current = setTimeout(() => setCopyState("idle"), 2000);
     } catch {
@@ -855,6 +861,9 @@ function SyncStatusDiagnosticsPanel({
         ))}
       </View>
 
+      <Text style={styles.diagnosticsTitle}>Inicio — lista offline</Text>
+      <Text style={styles.syncHistoryNotice}>Sólo metadata del scope activo; historial en memoria, máximo 30 eventos.</Text>
+      {navigationRows.map(([label, value]) => <View key={label}><Text style={styles.diagnosticsLabel}>{label}</Text><Text selectable style={styles.diagnosticsValue}>{value}</Text></View>)}
       <Text style={styles.diagnosticsTitle}>Historial breve</Text>
       <Text style={styles.syncHistoryNotice}>En memoria, máximo 50 eventos; se limpia al cerrar o cambiar sesión/contrato.</Text>
       {history.events.length ? [...history.events].reverse().map((event, index) => (

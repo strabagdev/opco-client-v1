@@ -50,6 +50,7 @@ export default function HomeScreen() {
   const [viewsRetryVersion, setViewsRetryVersion] = useState(0);
   const [offlineAvailabilityByViewId, setOfflineAvailabilityByViewId] = useState<Record<string, OfflineAvailability>>({});
   const [error, setError] = useState<string | null>(null);
+  const [cacheNotice, setCacheNotice] = useState<{ scope: string | null; message: string } | null>(null);
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
   const styles = isWideLayout ? desktopStyles : baseStyles;
   const { category } = useLocalSearchParams();
@@ -193,6 +194,7 @@ export default function HomeScreen() {
 
       setIsLoadingViews(true);
       setError(null);
+      setCacheNotice(null);
       let remoteSettled = false;
 
       try {
@@ -201,11 +203,18 @@ export default function HomeScreen() {
           cache: definitionCache,
           contractId: selectedContractId,
           ownerKey,
+          isCurrent: () => isMounted,
           onCached: (cached) => {
             if (!isMounted || remoteSettled) return;
             setLoadedViewsScope(viewsScope);
             setViews(cached.views);
             setIsOfflineViews(true);
+          },
+          onCacheRead: (result) => {
+            if (isMounted && result.status === "error") setCacheNotice({ scope: viewsScope, message: "No se pudo leer la lista de experiencias guardada. Intentando cargarla desde Opco." });
+          },
+          onCacheWrite: (result) => {
+            if (isMounted) setCacheNotice(result.status === "error" ? { scope: viewsScope, message: "Las experiencias están disponibles ahora, pero no se pudo guardar la lista para abrir Inicio sin conexión. Reintenta con conexión." } : null);
           },
           token,
         });
@@ -217,8 +226,9 @@ export default function HomeScreen() {
           setViews(data.views);
         }
 
-        if (!data.offline) {
+        if (!data.offline && isMounted) {
           void prewarmAssignedAppViewsOnce({
+            homeListWrite: data.cacheWrite ?? undefined,
             api,
             appViews: data.views,
             contractId: selectedContractId,
@@ -306,10 +316,11 @@ export default function HomeScreen() {
   const experiencesSection = (
     <View style={[styles.section, isWideLayout ? styles.sectionWide : null]}>
       {context && isLoadingViews && !hasCompatibleViews ? <ReadLoadingState mode="initial" /> : null}
-      {!isLoadingViews && isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {error ? <Pressable accessibilityRole="button" onPress={() => setViewsRetryVersion((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>Reintentar</Text></Pressable> : null}
-      {!isLoadingViews && hasCompatibleViews && selectedContractId && views.length === 0 && !error ? (
+      {isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
+      {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+      {!error && cacheNotice?.scope === viewsScope ? <Text accessibilityRole="alert" style={styles.error}>{cacheNotice.message}</Text> : null}
+      {error || cacheNotice?.scope === viewsScope ? <Pressable accessibilityRole="button" onPress={() => setViewsRetryVersion((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>Reintentar</Text></Pressable> : null}
+      {hasCompatibleViews && selectedContractId && views.length === 0 && !error ? (
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
       {(hasCompatibleViews ? experienceSections.filter(section => !selectedCategory || section.id === selectedCategory) : []).map((section) => (

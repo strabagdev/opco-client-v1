@@ -3063,3 +3063,51 @@ Inventario/parches/checks/hashes/tiempos:
 `/home/dannysilver/dev2026/backups/schedule-technical-close/2026-10-26/`.
 402 exclusiones y todos los pendientes/respaldos previos intactos; sin commit/push/deploy/migración
 productiva/activación. No se inició lectura de códigos. V11 pausado; auditoría general abierta.
+
+## Inicio — lista offline verificable y diagnóstico seguro — 2026-10-26, SIN PUBLICAR
+
+Corrección genérica de las brechas locales demostradas: lectura de app_views ahora devuelve lista
+válida (incluida vacía), ausente o error; el error remoto original se conserva como causa. La lista
+válida del owner/contrato activo se presenta sin esperar a la red y permanece tras timeout. Una lista
+vacía muestra inmediatamente cero asignaciones; no se reconstruyen permisos desde definiciones.
+Sin lista disponible, Inicio distingue ausencia de fallo de lectura y permite reintento explícito.
+
+El guardado online devuelve resultado explícito sin bloquear la presentación remota. Prewarm espera
+ese mismo recibo y verifica scope/conjunto de AppViews antes de reconciliar definiciones. Si falla,
+termina incompleto con «No se guardó Inicio», sin inventar fallos de AppView ni borrar contenido previo.
+Un reintento posterior puede completar. homeList queda en la telemetría persistida existente; los runs
+históricos sin este requisito se muestran no verificados. PWA deja de usar contrato seleccionado como
+prueba de caché: exige lectura válida o escritura exitosa. Sin nuevas consultas remotas, loops o cambios
+de snapshots/outbox/sync de escrituras, esquema, namespace, horarios o renderers.
+
+Diagnóstico → Sincronización → Inicio — lista offline y el botón existente «Copiar diagnóstico de
+sincronización» incluyen lectura/escritura, fase, cantidad, fecha, código seguro y fingerprints de
+owner/contrato, correlacionados con requestId/pathTemplate de /views y sus tiempos/timeout/HTTP.
+Historial de30 eventos en memoria; no se afirma persistencia de ese historial entre reaperturas.
+Matching de scopes exactos interno, nunca por fingerprint; sin nombres, tokens, payloads o registros.
+Respuestas tardías no sustituyen una respuesta remota final ni inician el guardado de un Home
+abandonado. Una escritura ya iniciada termina en su scope original sin publicar en la pantalla nueva.
+
+228 pruebas focalizadas PASS/13 archivos, worker1 y timeouts estándar; SQLite real en archivo y cierre
+pagehide/reapertura, fallos de lectura/guardado, reintento posterior, aislamiento y respuestas tardías.
+Se añaden garantías de lista requerida sin ampliar cobertura de datos de experiencias; regresiones
+prewarm/Attendance/current/identidad previas seleccionadas siguen PASS. Typecheck/lint afectado y
+diff-check PASS. No suite completa ni build de cierre.
+
+Revisión visual REAL en Chromium153.0.8010.12 headless Linux, perfil exclusivo,1440x900 y390x844:
+10 escenarios del Inicio/shell reales (lista válida, vacía, ausente, error de lectura, error de guardado).
+Cada uno hizo1 solicitud /views, sin errores JS/overflow; la lista válida permaneció tras12s de timeout.
+Detalle/copiar diagnóstico también acreditados capturando el texto entregado al clipboard. Sesión,
+transporte y caché VISUALES sintéticos; durabilidad acreditada separadamente con SQLite real/Python,
+sin nuevo OPFS, Core, Safari/iPhone físico ni garantía universal de navegadores. Dos exports temporales
+para navegador: el segundo incorpora el contenido final; no son artefactos publicables. Un primer
+intento de copia falló por un getter SQLite incompleto del fixture; corregido sólo en el arnés, sin
+cambio funcional. Restricciones de sockets iniciales del sandbox no se atribuyen a Client.
+
+No se declara demostrada la causa del incidente del usuario18:36:40.835Z: sigue faltando su correlación
+con la lectura/último guardado de app_views. Se corrigen pérdidas de estado/error demostradas localmente
+y se habilita capturar ese dato en el siguiente fallo. Respaldo reproducible/inventario/checks/capturas:
+`/home/dannysilver/dev2026/backups/home-offline-availability/2026-10-26/`.
+402 exclusiones y pendientes ajenos preservados; se incorpora explícitamente la prueba diagnóstica
+home-offline-timeout.sqlite.test.ts del respaldo anterior, con sus regresiones ampliadas.
+Sin producción, borrados, migraciones, commit/push/deploy. V11 pausado; auditoría general abierta.

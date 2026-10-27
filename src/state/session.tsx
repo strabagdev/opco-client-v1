@@ -1,4 +1,5 @@
 import { copyStateUpdateDiagnosticsWithCoverage } from "./state-update-coverage-copy";
+import { recordHomeNavigationTransport } from "@/lib/home-navigation-diagnostics";
 import {
   createContext,
   PropsWithChildren,
@@ -195,6 +196,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     () =>
       createOpcoApi({
         onRequestDiagnostics(diagnostics) {
+          recordHomeNavigationTransport(diagnostics);
           recordStateUpdateNetworkDiagnostics(diagnostics);
         },
         onSessionInvalid(termination) {
@@ -698,6 +700,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
         if (!result.offline) {
           void prewarmAssignedAppViewsOnce({
+            homeListWrite: result.cacheWrite ?? undefined,
             api,
             appViews: result.views,
             contractId,

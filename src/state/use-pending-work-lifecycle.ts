@@ -769,6 +769,7 @@ export function usePendingWorkLifecycle({
 
       if (!appViewsResult.offline) {
         void prewarmAssignedAppViewsOnce({
+          homeListWrite: appViewsResult.cacheWrite ?? undefined,
           api,
           appViews: appViewsResult.views,
           contractId: nextContractId,
