@@ -14,6 +14,7 @@ export type LocalDatabaseStorageState =
       cause: LocalDatabaseUnavailableCause;
       errorCode: "SQLITE_UNAVAILABLE";
       technicalMessage: string;
+      retryRequiresReload?: true;
       retryable: true;
       destructiveRecoveryAvailable: boolean;
     };
@@ -31,6 +32,7 @@ export class LocalDatabaseUnavailableError extends Error {
   code = "SQLITE_UNAVAILABLE" as const;
   destructiveRecoveryAvailable = true;
   retryable = true;
+  retryRequiresReload?: true;
 
   constructor(
     public readonly causeCode: LocalDatabaseUnavailableCause,

@@ -2728,3 +2728,62 @@ El cierre de código/build queda acreditado; ese requisito operativo no se susti
 Respaldo final: `/home/dannysilver/dev2026/backups/schedule-technical-close/2026-10-26/`.
 402 exclusiones, pendientes/prefijos ajenos y respaldos anteriores intactos. Sin implementación nueva,
 commit/push/deploy, migraciones productivas ni activación. Sin lectura de códigos; V11 pausado.
+
+
+## Recuperación del bloqueo inicial OPFS — 2026-10-27
+
+Cambio transversal acotado de apertura, sin alterar snapshots, intenciones, autorización, idempotencia,
+conflictos, consultas ni sincronización STATE_UPDATE. El error ACCESS_HANDLE_BUSY de la primera
+apertura web puede portar la señal transitoria retryRequiresReload; sólo se genera en el catch de
+openDatabaseAsync, con historial conocido de que ese documento nunca alcanzó READY y API de recarga.
+El historial vive en el singleton y nunca se reinicia al cerrar/reintentar; si proviene de un runtime
+previo y es desconocido no habilita recarga. No es metadata persistida ni cambio de SQLite v10.
+
+La guía existente advierte antes de Reintentar que se recargará la página y que se conservan los
+datos y pendientes. El handler compara tanto el estado presentado como el vigente: una sola recarga
+explícita, sin reutilizar el worker fallido ni rebootstrap adicional. No recarga sesiones antes
+operativas, errores de migración, escrituras/sync ni Invalid VFS genérico; clics tardíos o sin la
+advertencia actual no reinician otra sesión. No restablece SQLite ni promete soporte multitab.
+
+Validación:140 pruebas focalizadas PASS (13 nuevas; RED inicial2 fallos), typecheck/lint afectados.
+Chrome153/Linux + OPFS real, worker Expo intacto y transporte sintético: segunda pestaña BUSY,
+propietaria cerrada, botón real → nuevo documento/worker/READY; reapertura offline del mismo perfil
+tras cerrar Chrome. Hash de tres filas/tres outbox idéntico, incluidos conflicto y STATE_UPDATE con
+overwrite/base/requestId; integrity_check=ok, schema10 y opco-client-v10-epoch2.db conservados.
+Sin nuevo envío/ACK/Core ni Safari físico acreditados. Otros VFS históricos permanecen abiertos.
+[Informe y reproducción](../../backups/opfs-opening-retry-fix/2026-10-27/REPORT.md); evidencia E17 de
+la matriz canónica. Candidato local sin commit/push/deploy; códigos y V11 pausados.
+
+
+## Espera y recuperación automática de apertura OPFS inicial — 2026-10-27
+
+Extensión local del reintento manual anterior, cuyo respaldo no se modifica. La misma señal transitoria
+retryRequiresReload limita el camino a ACCESS_HANDLE_BUSY de openDatabaseAsync antes del primer READY
+conocido. No hay cambio de snapshots, intenciones, scope, SQL, sincronización, esquema o namespace.
+Una sesión que fue operativa o cuya historia se desconoce nunca se recarga automáticamente.
+
+La UI indica espera y futura recarga; un worker público, precacheado por el generador SW existente,
+comprueba exclusivamente los archivos ya existentes del pool plano expo-sqlite de la dependencia
+instalada57.0.1. Abre handles exclusivos sin leer/escribir/truncar/crear/borrar archivos, los cierra
+todos antes de publicar free y nunca inicializa SQLite/VFS. Una respuesta busy conserva la espera;
+no se deduce liberación por recibir un mensaje entre pestañas, así funciona con una propietaria
+antigua sin cooperación y ante caída de renderer. No se cambia ni termina el worker propietario.
+
+Una sonda en vuelo,12 comprobaciones máximo, backoff2/4/8/15s y timeout5s; se cancela al desmontar o
+perder elegibilidad. No encola operaciones SQLite. Tras free se termina la sonda y se recarga una
+sola vez, con presupuesto sessionStorage que sobrevive la recarga y sólo se limpia en READY. Una
+carrera perdida no repite recargas: fallback manual. La sonda no reserva atómicamente los handles
+para la próxima página. Sin API/asset/almacenamiento de presupuesto, layout desconocido, timeout,
+error o límite agotado, informa que no completó la recuperación y conserva Reintentar advertido.
+No hay soporte multitab simultáneo ni recuperación universal de VFS; no se extiende a guardados/ACK.
+
+155 pruebas focalizadas PASS, incluyendo RED del hook real sobre el candidato manual anterior,
+worker de comprobación contra frontera OPFS, límites/abortos/respuestas tardías/presupuesto y las
+regresiones SQLite v10. Typecheck/lint afectados PASS. Chrome153/Linux/OPFS real, perfil exclusivo:
+propietaria596b953 sin protocolo, cierre normal → recuperación sin click; nueva propietaria editando
+formulario conserva valores/runtime; crash real sin pagehide → recuperación; proceso nuevo offline
+con mismos registros/outbox/autorización/base/clientRequestId/conflicto, integrity_check=ok/schema10.
+Transporte sintético, sin nuevo Core/ACK/sync ni Safari físico. Se reutiliza el recorrido manual previo
+sólo por identidad del handler manual; el automático tiene evidencia nueva.
+[Informe, inventario y parches](../../backups/opfs-opening-auto-recovery/2026-10-27/REPORT.md), E18 en
+la matriz canónica. Sin publicación; otros VFS históricos, códigos y V11 permanecen fuera del lote.

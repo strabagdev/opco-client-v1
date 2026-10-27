@@ -3111,3 +3111,72 @@ y se habilita capturar ese dato en el siguiente fallo. Respaldo reproducible/inv
 402 exclusiones y pendientes ajenos preservados; se incorpora explícitamente la prueba diagnóstica
 home-offline-timeout.sqlite.test.ts del respaldo anterior, con sus regresiones ampliadas.
 Sin producción, borrados, migraciones, commit/push/deploy. V11 pausado; auditoría general abierta.
+
+
+## Reintento inicial OPFS bloqueado — corrección local — 2026-10-27
+
+Se corrige exclusivamente el camino demostrado en el diagnóstico OPFS del 26-10:
+ACCESS_HANDLE_BUSY al abrir por primera vez → worker parcialmente inicializado → Reintentar
+reutilizaba ese worker y terminaba en Invalid VFS state incluso después de cerrar la propietaria.
+El botón existente ahora anuncia y solicita una recarga del documento sólo en ese bloqueo inicial
+web identificado. Una sesión que alcanzó READY, un estado previo de historia desconocida, errores
+de migración, guardado/sync u otros errores VFS mantienen su comportamiento previo. La advertencia
+debe estar presentada y seguir vigente al pulsar; respuestas/clics tardíos no reinician una sesión
+operativa. Sin reset, cambios de namespace/worker Expo, acceso concurrente forzado ni recarga automática.
+
+RED previo:2 fallos/9 PASS; GREEN final:140 pruebas focalizadas en5 archivos, incluidos13 casos nuevos
+(estos13 repetidos tras ajustar sólo el nombre del arnés para lint). Typecheck, lint afectado y
+reconstrucción/diff-check documentados en el respaldo. Export local indispensable para OPFS,
+no build de cierre ni suite completa. Chrome153/Linux, perfil exclusivo, shell/handler/OPFS reales,
+worker Expo sin modificar: segunda pestaña bloqueada muestra la advertencia; cerrar la primera y
+pulsar el botón real crea documento/worker nuevos y abre correctamente sin Invalid VFS state.
+Control de una pestaña y cierre completo/reapertura offline pasan. Tres registros y tres operaciones
+sintéticas (CREATE pendiente, UPDATE en conflicto y STATE_UPDATE autorizado) conservan el hash íntegro
+de filas/outbox, identidad, base y autorización; integrity_check=ok, schema10, epoch2 sin cambios.
+
+[Informe, parche e inventario](../../backups/opfs-opening-retry-fix/2026-10-27/REPORT.md).
+La [matriz](OFFLINE_ACCEPTANCE_MATRIX.md) distingue publicado596b953 del candidato local y enlaza E17.
+Su actualización incremental se entrega separada: la matriz anterior ya era un pendiente ajeno al lote.
+Sin Core/red real, Safari/iPhone físico, sincronización nueva, captura de pantalla o revisión visual
+manual acreditados: interacción/advertencia verificadas en DOM mediante CDP, transporte sintético.
+No se declaran resueltos otros BUSY/VFS históricos ni la auditoría general.402 exclusiones y demás
+pendientes ajenos preservados; sin producción, migraciones, dependencias, commit/push/deploy.
+Códigos y V11 permanecen pausados.
+
+
+## Recuperación automática de apertura OPFS bloqueada — candidato local — 2026-10-27
+
+Extiende únicamente el candidato manual anterior, que se conserva íntegro en su respaldo. Sólo ante
+ACCESS_HANDLE_BUSY de apertura inicial web conocida, antes de READY, muestra espera comprensible.
+Un worker independiente comprueba el pool físico existente de expo-sqlite57.0.1: adquiere y cierra
+todos sus handles, sin abrir SQLite, leer/escribir datos ni crear archivos. No necesita mensajes de
+la propietaria. Si todos quedan libres, termina la sonda y recarga una vez el documento fallido.
+La sesión nueva abre con otro worker Expo; nunca se repite open sobre el parcialmente inicializado.
+
+Comprobaciones secuenciales acotadas: máximo12, espera2/4/8/15s (15s máximo), timeout5s por sonda.
+No trabajo de la cola SQLite, recargas periódicas, polling de datos ni desplazamiento de la propietaria.
+Un presupuesto en sessionStorage limita a una recarga automática por cadena fallida y se limpia
+sólo al alcanzar READY. Si no puede comprobar disponibilidad, expira la espera, falta soporte o se
+pierde una carrera, termina en alternativa manual advertida. La comprobación y la apertura siguiente
+no son una reserva atómica. Runtimes antes operativos, historia desconocida, migraciones, guardado,
+sync y VFS genérico no habilitan la recuperación automática. Otros errores VFS siguen abiertos.
+
+Validación local:155 PASS focalizadas en6 archivos, un worker/timeouts estándar; typecheck, lint
+aceptado de archivos afectados y diff-check. Regresión nueva RED contra el candidato manual (13 PASS,
+1 fallo) → GREEN sin click. Chrome153/Linux+OPFS reales: propietaria publicada596b953 (239 fuentes
+funcionales idénticas) sin protocolo nuevo; espera estable, cierre normal → apertura automática.
+Otra propietaria candidata con formulario editado: no se recarga; caída real de su renderer sin
+pagehide → la espera detecta liberación y recupera automáticamente. Cierre completo de Chrome y
+reapertura offline conservan hash de tres filas/tres operaciones, conflicto, autorización/base/requestId;
+integrity_check=ok, schema10/epoch2. Shell/handler/worker reales, transporte sintético; sin Core,
+Safari físico ni nuevo envío/ACK. Se verifican DOM e interacción; no revisión manual/capturas nuevas.
+
+Primer export rechazado por transformación Metro de un worker público como módulo: corregido sólo
+su constructor y repetido el recorrido afectado. Otro intento quedó en una espera CDP después del
+crash; arnés acotado y ensayo completo25,712s. No base borrada para obtener PASS. Un comando de prueba
+desde directorio incorrecto falló por resolución npm; RED/GREEN válidos usan dependencias existentes.
+[Informe/inventario combinado](../../backups/opfs-opening-auto-recovery/2026-10-27/REPORT.md).
+Matriz E18 distingue candidato de publicado; actualización incremental separada de su contenido previo.
+402 exclusiones, horarios y demás pendientes ajenos preservados; respaldo manual previo intacto.
+Sin producción, namespace/esquema/dependencias, commit/push/deploy. Se detiene para revisión del lote;
+lectura de códigos, V11 y auditoría general siguen pausados/abiertos según su alcance anterior.

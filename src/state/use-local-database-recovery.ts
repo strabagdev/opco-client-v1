@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   getLocalDatabaseRecoverySummary,
@@ -9,6 +9,8 @@ import {
 } from "../lib/local-db";
 import { LocalDatabaseStorageState } from "../lib/local-db-recovery";
 import { RecordsSyncSummary } from "../lib/offline-records";
+import { clearOpfsOpeningRecoveryBudget, startOpfsOpeningRecovery, type OpfsOpeningRecoveryStatus } from "../lib/opfs-opening-recovery";
+import { getLocalDatabaseRecoveryGuidance } from "./local-database-recovery-logic";
 export {
   getLocalDatabaseFailurePhase,
   getLocalDatabaseRecoveryGuidance,
@@ -43,6 +45,8 @@ export function useLocalDatabaseRecovery({
     getLocalDatabaseStorageState,
   );
   const [localStorageRecoveryNotice, setLocalStorageRecoveryNotice] = useState<string | null>(null);
+  const reloadRequested = useRef(false);
+  const [automaticRecovery, setAutomaticRecovery] = useState<OpfsOpeningRecoveryStatus>("idle");
 
   useEffect(
     () =>
@@ -52,11 +56,41 @@ export function useLocalDatabaseRecovery({
     [],
   );
 
+  const canRecoverOpening = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState).reloadOnRetry;
+  useEffect(() => {
+    if (localDatabaseStorageState.status === "ready") clearOpfsOpeningRecoveryBudget();
+    if (!canRecoverOpening) return;
+    return startOpfsOpeningRecovery({
+      isEligible: () => getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState()).reloadOnRetry && !reloadRequested.current,
+      onStatus: setAutomaticRecovery,
+      reload: () => {
+        reloadRequested.current = true;
+        try { window.location.reload(); }
+        catch (error) { reloadRequested.current = false; throw error; }
+      },
+    });
+  }, [canRecoverOpening, localDatabaseStorageState.status]);
+
   const retryLocalStorage = useCallback(async () => {
+    const displayedReload = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState).reloadOnRetry;
+    const currentReload = getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState()).reloadOnRetry;
+    if (displayedReload || currentReload) {
+      // Reload only the blocked initial document whose warning was actually presented.
+      // A late click must not restart a runtime that has since become operational.
+      if (!displayedReload || !currentReload || reloadRequested.current) return;
+      reloadRequested.current = true;
+      try {
+        window.location.reload();
+      } catch (error) {
+        reloadRequested.current = false;
+        throw error;
+      }
+      return;
+    }
     await retryLocalDatabaseInitialization();
     setBootstrapAttempt((attempt) => attempt + 1);
     setStatus("loading");
-  }, [setBootstrapAttempt, setStatus]);
+  }, [localDatabaseStorageState, setBootstrapAttempt, setStatus]);
 
   const resetLocalStorage = useCallback(async () => {
     await resetLocalDatabaseAfterConfirmation({ confirmed: true });
@@ -85,6 +119,7 @@ export function useLocalDatabaseRecovery({
   ]);
 
   return {
+    automaticRecovery,
     getRecoverySummary: getLocalDatabaseRecoverySummary,
     localDatabaseStorageState,
     localStorageRecoveryNotice,

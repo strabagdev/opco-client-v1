@@ -217,6 +217,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const {
+    automaticRecovery,
     getRecoverySummary,
     localDatabaseStorageState,
     localStorageRecoveryNotice,
@@ -759,6 +760,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     >
       {localDatabaseStorageState.status === "unavailable" ? (
         <LocalStorageRecoveryScreen
+          automaticRecovery={automaticRecovery}
           getRecoverySummary={getRecoverySummary}
           onResetConfirmed={resetLocalStorage}
           onRetry={retryLocalStorage}
@@ -789,10 +791,12 @@ function isLoginSelectionRequired(
 }
 
 function LocalStorageRecoveryScreen({
+  automaticRecovery,
   getRecoverySummary,
   onResetConfirmed,
   onRetry,
 }: {
+  automaticRecovery: import("../lib/opfs-opening-recovery").OpfsOpeningRecoveryStatus;
   getRecoverySummary(): Promise<LocalDatabaseRecoverySummary>;
   onResetConfirmed(): Promise<void>;
   onRetry(): Promise<void>;
@@ -803,7 +807,7 @@ function LocalStorageRecoveryScreen({
   const [isRetrying, setIsRetrying] = useState(false);
   const [summary, setSummary] = useState<LocalDatabaseRecoverySummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const guidance = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState);
+  const guidance = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState, automaticRecovery);
   const showDiagnostics = shouldShowLocalStorageDiagnostics();
 
   const refreshSummary = useCallback(async () => {

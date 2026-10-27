@@ -164,6 +164,7 @@ type LocalDatabaseGlobalState = {
   database: SQLite.SQLiteDatabase | null;
   databasePromise: Promise<CoordinatedDatabase> | null;
   lifecycleCloseRegistered: boolean;
+  hasReachedReady?: boolean;
   lastUnavailableError: LocalDatabaseUnavailableError | null;
   listeners: Set<() => void>;
   migrationPromise: Promise<void> | null;
@@ -371,7 +372,12 @@ async function openAndMigrate() {
     db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
     registerWebDatabaseLifecycleClose(state);
   } catch (error) {
-    throw toLocalDatabaseUnavailableError(error, "OPEN_FAILED");
+    const unavailable = toLocalDatabaseUnavailableError(error, "OPEN_FAILED");
+    if (state.hasReachedReady === false && isAccessHandleBusyError(error) &&
+      typeof window !== "undefined" && typeof window.location?.reload === "function") {
+      unavailable.retryRequiresReload = true;
+    }
+    throw unavailable;
   }
 
   state.database = db;
@@ -386,6 +392,7 @@ async function openAndMigrate() {
   }
 
   state.lastUnavailableError = null;
+  state.hasReachedReady = true;
   setLocalDatabaseStorageState(state, {
     destructiveRecoveryAvailable: false,
     errorCode: null,
@@ -568,6 +575,7 @@ function getLocalDatabaseGlobalState() {
       coordinatorWaiting: [],
       connectionOperationPromise: null,
       lifecycleCloseRegistered: false,
+      hasReachedReady: false,
       lastUnavailableError: null,
       listeners: new Set(),
       migratedSchemaVersion: null,
@@ -734,6 +742,7 @@ function getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics {
 function isSameLocalDatabaseStorageState(current: LocalDatabaseStorageState, next: LocalDatabaseStorageState) {
   return current.status === next.status && current.errorCode === next.errorCode && current.retryable === next.retryable &&
     current.destructiveRecoveryAvailable === next.destructiveRecoveryAvailable &&
+    ("retryRequiresReload" in current ? current.retryRequiresReload : false) === ("retryRequiresReload" in next ? next.retryRequiresReload : false) &&
     ("cause" in current ? current.cause : null) === ("cause" in next ? next.cause : null) &&
     ("technicalMessage" in current ? current.technicalMessage : null) === ("technicalMessage" in next ? next.technicalMessage : null);
 }
@@ -757,6 +766,7 @@ function markLocalDatabaseUnavailable(state: LocalDatabaseGlobalState, error: Lo
     destructiveRecoveryAvailable: error.causeCode !== "ACCESS_HANDLE_BUSY",
     errorCode: "SQLITE_UNAVAILABLE",
     technicalMessage: sanitizeLocalDatabaseErrorMessage(error.originalError),
+    ...(error.retryRequiresReload && state.hasReachedReady === false ? { retryRequiresReload: true as const } : {}),
     retryable: true,
     status: "unavailable",
   });
