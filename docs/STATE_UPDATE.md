@@ -2787,3 +2787,72 @@ Transporte sintético, sin nuevo Core/ACK/sync ni Safari físico. Se reutiliza e
 sólo por identidad del handler manual; el automático tiene evidencia nueva.
 [Informe, inventario y parches](../../backups/opfs-opening-auto-recovery/2026-10-27/REPORT.md), E18 en
 la matriz canónica. Sin publicación; otros VFS históricos, códigos y V11 permanecen fuera del lote.
+
+## Lector configurable por campo — integración local, 2026-10-27
+
+La ampliación Core/editor/Client fue autorizada después de la entrega independiente anterior.
+El lector queda integrado localmente en Attendance y STATE_UPDATE; aquella etapa «NO integrado»
+es histórica, no el estado de este candidato. No hay configuración ni publicación productiva.
+
+- Config opcional por experiencia: `codeSearch: { fieldId: "ID_ESTABLE_DEL_CAMPO_FUENTE" }`.
+  Primera entrega: TEXT/TEXTAREA simples, activos y buscables del origen. Core valida entidad,
+  contrato y permisos existentes. No usa nombres/labels como identidad ni reglas RUT/tenant/contrato.
+- Cámara sólo por acción explícita, getUserMedia + ZXing-WASM reader3.1.6 con JS/WASM/MIT/hashes
+  locales en public/vendor, incluidos por el precache existente; sin CDN ni cambio de dependencias.
+  QR, Code128 y PDF417; texto directo/nombres, no OCR, URL ni extracción de payloads compuestos.
+  Ceros, K, puntos y guiones se conservan. No imágenes/identificadores personales en logs o evidencia.
+- Una aceptación cierra tracks/worker antes de completar el buscador. Reutiliza el mismo handler,
+  debounce300ms y actividad de cabecera. No selecciona sujetos/personas, confirma, guarda ni genera outbox.
+  Cada aceptación incrementa sólo una revisión de búsqueda, incluso para dos lecturas idénticas.
+- Lectura del código usa GET `search` + `searchFieldId`; Core exige que sea el fieldId configurado,
+  y devuelve `searchFieldId` ejecutado y `codeSearchField: { id, key, name, type }`.
+  Client exige ambos antes de aceptar una respuesta por campo: un Core anterior no puede devolver
+  una búsqueda global y hacerla pasar por filtrada. Escrituras/idempotencia/autorización no cambian.
+- Búsqueda manual sin ese parámetro mantiene su comportamiento global. Editar el texto vuelve a
+  global; se indica el modo al usuario. Resultados múltiples y «Sin resultados» conservados: leer
+  no equivale a identificar. No búsqueda exacta ni nueva normalización global de RUT.
+- Predicado por campo: substring literal sin distinguir mayúsculas, trim exterior; `%`, `_` y `\`
+  no son comodines. Misma comparación comprobada en PostgreSQL y SQLite, incluidas puntuación,
+  nombres/Ñ y variantes K. No equivalencia implícita con RUT sin puntos/guion ni sin acentos.
+- Metadata guardada en la definición existente por owner/contrato/AppView, source validado; key se
+  obtiene del fieldId. Registros fuente siguen aislados por usuario/contrato/entidad y las lecturas
+  de current/latest por AppView/fecha/identidad completas. No se consulta otro campo si falta metadata,
+  cambia la configuración o faltan valores en caché: error preciso y búsqueda manual disponible.
+  Null conocido no coincide; undefined o valor no textual no se convierte ni se interpreta.
+- Reutiliza el catálogo preparado: no nuevas descargas por frame ni catálogo completo por lectura.
+  Source y definición deben estar persistidos; límites previos20 sujetos online/25 offline se conservan.
+  Datos parciales pueden devolver resultados parciales. El lector no acredita cobertura ni frescura;
+  no cambia marcadores, snapshots, preparación, namespace v10 epoch2, outbox ni sincronización.
+- STATE_UPDATE también filtra latest por el campo fuente, preserva campo en «cargar más»/refresh y
+  no elimina overlays por comparar sólo displayName. Conflictos del scope siguen visibles por separado;
+  la búsqueda no modifica ni consume intenciones. Contexto compuesto incompleto mantiene lector inhabilitado.
+- Un frame en vuelo; abort y tiempos finitos de carga/decodificación. Cancelar, ocultar documento,
+  pagehide, scope o navegación detienen recursos y descartan respuestas tardías. Expo conserva pantallas
+  ocultas montadas: se usa usePathname SDK57 para inhabilitar la cámara fuera de su experiencia,
+  además del desmontaje. No recarga sesión ni abre una nueva SQLite. Resize no inicia consultas.
+
+Evidencia:197 pruebas Client focalizadas en candidato aislado,205 Core focalizadas reutilizadas y
+1 prueba PostgreSQL local (seis predicados y patrones reales enviados por Prisma; sólo SELECT,
+base/usuario validados desde .env.local). Typecheck/lint afectado/diff-check aprobados. El tsc en Core
+habitual encontró EROFS al escribir tsbuildinfo; el candidato idéntico en /tmp pasó el comando estándar.
+Build web final con API pública, namespace epoch2, lector y tres recursos locales presentes en SW;
+no build/suite completos de Core ni suite completa Client en esta etapa.
+
+Chromium153 Linux, perfil exclusivo, **renderers reales + OPFS reales, API sintética y cámara canvas
+simulada**: QR/Code128/PDF417, una búsqueda por lectura, repetición idéntica, manual global,
+resultados múltiples/vacíos, cero escrituras/outbox. Anchos1440/1024/390 sin overflow ni nuevas
+peticiones al redimensionar. Salida de ruta con permiso pendiente cierra la pantalla retenida y
+el stream tardío. Cierre completo/reapertura del mismo perfil offline, servidor apagado: Attendance
+QR y STATE_UPDATE PDF417 buscan dos sujetos por el mismo campo, cero requests al servidor y cero
+business writes. Falta de metadata se inyectó sólo en esa caché sintética y mostró el límite sin
+fallback. Regresiones SQLite con reapertura incluyen pendientes, conflicto/autorización intactos
+y dos contextos compuestos; no afirman sincronización real nueva ni prueba Core/browser extremo a extremo.
+No cámara física, Safari/iPhone físico ni credencial original acreditados; sigue faltando su imagen/lectura.
+
+Dos RED de caracterización preexistentes en el archivo pendiente state-update-conflict-resolution.test.ts
+fallan igual sobre HEAD y se mantienen excluidos e intactos; la versión HEAD del archivo pasó23/23
+con el candidato. No se omiten fallos propios: las197 focalizadas del candidato final pasan completas.
+Los intentos de arnés (timestamps ISO, valor manual idéntico, controles ocultos retenidos, arranque OPFS
+al cambiar documentos) se conservan sanitizados; no se atribuyen al incidente productivo ni a Safari.
+Fuera de alcance: horarios, V11, auditoría general y configuración productiva. Respaldo combinado,
+parches por repo y evidencia/tiempos: `backups/code-reader-field-search/2026-10-27/`.

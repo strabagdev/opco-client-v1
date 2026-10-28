@@ -152,7 +152,10 @@ export type ReportTimeFilterConfig = {
 
 export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 
+export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
+
 export type AttendanceWorkflowConfig = {
+  codeSearch?: { fieldId: string };
   contextFieldIds?: string[];
   dateFieldId: string;
   defaultCheckInOptionId?: string;
@@ -165,6 +168,7 @@ export type AttendanceWorkflowConfig = {
 };
 
 export type StateUpdateWorkflowConfig = {
+  codeSearch?: { fieldId: string };
   dateFieldId?: string;
   extraFieldIds?: string[];
   historyMode?: StateUpdateHistoryMode;
@@ -572,6 +576,7 @@ export type EntityRecordResponse = {
 };
 
 export type AttendanceWorkflowQuery = {
+  searchFieldId?: string;
   date: string;
   personRecordId?: string;
   search?: string;
@@ -627,6 +632,8 @@ export type AttendanceLatestItem = {
 };
 
 export type AttendanceResponse = {
+  searchFieldId?: string;
+  codeSearchField?: WorkflowCodeSearchField;
   appView: {
     id: string;
     name: string;
@@ -717,6 +724,7 @@ export function normalizeStateUpdateUniqueness(input: unknown): StateUpdateUniqu
 export type CompositeStateIdentity = { version: 1; definitionId: string; values: Record<string, string> };
 
 export type StateUpdateWorkflowQuery = {
+  searchFieldId?: string;
   identity?: CompositeStateIdentity;
   date?: string;
   page?: number;
@@ -811,6 +819,8 @@ export type StateUpdateSummary = {
 };
 
 export type StateUpdateResponse = {
+  searchFieldId?: string;
+  codeSearchField?: WorkflowCodeSearchField;
   schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
   scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
   identityFields?: StateUpdateField[];
@@ -1676,6 +1686,8 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("search", normalizedQuery.search.trim());
       }
 
+      if (normalizedQuery.searchFieldId !== undefined) searchParams.set("searchFieldId", normalizedQuery.searchFieldId);
+
       if (normalizedQuery.personRecordId?.trim()) {
         searchParams.set("personRecordId", normalizedQuery.personRecordId.trim());
       }
@@ -1689,7 +1701,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: diagnosticOperation ?? attendanceDiagnosticOperation(normalizedQuery),
           diagnosticSyncRunId,
         },
-      ).then(normalizeAttendanceResponse);
+      ).then(normalizeAttendanceResponse).then(response => verifyCodeSearchResponse(response, normalizedQuery.searchFieldId));
     },
     getStateUpdateWorkflow(
       token: string,
@@ -1716,6 +1728,8 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("search", query.search.trim());
       }
 
+      if (query.searchFieldId !== undefined) searchParams.set("searchFieldId", query.searchFieldId);
+
       if (query.subjectRecordId?.trim()) {
         searchParams.set("subjectRecordId", query.subjectRecordId.trim());
       }
@@ -1732,7 +1746,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
           diagnosticSyncRunId: options.diagnosticSyncRunId,
         },
-      ).then(normalizeStateUpdateResponse);
+      ).then(normalizeStateUpdateResponse).then(response => verifyCodeSearchResponse(response, query.searchFieldId));
     },
     saveAttendanceWorkflow(
       token: string,
@@ -2535,4 +2549,11 @@ function isApiEnvelope<T>(body: unknown): body is ApiEnvelope<T> {
     typeof envelope.error.code === "string" &&
     typeof envelope.error.message === "string"
   );
+}
+
+function verifyCodeSearchResponse<T extends { searchFieldId?: string; codeSearchField?: WorkflowCodeSearchField }>(response: T, fieldId?: string): T {
+  if (fieldId !== undefined && (response.searchFieldId !== fieldId || response.codeSearchField?.id !== fieldId)) {
+    throw new OpcoApiError("Opco no confirmó la búsqueda en el campo configurado. Usa la búsqueda manual o actualiza la experiencia.", "CODE_SEARCH_NOT_CONFIRMED", 400);
+  }
+  return response;
 }

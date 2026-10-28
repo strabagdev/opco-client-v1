@@ -1,3 +1,4 @@
+import { cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
 import { validateScheduleResolution, type CachedStateUpdateScheduleContext, type StateUpdateSchedulePolicy } from "./state-update-schedule";
 import { pinnedStateUpdateScheduleMetadata, stateUpdateScheduleMetadata, stateUpdateScheduleRequest, stateUpdateSchedulesEqual, canonicalScheduleMetadata, StateUpdateScheduleReviewError } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
@@ -1807,6 +1808,7 @@ async function listCachedRecords({
   page = 1,
   pageSize = 25,
   search,
+  searchFieldKey,
   sort,
 }: {
   contractId: string;
@@ -1818,6 +1820,7 @@ async function listCachedRecords({
   page?: number;
   pageSize?: number;
   search?: string;
+  searchFieldKey?: string;
   sort?: `field:${string}` | `fieldId:${string}` | "displayName" | "updatedAt";
 }) {
   const db = await getDatabase();
@@ -1842,6 +1845,11 @@ async function listCachedRecords({
 
     if (fieldKeyHasValue && !hasCachedRecordValue(record.values[fieldKeyHasValue])) {
       return false;
+    }
+
+    if (searchFieldKey) {
+      if (!Object.prototype.hasOwnProperty.call(record.values, searchFieldKey)) throw new CodeSearchCacheError();
+      return codeSearchTextMatches(record.values[searchFieldKey], search ?? "");
     }
 
     if (!normalizedSearch) {
@@ -3034,9 +3042,12 @@ async function searchStateUpdateSubjects({
   identity,
   ownerKey,
   search,
+  searchFieldId,
   sourceEntityTypeId,
   targetEntityTypeId,
 }: SearchStateUpdateSubjectsInput) {
+  const prepared = searchFieldId !== undefined ? await getAppViewDefinition(ownerKey, contractId, appViewId) : null;
+  const searchField = searchFieldId !== undefined ? cachedWorkflowCodeSearchField(prepared?.definition, searchFieldId, sourceEntityTypeId) : undefined;
   const currentCoverage = (usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness }) || uniqueness === "subject-date-fields")
     ? await getStateUpdateCurrentCoverage({ scheduleBindingId, appViewId, contractId, date, dateFieldId, historyMode,
         uniqueness, identity, ownerKey, sourceEntityTypeId, targetEntityTypeId })
@@ -3048,6 +3059,7 @@ async function searchStateUpdateSubjects({
     page: 1,
     pageSize: 25,
     search,
+    searchFieldKey: searchField?.key,
   });
   const results = await Promise.all(
     subjects.records.map(async (record) => {
@@ -3216,14 +3228,24 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
     pendingCount: count(["pending_create", "pending_update"]), syncingCount: count(["syncing"]), totalRegistered: rows.length };
 }
 
-async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }) {
+async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string; searchFieldId?: string }) {
+  let matchingSubjects: Set<string> | undefined;
+  if (input.searchFieldId !== undefined) {
+    const prepared = await getAppViewDefinition(input.ownerKey, input.contractId, input.appViewId);
+    const view = prepared?.definition.appView;
+    const sourceEntityTypeId = view?.type === "WORKFLOW" ? view.config.sourceEntityTypeId : undefined;
+    if (typeof sourceEntityTypeId !== "string") throw new CodeSearchCacheError();
+    const field = cachedWorkflowCodeSearchField(prepared?.definition, input.searchFieldId, sourceEntityTypeId);
+    const found = await listCachedRecords({ ownerKey: input.ownerKey, contractId: input.contractId, entityTypeId: sourceEntityTypeId, pageSize: Number.MAX_SAFE_INTEGER, search: input.search, searchFieldKey: field.key });
+    matchingSubjects = new Set(found.records.map(record => record.serverId ?? record.id));
+  }
   const db = await getDatabase();
   const date = normalizeStateUpdateLogicalDate(input.date), dated = usesDatedSubjectHistory(input);
   const page = input.page && input.page > 0 ? input.page : 1, pageSize = input.pageSize && input.pageSize > 0 ? input.pageSize : 20;
   const rows = (await stateUpdateRows(db, input)).filter(row => {
     const v = JSON.parse(row.values_json);
     return (dated && row.sync_status === "synced" ? !!stateUpdateEventDate(row, input) : (!date || normalizeStateUpdateLogicalDate(v.date) === date)) &&
-      (!input.search?.trim() || v.subjectDisplayName.toLowerCase().includes(input.search.trim().toLowerCase()));
+      (matchingSubjects ? matchingSubjects.has(v.subjectRecordId) : (!input.search?.trim() || v.subjectDisplayName.toLowerCase().includes(input.search.trim().toLowerCase())));
   });
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   rows.sort((a, b) => dated

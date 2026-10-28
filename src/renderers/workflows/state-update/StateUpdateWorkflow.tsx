@@ -1,3 +1,5 @@
+import { CodeSearchCacheError } from "../../../lib/workflow-code-search";
+import { CodeReader } from "../../../components/code-reader";
 import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, scheduleForStateUpdateEdit, formatAppliedSchedule, type StateUpdateScheduleMetadata } from "@/lib/state-update-schedule";
 import { LocalReportCancellation } from "./local-report-cancellation";
 import { useExtraRelations } from "./use-extra-relations";
@@ -10,7 +12,7 @@ import { StateUpdateFormGrid, StateUpdateReadRows } from "./state-update-present
 import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { desktopStyleColors, desktopPalette } from "@/lib/desktop-presentation";
 import { useContextPreparation } from "./use-context-preparation";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { usePathname, useLocalSearchParams, useRouter } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -130,7 +132,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const targetDate = attentionDate(compositeMode ? attentionParams.reportDate ?? attentionParams.attentionDate : attentionParams.attentionDate);
   const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? (compositeMode ? "" : formatLocalDateInput(new Date())) });
   const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
+  const cameraIsActive = usePathname() === `/view/${appView.id}`;
   const [searchText, setSearchText] = useState("");
+  const [searchFieldId, setSearchFieldId] = useState<string>();
+  const [searchReadId, setSearchReadId] = useState(0);
   const [response, setResponse] = useState<StateUpdateResponse | null>(null);
   const [scheduleReview,setScheduleReview]=useState<import("@/lib/state-update-offline").ReviewStateUpdateScheduleInput|null>(null);
   const [contextSelection, setContextSelection] = useState({ route: attentionParams.reportContext, value: parseCompositeContextValues(attentionParams.reportContext) });
@@ -326,7 +331,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     recordVisibleError({ error: contextPreparation.error, operation: "refresh", resolution: "refresh_failed" });
   }, [contextPreparation.error, recordVisibleError]);
 
-  const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; requestId?: number; search?: string; subjectRecordId?: string } = {}) => {
+  const loadOfflineWorkflow = useCallback(async (query: { appendLatest?: boolean; fallbackReason?: "network-load"; page?: number; requestId?: number; search?: string; searchFieldId?: string; subjectRecordId?: string } = {}) => {
     if (!ownerKey || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
       return false;
@@ -347,6 +352,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setResponse({ appView: { id: appView.id, name: appView.name, slug: appView.slug }, date, dateFieldId: definition.dateFieldId,
         ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
+        codeSearchField: definition.codeSearchField,
         extraFields: definition.extraFields, stateFields: definition.stateFields, subjectFieldId: definition.subjectFieldId,
         historyMode: definition.historyMode, uniqueness: definition.uniqueness, items: [], latest: [],
         sourceEntityType: { id: definition.sourceEntityTypeId, name: definition.sourceEntityTypeName ?? "Registros" }, targetEntityType: { id: definition.targetEntityTypeId, name: definition.targetEntityTypeName ?? "Registros" } });
@@ -376,6 +382,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         page: latestPageToLoad,
         pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
         search: query.search,
+        searchFieldId: query.searchFieldId,
       }),
       definitionCache.listStateUpdateConflicts(scope),
       definitionCache.getStateUpdateSnapshotCoverage(scope),
@@ -391,6 +398,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       nextItems = await definitionCache.searchStateUpdateSubjects({
         ...scope,
         search: query.search,
+        searchFieldId: query.searchFieldId,
         sourceEntityTypeId: definition.sourceEntityTypeId,
       });
     }
@@ -428,6 +436,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             type: field.type ?? "DATE",
           })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
         : null,
+      codeSearchField: definition.codeSearchField,
       dateFieldId: definition.dateFieldId,
       ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
@@ -455,7 +464,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       },
       uniqueness: definition.uniqueness,
     };
-    const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query);
+    const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query, nextResponse);
     const nextVisibleResponse = mergeStateUpdateResponseWithLocalConflicts(nextResponse, visibleLocalConflicts);
     setResponse((current) => query.appendLatest && current
       ? {
@@ -463,7 +472,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextVisibleResponse.latest ?? []),
         }
       : nextVisibleResponse);
-    setDurableConflicts(visibleLocalConflicts);
+    setDurableConflicts(query.searchFieldId ? localConflicts : visibleLocalConflicts);
     setItems(nextItems);
     setLatestPage(latestPageToLoad);
     setOfflineHistoryState(effectiveCoverage);
@@ -482,7 +491,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     return true;
   }, [identity, contextReady, compositeMode, appView.id, appView.name, appView.slug, date, definitionCache, ownerKey, selectedContractId, setError, setItems, setDurableConflicts, setLatestPage, setOfflineHistoryState, readScope, setVerifiedOfflineAbsences]);
 
-  const loadWorkflow = useCallback(async (query: { appendLatest?: boolean; operation?: StateUpdateVisibleErrorOperation; page?: number; search?: string; subjectRecordId?: string } = {}) => {
+  const loadWorkflow = useCallback(async (query: { appendLatest?: boolean; operation?: StateUpdateVisibleErrorOperation; page?: number; search?: string; searchFieldId?: string; subjectRecordId?: string } = {}) => {
     if (!token || !selectedContractId) {
       setError("Selecciona un contrato antes de abrir este workflow.");
       setIsLoading(false);
@@ -524,6 +533,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         page: latestPageToLoad,
         pageSize: STATE_UPDATE_LATEST_PAGE_SIZE,
         search: contextReady ? query.search : undefined,
+        ...(contextReady && query.search && query.searchFieldId !== undefined ? { searchFieldId: query.searchFieldId } : {}),
         subjectRecordId: contextReady ? query.subjectRecordId : undefined,
       };
       const definitionKey = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config]);
@@ -544,7 +554,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       if (nextResponse.uniqueness === "subject-date-fields" && nextResponse.contextRequired) {
         setResponse(nextResponse);setItems([]);
         if (ownerKey) await definitionCache.upsertAppViewDefinition({ appViewId: appView.id, appViewType: "WORKFLOW", workflowKey: "state-update", ownerKey, contractId: selectedContractId,
-          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", sourceEntityTypeId: nextResponse.sourceEntityType.id,
+          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, sourceEntityTypeId: nextResponse.sourceEntityType.id,
             sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
             dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
             schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
@@ -565,7 +575,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         return;
       }
 
-      const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query);
+      const visibleLocalConflicts = filterStateUpdateConflictsForQuery(localConflicts, query, nextResponse);
       const nextVisibleResponse = mergeStateUpdateResponseWithLocalConflicts(nextResponse, visibleLocalConflicts);
 
       setResponse((current) => query.appendLatest && current
@@ -574,14 +584,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
             latest: mergeStateUpdateLatestUpdates(current.latest ?? [], nextVisibleResponse.latest ?? []),
           }
         : nextVisibleResponse);
-      setDurableConflicts(visibleLocalConflicts);
+      setDurableConflicts(query.searchFieldId ? localConflicts : visibleLocalConflicts);
       setItems(nextVisibleResponse.items);
       setLatestPage(latestPageToLoad);
       setOfflineHistoryState(null);
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
-        if(nextResponse.schedulePolicy) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
+        if(nextResponse.schedulePolicy || nextResponse.codeSearchField) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
         const pagination = nextResponse.latestPagination ?? {
           hasMore: false,
           page: latestPageToLoad,
@@ -634,7 +644,13 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         });
 
         if (isOnline && nextError instanceof OpcoNetworkError && isStateUpdateReadOperation(operation)) {
-          const loadedFromCache = await loadOfflineWorkflow({ ...query, fallbackReason: "network-load", requestId });
+          let loadedFromCache: boolean;
+          try { loadedFromCache = await loadOfflineWorkflow({ ...query, fallbackReason: "network-load", requestId }); }
+          catch (cacheError) {
+            if (!(cacheError instanceof CodeSearchCacheError)) throw cacheError;
+            if (isStateUpdateVisualRequestCurrent(requestSequenceRef.current, requestId)) { setError(cacheError.message); setRefreshError(null); }
+            return;
+          }
 
           if (loadedFromCache) {
             setError(null);
@@ -686,7 +702,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     const timeoutId = setTimeout(() => {
       if (shouldSearchStateUpdateSubjects(searchText)) {
-        void loadWorkflow({ operation: "refresh", search: normalizeStateUpdateSearch(searchText) });
+        void loadWorkflow({ operation: "refresh", search: normalizeStateUpdateSearch(searchText), searchFieldId });
         return;
       }
 
@@ -694,7 +710,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     }, 0);
 
     return () => clearTimeout(timeoutId);
-  }, [loadWorkflow, searchText, stateUpdateReconnectRefreshKey]);
+  }, [loadWorkflow, searchText, searchFieldId, stateUpdateReconnectRefreshKey]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -705,11 +721,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         return;
       }
 
-      void loadWorkflow({ operation: "search", page: 1, search: normalizeStateUpdateSearch(searchText) });
+      void loadWorkflow({ operation: "search", page: 1, search: normalizeStateUpdateSearch(searchText), searchFieldId });
     }, STATE_UPDATE_SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [loadWorkflow, searchText]);
+  }, [loadWorkflow, searchText, searchFieldId, searchReadId]);
 
   function setDate(next: string | ((current: string) => string)) {
     const value = typeof next === "function" ? next(date) : next;
@@ -980,7 +996,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     subject: StateUpdateItem["subject"];
     updatedAt: string;
   }) {
-    if (!stateUpdateLatestMatchesSearch({ recordId, stateValues: [], subject, updatedAt }, searchText)) {
+    if (!searchFieldId && !stateUpdateLatestMatchesSearch({ recordId, stateValues: [], subject, updatedAt }, searchText)) {
       return;
     }
 
@@ -1176,6 +1192,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       operation: "refresh",
       page: latestPage + 1,
       search: shouldSearchStateUpdateSubjects(searchText) ? normalizeStateUpdateSearch(searchText) : undefined,
+      searchFieldId,
     });
   }
 
@@ -1188,6 +1205,19 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     shownCount: (visibleResponse?.items.length ?? 0) + (visibleResponse?.latest?.length ?? 0),
     source: connectivityStatus === "offline" ? "local" as const : "remote" as const,
   }), [connectivityStatus, error, isLoading, visibleResponse]));
+
+  function changeSearchText(value: string, fieldId?: string) {
+    setSearchText(value);
+    setSearchFieldId(fieldId);
+    if (fieldId !== undefined) setSearchReadId(current => current + 1);
+    requestSequenceRef.current += 1;
+    setItems([]);
+    setIsSearching(Boolean(normalizeStateUpdateSearch(value)));
+    setSelectedItem(null);
+    setConflict(null);
+    setSuccessMessage(null);
+    setResolutionFeedback(null);
+  }
 
   return (
     <ScrollView testID="state-update-workflow" contentContainerStyle={styles.content} style={styles.screen}>
@@ -1265,25 +1295,20 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           : "Sin conexión. Disponibilidad del contexto no verificada por completo; sólo se muestran los datos guardados."}</Text> : null}
         {contextReady && isOnline && (contextPreparation.phase === "failed" || contextPreparation.phase === "partial") ? <Pressable accessibilityRole="button" disabled={isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Reintentar</Text></Pressable> : null}
       </View> : null}
-      <View style={styles.searchBlock}>
+      <View style={[styles.searchBlock, appView.config.codeSearch && { flexWrap: "wrap" }]}>
         <TextInput
           autoCapitalize="words"
-          onChangeText={(value) => {
-            setSearchText(value);
-            requestSequenceRef.current += 1;
-            setItems([]);
-            setIsSearching(Boolean(normalizeStateUpdateSearch(value)));
-            setSelectedItem(null);
-            setConflict(null);
-            setSuccessMessage(null);
-            setResolutionFeedback(null);
-          }}
+          onChangeText={value => changeSearchText(value)}
           editable={contextReady}
           placeholder="Buscar"
-          style={styles.searchInput}
+          style={[styles.searchInput, appView.config.codeSearch && { minWidth: 160, flexBasis: 240 }]}
           value={searchText}
         />
+        {appView.config.codeSearch ? <CodeReader scopeKey={JSON.stringify([readScope, appView.config.sourceEntityTypeId, appView.config.codeSearch.fieldId])}
+          disabled={!cameraIsActive || !contextReady || !!selectedItem || !!conflict || isSaving || isSearching || !ownerKey || !selectedContractId}
+          onRead={value => changeSearchText(value, appView.config.codeSearch!.fieldId)} /> : null}
       </View>
+        {searchFieldId && normalizedSearch ? <Text>Búsqueda del lector en {visibleResponse?.codeSearchField?.name ?? "el campo configurado"}. Edita el texto para volver a la búsqueda manual global.</Text> : null}
 
 
       {(isLoading || isSearching) && !(visibleResponse && (!normalizedSearch || items.length > 0)) ? <ReadLoadingState mode="initial" /> : null}
@@ -1384,13 +1409,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
 function filterStateUpdateConflictsForQuery(
   conflicts: CachedStateUpdateRecord[],
-  query: { search?: string; subjectRecordId?: string },
+  query: { search?: string; searchFieldId?: string; subjectRecordId?: string },
+  response?: StateUpdateResponse,
 ) {
   return conflicts.filter((record) => {
     if (query.subjectRecordId && record.subject.id !== query.subjectRecordId) {
       return false;
     }
 
+    if (query.searchFieldId) return Boolean(response?.items.some(item => item.subject.id === record.subject.id) || response?.latest?.some(item => item.subject?.id === record.subject.id));
     return !query.search || stateUpdateLatestMatchesSearch(stateUpdateConflictLatestItem(record), query.search);
   });
 }

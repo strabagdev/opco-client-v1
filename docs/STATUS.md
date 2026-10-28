@@ -3180,3 +3180,23 @@ Matriz E18 distingue candidato de publicado; actualización incremental separada
 402 exclusiones, horarios y demás pendientes ajenos preservados; respaldo manual previo intacto.
 Sin producción, namespace/esquema/dependencias, commit/push/deploy. Se detiene para revisión del lote;
 lectura de códigos, V11 y auditoría general siguen pausados/abiertos según su alcance anterior.
+
+## Lector por campo — implementado sólo localmente, 2026-10-27
+
+La autorización posterior completó la integración independiente de cámara. Attendance y STATE_UPDATE
+usan `codeSearch.fieldId` opcional (TEXT/TEXTAREA activos/buscables del origen), configurable en Core.
+El código consulta sólo ese campo, online/offline; editar manualmente conserva global. Ceros/puntuación
+sin reinterpretar RUT. Sin metadata/valores cacheados hay límite explícito, no fallback global.
+No selección, guardado ni confirmación automáticos; no cambios de payloads/outbox/sync ni epoch2.
+Detalle canónico en STATE_UPDATE, «Lector configurable por campo — integración local».
+
+197 pruebas Client focalizadas del candidato aislado,205 Core +1 PostgreSQL local de predicado,
+typecheck/lint afectados y build web Client aprobados; diff-check. Chromium/OPFS con renderers reales,
+API/cámara sintéticas: una consulta por lectura, repetición, múltiples/vacío, manual global, navegación,
+1440/1024/390, reapertura offline con servidor apagado y metadata ausente. Sin Core/browser real combinado,
+cámara física/Safari ni credencial original. Dos RED ajenos se reprodujeron también en HEAD y se preservan;
+el archivo HEAD pasó23/23 y todos los tests del lote pasan. No suite completa ni publicación.
+Core debe preceder a Client; sin migraciones ni activación automática. No habilitar configuración hasta
+ambos builds compatibles. Los checks del lector independiente se conservan en su respaldo anterior.
+Inventario/parches/hashes/REVIEW y tiempos: `backups/code-reader-field-search/2026-10-27/`.
+402 exclusiones y horarios intactos. V11/auditoría general sin reabrir. Credencial real pendiente.

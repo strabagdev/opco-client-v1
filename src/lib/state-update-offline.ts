@@ -818,6 +818,7 @@ export type DiscardStateUpdateConflictInput = StateUpdateScope & {
 };
 
 export type SearchStateUpdateSubjectsInput = StateUpdateScope & {
+  searchFieldId?: string;
   search: string;
   sourceEntityTypeId: string;
 };
@@ -913,7 +914,7 @@ export type StateUpdateOfflineStore = {
   listPendingStateUpdateOperations(ownerKey: string): Promise<PendingOperation[]>;
   getStateUpdateResolutionOutcome(input: StateUpdateScope & { localRecordId: string; clientRequestId: string }): Promise<"confirmed" | "pending" | "conflict" | "failed" | "superseded">;
   listStateUpdateConflicts(input: StateUpdateScope): Promise<CachedStateUpdateRecord[]>;
-  listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string }): Promise<{
+  listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string; searchFieldId?: string }): Promise<{
     items: StateUpdateLatestItem[];
     pagination: {
       hasMore: boolean;

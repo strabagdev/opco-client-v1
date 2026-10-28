@@ -42,6 +42,7 @@ export type PreparedAppViewDefinition =
   | {
       appView: AppView;
       kind: "attendance";
+      codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       sourceEntityTypeId?: string;
       targetEntityTypeId?: string;
       statuses: {
@@ -56,6 +57,7 @@ export type PreparedAppViewDefinition =
       extraFields: EntityField[];
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
+      codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
       identityFields?: import("./opco-api").StateUpdateField[];
       identityDefinition?: { version: 1; definitionId: string };

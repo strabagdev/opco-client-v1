@@ -1,8 +1,9 @@
+import { CodeReader } from "../../../components/code-reader";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput } from "@/renderers/records/temporal-input";
 import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
-import { useLocalSearchParams } from "expo-router";
+import { usePathname, useLocalSearchParams } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -147,7 +148,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setDateSelection({ routeDate: targetDate, value: constrainAttendanceDate(typeof next === "function" ? next(date) : next, today) });
   }
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
+  const cameraIsActive = usePathname() === `/view/${appView.id}`;
   const [searchText, setSearchText] = useState("");
+  const [searchFieldId, setSearchFieldId] = useState<string>();
+  const [searchReadId, setSearchReadId] = useState(0);
   const [items, setItems] = useState<AttendanceItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
@@ -455,6 +459,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       store: definitionCache,
       token: token!,
     });
+    if (response.codeSearchField) {
+      const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
+      if (prepared && (prepared.definition.kind === "state-update" || prepared.definition.kind === "attendance")) {
+        await definitionCache.upsertAppViewDefinition({ ...prepared, lastPreparedAt: new Date().toISOString(),
+          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField } });
+      }
+    }
     await cacheAttendanceRemoteSnapshot({
       appViewId: appView.id,
       config: appView.config,
@@ -464,7 +475,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       snapshotComplete: options.complete,
       store: definitionCache,
     });
-  }, [api, appView.config, appView.id, definitionCache, ownerKey, selectedContractId, token]);
+  }, [api, appView, definitionCache, ownerKey, selectedContractId, token]);
 
   const cacheAttendanceOnlineResponseInBackground = useCallback((response: AttendanceResponse, options: { complete?: boolean } = {}) => {
     void cacheAttendanceOnlineResponse(response, options).catch(() => undefined);
@@ -686,7 +697,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.completedAt,
   ]);
 
-  const searchPeople = useCallback(async (search: string) => {
+  const searchPeople = useCallback(async (search: string, fieldId?: string) => {
     if (!selectedContractId || !ownerKey) {
       return;
     }
@@ -703,6 +714,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           date,
           ownerKey,
           search,
+          searchFieldId: fieldId,
           sourceEntityTypeId: appView.config.sourceEntityTypeId,
           targetEntityTypeId: appView.config.targetEntityTypeId,
         });
@@ -720,7 +732,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, search });
+      const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, search, ...(fieldId !== undefined ? { searchFieldId: fieldId } : {}) });
 
       if (requestId !== requestSequenceRef.current) {
         return;
@@ -906,11 +918,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
-      void searchPeople(normalizeAttendanceSearch(searchText));
+      void searchPeople(normalizeAttendanceSearch(searchText), searchFieldId);
     }, ATTENDANCE_SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [searchPeople, searchText]);
+  }, [searchPeople, searchText, searchFieldId, searchReadId]);
 
   async function selectPerson(item: AttendanceItem) {
     const requestId = ++requestSequenceRef.current;
@@ -1285,6 +1297,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     source: connectivityStatus === "offline" ? "local" as const : "remote" as const,
   }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
+  function changeSearchText(value: string, fieldId?: string) {
+    setSearchText(value);
+    setSearchFieldId(fieldId);
+    if (fieldId !== undefined) setSearchReadId(current => current + 1);
+    requestSequenceRef.current += 1;
+    setItems([]);
+    setIsSearching(Boolean(normalizeAttendanceSearch(value)));
+    setSelectedItem(null);
+    setConflict(null);
+    setSuccessMessage(null);
+  }
+
   return (
     <ScrollView testID={isDesktop ? "desktop-attendance" : "compact-attendance"} contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
@@ -1375,20 +1399,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         {isDesktop ? <Text style={styles.searchLabel}>Buscar persona</Text> : null}
         <TextInput
           autoCapitalize="words"
-          onChangeText={(value) => {
-            setSearchText(value);
-            requestSequenceRef.current += 1;
-            setItems([]);
-            setIsSearching(Boolean(normalizeAttendanceSearch(value)));
-            setSelectedItem(null);
-            setConflict(null);
-            setSuccessMessage(null);
-          }}
+          onChangeText={value => changeSearchText(value)}
           placeholder="Buscar persona"
           style={styles.searchInput}
           value={searchText}
         />
+        {appView.config.codeSearch ? <CodeReader scopeKey={JSON.stringify([resolutionScope, appView.config.sourceEntityTypeId, appView.config.codeSearch.fieldId])}
+          disabled={!cameraIsActive || !!selectedItem || !!conflict || isSaving || isSearching || !ownerKey || !selectedContractId}
+          onRead={value => changeSearchText(value, appView.config.codeSearch!.fieldId)} /> : null}
       </View>
+        {searchFieldId && normalizedSearch ? <Text>Búsqueda del lector en el campo configurado. Edita el texto para volver a la búsqueda manual global.</Text> : null}
 
 
       {(isLoading || isSearching) && !(hasCompatibleDay && (!normalizedSearch || items.length > 0)) ? <ReadLoadingState mode="initial" /> : null}
