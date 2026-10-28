@@ -1,3 +1,4 @@
+import { verifyWorkflowSearchComparison, SearchComparisonError, type WorkflowSearchComparison } from "./search-comparison";
 import { stateUpdateScheduleMetadata, stateUpdateScheduleRequest, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
 import { config, trimTrailingSlash } from "./config";
@@ -634,6 +635,7 @@ export type AttendanceLatestItem = {
 export type AttendanceResponse = {
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
+  searchComparison?: WorkflowSearchComparison;
   appView: {
     id: string;
     name: string;
@@ -821,6 +823,7 @@ export type StateUpdateSummary = {
 export type StateUpdateResponse = {
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
+  searchComparison?: WorkflowSearchComparison;
   schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
   scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
   identityFields?: StateUpdateField[];
@@ -1686,6 +1689,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("search", normalizedQuery.search.trim());
       }
 
+      if (normalizedQuery.search?.trim()) searchParams.set("searchComparisonVersion", "1");
       if (normalizedQuery.searchFieldId !== undefined) searchParams.set("searchFieldId", normalizedQuery.searchFieldId);
 
       if (normalizedQuery.personRecordId?.trim()) {
@@ -1701,7 +1705,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: diagnosticOperation ?? attendanceDiagnosticOperation(normalizedQuery),
           diagnosticSyncRunId,
         },
-      ).then(normalizeAttendanceResponse).then(response => verifyCodeSearchResponse(response, normalizedQuery.searchFieldId));
+      ).then(normalizeAttendanceResponse).then(response => verifyCodeSearchResponse(response, normalizedQuery.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, normalizedQuery.search, normalizedQuery.searchFieldId, normalizedQuery.personRecordId));
     },
     getStateUpdateWorkflow(
       token: string,
@@ -1728,6 +1732,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         searchParams.set("search", query.search.trim());
       }
 
+      if (query.search?.trim()) searchParams.set("searchComparisonVersion", "1");
       if (query.searchFieldId !== undefined) searchParams.set("searchFieldId", query.searchFieldId);
 
       if (query.subjectRecordId?.trim()) {
@@ -1746,7 +1751,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
           diagnosticSyncRunId: options.diagnosticSyncRunId,
         },
-      ).then(normalizeStateUpdateResponse).then(response => verifyCodeSearchResponse(response, query.searchFieldId));
+      ).then(normalizeStateUpdateResponse).then(response => verifyCodeSearchResponse(response, query.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, query.search, query.searchFieldId, query.subjectRecordId));
     },
     saveAttendanceWorkflow(
       token: string,
@@ -2556,4 +2561,12 @@ function verifyCodeSearchResponse<T extends { searchFieldId?: string; codeSearch
     throw new OpcoApiError("Opco no confirmó la búsqueda en el campo configurado. Usa la búsqueda manual o actualiza la experiencia.", "CODE_SEARCH_NOT_CONFIRMED", 400);
   }
   return response;
+}
+
+function verifyWorkflowComparisonResponse<T extends {sourceEntityType:{id:string};searchComparison?:WorkflowSearchComparison}>(response:T,query?:string,fieldId?:string,recordId?:string):T {
+  try {
+    const policy=response.searchComparison?verifyWorkflowSearchComparison(response.searchComparison,response.sourceEntityType.id):undefined;
+    if(query?.trim()&&(!policy||policy.applied.mode!==(recordId?.trim()?"record":fieldId?"field":"global")||(fieldId&&policy.applied.fieldId!==fieldId)))throw new SearchComparisonError("Opco no confirmó la comparación ejecutada; actualiza la experiencia con un servidor compatible.","SEARCH_COMPARISON_NOT_CONFIRMED");
+    return policy?{...response,searchComparison:policy}:response;
+  } catch(error){if(error instanceof SearchComparisonError)throw new OpcoApiError(error.message,error.code,400);throw error;}
 }

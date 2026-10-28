@@ -3200,3 +3200,41 @@ Core debe preceder a Client; sin migraciones ni activación automática. No habi
 ambos builds compatibles. Los checks del lector independiente se conservan en su respaldo anterior.
 Inventario/parches/hashes/REVIEW y tiempos: `backups/code-reader-field-search/2026-10-27/`.
 402 exclusiones y horarios intactos. V11/auditoría general sin reabrir. Credencial real pendiente.
+
+
+## Comparación genérica de búsqueda — candidato local, 2026-10-28
+
+Implementada sólo localmente la primera etapa autorizada: config.searchComparison v1 y editor Core,
+manual/global + dirigida Attendance/STATE_UPDATE/codeSearch, SQL antes de paginar/contar, política efectiva
+confirmada y cacheada, lector offline equivalente para políticas configuradas y metadata antigua explícita.
+getAppViewAdminData entrega searchable; ausencia de la clave al guardar preserva codeSearch, eliminación
+sólo explícita. Una edición exclusiva de regla no recalcula nombres/versiones de registros.
+Detalle canónico: STATE_UPDATE, «Comparación por campo v1 — implementación local».
+
+394 pruebas Core y213 Client focalizadas con un worker;5 integraciones PostgreSQL locales adicionales,
+SQLite real/reapertura y1512 pares Unicode C/S17.0.0, typecheck y lint afectados aprobados; diff-check.
+Sin suites completas, build ni navegador/cámara repetidos. Medición local acotada, sin estimación productiva.
+No equivale a comprobar Safari físico, OPFS o credencial real. RECORDS/RELATION/REPORT/PANEL quedan fuera;
+comparaciones legacy sin regla preservadas, sin certificar paridad universal ni cobertura/frescura nueva.
+
+Core debe preceder a Client. Mantener reglas desactivadas hasta actualizar runtimes y preparar metadata;
+Core anterior no puede confirmar la comparación nueva y el Client falla explícitamente. Rollback a lector
+anterior tras activar pierde la capacidad; outbox/payloads intactos. Sin migraciones, namespace ni deps.
+Parche/inventario/hashes/REVIEW/checks: backups/workflow-search-comparison/2026-10-28/. Las402 exclusiones,
+horarios y pendientes ajenos se preservan. Sin cambios productivos, commit/push/deploy. V11 pausado.
+
+
+### Cierre comparación genérica v1 — 2026-10-28
+
+LISTO para siguiente etapa autorizada, sin publicar/activar. Reconstrucción exacta: Core23 archivos/59
+hunks y Client17/53. Builds habituales PASS automatizados: Core Turbopack59.458s y Client Metro47.168s,
+código0, variables ficticias para Core y sin .env/productivo. Artefacto local API https://web.opco.cl,
+index/sw con entry-058409be1645b5952e8f472a5a840863.js, epoch2 y lector JS/WASM local precacheado íntegros.
+394 Core/213 Client/5 PostgreSQL/typecheck/lint reutilizados por hashes;6 comprobaciones complementarias
+con motores/adaptadores reales y Prisma/fetch sintéticos. Sin suites completas ni navegador/cámara.
+Core → Client con reglas desactivadas; activación pendiente de runtimes/metadata compatibles. Rollback
+Core anterior con Client nuevo impide búsquedas aunque no haya reglas; coordinar retirada de runtime.
+Lectores antiguos offline no conocen reglas: no basta actualizar service worker. Sin pérdida ni cambios
+de outbox. Attendance/STATE_UPDATE solamente; RECORDS/RELATION/REPORT/PANEL continúan pendientes.
+Inventario/parches/checks/tiempos: backups/workflow-search-comparison-close/2026-10-28/.402 exclusiones,
+prefijos documentales y demás pendientes preservados. Sin migración/commit/push/deploy; V11 pausado.

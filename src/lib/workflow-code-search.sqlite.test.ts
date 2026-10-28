@@ -1,3 +1,5 @@
+import comparisonFixtures from "./search-comparison-fixtures.json";
+import { normalizeSearchComparison,parseSearchComparison,comparisonFingerprint,searchComparisonMatches,type SearchComparison,type WorkflowSearchComparison } from "./search-comparison";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
@@ -144,4 +146,50 @@ it("keeps compound contexts and another context's pending command independent du
   expect(record?.serverId).toBe(id);
  }
  expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual(before);
+});
+
+const comparisonPolicy={...comparisonFixtures.policy,ignoreCharacters:["-","."]} as SearchComparison;
+function comparisonMetadata():WorkflowSearchComparison {
+ const fields=[{id:descriptor.id,key:descriptor.key,type:"TEXT",primary:true,policy:comparisonPolicy},{id:"name-search",key:"name",type:"TEXT",primary:false,policy:null}].sort((a,b)=>a.id<b.id?-1:1);
+ return {version:1,sourceEntityTypeId:scope.sourceEntityTypeId,fields,fingerprint:comparisonFingerprint(scope.sourceEntityTypeId,fields),applied:{mode:"definition"}};
+}
+async function comparisonDefinition(metadata=comparisonMetadata()){
+ await store.upsertAppViewDefinition({appViewId:view.id,ownerKey:scope.ownerKey,contractId:scope.contractId,appViewType:"WORKFLOW",workflowKey:"state-update",status:"ready",lastPreparedAt:"2026-10-28T10:00:00.000Z",definition:{appView:view,kind:"state-update",sourceEntityTypeId:scope.sourceEntityTypeId,targetEntityTypeId:scope.targetEntityTypeId,subjectFieldId:"subject",dateFieldId:"date",stateFields:[],extraFields:[],historyMode:"update-current",uniqueness:"subject-date",codeSearchField:descriptor,searchComparison:metadata}});
+}
+async function comparisonRows(rows=comparisonFixtures.rows){
+ await store.upsertRemoteRecords({...scope,entityTypeId:scope.sourceEntityTypeId,records:rows.map(([id,value])=>({id:"matrix-"+id,displayName:"Nombre "+id,updatedAt:"2026-10-28T09:00:00.000Z",values:{identifier:value,name:id==="j"?"00123K en otro campo":"Persona "+id}}))});
+ const items=rows.map(([id])=>({subject:{id:"matrix-"+id,displayName:"Nombre "+id},current:{recordId:"event-"+id,updatedAt:"2026-10-28T10:00:00.000Z",stateValues:[]}}));
+ await store.upsertStateUpdateSnapshot({...scope,items,latest:items.map(item=>({...item.current,subject:item.subject,date:scope.date}))});
+}
+it("SQLite reopen uses the exact shared PostgreSQL fixture, multiple IDs and global OR while leaving raw values unchanged",async()=>{
+ await comparisonDefinition();await comparisonRows();const before=await harness.db.getAllAsync("SELECT * FROM entity_records ORDER BY local_id");await reopen();
+ for(const query of comparisonFixtures.queries){const expected=comparisonFixtures.rows.filter(([,value])=>searchComparisonMatches(value,query,comparisonPolicy)).map(([id])=>"matrix-"+id).sort();
+  if(query==="---"){await expect(search(query)).rejects.toMatchObject({code:"EMPTY_NORMALIZED_SEARCH"});continue;}
+  expect((await search(query)).map(row=>row.subject.id).sort()).toEqual(expected);
+  const latest=await store.listStateUpdateLatest({...scope,search:query,searchFieldId:descriptor.id});expect(latest.items.map(item=>item.subject?.id).sort()).toEqual(expected);expect(latest.pagination.total).toBe(expected.length);
+ }
+ for(const policy of [{...comparisonPolicy,match:"contains" as const},{...comparisonPolicy,ignoreCase:false},{...comparisonPolicy,ignoreCharacters:["[","]","%","_","\\","\'"]}]){
+  const metadata=comparisonMetadata();metadata.fields=metadata.fields.map(f=>f.policy?{...f,policy:parseSearchComparison(policy)}:f);metadata.fingerprint=comparisonFingerprint(scope.sourceEntityTypeId,metadata.fields);await comparisonDefinition(metadata);await reopen();
+  for(const query of ["123","K","[]%_\\\'","Ñ áéíóú ü σ Σ ß"]){if(!normalizeSearchComparison(query,policy)){await expect(search(query)).rejects.toMatchObject({code:"EMPTY_NORMALIZED_SEARCH"});continue;}const expected=comparisonFixtures.rows.filter(([,value])=>searchComparisonMatches(value,query,policy)).map(([id])=>"matrix-"+id).sort();expect((await search(query)).map(row=>row.subject.id).sort()).toEqual(expected);}
+ }
+ await comparisonDefinition();
+ const global=await store.searchStateUpdateSubjects({...scope,search:"00123k"});expect(global.map(v=>v.subject.id).sort()).toEqual(["matrix-a","matrix-b","matrix-c","matrix-j"]);
+ expect((await store.listStateUpdateLatest({...scope,search:"00123k"})).pagination.total).toBe(4);
+ expect(await harness.db.getAllAsync("SELECT * FROM entity_records ORDER BY local_id")).toEqual(before);
+});
+it("filters all cached content before paging/count and preserves pending authorization/conflicts after reopen",async()=>{
+ await comparisonDefinition();await comparisonRows(Array.from({length:35},(_,i)=>[String(i).padStart(2,"0"),i%2?"00.123-K":"00123k"]));
+ const pending=await store.saveStateUpdateLocally({...scope,subjectRecordId:"matrix-00",subjectDisplayName:"Nombre 00",stateFields:[],stateValues:[{fieldId:"status",optionId:"local"}],extraValues:{},overwrite:true,expectedUpdatedAt:"2026-10-28T10:00:00.000Z"});const op=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];
+ await store.markStateUpdateOperationConflict(op,{result:"CONFLICT",subjectRecordId:"matrix-00",requested:{stateValues:[]},existing:{recordId:"event-00",updatedAt:"2026-10-28T11:00:00.000Z",stateValues:[{fieldId:"status",optionId:"remote",label:"Remoto"}]}});
+ const before=await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id");await reopen();
+ const first=await store.listStateUpdateLatest({...scope,search:"00123k",searchFieldId:descriptor.id,page:1,pageSize:10}),second=await store.listStateUpdateLatest({...scope,search:"00123k",searchFieldId:descriptor.id,page:2,pageSize:10});
+ expect(first.pagination.total).toBe(35);expect(first.items).toHaveLength(10);expect(second.items).toHaveLength(10);expect(new Set([...first.items,...second.items].map(v=>v.recordId)).size).toBe(20);
+ expect(await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")).toEqual(before);expect((await store.listStateUpdateConflicts(scope))[0].localRecordId).toBe(pending.localRecordId);
+ for(const invalid of [{ownerKey:"another"},{contractId:"another"},{appViewId:"another"}])await expect(search("00123k",invalid)).rejects.toMatchObject({code:"CODE_SEARCH_CACHE_UNAVAILABLE"});
+});
+it("keeps legacy cache behavior but never silently uses it for a known configured or corrupt policy",async()=>{
+ await comparisonRows();await reopen();expect(await search("00123k")).toHaveLength(2); // legacy literal: b and c, no punctuation equivalence
+ await store.upsertEntityDefinition(scope.contractId,scope.sourceEntityTypeId,{id:scope.sourceEntityTypeId,name:"Origen",slug:"source",icon:null,active:true,fields:[{id:descriptor.id,key:descriptor.key,name:"Identificador",type:"TEXT",required:true,config:{searchComparison:comparisonPolicy}}]},"2026-10-28T10:00:00.000Z");
+ await expect(store.searchStateUpdateSubjects({...scope,search:"00123k"})).rejects.toMatchObject({code:"SEARCH_COMPARISON_CACHE_UNAVAILABLE"});
+ await comparisonDefinition({...comparisonMetadata(),fingerprint:"stale"});await reopen();await expect(search("00123k")).rejects.toMatchObject({code:"SEARCH_COMPARISON_NOT_CONFIRMED"});
 });

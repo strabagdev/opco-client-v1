@@ -2856,3 +2856,99 @@ Los intentos de arnés (timestamps ISO, valor manual idéntico, controles oculto
 al cambiar documentos) se conservan sanitizados; no se atribuyen al incidente productivo ni a Safari.
 Fuera de alcance: horarios, V11, auditoría general y configuración productiva. Respaldo combinado,
 parches por repo y evidencia/tiempos: `backups/code-reader-field-search/2026-10-27/`.
+
+
+## Comparación por campo v1 — implementación local, 2026-10-28
+
+Esta etapa implementa búsqueda global/manual y dirigida de Attendance y STATE_UPDATE simple/compuesto.
+Amplía el alcance dirigido de la propuesta anterior; no activa reglas ni configura experiencias reales.
+RECORDS, selectores RELATION y filtros REPORT/PANEL conservan sus consultas y quedan para otra etapa.
+La proyección de metadata del campo es aditiva; no extiende sus predicados a esas superficies.
+
+Contrato opcional en `EntityField.config.searchComparison`:
+`{version:1, ignoreCase:true, ignoreCharacters:["-","."], ignoreWhitespace:true, match:"exact"}`.
+Objeto completo, TEXT/TEXTAREA simple, activo y buscable; máximo32 caracteres literales Unicode,
+deduplicados/canónicos, sin NUL ni surrogates aislados. Sin regla se conserva la comparación anterior.
+`exact` compara igualdad, `contains` substring literal. No se alteran valores, displayName, ceros,
+identidad, códigos leídos, autorización, versión base, clientRequestId ni payloads de escritura.
+
+El normalizador compartido fija Unicode17.0.0 Simple Case Folding C/S (1512 pares, licencia UnicodeV3)
+y25 blancos Unicode; ambos operandos usan la misma tabla. No elimina acentos ni aplica NFC/NFKC o
+plegado completo: İ/i, ß/ss y é/e+acento no se declaran equivalentes. Conserva el trim de consulta
+previo. La lista es literal, no regex/SQL; contains escapa %, _ y backslash. Consulta normalizada
+vacía: error EMPTY_NORMALIZED_SEARCH dirigida; en global se omite sólo ese predicado, conservando
+los demás campos. Null no coincide; falta de un valor configurado en caché produce limitación explícita.
+
+Core aplica SQL parametrizado ANTES de límite/paginación/count: sujetos, latest STATE_UPDATE y
+contexto compuesto; OR por los campos buscables, sin reducir global a codeSearch. displayName no
+elude la política exacta del campo principal. Attendance conserva su lista/resumen diario independiente
+del buscador, límite20; no se transforma totalRegistered en un conteo de coincidencias. Equivalentes
+con IDs diferentes permanecen independientes. Las ramas sin regla conservan sus operadores legacy;
+no se certifica paridad universal de ILIKE/collation legacy frente a lower/JSON local o catálogos parciales.
+
+GET confirma `searchComparison:{version,sourceEntityTypeId,fields,fingerprint,applied}`. fingerprint
+es una clave canónica de metadata completa, no un hash de registros ni contador de frescura.
+`applied.mode` distingue definition/global/field/record (lectura directa por ID, sin fingir búsqueda).
+Con texto, Client solicita searchComparisonVersion=1 y exige confirmación efectiva, versión, source,
+clave y modo; un mero eco de searchFieldId de un Core anterior no basta. Rechazo explícito, sin segunda
+petición global. Peticiones sin búsqueda admiten respuestas históricas sin este descriptor.
+
+Se persiste el descriptor en la definición scoped existente, tanto en prewarm como en lectura online.
+El lector offline evalúa todos los registros locales compatibles antes de count/slice; latest usa
+los mismos sujetos coincidentes. No cambia snapshots, selección current, cobertura ni preparación.
+Caché anterior sin políticas conocidas mantiene comparación legacy con aviso de metadata anterior;
+una regla conocida sin descriptor o descriptor incompatible produce error de disponibilidad, nunca
+una reinterpretación silenciosa. La copia offline refleja la política preparada, no prueba frescura
+remota ni disponibilidad de registros ausentes. Los límites de cobertura existentes siguen vigentes.
+
+Editor Core: regla opcional con activación explícita; versión ausente preserva la configuración
+anterior, desactivar explícitamente la elimina. Guardar sólo la regla evita recalcular displayName
+u otras escrituras incidentales sobre registros. getAppViewAdminData entrega searchable; omitir la
+clave codeSearchFieldId preserva codeSearch, vacío explícito lo elimina. Una selección no disponible
+se conserva en el formulario para validación del servidor, sin borrarla por renderizar metadata incompleta.
+
+Evidencia:394 pruebas Core,213 Client focalizadas (un worker), más5 integraciones PostgreSQL reales
+en opco_dev@127.0.0.1:5432/opco_development validado desde .env.local. Formulario SSR/multipart →
+validador → persistencia → lectura editor/API; registros/displayName/versiones inalterados; conservar/
+eliminar explícitamente codeSearch. Fixture240 sujetos/240 eventos,160 coincidencias dirigidas y161
+globales; conteos/páginas no duplican IDs, contexto compuesto y Attendance. Se comprobaron1512 pares
+Unicode en SQL y el mismo fixture literal/Unicode, exact/contains y caja en SQLite real tras reapertura.
+Pendientes autorizados/conflictos y scopes preservados. Typecheck y lint afectados sin errores/advertencias.
+No suite completa, build, navegador ni nueva prueba de cámara; Safari físico/credencial original siguen
+pendientes. Esta evidencia no acredita OPFS o sincronización nueva: los caminos de escritura no cambian.
+Medición local del SELECT paginado:240 sujetos, cinco muestras10.8–121.1ms, EXPLAIN ejecución123.116ms;
+repeticiones calientes, sin extrapolación productiva. No se midió escala grande ni carga Unicode masiva.
+
+Orden futuro: Core → Client, inicialmente sin reglas. Luego actualizar los runtimes que vayan a usar
+la política y preparar su metadata antes de activarla. Client nuevo + Core anterior falla explícitamente
+en búsquedas no confirmadas; Client anterior offline ignora la regla nueva. Tras activarla, rollback a
+un lector anterior pierde esta capacidad de comparación y requiere desactivación/decisión explícita;
+no se altera ni reinterpreta su outbox. Sin migración, dependencia, namespace ni cambio de SQLite v10/
+opco-client-v10-epoch2.db. Sin publicación ni activación; V11 y auditoría general siguen pausados/abiertos.
+
+Inventario, parches, checks, hashes y mediciones: `backups/workflow-search-comparison/2026-10-28/`.
+La propuesta histórica y las402 exclusiones permanecen fuera del diff propio, sin eliminarlas.
+
+
+### Cierre técnico de comparación v1 — 2026-10-28, sin publicar
+
+Candidatos reconstruidos exactamente: Core23/59, Client17/53; parches/hashes/whitespace verificados.
+Builds habituales automatizados PASS/código0: Core Next16.3.0/Turbopack59.458s, Client Expo57/Metro47.168s.
+Sin .env ni secretos/conexiones productivas; fuente/configuración intacta tras build (391 Core/291 Client).
+Artefacto local Client entry-058409be1645b5952e8f472a5a840863.js, coincidente en index/sw; módulo config
+emitido evaluado sin red confirma API https://web.opco.cl, namespace opco-client-v10-epoch2.db intacto.
+Worker lector, reader.js, WASM3.1.6 y provenance íntegros/precacheados; licencia presente en artefacto,
+sin afirmar que la licencia (sin extensión) esté precacheada. No es bundle desplegado ni cámara probada.
+
+Se reutilizan394 Core,213 Client,5 PostgreSQL, typecheck/lint del contenido funcional idéntico. Se añaden
+sólo2 casos motores Core publicado/nuevo con Prisma simulado y4 casos adaptadores reales publicado/nuevo
+con fetch sintético. No suites completas, navegador, cámara/credencial real ni Safari/iPhone repetidos.
+
+Publicación futura Core → Client, reglas desactivadas. Activación exige runtimes compatibles y metadata/
+valores del campo preparados por scope; no prueba cobertura de sujetos ausentes ni frescura remota.
+No guard que impida lectores antiguos offline: actualizar service worker no acredita retirarlos. Core
+anterior con Client nuevo rechaza búsquedas no confirmadas incluso sin reglas; rollback exige retirar
+primero esos runtimes. Tras activar, coordinar desactivación/refresco antes de usar lectores anteriores,
+sin borrar ni reinterpretar outbox. RECORDS/RELATION/REPORT/PANEL siguen para etapas posteriores.
+Listo para la siguiente etapa autorizada; sin publicación, reglas activadas o cambios funcionales.
+Respaldo final: backups/workflow-search-comparison-close/2026-10-28/. V11 pausado.

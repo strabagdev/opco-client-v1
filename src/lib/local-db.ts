@@ -1,4 +1,5 @@
-import { cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
+import { workflowRecordMatches, SearchComparisonError, fieldSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
+import { cachedWorkflowComparison, cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
 import { validateScheduleResolution, type CachedStateUpdateScheduleContext, type StateUpdateSchedulePolicy } from "./state-update-schedule";
 import { pinnedStateUpdateScheduleMetadata, stateUpdateScheduleMetadata, stateUpdateScheduleRequest, stateUpdateSchedulesEqual, canonicalScheduleMetadata, StateUpdateScheduleReviewError } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
@@ -1809,6 +1810,8 @@ async function listCachedRecords({
   pageSize = 25,
   search,
   searchFieldKey,
+  workflowComparison,
+  workflowSearchFieldId,
   sort,
 }: {
   contractId: string;
@@ -1821,6 +1824,8 @@ async function listCachedRecords({
   pageSize?: number;
   search?: string;
   searchFieldKey?: string;
+  workflowComparison?: WorkflowSearchComparison;
+  workflowSearchFieldId?: string;
   sort?: `field:${string}` | `fieldId:${string}` | "displayName" | "updatedAt";
 }) {
   const db = await getDatabase();
@@ -1846,6 +1851,8 @@ async function listCachedRecords({
     if (fieldKeyHasValue && !hasCachedRecordValue(record.values[fieldKeyHasValue])) {
       return false;
     }
+
+    if(workflowComparison && search?.trim())return workflowRecordMatches(record,search,workflowComparison,workflowSearchFieldId);
 
     if (searchFieldKey) {
       if (!Object.prototype.hasOwnProperty.call(record.values, searchFieldKey)) throw new CodeSearchCacheError();
@@ -3046,7 +3053,9 @@ async function searchStateUpdateSubjects({
   sourceEntityTypeId,
   targetEntityTypeId,
 }: SearchStateUpdateSubjectsInput) {
-  const prepared = searchFieldId !== undefined ? await getAppViewDefinition(ownerKey, contractId, appViewId) : null;
+  const prepared = await getAppViewDefinition(ownerKey, contractId, appViewId);
+  const workflowComparison=cachedWorkflowComparison(prepared?.definition,sourceEntityTypeId);
+  if(!workflowComparison&&search?.trim()){const definition=await getEntityDefinition(contractId,sourceEntityTypeId);if(definition?.definition.fields.some(f=>fieldSearchComparison(f.config)))throw new SearchComparisonError("La comparación actual no está preparada para esta experiencia.","SEARCH_COMPARISON_CACHE_UNAVAILABLE");}
   const searchField = searchFieldId !== undefined ? cachedWorkflowCodeSearchField(prepared?.definition, searchFieldId, sourceEntityTypeId) : undefined;
   const currentCoverage = (usesDatedSubjectHistory({ dateFieldId, historyMode, uniqueness }) || uniqueness === "subject-date-fields")
     ? await getStateUpdateCurrentCoverage({ scheduleBindingId, appViewId, contractId, date, dateFieldId, historyMode,
@@ -3060,6 +3069,8 @@ async function searchStateUpdateSubjects({
     pageSize: 25,
     search,
     searchFieldKey: searchField?.key,
+    workflowComparison,
+    workflowSearchFieldId:searchFieldId,
   });
   const results = await Promise.all(
     subjects.records.map(async (record) => {
@@ -3230,13 +3241,17 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
 
 async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string; searchFieldId?: string }) {
   let matchingSubjects: Set<string> | undefined;
-  if (input.searchFieldId !== undefined) {
-    const prepared = await getAppViewDefinition(input.ownerKey, input.contractId, input.appViewId);
+  const prepared = await getAppViewDefinition(input.ownerKey, input.contractId, input.appViewId);
+  const view=prepared?.definition.appView;
+  const sourceId=view?.type==="WORKFLOW"?view.config.sourceEntityTypeId:undefined;
+  const comparison=typeof sourceId==="string"?cachedWorkflowComparison(prepared?.definition,sourceId):undefined;
+  if(!comparison&&input.search?.trim()&&typeof sourceId==="string"){const definition=await getEntityDefinition(input.contractId,sourceId);if(definition?.definition.fields.some(f=>fieldSearchComparison(f.config)))throw new SearchComparisonError("La comparación actual no está preparada para esta experiencia.","SEARCH_COMPARISON_CACHE_UNAVAILABLE");}
+  if (input.searchFieldId !== undefined || (input.search?.trim() && comparison?.fields.some(f=>f.policy))) {
     const view = prepared?.definition.appView;
     const sourceEntityTypeId = view?.type === "WORKFLOW" ? view.config.sourceEntityTypeId : undefined;
     if (typeof sourceEntityTypeId !== "string") throw new CodeSearchCacheError();
-    const field = cachedWorkflowCodeSearchField(prepared?.definition, input.searchFieldId, sourceEntityTypeId);
-    const found = await listCachedRecords({ ownerKey: input.ownerKey, contractId: input.contractId, entityTypeId: sourceEntityTypeId, pageSize: Number.MAX_SAFE_INTEGER, search: input.search, searchFieldKey: field.key });
+    const field = input.searchFieldId!==undefined?cachedWorkflowCodeSearchField(prepared?.definition, input.searchFieldId, sourceEntityTypeId):undefined;
+    const found = await listCachedRecords({ ownerKey: input.ownerKey, contractId: input.contractId, entityTypeId: sourceEntityTypeId, pageSize: Number.MAX_SAFE_INTEGER, search: input.search, searchFieldKey: field?.key, workflowComparison:comparison,workflowSearchFieldId:input.searchFieldId });
     matchingSubjects = new Set(found.records.map(record => record.serverId ?? record.id));
   }
   const db = await getDatabase();

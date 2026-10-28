@@ -1,3 +1,4 @@
+import { verifyWorkflowSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
 import type { PreparedAppViewDefinition } from "./app-view-definitions-cache";
 import type { WorkflowCodeSearchField } from "./opco-api";
 
@@ -22,4 +23,12 @@ export function codeSearchTextMatches(value: unknown, query: string) {
   if (value === null) return false;
   if (typeof value !== "string") throw new CodeSearchCacheError();
   return value.toLocaleLowerCase("es-CL").includes(query.trim().toLocaleLowerCase("es-CL"));
+}
+
+export function cachedWorkflowComparison(definition:PreparedAppViewDefinition|undefined,sourceEntityTypeId:string):WorkflowSearchComparison|undefined {
+  if(!definition||(definition.kind!=="state-update"&&definition.kind!=="attendance"))return undefined;
+  if(!definition.searchComparison)return undefined;
+  const config=definition.appView.type==="WORKFLOW"?definition.appView.config:undefined;
+  if(config?.sourceEntityTypeId!==sourceEntityTypeId)throw new CodeSearchCacheError();
+  return verifyWorkflowSearchComparison(definition.searchComparison,sourceEntityTypeId);
 }

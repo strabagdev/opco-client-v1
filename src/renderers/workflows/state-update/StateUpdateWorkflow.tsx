@@ -353,6 +353,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
         codeSearchField: definition.codeSearchField,
+        searchComparison: definition.searchComparison,
         extraFields: definition.extraFields, stateFields: definition.stateFields, subjectFieldId: definition.subjectFieldId,
         historyMode: definition.historyMode, uniqueness: definition.uniqueness, items: [], latest: [],
         sourceEntityType: { id: definition.sourceEntityTypeId, name: definition.sourceEntityTypeName ?? "Registros" }, targetEntityType: { id: definition.targetEntityTypeId, name: definition.targetEntityTypeName ?? "Registros" } });
@@ -437,6 +438,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
         : null,
       codeSearchField: definition.codeSearchField,
+        searchComparison: definition.searchComparison,
       dateFieldId: definition.dateFieldId,
       ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
@@ -554,7 +556,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       if (nextResponse.uniqueness === "subject-date-fields" && nextResponse.contextRequired) {
         setResponse(nextResponse);setItems([]);
         if (ownerKey) await definitionCache.upsertAppViewDefinition({ appViewId: appView.id, appViewType: "WORKFLOW", workflowKey: "state-update", ownerKey, contractId: selectedContractId,
-          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, sourceEntityTypeId: nextResponse.sourceEntityType.id,
+          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, searchComparison:nextResponse.searchComparison, sourceEntityTypeId: nextResponse.sourceEntityType.id,
             sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
             dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
             schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
@@ -591,7 +593,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
-        if(nextResponse.schedulePolicy || nextResponse.codeSearchField) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
+        if(nextResponse.schedulePolicy || nextResponse.codeSearchField || nextResponse.searchComparison) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,searchComparison:nextResponse.searchComparison,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
         const pagination = nextResponse.latestPagination ?? {
           hasMore: false,
           page: latestPageToLoad,
@@ -1295,6 +1297,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           : "Sin conexión. Disponibilidad del contexto no verificada por completo; sólo se muestran los datos guardados."}</Text> : null}
         {contextReady && isOnline && (contextPreparation.phase === "failed" || contextPreparation.phase === "partial") ? <Pressable accessibilityRole="button" disabled={isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Reintentar</Text></Pressable> : null}
       </View> : null}
+      {!isOnline && normalizedSearch && !visibleResponse?.searchComparison ? <Text>La copia usa la comparación anterior; las reglas actuales necesitan verificarse con conexión.</Text> : null}
       <View style={[styles.searchBlock, appView.config.codeSearch && { flexWrap: "wrap" }]}>
         <TextInput
           autoCapitalize="words"

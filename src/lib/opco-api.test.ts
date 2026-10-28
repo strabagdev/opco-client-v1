@@ -1,3 +1,4 @@
+import { comparisonFingerprint } from "./search-comparison";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_REFRESH_TIMEOUT_MS, createOpcoApi, OpcoApiError, OpcoNetworkError, parseApiEnvelope, parseServerTimingHeader } from "./opco-api";
@@ -1412,6 +1413,7 @@ describe("createOpcoApi", () => {
 
         return jsonResponse({
           data: {
+            searchComparison: legacyComparisonFixture("entity_people","record"),
             appView: { id: "view_attendance", name: "Tomar asistencia", slug: "tomar-asistencia" },
             date: "2026-08-22",
             items: [
@@ -1459,7 +1461,7 @@ describe("createOpcoApi", () => {
     });
 
     expect(urls[0]).toBe(
-      "https://opco.test/api/v1/contracts/contract_1/views/view_attendance/workflow/attendance?date=2026-08-22&search=ana&personRecordId=person_1",
+      "https://opco.test/api/v1/contracts/contract_1/views/view_attendance/workflow/attendance?date=2026-08-22&search=ana&searchComparisonVersion=1&personRecordId=person_1",
     );
     expect(result.statuses).toEqual([
       { isDefaultCheckIn: true, label: "Presente", optionId: "present_option" },
@@ -1574,6 +1576,7 @@ describe("createOpcoApi", () => {
 
         return jsonResponse({
           data: {
+            searchComparison: legacyComparisonFixture("assets","record"),
             appView: { id: "view_state", name: "Estados", slug: "estados" },
             date: "2026-08-22",
             dateFieldId: "field_date",
@@ -1623,7 +1626,7 @@ describe("createOpcoApi", () => {
     });
 
     expect(urls[0]).toBe(
-      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?date=2026-08-22&search=equipo&subjectRecordId=asset_1",
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?date=2026-08-22&search=equipo&searchComparisonVersion=1&subjectRecordId=asset_1",
     );
     expect(result.stateFields[0].fieldId).toBe("field_status");
     expect(result.items[0].current?.stateValues[0].optionId).toBe("available");
@@ -1639,6 +1642,7 @@ describe("createOpcoApi", () => {
 
         return jsonResponse({
           data: {
+            searchComparison: legacyComparisonFixture("procedures","global"),
             appView: { id: "view_state", name: "Versionado", slug: "versionado" },
             extraFields: [],
             historyMode: "append",
@@ -1698,7 +1702,7 @@ describe("createOpcoApi", () => {
     });
 
     expect(urls[0]).toBe(
-      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?search=procedimiento",
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?search=procedimiento&searchComparisonVersion=1",
     );
     expect(result.sourceEntityType).toEqual({ id: "procedures", name: "Procedimientos" });
     expect(result.stateFields[0]).toMatchObject({
@@ -1729,6 +1733,7 @@ describe("createOpcoApi", () => {
 
         return jsonResponse({
           data: {
+            searchComparison: legacyComparisonFixture("procedures","global"),
             appView: { id: "view_state", name: "Versionado", slug: "versionado" },
             dateField: {
               active: true,
@@ -1806,7 +1811,7 @@ describe("createOpcoApi", () => {
     });
 
     expect(urls[0]).toBe(
-      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?page=1&pageSize=20&search=procedimiento",
+      "https://opco.test/api/v1/contracts/contract_1/views/view_state/workflow/state-update?page=1&pageSize=20&search=procedimiento&searchComparisonVersion=1",
     );
     expect(result.latestPagination).toEqual({
       hasMore: true,
@@ -2434,3 +2439,5 @@ describe("createOpcoApi", () => {
     });
   });
 });
+
+function legacyComparisonFixture(sourceEntityTypeId:string,mode:"record"|"global") {return {version:1,sourceEntityTypeId,fields:[],fingerprint:comparisonFingerprint(sourceEntityTypeId,[]),applied:{mode}};}

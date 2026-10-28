@@ -150,6 +150,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const cameraIsActive = usePathname() === `/view/${appView.id}`;
   const [searchText, setSearchText] = useState("");
+  const [comparisonMetadataAvailable,setComparisonMetadataAvailable]=useState<boolean|null>(null);
   const [searchFieldId, setSearchFieldId] = useState<string>();
   const [searchReadId, setSearchReadId] = useState(0);
   const [items, setItems] = useState<AttendanceItem[]>([]);
@@ -459,11 +460,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       store: definitionCache,
       token: token!,
     });
-    if (response.codeSearchField) {
+    if (response.codeSearchField || response.searchComparison) {
       const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
       if (prepared && (prepared.definition.kind === "state-update" || prepared.definition.kind === "attendance")) {
         await definitionCache.upsertAppViewDefinition({ ...prepared, lastPreparedAt: new Date().toISOString(),
-          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField } });
+          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField, searchComparison:response.searchComparison } });
       }
     }
     await cacheAttendanceRemoteSnapshot({
@@ -723,6 +724,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
         }
 
+        const prepared=await definitionCache.getAppViewDefinition(ownerKey,selectedContractId,appView.id);
+        if(requestId!==requestSequenceRef.current)return;
+        setComparisonMetadataAvailable(Boolean(prepared && "searchComparison" in prepared.definition && prepared.definition.searchComparison));
         setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId, appView.config.observationFieldId)));
         await refreshLocalDayState();
         return;
@@ -738,6 +742,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      setComparisonMetadataAvailable(Boolean(response.searchComparison));
       await applyDayState(response);
       cacheAttendanceOnlineResponseInBackground(response, { complete: false });
       clearVisibleError();
@@ -1411,6 +1416,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         {searchFieldId && normalizedSearch ? <Text>Búsqueda del lector en el campo configurado. Edita el texto para volver a la búsqueda manual global.</Text> : null}
 
 
+      {!isOnline && normalizedSearch && comparisonMetadataAvailable===false ? <Text>La copia usa la comparación anterior; las reglas actuales necesitan verificarse con conexión.</Text> : null}
       {(isLoading || isSearching) && !(hasCompatibleDay && (!normalizedSearch || items.length > 0)) ? <ReadLoadingState mode="initial" /> : null}
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
