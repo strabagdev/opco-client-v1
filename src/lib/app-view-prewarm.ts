@@ -167,6 +167,7 @@ export type StateUpdateContextPreparationInput = {
     Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot">;
   signal: AbortSignal;
   force?: boolean;
+  currentBatchCapabilities?: import("./opco-api").StateUpdateCurrentBatchCapabilities;
 };
 
 /** Same coordinator, source refresh, bounded pool and persisted proof as manual preparation. */
@@ -603,19 +604,6 @@ async function prewarmOneAppView({
         });
       });
 
-      const setCurrentCoverage = store.setStateUpdateCurrentCoverage?.bind(store);
-      if (prepareCurrent && setCurrentCoverage) {
-        await measurePrewarmStage(telemetry, "snapshot", () => prepareStateUpdateCurrent({
-          api, token, scope: currentScope, store: {
-            listCachedRecords: store.listCachedRecords.bind(store),
-            upsertStateUpdateSnapshot: store.upsertStateUpdateSnapshot.bind(store),
-            setStateUpdateCurrentCoverage: setCurrentCoverage,
-          }, sourceRemoteTotal, sourceFetched,
-          sourceCacheTotal: sourceRecords.pagination.total,
-          runWithConcurrency, concurrency: PREWARM_CONCURRENCY, signal,
-        }));
-      }
-
       await measurePrewarmStage(telemetry, "sqliteWrite", () =>
         store.upsertAppViewDefinition(baseDefinitionInput({
           appView,
@@ -626,6 +614,19 @@ async function prewarmOneAppView({
           status: "ready",
         })),
       );
+      const setCurrentCoverage = store.setStateUpdateCurrentCoverage?.bind(store);
+      if (prepareCurrent && setCurrentCoverage) {
+        await measurePrewarmStage(telemetry, "snapshot", () => prepareStateUpdateCurrent({
+          api, token, scope: currentScope, store: {
+            listCachedRecords: store.listCachedRecords.bind(store),
+            upsertStateUpdateSnapshot: store.upsertStateUpdateSnapshot.bind(store),
+            setStateUpdateCurrentCoverage: setCurrentCoverage,
+          }, sourceRemoteTotal, sourceFetched,
+          sourceCacheTotal: sourceRecords.pagination.total, currentBatchCapabilities:response.currentBatchCapabilities,
+          runWithConcurrency, concurrency: PREWARM_CONCURRENCY, signal,
+        }));
+      }
+
       return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
 
@@ -678,6 +679,14 @@ async function preserveOrMarkPrewarmFailure({
   const existing = await store.getAppViewDefinition(ownerKey, contractId, appView.id);
 
   if (existing?.status === "ready" && error instanceof OpcoNetworkError) {
+    return;
+  }
+
+  if (appView.type === "WORKFLOW" && appView.config.workflowKey === "state-update" && existing?.definition.kind === "state-update") {
+    // Current preparation can fail partially after valid snapshots have persisted. Keep the configuration
+    // that makes those snapshots readable; definition availability never certifies current coverage.
+    await store.upsertAppViewDefinition(baseDefinitionInput({ appView, contractId, ownerKey, lastPreparedAt,
+      definition: existing.definition, status: "partial" }));
     return;
   }
 

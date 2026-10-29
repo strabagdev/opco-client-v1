@@ -733,6 +733,8 @@ export type StateUpdateWorkflowQuery = {
   pageSize?: number;
   search?: string;
   subjectRecordId?: string;
+  subjectRecordIds?: string[];
+  currentBatchCapabilities?: StateUpdateCurrentBatchCapabilities;
 };
 
 export type StateUpdateOption = {
@@ -820,7 +822,14 @@ export type StateUpdateSummary = {
   [key: string]: unknown;
 };
 
+export type StateUpdateCurrentBatchCapabilities = { version: 1; maxSubjects: number; configurationFingerprint: string };
+export type StateUpdateCurrentBatch = { version: 1; requestedSubjectIds: string[];
+  results: { subjectRecordId: string; status: "resolved" | "error"; code?: string }[] };
+
 export type StateUpdateResponse = {
+  currentBatchCapabilities?: StateUpdateCurrentBatchCapabilities;
+  currentBatch?: StateUpdateCurrentBatch;
+  contractId?: string;
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
   searchComparison?: WorkflowSearchComparison;
@@ -1740,6 +1749,12 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       }
 
       if (query.identity) searchParams.set("identity", JSON.stringify(query.identity));
+      if (query.subjectRecordIds) {
+        if (!query.currentBatchCapabilities || query.subjectRecordIds.length < 1 || query.subjectRecordIds.length > Math.min(100,query.currentBatchCapabilities.maxSubjects)) throw new Error("INVALID_CURRENT_BATCH");
+        searchParams.set("currentBatchVersion", "1");
+        searchParams.set("currentBatchFingerprint", query.currentBatchCapabilities.configurationFingerprint);
+        for (const id of query.subjectRecordIds) searchParams.append("subjectRecordIds", id);
+      }
       const serializedQuery = searchParams.toString();
 
       return authenticatedRequest<StateUpdateRawResponse>(
@@ -1748,10 +1763,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         )}/workflow/state-update${serializedQuery ? `?${serializedQuery}` : ""}`,
         token,
         {
-          diagnosticOperation: query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
+          diagnosticOperation: query.subjectRecordIds || query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
           diagnosticSyncRunId: options.diagnosticSyncRunId,
         },
-      ).then(normalizeStateUpdateResponse).then(response => verifyCodeSearchResponse(response, query.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, query.search, query.searchFieldId, query.subjectRecordId));
+      ).then(raw => { if (query.subjectRecordIds) verifyRawCurrentBatch(raw,query.subjectRecordIds,query.currentBatchCapabilities!,contractId,appViewId); return normalizeStateUpdateResponse(raw); }).then(response => verifyCodeSearchResponse(response, query.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, query.search, query.searchFieldId, query.subjectRecordId));
     },
     saveAttendanceWorkflow(
       token: string,
@@ -1873,7 +1888,22 @@ function normalizeAttendanceBatchResponse(response: AttendanceBatchResponse): At
   return response;
 }
 
+function verifyRawCurrentBatch(raw: StateUpdateRawResponse, ids: string[], capability: StateUpdateCurrentBatchCapabilities, contractId: string, appViewId: string) {
+  const batch = raw.currentBatch;
+  if (raw.appView?.id !== appViewId || raw.contractId !== contractId || raw.currentBatchCapabilities?.version !== 1 ||
+    raw.currentBatchCapabilities.configurationFingerprint !== capability.configurationFingerprint || batch?.version !== 1 ||
+    !Array.isArray(batch.results) || JSON.stringify(batch.requestedSubjectIds) !== JSON.stringify(ids) || batch.results.length !== ids.length ||
+    new Set(batch.results.map(item=>item.subjectRecordId)).size !== ids.length ||
+    batch.results.some(item=>!ids.includes(item.subjectRecordId) || !["resolved","error"].includes(item.status))) throw new Error("CURRENT_BATCH_RESPONSE_INCOMPATIBLE");
+  const items=raw.subjects ?? raw.items;
+  const resolved=batch.results.filter(item=>item.status==="resolved").map(item=>item.subjectRecordId);
+  if (!Array.isArray(items) || items.length!==resolved.length || new Set(items.map(item=>item.subject.id)).size!==resolved.length ||
+    items.some(item=>!resolved.includes(item.subject.id) || !Object.prototype.hasOwnProperty.call(item,"current") || item.current===undefined)) throw new Error("CURRENT_BATCH_RESPONSE_INCOMPLETE");
+}
+
 function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUpdateResponse {
+  const capability=response.currentBatchCapabilities;
+  if(capability && (capability.version!==1 || !Number.isInteger(capability.maxSubjects) || capability.maxSubjects<1 || !/^[a-f0-9]{64}$/.test(capability.configurationFingerprint))) throw new Error("CURRENT_BATCH_CAPABILITY_INCOMPATIBLE");
   const stateFields = (response.stateFields ?? []).map(normalizeStateUpdateField);
   const rawItems = response.subjects ?? response.items ?? [];
   const items = rawItems.map((item) => ({

@@ -3280,3 +3280,25 @@ Siguiente etapa separada autorizada: preparar contrato current por lotes en Core
 solicitudes sin perder prueba por sujeto; aún NO IMPLEMENTADO. No se incorpora a este lote. Preservados
 subjectPresentation,402exclusiones y demás pendientes. Sin producción/configuración/commit/push/deploy.
 Respaldo reconstruible:backups/home-preparation-optimization/2026-10-29/. V11 y auditoría general abiertos.
+
+
+## STATE_UPDATE current por lotes — LOCAL, SIN PUBLICAR — 2026-10-29
+
+Core/Client aditivos: capability v1/fingerprint y GET acotado100IDs, recibo por sujeto evento/null/error,
+consulta por conjuntos con selección current intacta. Client valida scope/recibo y cada persistencia;
+no fallback indiscriminado tras fallo. Marcador v10 requestBatchSize opcional conserva legacy1 y prueba de
+contenido; fallo parcial STATE_UPDATE conserva definición legible, snapshots e intenciones. Inicio mantiene
+optimización dd0483a y su política de preparar todas al reentrar; sin nueva configuración ni namespace.
+
+Fixture local217sujetos, HTTP real a handlers/auth reales y PostgreSQL validado:217→3HTTP;5639→57SQL;
+7496.271→75.210ms en una muestra secuencial, sin extrapolación productiva. Client sqlite3 real y reapertura:
+current verificado, latest parcial, errores no convertidos en null, payload/IDs/outbox/conflictos intactos.
+Core3integraciones+81regresiones PASS; Client8nuevas+103afectadas PASS, límites y checks finales en respaldo.
+4fallos antiguos por mocks sin searchComparison contrastados iguales en HEAD/candidato; no ocultados ni
+modificados. Sin navegador/OPFS/Safari, builds o suite completa nuevos. No es estabilidad offline general.
+
+Orden futuro Core→Client; sin capacidad se negocia individual, recibo incompatible falla explícitamente.
+Runtime anterior lee marcador batch como parcial, sin cambiar intenciones; rollback recomendado Client primero.
+Detalle/limitaciones en STATE_UPDATE, sección «Current por lotes». Sin producción, migraciones, commit/push/
+deploy/Railway. subjectPresentation y402exclusiones preservados. Respaldo reconstruible:
+backups/state-update-current-batch/2026-10-29/. V11 y auditoría general abiertos.

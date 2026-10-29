@@ -5628,9 +5628,11 @@ async function getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageSc
   const sourceComplete = coverage.sourceComplete && sourceRows.length === coverage.totalSubjects &&
     sourceRows.every(source => !!source.serverId && Object.hasOwn(subjects, source.serverId));
   const verified = Object.values(subjects).filter(outcome => outcome.status === "verified").length;
+  const requestBatchSize = coverage.requestBatchSize ?? 1;
+  if (!Number.isInteger(requestBatchSize) || requestBatchSize < 1 || requestBatchSize > 100) return null;
   return { ...coverage, subjects, sourceComplete,
     status: coverage.status === "complete" && sourceComplete && verified === coverage.totalSubjects &&
-      Object.keys(subjects).length === coverage.totalSubjects && coverage.requestCount >= verified ? "complete" : "partial" };
+      Object.keys(subjects).length === coverage.totalSubjects && coverage.requestCount * requestBatchSize >= verified ? "complete" : "partial" };
 }
 
 async function setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }) {

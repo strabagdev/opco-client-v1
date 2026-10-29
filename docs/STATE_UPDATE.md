@@ -3111,3 +3111,93 @@ Usuario autorizó preparar esa etapa por separado durante esta ejecución; no se
 Respaldo:backups/home-preparation-optimization/2026-10-29/. Implementación sólo Client, sin cambios de Core,
 configuración, dependencias, SQLite/namespace, guardados, confirmación Attendance o sincronización de escrituras.
 Sin producción, commit/push/deploy. V11 y auditoría general continúan abiertos.
+
+
+## Current por lotes — IMPLEMENTADO LOCALMENTE, SIN PUBLICAR — 2026-10-29
+
+Sobre Core333252a17400bfee3ba12f2d6ad9da7c793fcc3a y Clientdd0483a58cfb064025cadcec8df154ebe6207ca6.
+Sin integrar subjectPresentation ni modificar la optimización publicada de Inicio. Detalle del contrato
+GET v1 en Core docs/EXTERNAL_API. Capacidad anunciada incluye versión1, máximo100 y fingerprint de la
+configuración/metadata; Client valida ese recibo, contrato/AppView/origen/destino/fecha/modos/contexto y
+resultados por ID. Error u omisión no significan ausencia. Sólo current=null explícito y persistido verifica
+un sujeto sin versión. Rechazo de un lote no deriva en N peticiones individuales para ocultar el fallo.
+Si Core no anuncia capacidad (servidor/metadata anteriores), se conserva la ruta individual, sin asumir
+soporte por ignorar parámetros nuevos. No se cachean capacidades como permiso ni se alteran scopes/identidades.
+
+Preparador existente/pool4 divide la fuente completa en lotes acotados. Dentro del lote persiste/verifica
+cada sujeto antes de acreditarlo; fallos de almacenamiento sólo dejan ese sujeto failed. Fallo de lote/
+recibo incompatible no acredita ninguno de sus sujetos; otros lotes correctos permanecen preparados.
+Se comprueba cancelación antes de recibir y antes de cada persistencia; respuestas fuera del scope no se
+publican. Latest conserva su marcador independiente, parcial si corresponde. No descarga históricos.
+No crea cola, temporizador ni reintento infinito; se conserva el coordinador, refresco automático y retry.
+
+SQLite v10/epoch2 intactos. El marcador app_metadata añade requestBatchSize opcional1..100 para interpretar
+requestCount como solicitudes HTTP reales. Ausente=1, compatibilidad de marcadores anteriores. El lector
+sigue verificando fuente completa, outcomes y snapshots disponibles; requestCount*capacidad no reemplaza
+esa prueba. Capacidad inválida rechazada. Runtime publicado anterior ignora el campo y degrada el lote a
+partial por su guarda requestCount>=sujetos, sin consumir/mutar intenciones; una preparación individual
+posterior vuelve a emitir el marcador legacy. Ningún campo nuevo en outbox, autorización, base o recibos.
+
+Hallazgo durante regresión: el fallo parcial de current reemplazaba la definición por kind=error, haciendo
+ilegibles snapshots ya persistidos bajo la configuración anterior. Se guarda la definición validada antes
+de preparar current y, sólo en STATE_UPDATE, se conserva esa definición con estado partial ante error.
+No se acredita cobertura por guardar definición ni por ACK. Attendance/otros preparadores mantienen su
+comportamiento. Sin borrar historial, snapshot válido, intención o conflicto.
+
+### Evidencia local y medidas
+
+Core/PostgreSQL local validado exclusivamente desde .env.local:127.0.0.1:5432/opco_development/opco_dev,
+confirmado también por current_database/current_user/inet_server_addr. HTTP real localhost con adaptador
+al handler GET y auth JWT/dominio reales, no servidor Next/Railway.217sujetos, eventos con/sin fecha,
+dos sin vigente y empate Fecha/ID; configuraciones subject/append y compuesto/update-current separadas.
+Mismo fixture y usuario, secuencia individual y luego lotes en candidato:
+
+| Camino current | HTTP | Consultas PostgreSQL (Prisma query events) | Duración local |
+| --- | --- | --- | --- |
+| Individual,217sujetos |217|5639|7496.271ms|
+| Lotes100/100/17 |3|57|75.210ms|
+
+No se trasladó el bucle HTTP a SQL: búsqueda de sujetos y current por conjuntos, serialización sin consultas
+por fila, slots compuestos acotados a los IDs del lote. Se conservan consultas de auth/metadata por petición.
+El selector carga por conjunto las versiones candidatas existentes y elige current con su criterio previo;
+no se implementa otra optimización SQL por ventana ni se promete coste constante frente a cualquier historial.
+Comparación en una sola muestra secuencial con calentamiento diferente; no extrapolar tiempos productivos.
+GET inicial de metadata/fuente fuera de esos217/3current sigue siendo necesario. La métrica incluye el
+handler/auth y SQL reales; no red productiva, precargas Next, CORS/preflight ni latencia de dispositivos.
+
+Core:3integraciones PostgreSQL PASS (incluyen equivalencia exacta, auth, ID no disponible, contexto A/B,
+null, tamaño/duplicados, fingerprint y rechazo de página),81regresiones STATE_UPDATE/Attendance PASS.
+Control de error/paginación repetido de forma focalizada tras conservar cabeceras diagnósticas. Fixtures
+propios eliminados; primer cleanup falló por FK AuditEvent y se completó sólo para su prefijo identificado,
+sin atribuirlo al runtime ni a producción. Métricas e informe sanitizados en respaldo, sin tokens/payloads.
+
+Client:8regresiones nuevas con sqlite3 real/archivo y reapertura (217sujetos en prueba de cobertura/lotes,
+48en control de intención para no superar5s con dos refrescos); parciales/null/omisión/almacenamiento,
+servidor anterior/capability incompatible, cancelación, otro contrato y prueba de contenido pese a tamaño.
+103regresiones afectadas adicionales PASS. Outbox/filas conflict completas conservan IDs, autorización,
+base, requestId y contenido tras refresco/reapertura. Integridad SQLite=ok. Sin Expo/OPFS, Safari físico o
+cámara nuevos; no se presenta sqlite3 como esas plataformas ni esta lectura como sincronización nueva.
+
+Cuatro pruebas anteriores de state-update-prewarm-current-investigation fallan exactamente igual en HEAD y
+candidato: fixture de búsquedas sin searchComparison requerido por el Client publicado. No se alteran ni
+omiten del informe.18pruebas restantes de ese archivo pasan en candidato; no es suite completa. La primera
+versión del fixture nuevo usaba timestamps sin milisegundos rechazados por el contrato existente; se corrigió
+sólo el fixture. Un control con dos refrescos de217sujetos superó5s; se separó cancelación y el control de
+intención usa48, manteniendo217en cobertura y SQL, sin aumentar timeouts ni retirar aserciones. Se corrigió
+la guarda de lectura del marcador para lotes conservando la regresión legacy y prueba de snapshot faltante.
+Typecheck/lint afectados/diff-check: ver checks finales. No builds, suites completas, producción o Railway.
+
+### Compatibilidad, límites y siguiente etapa
+
+Core primero, luego Client; no configuración nueva. Publicar Core solo no cambia a Client antiguo.
+Client nuevo selecciona lote automáticamente en preparación ya existente si Core anuncia capacidad.
+Core anterior sin capacidad conserva la ruta individual; con capacidad previamente conocida pero servidor
+incompatible se informa error/partial, conservando copia válida, hasta actualizar metadata y reintentar.
+Rollback recomendado Client primero; API individual y formatos de escrituras permanecen. Un runtime anterior
+puede mostrar cobertura parcial al leer un marcador batched; no se presenta como soporte de métricas completo.
+No cambia schema ni namespace; pendientes/cachés anteriores no se reinterpretan.
+
+Reentrar a Inicio tras finalizar sigue preparando todas las experiencias; no se usa complete como frescura
+ni se cambia esa decisión pendiente. Las mejoras son locales y no acreditan tiempos productivos. Horarios,
+subjectPresentation y402exclusiones permanecen fuera del lote. Sin configuración/migraciones/commit/push/
+deploy. Respaldo:backups/state-update-current-batch/2026-10-29/. V11 y auditoría general abiertos.

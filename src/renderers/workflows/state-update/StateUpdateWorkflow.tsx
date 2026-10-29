@@ -155,12 +155,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const preparationUniqueness = response?.uniqueness;
   const preparationHistoryMode = response?.historyMode;
   const preparationScheduleBindingId = response?.schedulePolicy?.bindingId;
+  const preparationBatchFingerprint = response?.currentBatchCapabilities?.configurationFingerprint;
+  const preparationBatchMax = response?.currentBatchCapabilities?.maxSubjects;
   const preparationInput = useMemo(() => compositeMode && contextReady && identity && preparationSourceId && preparationTargetId && token && ownerKey && selectedContractId
-    ? { api, token, store: definitionCache, scope: { identity, ownerKey, contractId: selectedContractId,
+    ? { api, token, store: definitionCache,
+        currentBatchCapabilities: preparationBatchFingerprint && preparationBatchMax ? { version:1 as const, maxSubjects:preparationBatchMax, configurationFingerprint:preparationBatchFingerprint } : undefined, scope: { identity, ownerKey, contractId: selectedContractId,
         appViewId: appView.id, sourceEntityTypeId: preparationSourceId, targetEntityTypeId: preparationTargetId,
         date, scheduleBindingId:preparationScheduleBindingId, dateFieldId: preparationDateFieldId, uniqueness: preparationUniqueness, historyMode: preparationHistoryMode } }
     : null, [compositeMode, contextReady, identity, preparationSourceId, preparationTargetId,
-      preparationDateFieldId, preparationUniqueness, preparationHistoryMode, preparationScheduleBindingId, api, token, ownerKey, selectedContractId, appView.id, date, definitionCache]);
+      preparationDateFieldId, preparationUniqueness, preparationHistoryMode, preparationScheduleBindingId, preparationBatchFingerprint, preparationBatchMax, api, token, ownerKey, selectedContractId, appView.id, date, definitionCache]);
   const contextPreparation = useContextPreparation({ input: preparationInput, connectivityStatus,
     canPrepare: !isAuthSessionRestoring && !isOperationalCoreReadinessChecking && !isPendingWorkSyncing,
     refreshKey: stateUpdateReconnectRefreshKey });

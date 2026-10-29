@@ -864,6 +864,8 @@ export type StateUpdateSnapshotCoverage = {
 // A separate proof for per-subject current; latest pagination is not this proof.
 export type StateUpdateCurrentCoverageScope = StateUpdateScope & { sourceEntityTypeId: string };
 export type StateUpdateCurrentCoverage = {
+  /** HTTP batch capacity; absent on legacy per-subject proofs. Never substitutes content verification. */
+  requestBatchSize?: number;
   status: "complete" | "partial";
   sourceComplete: boolean;
   totalSubjects: number;
