@@ -1,3 +1,4 @@
+import {presentationFingerprint} from "./subject-presentation";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitionInput } from "./app-view-definitions-cache";
@@ -1389,3 +1390,11 @@ function formatLocalDateInput(date: Date) {
 
   return `${year}-${month}-${day}`;
 }
+
+it("does not announce complete preparation without visual metadata, while preserving the usable workflow definition",async()=>{
+ const store=new MemoryPrewarmStore();const base=appViewsFixture[1] as Extract<AppView,{type:"WORKFLOW"}>;const config={version:1 as const,titleFieldIds:["visual-name"],secondaryFieldIds:[]};const view={...base,config:{...base.config,subjectPresentation:config}};
+ const fields=[{id:"visual-name",key:"nombre",name:"Nombre visual",type:"TEXT",multiple:false}];const definition={version:1 as const,sourceEntityTypeId:"entity_people",config,fields,fingerprint:presentationFingerprint("entity_people",config,fields)};let prepared=false;
+ const api={getAttendanceWorkflow:vi.fn(async(_t:string,_c:string,_v:string,q:{date:string})=>({...attendanceWorkflowResponse(q.date),...(prepared?{subjectPresentation:definition}:{})})),getStateUpdateWorkflow:vi.fn(),getEntityDefinition:vi.fn(async()=>({entity:entityDefinitionFixture})),getEntityRecords:vi.fn(async(_t:string,_c:string,_e:string,q?:{page?:number;pageSize?:number})=>({records:[{id:"one",displayName:"Legacy",updatedAt:"2026-10-28T10:00:00.000Z",values:{nombre:"Nombre preparado"}}],pagination:{page:q?.page??1,pageSize:q?.pageSize??100,total:1,totalPages:1}}))};
+ const run=()=>prewarmAssignedAppViewsOnce({api,appViews:[view],contractId:"contract_1",ownerKey:"org_1:user_1",store,token:"synthetic"});await run();expect(store.offlinePreparationDiagnostics).toMatchObject({status:"failed",appViews:{failed:1}});expect(await store.getAppViewDefinition("org_1:user_1","contract_1",view.id)).toMatchObject({status:"ready",definition:{kind:"state-update"}});
+ prepared=true;await run();expect(store.offlinePreparationDiagnostics).toMatchObject({status:"completed",appViews:{failed:0}});
+});

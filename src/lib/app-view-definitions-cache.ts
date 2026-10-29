@@ -43,6 +43,7 @@ export type PreparedAppViewDefinition =
       appView: AppView;
       kind: "attendance";
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
+      subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
       searchComparison?: import("./search-comparison").WorkflowSearchComparison;
       sourceEntityTypeId?: string;
       targetEntityTypeId?: string;
@@ -59,6 +60,7 @@ export type PreparedAppViewDefinition =
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
+      subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
       searchComparison?: import("./search-comparison").WorkflowSearchComparison;
       schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
       identityFields?: import("./opco-api").StateUpdateField[];

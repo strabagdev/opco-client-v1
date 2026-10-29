@@ -3201,3 +3201,125 @@ Reentrar a Inicio tras finalizar sigue preparando todas las experiencias; no se 
 ni se cambia esa decisión pendiente. Las mejoras son locales y no acreditan tiempos productivos. Horarios,
 subjectPresentation y402exclusiones permanecen fuera del lote. Sin configuración/migraciones/commit/push/
 deploy. Respaldo:backups/state-update-current-batch/2026-10-29/. V11 y auditoría general abiertos.
+
+
+## subjectPresentation v1 — IMPLEMENTADO LOCALMENTE, SIN ACTIVAR — 2026-10-28
+
+Se implementó la selección ordenada por experiencia para Attendance y STATE_UPDATE:
+`subjectPresentation: {version: 1, titleFieldIds: [fieldId], secondaryFieldIds: [fieldId]}`.
+Los IDs son del origen activo, con 1–8 campos de título y 0–12 secundarios, sin duplicados dentro
+de cada lista. El editor permite añadir, ordenar y retirar campos; una clave omitida conserva
+la configuración existente y una retirada explícita la elimina. La validación no toca registros,
+displayName ni el campo principal. Sin configuración se mantiene la presentación anterior.
+
+Esta implementación precisa la propuesta anterior: «Mostrar en Cliente» es una preferencia visual
+global, NO una autorización. La selección explícita de esta experiencia puede utilizar un campo
+activo con esa preferencia desmarcada, sin cambiarla. Se mantienen los accesos reales existentes
+a AppView/organización/contrato. No se inventan ACL por campo donde el contrato actual no las tiene.
+Las relaciones sólo exponen etiquetas de la entidad configurada, activa y del mismo contrato.
+
+Core agrega un descriptor tipado/versionado y una proyección de lectura tras seleccionar la página
+con los buscadores existentes. Los sujetos se resuelven en un lote de origen y sus relaciones,
+con una comprobación por lote de entidades relacionadas; no hay peticiones por fila. SELECT y
+MULTISELECT usan valores canónicos y etiquetas, RELATION conserva todas sus etiquetas simples o
+múltiples autorizadas. Las búsquedas, conteos, orden, estados, extras y acciones no cambian.
+La UI configurada afecta resultados y encabezado seleccionado; últimas actualizaciones, historial
+y resolución de conflictos conservan su presentación y handlers actuales. No se amplía su diseño.
+
+Client guarda el descriptor en la definición existente y la proyección visual en app_metadata,
+con owner/contrato/AppView/origen/fingerprint/sujeto. No sustituye registros completos con una
+proyección parcial. Prefiere esta copia y puede derivarla de los valores del origen ya preparado
+cuando son compatibles. Distingue vacío conocido, no preparado, inaccesible y metadata incompatible;
+no muestra IDs como etiquetas de SELECT/RELATION. Si falta presentación usa la identificación
+anterior con una limitación visible, sin bloquear las operaciones existentes. Las respuestas visuales
+antiguas no reemplazan una captura más reciente del mismo sujeto/configuración (sourceUpdatedAt y
+capturedAt); otro scope/fingerprint no se mezcla.
+
+Preparación reutiliza los mismos pasos y solicitudes. Comprueba los sujetos ya preparados, incluidas
+todas las páginas locales, sin preparar otras combinaciones ni históricos. Falta de descriptor/campo/
+etiqueta o escritura visual fallida no anuncia preparación completa: conserva definición de negocio
+ready, snapshots válidos e intenciones y registra fallo terminal en el mecanismo existente. La cobertura
+de negocio y la disponibilidad visual son distintas; ninguna acredita frescura remota por sí sola.
+Un ACK no acredita la proyección. No hay esquema, migración, namespace, dependencias ni motor nuevos.
+SQLite v10 y opco-client-v10-epoch2.db se mantienen. No se cambian payloads, autorización, versión base,
+clientRequestId, outbox, sincronización ni recibos/intenciones para introducir presentación.
+
+Evidencia local: 257 pruebas Core focalizadas y 2 integraciones PostgreSQL adicionales con editor/API,
+simple/múltiple, permisos y limpieza de fixtures; 229 pruebas Client únicas en los conjuntos focalizados,
+SQLite real con reapertura, aislamiento, fallos de escritura y respuestas tardías; 4 casos de compatibilidad
+con el adaptador publicado 63d328493e1d77c27252f21984f8adc4b2489a17. Payloads de escritura viejos/nuevos
+idénticos. Typecheck y lint afectados registrados en checks.json. Sin suite completa.
+
+Renderers reales en Chromium local a 1440/1024/390, transporte sintético y OPFS del runtime; capturas
+de resultados/seleccionado, sin desbordamiento global y con acciones conservadas. Editor real en harness
+local comprueba selección/orden/FormData; su persistencia/reapertura se acredita separadamente con
+PostgreSQL, no con una sesión autenticada de navegador. Export local sólo para esa revisión. Cero
+escrituras de negocio/cámara/red externa en el recorrido final medido. No acredita Safari físico,
+Core+navegador integrados, cierre offline de navegador ni sincronización remota de esta proyección.
+La reapertura persistente se acredita mediante SQLite automatizado, no se generaliza a dispositivos.
+
+Límite separado: cuatro casos de state-update-prewarm-current-investigation.test.ts fallan igual en HEAD
+y candidato por mocks sin confirmación searchComparison; se conservaron intactos, sin debilitar aserciones
+ni cambiar timeouts. Sus nombres y contraste están en baseline-failures.json. No son PASS de este lote.
+
+Publicación futura recomendada Core → Client, sin activar configuraciones ahora. Client publicado ignora
+el descriptor aditivo y sigue operando; Client nuevo con Core/metadata antigua conserva identificación
+legacy y avisa. Un runtime anterior no reinterpreta intenciones porque su formato no cambia. Rollback
+pierde presentación enriquecida y puede perder descriptor al refrescar; no usar un editor anterior para
+guardar AppViews configuradas, pues no preserva esta clave. Retirar explícitamente configuración o usar
+builds compatibles al editar. No prometer revocación remota instantánea offline.
+
+Inventario, parches, hashes, capturas sintéticas y límites: backups/subject-presentation/2026-10-28/.
+Sin activación ni lecturas de registros productivos; Andes Norte C2 sólo como fixture local sintético,
+Misceláneos intacto. Las 402 exclusiones y todos los pendientes previos se preservan. V11 sigue pausado.
+
+
+## subjectPresentation — cierre de convivencia sobre HEAD actuales, SIN PUBLICAR — 2026-10-29
+
+Candidato reconstruido sobre Core293d59117c61d5d7c087c95110276a7581904310 y
+Client6fdff907992029cff0f0abff929a00c118d2b0aa. Preserva confirmación/comando completo y borradores
+Attendance, agrupación de preparación/lecturas de Inicio y current por lotes. No cambia displayName,
+búsquedas, selección de current, identidad, permisos ni contratos de escritura/intención.
+
+Único ajuste funcional de integración: getStateUpdateCurrentBatch reutiliza withSubjectPresentation,
+igual que la lectura individual; enriquece sólo los sujetos autorizados del lote. Sin configuración
+retorna el mismo objeto sin consultas visuales. Con configuración resuelve sujetos/relaciones por
+conjuntos; no introduce peticiones por fila ni modifica evento/null, resultados o fingerprint del lote.
+La regresión PostgreSQL local fue RED por descriptor/proyección ausentes y GREEN tras ese enlace.
+
+Validación nueva:86 regresiones Core +2 PostgreSQL locales;135 casos Client únicos de integración y
+convivencia (incluyen14 del archivo SQLite final),4 de compatibilidad con adaptador publicado6fdff90.
+Dos caminos current, individual y batch: título/orden/SELECT/RELATION después de reapertura SQLite,
+current=null confirmado, conflicto/outbox/autorización/requestId intactos e integrity_check=ok.
+Es sqlite3 real en disco con transporte sintético, no reapertura Chrome/OPFS o Safari nueva. Los2casos
+PostgreSQL usan lectores reales y sólo fixtures propios; URL y destino real validados como locales,
+limpieza acreditada. Preparación completa y disponibilidad visual se comprueban separadamente.
+Typecheck/lint afectados PASS; builds habituales Core/Turbopack32.494s y Client/Metro9.740s PASS,
+solapados. API efectiva del artefacto local https://web.opco.cl; index/sw coinciden con
+entry-5f71059bd29ab64b75ec452473a5fbed.js, epoch2 y lector JS/WASM locales precacheados conservados.
+Build no es despliegue ni validación de dispositivos. Variables Core ficticias, sin base real en build.
+
+Se reutilizan editor/serializador/proyector y evidencia Chromium1440/1024/390 de las mismas piezas
+visuales del respaldo28-10; no se repiten suites, cámara ni navegador. Nuevos controles de convivencia
+cubren handlers/borradores actuales; no se afirma una nueva revisión visual integrada con Core.
+Los4fallos preexistentes de state-update-prewarm-current-investigation.test.ts siguen identificados
+(mocks sin searchComparison, mismo archivo/hashes de HEAD), sin corregirlos/ocultarlos ni declarar
+suite completa PASS. Dos intentos iniciales del fixture nuevo usaron scope/definición inconsistentes;
+se corrigió sólo el fixture, manteniendo sus aserciones y timeouts. El primer intento PostgreSQL no
+pudo iniciar en sandbox; la ejecución local autorizada obtuvo el RED funcional y luego2/2GREEN.
+
+Publicar Core→Client; configuración en etapa posterior expresamente autorizada. Core nuevo/Client
+publicado conserva operaciones y presentación legacy. Client nuevo con metadata vieja/incompatible
+usa fallback visual explícito; no inventa labels ni completa cobertura por una fila o ACK. Viejos
+runtimes pueden degradar la metadata visual al refrescar: no alteran el formato de intenciones, pero
+no se promete reemplazarlos mediante SW. Rollback pierde presentación; no guardar AppViews ya
+configuradas con un editor antiguo que no conserva subjectPresentation. Capacidades current por
+lotes y su política de rollback publicada permanecen; no revertirlas incidentalmente. Sin migración,
+configuración, activación, namespace o dependencias nuevas. SQLitev10/epoch2 conservados.
+
+Respaldo final:backups/subject-presentation-close/2026-10-29/ (inventario/parches/hashes/checks/CLOSE).
+Mantener separados:interrupción11/13,runId prewarm-1793283039040-2,sin causa confirmada; reentrada a
+Inicio sigue preparando todas las experiencias. No se corrigen aquí.402exclusiones y pendientes
+ajenos preservados; respaldo original intacto. Sin producción,Railway,commit,push,deploy o activación.
+Safari físico,offline frío de navegador/sync de esta proyección y auditoría general siguen pendientes.
+V11 pausado.

@@ -99,7 +99,7 @@ export async function prepareStateUpdateCurrent({
         const item=response.items.find(item=>item.subject.id===subjectRecordId);
         if(!item) throw new Error("CURRENT_SUBJECT_OMITTED");
         const result=await store.upsertStateUpdateSnapshot({...scope,complete:false,
-          schedulePolicy:response.schedulePolicy,scheduleResolution:response.scheduleResolution,projectionDefinition:{
+          subjectPresentation:response.subjectPresentation,schedulePolicy:response.schedulePolicy,scheduleResolution:response.scheduleResolution,projectionDefinition:{
             sourceEntityTypeId:response.sourceEntityType.id,subjectFieldId:response.subjectFieldId,
             identityFields:response.identityFields,identityDefinition:response.identityDefinition,dateFieldId:response.dateFieldId,
             stateFields:response.stateFields,extraFields:response.extraFields,

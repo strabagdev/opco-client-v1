@@ -3302,3 +3302,42 @@ Runtime anterior lee marcador batch como parcial, sin cambiar intenciones; rollb
 Detalle/limitaciones en STATE_UPDATE, sección «Current por lotes». Sin producción, migraciones, commit/push/
 deploy/Railway. subjectPresentation y402exclusiones preservados. Respaldo reconstruible:
 backups/state-update-current-batch/2026-10-29/. V11 y auditoría general abiertos.
+
+
+## subjectPresentation — integración local, SIN PUBLICAR — 2026-10-28
+
+Implementación opcional por experiencia en Core/editor y Client para resultados y sujeto seleccionado
+de Attendance/STATE_UPDATE. Título y secundarios ordenados por IDs, tipos/labels y relaciones en lote;
+showInClient es preferencia visual, no ACL. Se preservan accesos reales y campos/configuración global.
+Detalle de contrato, caché scoped, preparación y compatibilidad en STATE_UPDATE, «subjectPresentation v1».
+No cambia búsqueda, displayName, payloads/identidad/autorización de intenciones ni sincronización.
+
+257 pruebas Core + 2 PostgreSQL locales; 229 pruebas Client únicas + 4 de compatibilidad; SQLite real
+con reapertura, renderer real Chromium con API sintética a 1440/1024/390 y componente real del editor.
+Typecheck/lint afectados y export local registrados. Sin suite completa ni pruebas de cámara.
+No acredita Safari físico, Core+navegador integrados ni reapertura offline/sync del navegador.
+Cuatro pruebas de preparación fallan igual en HEAD y candidato (mocks sin searchComparison efectivo);
+se conservan fuera del lote, con contraste archivado, sin atribuirlos a este cambio.
+
+Entrega reconstruible: backups/subject-presentation/2026-10-28/ (inventory, parches, checks, REVIEW,
+hashes y capturas sintéticas fuera de Git). Core → Client; configurar sólo en etapa posterior autorizada.
+Rollback conserva operaciones legacy pero pierde presentación; evitar editor antiguo con configuración
+nueva. Sin migración/namespace/dependencias/activación.402 exclusiones y pendientes previos preservados;
+Misceláneos y producción intactos. V11 y auditoría general continúan abiertos.
+
+
+## subjectPresentation — cierre local sobre current por lotes, SIN PUBLICAR — 2026-10-29
+
+Reconstruido sobre Core293d591 y Client6fdff90, conservando confirmación/borradores Attendance,
+optimización de Inicio y current por lotes. Ajuste acotado:el lector Core por lotes agrega la misma
+proyección visual que el individual. PostgreSQL RED→GREEN;86regresiones Core+2PostgreSQL locales,
+135casos Client únicos+4compatibilidad, SQLite con reapertura individual/batch y conflictos intactos.
+Typecheck/lint afectados y builds habituales PASS; artefacto local API pública,epoch2,index/sw y
+lector precacheado verificados. Editor/componentes visuales sin cambios reutilizan evidencia28-10;
+sin suites completas,navegador,cámara,OPFS/Safari nuevos ni acceso productivo. Los4fallos preexistentes
+de comparación siguen documentados. Detalle y límites en STATE_UPDATE,cierre de convivencia29-10.
+Core→Client; configurar después con autorización. Rollback pierde enriquecimiento; no editar una
+AppView configurada con editor antiguo. Sin migraciones,namespace o payloads nuevos.
+Inventario/parches/checks verificables:backups/subject-presentation-close/2026-10-29/.
+402exclusiones y pendientes ajenos preservados. Continúan separados la interrupción11/13 sin causa
+y la preparación de todas las experiencias al volver a Inicio. Sin publicación/activación. V11 pausado.

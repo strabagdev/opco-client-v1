@@ -835,6 +835,7 @@ export type StateUpdateProjectionDefinition = {
 };
 
 export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
+  subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
   schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
   scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
   projectionDefinition?: StateUpdateProjectionDefinition;
@@ -847,6 +848,7 @@ export type UpsertStateUpdateSnapshotInput = StateUpdateScope & {
 };
 
 export type StateUpdateSnapshotReconcileResult = {
+  presentationWrite?:{status:"stored"|"failed";complete:boolean;persistedSubjects:number;requestedSubjects:number};
   contentVerified?: boolean;
   persistedRemoteEventCount?: number;
   staleSyncedRemoved: number;

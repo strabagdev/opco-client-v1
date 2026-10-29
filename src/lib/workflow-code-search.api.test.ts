@@ -58,3 +58,10 @@ describe.each(["attendance","state-update"])("%s effective comparison compatibil
   }
  });
 });
+
+describe.each(["attendance","state-update"])("%s optional subject presentation transport",kind=>{
+ it("keeps legacy reads and malformed visual metadata usable without changing search transport",async()=>{
+  const requests:URL[]=[];const api=createOpcoApi({apiUrl:"https://synthetic.invalid",fetcher:async input=>{requests.push(new URL(String(input)));return Response.json({ok:true,data:{...payload(kind,false),searchComparison:comparisonFixture("global"),subjectPresentation:{version:99}}});}});
+  const result=kind==="attendance"?await api.getAttendanceWorkflow("fake","contract","view",{date:"2026-10-28",search:"name"}):await api.getStateUpdateWorkflow("fake","contract","view",{date:"2026-10-28",search:"name"});expect(result.subjectPresentation).toBeUndefined();expect(result.subjectPresentationIssue).toBeTruthy();expect(requests).toHaveLength(1);expect(requests[0].searchParams.get("search")).toBe("name");expect(requests[0].searchParams.has("subjectPresentation")).toBe(false);
+ });
+});

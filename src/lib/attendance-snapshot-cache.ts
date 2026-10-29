@@ -78,6 +78,7 @@ export async function cacheAttendanceRemoteSnapshot({
     subjectsWithCurrentResponse.add(event.subject.id);
   }
   const result = await store.upsertStateUpdateSnapshot({
+    subjectPresentation:response.subjectPresentation,
     appViewId,
     complete,
     contractId,

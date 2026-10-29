@@ -1,4 +1,6 @@
 import { attendanceAttemptKey, attendanceCommandKey, attendanceContentChanged, attendanceEditContextValues, copyAttendanceEntry } from "./attendance-edit-command";
+import {SubjectIdentity} from "../../../components/subject-identity";
+import type {SubjectPresentationDefinition} from "../../../lib/subject-presentation";
 import { CodeReader } from "../../../components/code-reader";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput } from "@/renderers/records/temporal-input";
@@ -155,6 +157,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const cameraIsActive = usePathname() === `/view/${appView.id}`;
   const [searchText, setSearchText] = useState("");
+  const [presentationDefinition,setPresentationDefinition]=useState<SubjectPresentationDefinition>();
   const [comparisonMetadataAvailable,setComparisonMetadataAvailable]=useState<boolean|null>(null);
   const [searchFieldId, setSearchFieldId] = useState<string>();
   const [searchReadId, setSearchReadId] = useState(0);
@@ -269,11 +272,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   });
 
   const applyAttendanceResponse = useCallback((response: {
+    subjectPresentation?:SubjectPresentationDefinition;
     contextFields?: AttendanceContextField[];
     latest: AttendanceLatestItem[];
     statuses: AttendanceStatusOption[];
     summary: { totalRegistered: number };
   }, options: { updateLatest?: boolean } = {}) => {
+    if("subjectPresentation" in response)setPresentationDefinition(response.subjectPresentation);
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
     setContextFields(response.contextFields ?? []);
 
@@ -481,11 +486,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       store: definitionCache,
       token: token!,
     });
-    if (response.codeSearchField || response.searchComparison) {
+    if (response.codeSearchField || response.searchComparison || response.subjectPresentation) {
       const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
       if (prepared && (prepared.definition.kind === "state-update" || prepared.definition.kind === "attendance")) {
         await definitionCache.upsertAppViewDefinition({ ...prepared, lastPreparedAt: new Date().toISOString(),
-          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField, searchComparison:response.searchComparison } });
+          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField, subjectPresentation:response.subjectPresentation, searchComparison:response.searchComparison } });
       }
     }
     await cacheAttendanceRemoteSnapshot({
@@ -750,6 +755,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         const prepared=await definitionCache.getAppViewDefinition(ownerKey,selectedContractId,appView.id);
         if(requestId!==requestSequenceRef.current)return;
         setComparisonMetadataAvailable(Boolean(prepared && "searchComparison" in prepared.definition && prepared.definition.searchComparison));
+        setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
         setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId, appView.config.observationFieldId)));
         await refreshLocalDayState();
         return;
@@ -1509,7 +1515,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           {items.map((item) => (
             <Pressable testID="attendance-person-row" accessibilityRole="button" key={item.person.id} onPress={() => void selectPerson(item)} style={styles.personRow}>
               <View style={styles.personText}>
-                <Text style={styles.personName}>{item.person.displayName}</Text>
+                <SubjectIdentity subject={item.person} config={appView.config.subjectPresentation} definition={presentationDefinition} titleStyle={styles.personName}/>
                 <Text style={styles.statusMeta}>{item.attendance?.statusLabel ?? "Sin registrar"}</Text>
               </View>
             </Pressable>
@@ -1520,7 +1526,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {selectedItem ? (
         <View testID="attendance-form" style={styles.checkInPanel}>
           <View style={[styles.personText, isDesktop && { flexDirection: "column", alignItems: "stretch" }]} >
-            <Text style={styles.panelName}>{selectedItem.person.displayName}</Text>
+            <SubjectIdentity subject={selectedItem.person} config={appView.config.subjectPresentation} definition={presentationDefinition} titleStyle={styles.panelName}/>
             <Text style={[styles.statusMeta, isDesktop && { width: "auto" }]}>Actual: {selectedItem.attendance?.statusLabel ?? "Sin registrar"}</Text>
           </View>
 

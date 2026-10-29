@@ -1,3 +1,4 @@
+import {verifyPresentationDefinition,type SubjectPresentationConfig,type SubjectPresentationDefinition,type SubjectPresentationProjection} from "./subject-presentation";
 import { verifyWorkflowSearchComparison, SearchComparisonError, type WorkflowSearchComparison } from "./search-comparison";
 import { stateUpdateScheduleMetadata, stateUpdateScheduleRequest, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
@@ -156,6 +157,7 @@ export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
 
 export type AttendanceWorkflowConfig = {
+  subjectPresentation?: SubjectPresentationConfig;
   codeSearch?: { fieldId: string };
   contextFieldIds?: string[];
   dateFieldId: string;
@@ -169,6 +171,7 @@ export type AttendanceWorkflowConfig = {
 };
 
 export type StateUpdateWorkflowConfig = {
+  subjectPresentation?: SubjectPresentationConfig;
   codeSearch?: { fieldId: string };
   dateFieldId?: string;
   extraFieldIds?: string[];
@@ -615,6 +618,7 @@ export type AttendanceItem = {
     updatedAt: string;
   } | null;
   person: {
+    presentation?:SubjectPresentationProjection;
     displayName: string;
     id: string;
   };
@@ -624,6 +628,7 @@ export type AttendanceLatestItem = {
   attendanceRecordId: string;
   contextValues?: AttendanceContextValues;
   person: {
+    presentation?:SubjectPresentationProjection;
     displayName: string;
     id: string;
   };
@@ -635,6 +640,8 @@ export type AttendanceLatestItem = {
 export type AttendanceResponse = {
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
+  subjectPresentation?:SubjectPresentationDefinition;
+  subjectPresentationIssue?:string;
   searchComparison?: WorkflowSearchComparison;
   appView: {
     id: string;
@@ -760,6 +767,7 @@ export type StateUpdateField = {
 };
 
 export type StateUpdateSubject = {
+  presentation?:SubjectPresentationProjection;
   displayName: string;
   id: string;
 };
@@ -832,6 +840,8 @@ export type StateUpdateResponse = {
   contractId?: string;
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
+  subjectPresentation?:SubjectPresentationDefinition;
+  subjectPresentationIssue?:string;
   searchComparison?: WorkflowSearchComparison;
   schedulePolicy?: import("./state-update-schedule").StateUpdateSchedulePolicy;
   scheduleResolution?: import("./state-update-schedule").StateUpdateScheduleResolution;
@@ -1714,7 +1724,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: diagnosticOperation ?? attendanceDiagnosticOperation(normalizedQuery),
           diagnosticSyncRunId,
         },
-      ).then(normalizeAttendanceResponse).then(response => verifyCodeSearchResponse(response, normalizedQuery.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, normalizedQuery.search, normalizedQuery.searchFieldId, normalizedQuery.personRecordId));
+      ).then(normalizeAttendanceResponse).then(sanitizeSubjectPresentationResponse).then(response => verifyCodeSearchResponse(response, normalizedQuery.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, normalizedQuery.search, normalizedQuery.searchFieldId, normalizedQuery.personRecordId));
     },
     getStateUpdateWorkflow(
       token: string,
@@ -1766,7 +1776,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticOperation: query.subjectRecordIds || query.subjectRecordId?.trim() ? "RECONCILE" : stateUpdateReadDiagnosticOperation(query),
           diagnosticSyncRunId: options.diagnosticSyncRunId,
         },
-      ).then(raw => { if (query.subjectRecordIds) verifyRawCurrentBatch(raw,query.subjectRecordIds,query.currentBatchCapabilities!,contractId,appViewId); return normalizeStateUpdateResponse(raw); }).then(response => verifyCodeSearchResponse(response, query.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, query.search, query.searchFieldId, query.subjectRecordId));
+      ).then(raw => { if (query.subjectRecordIds) verifyRawCurrentBatch(raw,query.subjectRecordIds,query.currentBatchCapabilities!,contractId,appViewId); return normalizeStateUpdateResponse(raw); }).then(sanitizeSubjectPresentationResponse).then(response => verifyCodeSearchResponse(response, query.searchFieldId)).then(response => verifyWorkflowComparisonResponse(response, query.search, query.searchFieldId, query.subjectRecordId));
     },
     saveAttendanceWorkflow(
       token: string,
@@ -2605,4 +2615,10 @@ function verifyWorkflowComparisonResponse<T extends {sourceEntityType:{id:string
     if(query?.trim()&&(!policy||policy.applied.mode!==(recordId?.trim()?"record":fieldId?"field":"global")||(fieldId&&policy.applied.fieldId!==fieldId)))throw new SearchComparisonError("Opco no confirmó la comparación ejecutada; actualiza la experiencia con un servidor compatible.","SEARCH_COMPARISON_NOT_CONFIRMED");
     return policy?{...response,searchComparison:policy}:response;
   } catch(error){if(error instanceof SearchComparisonError)throw new OpcoApiError(error.message,error.code,400);throw error;}
+}
+
+function sanitizeSubjectPresentationResponse<T extends {sourceEntityType:{id:string};subjectPresentation?:SubjectPresentationDefinition}>(response:T):T {
+ if(response.subjectPresentation===undefined)return response;
+ try{verifyPresentationDefinition(response.subjectPresentation,response.sourceEntityType.id);return response;}
+ catch{return {...response,subjectPresentation:undefined,subjectPresentationIssue:"La presentación recibida no es compatible; las operaciones siguen disponibles."};}
 }

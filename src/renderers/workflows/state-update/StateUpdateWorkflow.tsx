@@ -1,3 +1,4 @@
+import {SubjectIdentity} from "../../../components/subject-identity";
 import { CodeSearchCacheError } from "../../../lib/workflow-code-search";
 import { CodeReader } from "../../../components/code-reader";
 import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, scheduleForStateUpdateEdit, formatAppliedSchedule, type StateUpdateScheduleMetadata } from "@/lib/state-update-schedule";
@@ -356,7 +357,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
         codeSearchField: definition.codeSearchField,
-        searchComparison: definition.searchComparison,
+        searchComparison: definition.searchComparison, subjectPresentation:definition.subjectPresentation,
         extraFields: definition.extraFields, stateFields: definition.stateFields, subjectFieldId: definition.subjectFieldId,
         historyMode: definition.historyMode, uniqueness: definition.uniqueness, items: [], latest: [],
         sourceEntityType: { id: definition.sourceEntityTypeId, name: definition.sourceEntityTypeName ?? "Registros" }, targetEntityType: { id: definition.targetEntityTypeId, name: definition.targetEntityTypeName ?? "Registros" } });
@@ -441,7 +442,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           })), ...definition.extraFields].find((field) => field.id === definition.dateFieldId) ?? null
         : null,
       codeSearchField: definition.codeSearchField,
-        searchComparison: definition.searchComparison,
+        searchComparison: definition.searchComparison, subjectPresentation:definition.subjectPresentation,
       dateFieldId: definition.dateFieldId,
       ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: identity,
@@ -559,7 +560,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       if (nextResponse.uniqueness === "subject-date-fields" && nextResponse.contextRequired) {
         setResponse(nextResponse);setItems([]);
         if (ownerKey) await definitionCache.upsertAppViewDefinition({ appViewId: appView.id, appViewType: "WORKFLOW", workflowKey: "state-update", ownerKey, contractId: selectedContractId,
-          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, searchComparison:nextResponse.searchComparison, sourceEntityTypeId: nextResponse.sourceEntityType.id,
+          status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, subjectPresentation:nextResponse.subjectPresentation, searchComparison:nextResponse.searchComparison, sourceEntityTypeId: nextResponse.sourceEntityType.id,
             sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
             dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
             schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
@@ -596,7 +597,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
-        if(nextResponse.schedulePolicy || nextResponse.codeSearchField || nextResponse.searchComparison) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,searchComparison:nextResponse.searchComparison,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
+        if(nextResponse.schedulePolicy || nextResponse.codeSearchField || nextResponse.searchComparison) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,subjectPresentation:nextResponse.subjectPresentation, searchComparison:nextResponse.searchComparison,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
         const pagination = nextResponse.latestPagination ?? {
           hasMore: false,
           page: latestPageToLoad,
@@ -604,6 +605,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           total: nextResponse.latest?.length ?? 0,
         };
         const snapshotResult = await definitionCache.upsertStateUpdateSnapshot({
+          subjectPresentation:nextResponse.subjectPresentation,
           appViewId: appView.id,
           identity,
           schedulePolicy:nextResponse.schedulePolicy, scheduleResolution:nextResponse.scheduleResolution,
@@ -1321,7 +1323,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       {!selectedItem && normalizedSearch ? (
         <View style={styles.list}>
           {!isSearching && items.length === 0 ? <Text style={styles.empty}>Sin resultados.</Text> : null}
-          <StateUpdateReadRows fullFieldIds={(response?.stateFields ?? []).filter(field => ["TEXT", "TEXTAREA"].includes(stateFieldType(field))).map(field => field.fieldId)} rows={items.map(item => ({ key: item.subject.id, name: item.subject.displayName,
+          <StateUpdateReadRows presentationConfig={appView.config.subjectPresentation} presentationDefinition={response?.subjectPresentation} fullFieldIds={(response?.stateFields ?? []).filter(field => ["TEXT", "TEXTAREA"].includes(stateFieldType(field))).map(field => field.fieldId)} rows={items.map(item => ({ key: item.subject.id, name: item.subject.displayName, subject:item.subject,
             compactText: unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : formatCurrentState(response, item) ?? "Sin estado",
             fallback: unavailableCompositeAbsence(item) ? "Reporte no verificado sin conexión" : "Sin estado",
             values: unavailableCompositeAbsence(item) || !item.current ? [] : (response?.stateFields ?? []).flatMap(field => {
@@ -1335,7 +1337,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       {selectedItem && visibleResponse ? (
         <View style={styles.editorPanel}>
           <View style={styles.subjectText}>
-            <Text style={styles.panelName}>{selectedItem.subject.displayName}</Text>
+            <SubjectIdentity subject={selectedItem.subject} config={appView.config.subjectPresentation} definition={visibleResponse.subjectPresentation} titleStyle={styles.panelName}/>
             <Text style={styles.statusMeta}>Actual: {formatCurrentState(visibleResponse, selectedItem) ?? "Sin estado"}</Text>
           </View>
 

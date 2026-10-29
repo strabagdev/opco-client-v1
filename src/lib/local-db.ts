@@ -1,3 +1,4 @@
+import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
 import { workflowRecordMatches, SearchComparisonError, fieldSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
 import { cachedWorkflowComparison, cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
 import { validateScheduleResolution, type CachedStateUpdateScheduleContext, type StateUpdateSchedulePolicy } from "./state-update-schedule";
@@ -3100,7 +3101,9 @@ async function searchStateUpdateSubjects({
     }),
   );
 
-  return results;
+  const db=await getDatabase();
+  const presented=await hydrateSubjectPresentations(db,{ownerKey,contractId,appViewId,sourceEntityTypeId},prepared?.definition,results.map(item=>item.subject));
+  return results.map((item,index)=>({...item,subject:presented[index]}));
 }
 
 async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput): Promise<StateUpdateSnapshotReconcileResult> {
@@ -3226,7 +3229,12 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     if (input.complete && contentVerified) staleSyncedRemoved = await reconcileStateUpdateProjections(transaction, scope, [...ids]);
   }, "transaction:attendance-snapshot");
   if (reconciledFromSnapshot) await markStateUpdateSyncDiagnosticsReconciledFromSnapshot({ completedAt: cachedAt, ownerKey: input.ownerKey });
-  return { staleSyncedRemoved, contentVerified, persistedRemoteEventCount: ids.size };
+  let presentationWrite:import("./state-update-offline").StateUpdateSnapshotReconcileResult["presentationWrite"];
+  const presentationSourceId=input.sourceEntityTypeId??input.projectionDefinition?.sourceEntityTypeId;
+  if(input.subjectPresentation&&presentationSourceId){
+    try{await db.withTransactionAsync(async transaction=>{presentationWrite={status:"stored",...await persistSubjectPresentations(transaction,{ownerKey:input.ownerKey,contractId:input.contractId,appViewId:input.appViewId,sourceEntityTypeId:presentationSourceId},input.subjectPresentation!,[...input.items.map(item=>item.subject),...(input.latest??[]).map(item=>item.subject)])};},"transaction:subject-presentation");}catch{presentationWrite={status:"failed",complete:false,persistedSubjects:0,requestedSubjects:new Set(input.items.map(item=>item.subject.id)).size};}
+  }
+  return { staleSyncedRemoved, contentVerified, persistedRemoteEventCount: ids.size,...(presentationWrite?{presentationWrite}:{}) };
 }
 
 async function getStateUpdateSummary(input: StateUpdateScope): Promise<import("./state-update-offline").StateUpdateSummary> {

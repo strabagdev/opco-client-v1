@@ -1,3 +1,4 @@
+import {preparedPresentationAvailable} from "./subject-presentation-cache";
 import {
   AppViewDefinitionCache,
   getWorkflowKey,
@@ -164,7 +165,7 @@ export type StateUpdateContextPreparationInput = {
   token: string;
   scope: StateUpdateCurrentCoverageScope;
   store: Parameters<typeof refreshEntityRecordsCache>[0]["store"] &
-    Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot">;
+    Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot"> & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">>;
   signal: AbortSignal;
   force?: boolean;
   currentBatchCapabilities?: import("./opco-api").StateUpdateCurrentBatchCapabilities;
@@ -198,6 +199,7 @@ export function prepareStateUpdateContextOnce(input: StateUpdateContextPreparati
     const result = await prepareStateUpdateCurrent({ ...input, sourceRemoteTotal, sourceFetched,
       retainCoverageUntilComplete: Boolean(coverage),
       sourceCacheTotal: source.pagination.total, runWithConcurrency, concurrency: PREWARM_CONCURRENCY });
+    if(!input.signal.aborted && input.store.getAppViewDefinition){const prepared=await input.store.getAppViewDefinition(input.scope.ownerKey,input.scope.contractId,input.scope.appViewId);if(prepared&&!await preparedPresentationAvailable(input.store,input.scope,prepared.definition))throw new Error("SUBJECT_PRESENTATION_INCOMPLETE");}
     if (!input.signal.aborted && result?.status !== "complete") {
       throw new Error("STATE_UPDATE_CURRENT_PREPARATION_INCOMPLETE");
     }
@@ -488,6 +490,7 @@ async function prewarmOneAppView({
             kind: "state-update",
             ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
+            ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),
             sourceEntityTypeId: response.sourceEntityType.id,
             stateFields: attendanceStateFields(response.statuses, attendanceConfig, response.stateFields?.find((field) => field.fieldId === attendanceConfig.statusFieldId)),
             subjectFieldId: attendanceConfig.personFieldId,
@@ -512,6 +515,7 @@ async function prewarmOneAppView({
           token,
         }),
       );
+      if(appView.config.subjectPresentation!==undefined && !await preparedPresentationAvailable(store,{ownerKey,contractId,appViewId:appView.id,sourceEntityTypeId:response.sourceEntityType.id},{appView,subjectPresentation:response.subjectPresentation}))return completeAppViewTelemetry(telemetry,appStartedMs,"failed",new OpcoApiError("Los datos de presentación no están preparados por completo.","SUBJECT_PRESENTATION_INCOMPLETE",0));
       return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
 
@@ -565,7 +569,8 @@ async function prewarmOneAppView({
       };
       if (response.uniqueness === "subject-date-fields") {
         await store.upsertAppViewDefinition(baseDefinitionInput({ appView, contractId, ownerKey, lastPreparedAt, status: "ready", definition: stateUpdatePreparedDefinition(appView, response) }));
-        return completeAppViewTelemetry(telemetry, appStartedMs, "success");
+        if(appView.config.subjectPresentation!==undefined && !await preparedPresentationAvailable(store,{ownerKey,contractId,appViewId:appView.id,sourceEntityTypeId:response.sourceEntityType.id},{appView,subjectPresentation:response.subjectPresentation}))return completeAppViewTelemetry(telemetry,appStartedMs,"failed",new OpcoApiError("Los datos de presentación no están preparados por completo.","SUBJECT_PRESENTATION_INCOMPLETE",0));
+      return completeAppViewTelemetry(telemetry, appStartedMs, "success");
       }
       const snapshotPagination = response.latestPagination ?? {
         hasMore: false,
@@ -575,6 +580,7 @@ async function prewarmOneAppView({
       };
       await measurePrewarmStage(telemetry, "snapshot", async () => {
         const snapshotResult = await store.upsertStateUpdateSnapshot({
+          subjectPresentation:response.subjectPresentation,
           appViewId: appView.id,
           complete: snapshotPagination.page === 1 && !snapshotPagination.hasMore,
           expectedRemoteEventCount: snapshotPagination.page === 1 && !snapshotPagination.hasMore ? snapshotPagination.total : undefined,
@@ -627,6 +633,7 @@ async function prewarmOneAppView({
         }));
       }
 
+      if(appView.config.subjectPresentation!==undefined && !await preparedPresentationAvailable(store,{ownerKey,contractId,appViewId:appView.id,sourceEntityTypeId:response.sourceEntityType.id},{appView,subjectPresentation:response.subjectPresentation}))return completeAppViewTelemetry(telemetry,appStartedMs,"failed",new OpcoApiError("Los datos de presentación no están preparados por completo.","SUBJECT_PRESENTATION_INCOMPLETE",0));
       return completeAppViewTelemetry(telemetry, appStartedMs, "success");
     }
 
@@ -1182,6 +1189,7 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     kind: "state-update",
     ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
+            ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),
     ...(response.schedulePolicy ? {schedulePolicy: response.schedulePolicy} : {}),
     sourceEntityTypeId: response.sourceEntityType.id,
     sourceEntityTypeName: response.sourceEntityType.name,

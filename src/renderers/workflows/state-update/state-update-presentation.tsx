@@ -1,3 +1,6 @@
+import {SubjectIdentity} from "../../../components/subject-identity";
+import {subjectPresentationView} from "../../../lib/subject-presentation-display";
+import type {PresentedSubject,SubjectPresentationDefinition} from "../../../lib/subject-presentation";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { APP_SHELL_WIDE_BREAKPOINT } from "../../../lib/app-shell-layout";
@@ -5,6 +8,7 @@ import { desktopPalette as p } from "../../../lib/desktop-presentation";
 import type { StateUpdateLatestRow } from "./state-update-workflow-logic";
 
 export type StateUpdateReadRow = {
+  subject?:PresentedSubject;
   key: string;
   name: string;
   values: StateUpdateLatestRow[];
@@ -29,7 +33,7 @@ export function StateUpdateFormGrid({ slots }: { slots: { key: string; full?: bo
 }
 
 /** One reading projection. No data fetching, selection state or workflow policy. */
-export function StateUpdateReadRows({ rows, fullFieldIds = [] }: { rows: StateUpdateReadRow[]; fullFieldIds?: string[] }) {
+export function StateUpdateReadRows({ rows, fullFieldIds = [], presentationConfig,presentationDefinition }: { rows: StateUpdateReadRow[]; fullFieldIds?: string[];presentationConfig?:unknown;presentationDefinition?:SubjectPresentationDefinition }) {
   const desktop = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT;
   const [width, setWidth] = useState(0);
   const columns = stateUpdateReadColumns(rows);
@@ -38,8 +42,8 @@ export function StateUpdateReadRows({ rows, fullFieldIds = [] }: { rows: StateUp
   const count = Math.max(1, Math.min(columns.filter(id => !fullFieldIds.includes(id)).length, Math.floor((detailWidth + 16) / 156)));
   const cellWidth = Math.max(0, (detailWidth - (count - 1) * 16) / count);
   return <View style={[s.list, desktop && s.listWide]} onLayout={event => setWidth(Math.round(event.nativeEvent.layout.width))}>
-    {rows.map(row => <ReadRow key={row.key} row={row} desktop={desktop}>
-      <View style={[s.nameBlock, desktop && { width: nameWidth, flexShrink: 0 }]}><Text style={[s.name, desktop && s.nameWide]}>{row.name}</Text>
+    {rows.map(row => <ReadRow key={row.key} row={{...row,name:row.subject?subjectPresentationView(row.subject,presentationConfig,presentationDefinition).title:row.name}} desktop={desktop}>
+      <View style={[s.nameBlock, desktop && { width: nameWidth, flexShrink: 0 }]}>{row.subject?<SubjectIdentity subject={row.subject} config={presentationConfig} definition={presentationDefinition} titleStyle={[s.name,desktop&&s.nameWide]}/>:<Text style={[s.name, desktop && s.nameWide]}>{row.name}</Text>}
         {!desktop && row.compactText !== undefined ? <Text style={s.value}>{row.compactText}</Text> : null}
       </View>
       {desktop || row.compactText === undefined ? <View style={[s.values, desktop && s.valuesWide]}>
