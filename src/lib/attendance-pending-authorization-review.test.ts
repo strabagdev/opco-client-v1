@@ -1,3 +1,5 @@
+import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry} from "../renderers/workflows/attendance/attendance-edit-command";
+import {OpcoApiError} from "./opco-api";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
@@ -8,7 +10,7 @@ import ts from "typescript";
 import type {OpcoApi} from "./opco-api";
 import {buildOfflineStateValues,stateUpdateIntentsEqual} from "./state-update-offline";
 import { attendanceStateFields } from "./attendance-offline";
-import { attendanceEntryExtraValues } from "../renderers/workflows/attendance/attendance-workflow-logic";
+import { attendanceEntryToStateUpdateEntry, attendanceEntryExtraValues } from "../renderers/workflows/attendance/attendance-workflow-logic";
 import { syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 const sqlite = vi.hoisted(() => ({
   openDatabaseAsync: vi.fn()
@@ -110,7 +112,7 @@ afterEach(()=>{harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{r
 async function reopen(){await harness.db.closeAsync();__resetLocalDatabaseForTests();harness=sqliteHarness(directory+"/db.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();await store.getSelectedContractId();}
 function input(overwrite?:boolean){return {...scope,subjectRecordId:"person",subjectDisplayName:"Synthetic",historyMode:"update-current" as const,uniqueness:"subject-date" as const,stateFields:fields,stateValues:[{fieldId:"status",optionId:"present"}],expectedUpdatedAt:base,overwrite};}
 function rendererContext(before:any){
-  const c:any={buildOfflineStateValues,stateUpdateIntentsEqual,resolutionMountedRef:{current:true},requestSequenceRef:{current:0},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},selectedContractId:scope.contractId,selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:before.localRecordId,statusOptionId:"present",statusLabel:"Present",updatedAt:base}},ownerKey:scope.ownerKey,isSaving:false,isOnline:false,date:scope.date,appView:{id:scope.appViewId,config:{statusFieldId:"status",targetEntityTypeId:scope.targetEntityTypeId}},contextFields:[],contextValues:{},supportsObservation:false,observation:"",statuses:fields[0].options,definitionCache:store,attendanceContextValidationErrors:()=>[],attendanceStateFields,attendanceEntryExtraValues};
+  const c:any={attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},setConfirmationError:vi.fn(),conflict:null,buildOfflineStateValues,stateUpdateIntentsEqual,resolutionMountedRef:{current:true},requestSequenceRef:{current:0},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},selectedContractId:scope.contractId,selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:before.localRecordId,statusOptionId:"present",statusLabel:"Present",updatedAt:base}},ownerKey:scope.ownerKey,isSaving:false,isOnline:false,date:scope.date,appView:{id:scope.appViewId,config:{statusFieldId:"status",targetEntityTypeId:scope.targetEntityTypeId}},contextFields:[],contextValues:{},supportsObservation:false,observation:"",statuses:fields[0].options,definitionCache:store,attendanceContextValidationErrors:()=>[],attendanceStateFields,attendanceEntryExtraValues,attendanceEntryToStateUpdateEntry};
   for(const name of ["setContextErrors","setIsSaving","setError","setRefreshError","setSuccessMessage","clearPersonFlow","refreshLocalDayState","refreshRecordsSyncSummary","clearVisibleError","reportWriteFeedback","recordVisibleError","setConflict"]) c[name]=vi.fn();
   c.saveEntry=handler("saveEntry",c);return c;
 }
@@ -143,4 +145,15 @@ describe("review of already-confirmed pending Attendance",()=>{
   await store.saveStateUpdateLocally(input());const op=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];await handler("saveStatus",rendererContext(op))({optionId:"present",label:"Present"});await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0].payload).not.toMatchObject({overwrite:true});
  });
 
+});
+
+
+describe("observation-only confirmed replacement across SQLite reopen",()=>{
+ it("preserves untouched context, base, state and authorization without changing the reopened intent",async()=>{
+  await store.upsertStateUpdateSnapshot({...scope,historyMode:"update-current",uniqueness:"subject-date",complete:false,latest:[],items:[{subject:{id:"person",displayName:"Synthetic"},current:{recordId:"remote",updatedAt:base,stateValues:[{fieldId:"status",optionId:"training",label:"Training"}],extraValues:{note:"Original",shift:"FIRST"}}}]});
+  const c=rendererContext({localRecordId:"remote"});c.appView.config.observationFieldId="note";c.appView.config.contextFieldIds=["shift"];c.contextFields=[{id:"shift",name:"Context",type:"SELECT",required:true,options:[{optionId:"a",value:"FIRST",label:"First"}]}];c.contextValues={shift:"a"};c.supportsObservation=true;c.observation="Edited";c.selectedItem.attendance={recordId:"remote",statusOptionId:"training",statusLabel:"Training",updatedAt:base,observation:"Original",contextValues:{shift:"a"}};
+  c.saveEntry=handler("saveEntry",c);await handler("saveStatus",c)({optionId:"training",label:"Training"});expect(c.setConflict).toHaveBeenCalledOnce();const conflict=c.setConflict.mock.calls[0][0];await handler("confirmConflict",{...c,conflict})();expect(c.recordVisibleError).not.toHaveBeenCalled();
+  const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(before.payload).toMatchObject({overwrite:true,expectedUpdatedAt:base,stateValues:[{optionId:"training"}],extraValues:{note:"Edited",shift:"FIRST"}});await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+  const reopened=rendererContext(before);Object.assign(reopened,{contextFields:c.contextFields,contextValues:c.contextValues,supportsObservation:true,observation:"Edited",appView:c.appView,selectedItem:{...c.selectedItem,attendance:{...c.selectedItem.attendance,statusOptionId:"training",observation:"Edited"}}});reopened.saveEntry=handler("saveEntry",reopened);await handler("saveStatus",reopened)({optionId:"training",label:"Training"});expect(reopened.setConflict).not.toHaveBeenCalled();await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+ });
 });

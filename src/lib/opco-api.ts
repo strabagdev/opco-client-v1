@@ -1778,16 +1778,17 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       input: StateUpdateRequest,
       options: { diagnosticSyncRunId?: string | null } = {},
     ) {
+      const submitted = JSON.parse(JSON.stringify(input)) as StateUpdateRequest;
       return authenticatedRequest<StateUpdateApiResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update`,
         token,
         {
-          body: JSON.stringify(serializeStateUpdateRequest(input)),
+          body: JSON.stringify(serializeStateUpdateRequest(submitted)),
           diagnosticOperation: "SAVE",
           diagnosticSyncRunId: options.diagnosticSyncRunId,
           method: "POST",
         },
-      ).then(normalizeStateUpdateBatchResponse);
+      ).then(response => normalizeStateUpdateBatchResponse(response, submitted));
     },
     getHealth() {
       return request<unknown>("/api/v1/health", {
@@ -2090,9 +2091,9 @@ function normalizeStateUpdateSourceEntityType(response: StateUpdateRawResponse):
   return sourceEntityType;
 }
 
-function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse): StateUpdateBatchResponse {
+function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse, submitted?: StateUpdateRequest): StateUpdateBatchResponse {
   const results = (response.results ?? ("result" in response && response.result ? [response.result] : []))
-    .map(normalizeStateUpdateBatchResult);
+    .map(result => normalizeStateUpdateBatchResult(result, submitted));
 
   results.forEach((result) => {
     if (result.result === "CONFLICT") {
@@ -2125,11 +2126,13 @@ function serializeStateUpdateRequest(input: StateUpdateRequest) {
   };
 }
 
-function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpdateBatchResult {
+function normalizeStateUpdateBatchResult(result: StateUpdateApiResult, submitted?: StateUpdateRequest): StateUpdateBatchResult {
   if (result.result !== "CONFLICT") {
     return result;
   }
 
+  // A difference list is not a complete command: unchanged states/extras must survive confirmation.
+  const requestedCommand = submitted?.subjectRecordId === result.subjectRecordId ? submitted : undefined;
   const stateDifferences = result.differences.filter((difference) => !isStateUpdateExtraDifference(difference));
   const extraDifferences = result.differences
     .filter(isStateUpdateExtraDifference)
@@ -2159,8 +2162,11 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult): StateUpd
     requested: {
       ...stateUpdateScheduleMetadata(result.requested),
       extraValuesFormat: result.existing.extraValuesFormat,
-      extraValues: objectFromConflictExtraValues(extraDifferences, "localValue"),
-      stateValues: stateDifferences.map((difference) => ({
+      extraValues: requestedCommand ? requestedCommand.extraValues : objectFromConflictExtraValues(extraDifferences, "localValue"),
+      stateValues: requestedCommand ? requestedCommand.stateValues.map(value => ({ ...value, optionId: value.optionId ?? null,
+        label: value.label ?? stateDifferences.find(difference => difference.fieldId === value.fieldId)?.requestedLabel ??
+          result.existing.stateValues?.find(existing => existing.fieldId === value.fieldId && existing.optionId === value.optionId)?.label ?? null,
+      })) : stateDifferences.map((difference) => ({
         fieldId: difference.fieldId,
         label: difference.requestedLabel ?? null,
         optionId: difference.requestedOptionId ?? null,

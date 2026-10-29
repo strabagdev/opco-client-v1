@@ -3238,3 +3238,23 @@ Lectores antiguos offline no conocen reglas: no basta actualizar service worker.
 de outbox. Attendance/STATE_UPDATE solamente; RECORDS/RELATION/REPORT/PANEL continúan pendientes.
 Inventario/parches/checks/tiempos: backups/workflow-search-comparison-close/2026-10-28/.402 exclusiones,
 prefijos documentales y demás pendientes preservados. Sin migración/commit/push/deploy; V11 pausado.
+
+
+## Attendance: edición y confirmación corregidas localmente — 2026-10-28, SIN PUBLICAR
+
+Comando completo preservado al adaptar el conflicto y al confirmar; Observación sola ya no pierde estado.
+Confirmación vinculada a sujeto/scope/configuración/contenido y base mostrada, sin transferir autorización.
+GET tardío no pisa borrador editado; hidratación normal intacta. Contextos existentes no se sustituyen por
+preferencias de alta. Rechazo visible dentro del modal, edición conservada y botón liberado. Offline pide
+confirmación también por extras y conserva outbox/idempotencia/conflictos mediante runtime existente.
+
+203pruebas focalizadas + aserción RED archivada→GREEN con Core local; typecheck/lint/diff-check. Chrome/OPFS
+real y Core/PostgreSQL local: botones, cancelación, error recuperable, replay real, scopes y respuesta tardía;
+cierre/reapertura offline, misma fila al sincronizar y conflicto tras modificación remota, ambas versiones
+conservadas. Inyecciones deliberadas distinguidas de evidencia normal; sin Safari físico/cámara/suite completa.
+
+Contrato/límites en STATE_UPDATE, «Attendance: comando confirmado y borrador protegido». Respaldo durable
+backups/attendance-edit-confirmation-fix/2026-10-28/: inventario/parche sobre HEAD publicado, hashes, checks,
+evidencia y prueba de separación de subjectPresentation. No modifica preparaciones/recálculos de Inicio:
+esos costes siguen pendientes de otro lote.402exclusiones, subjectPresentation y demás pendientes intactos.
+Sin Core/esquema/configuración productiva/commit/push/deploy/Railway. V11 y auditoría general abiertos.

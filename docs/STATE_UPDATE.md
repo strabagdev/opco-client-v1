@@ -2952,3 +2952,57 @@ primero esos runtimes. Tras activar, coordinar desactivación/refresco antes de 
 sin borrar ni reinterpretar outbox. RECORDS/RELATION/REPORT/PANEL siguen para etapas posteriores.
 Listo para la siguiente etapa autorizada; sin publicación, reglas activadas o cambios funcionales.
 Respaldo final: backups/workflow-search-comparison-close/2026-10-28/. V11 pausado.
+
+
+## Attendance: comando confirmado y borrador protegido — IMPLEMENTADO LOCALMENTE, NO PUBLICADO — 2026-10-28
+
+Corrección aislada sobre Client63d328493e1d77c27252f21984f8adc4b2489a17, separada de subjectPresentation.
+No modifica preparador de Inicio, disponibilidad, política de navegación, consultas, Core o esquema.
+Responde al diagnóstico anterior: confirmar sólo Observación perdía el estado y enviaba states vacío;
+GET tardío repoblaba el borrador; rechazo quedaba fuera del modal. No atribuye el evento productivo.
+
+saveStateUpdateWorkflow conserva una copia JSON del comando realmente enviado. El adaptador de conflicto
+usa todos sus estados y extras para la parte solicitada, no sólo differences; reutiliza labels disponibles
+sin inventar estados/IDs. La petición wire, autorización, fechas e identidad no cambian. Estados no SELECT
+(incluido0) conservan su valor. Respuestas legacy sin comando disponible conservan su adaptación previa.
+
+Attendance fija entrada completa, contexto, sujeto, scope/configuración, generación de borrador y versión
+mostrada al abrir confirmación online/offline. Aceptar usa ese comando; cambios de contenido/persona/fecha/
+configuración o una confirmación sin vinculación no autorizan otra entrada. Nuevo conflicto remoto conserva
+comando y snapshot remoto y exige otro acto explícito; nunca actualiza la base para evitar el rechazo.
+Cancelar sólo cierra feedback. El modal explica rechazos, mantiene edición y libera el botón en finally.
+Una petición online de resultado incierto conserva su requestId para reintentar el mismo comando; otro
+contenido tiene otro ID. No se convierte ese mismo envío incierto en una nueva operación offline con otro
+ID: se informa que debe verificarse/reintentarse conectado. Esa memoria no sustituye la outbox durable.
+
+La edición inicia una generación de formulario. selectPerson hidrata normalmente si nadie editó; una
+respuesta tardía de otro scope/persona o tras editar no repuebla campos ni versión base. También se aíslan
+respuestas de guardado. Contextos de una asistencia existente se muestran desde esa asistencia, no desde
+predeterminados recordados para un alta; opciones antiguas desconocidas se conservan para validación,
+sin convertirlas en vacío. El cargador de selecciones recordadas no pisa la selección/edición activa.
+Esto no cambia globalmente SELECT, DATE, búsquedas ni identidad por persona/fecha/AppView.
+
+Offline compara el contenido completo (estado, Observación y contextos canónicos), no sólo estado, para
+pedir confirmación de reemplazo de un remoto conocido. Mantiene las restricciones sobre filas antiguas
+sin autorización, conflictos y otros scopes. Guardado idéntico ya confirmado conserva intención, base,
+requestId y entrega mediante la protección SQLite existente. No se reescribe la cola ni su contrato.
+
+Validación local:203 pruebas afectadas con1worker y timeouts estándar; RED positiva archivada→GREEN en
+Core/PostgreSQL local; typecheck/lint afectados/diff-check. SQLite real con reapertura acredita campos
+no editados y repetición idéntica. Navegador Chromium real, handlers/auth/Core/PostgreSQL locales y OPFS:
+Observación sola, estado solo, ambos, cancelar, rechazo controlado visible y recuperación; respuesta
+perdida con commit real y replay de un solo efecto; GET retenido con/sin edición, persona y fecha.
+Cierre completo/reapertura offline del mismo perfil conserva comando/autorización/base; reconexión
+actualiza una sola fila. Con modificación remota posterior, conserva conflicto y ambas versiones, sin
+mutación remota adicional. Quitar localDelivery=never-dispatched al despachar es el comportamiento
+publicado, no un cambio de intención: los demás bytes inmutables se comprobaron íntegros.
+
+Límites: transporte local mediante adaptador de handlers HTTP, no servidor Next/Railway; Chromium local,
+no Safari/iPhone físico ni cámara. Rechazo y pérdida de respuesta se inyectaron deliberadamente y se
+separan del recorrido normal. No suite completa/build de cierre; sólo export web/SW necesario para
+OPFS y apertura fría offline. No se acredita auditoría general ni causa productiva exacta.
+
+Inventario/parche/hashes/evidencia y separación: backups/attendance-edit-confirmation-fix/2026-10-28/.
+subjectPresentation sigue respaldado y sin publicar; los hunks compartidos se preservan con comprobación
+inversa exacta.402exclusiones y pendientes ajenos conservados. Sin producción/migraciones/configuración,
+commit, push, deploy ni consultas Railway. V11 pausado. Preparación/disponibilidad de Inicio sigue pendiente.

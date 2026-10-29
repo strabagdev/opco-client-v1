@@ -1,3 +1,4 @@
+import { attendanceAttemptKey, attendanceCommandKey, attendanceContentChanged, attendanceEditContextValues, copyAttendanceEntry } from "./attendance-edit-command";
 import { CodeReader } from "../../../components/code-reader";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput } from "@/renderers/records/temporal-input";
@@ -44,6 +45,7 @@ import {
   AttendanceResponse,
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
+  OpcoApiError,
   StateUpdateBatchResult,
   WorkflowAppView,
 } from "@/lib/opco-api";
@@ -99,6 +101,9 @@ type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   confirmationScope?: string;
   confirmationRequestId?: number;
   confirmedEntry?: AttendanceBatchEntry;
+  confirmationDraftKey?: string;
+  confirmationRevision?: number;
+  remoteSnapshot?: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>["existing"];
 };
 
 export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowAppView & { config: AttendanceWorkflowConfig }>) {
@@ -164,6 +169,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [observationExpanded, setObservationExpanded] = useState(false);
   const [observation, setObservation] = useState("");
   const [conflict, setConflict] = useState<ConflictState | null>(null);
+  const [confirmationError, setConfirmationError] = useState<string | null>(null);
+  const draftRevisionRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const onlineAttemptsRef = useRef(new Map<string, { clientRequestId: string; uncertain: boolean }>());
   const [localConflicts, setLocalConflicts] = useState<CachedAttendanceRecord[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [daySnapshotHydrated, setDaySnapshotHydrated] = useState(false);
@@ -179,11 +188,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [resolutionFeedback, setResolutionFeedback] = useState<(ReturnType<typeof stateUpdateResolutionFeedback> & { scope: string }) | null>(null);
-  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date]);
+  const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, attendanceConfigurationKey(appView.config)]);
   const resolutionScopeRef = useRef(resolutionScope);
   const resolutionInFlightRef = useRef(false);
   const resolutionMountedRef = useRef(false);
-  useLayoutEffect(() => { resolutionScopeRef.current = resolutionScope; }, [resolutionScope]);
+  useLayoutEffect(() => {
+    if (resolutionScopeRef.current !== resolutionScope) {
+      draftRevisionRef.current += 1;
+      setSelectedItem(null);
+      setConflict(null);
+      setConfirmationError(null);
+      setObservation("");
+    }
+    resolutionScopeRef.current = resolutionScope;
+  }, [resolutionScope]);
   useLayoutEffect(() => {
     resolutionMountedRef.current = true;
     return () => { resolutionMountedRef.current = false; };
@@ -267,6 +285,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, []);
 
   useEffect(() => {
+    // Remembered defaults are for a new check-in, never for replacing the selected record's fields.
+    if (selectedItem) return;
     if (!ownerKey || !selectedContractId || contextFields.length === 0) {
       void Promise.resolve().then(() => {
         setContextValues({});
@@ -276,12 +296,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     let cancelled = false;
+    const rememberedRevision = draftRevisionRef.current;
 
     void Promise.all(contextFields.map(async (field) => [
       field.id,
       await definitionCache.getAttendanceContextSelection(ownerKey, selectedContractId, appView.id, field.id),
     ] as const)).then(async (entries) => {
-      if (cancelled) {
+      if (cancelled || rememberedRevision !== draftRevisionRef.current) {
         return;
       }
 
@@ -299,7 +320,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => {
       cancelled = true;
     };
-  }, [appView.id, contextFields, definitionCache, ownerKey, selectedContractId]);
+  }, [appView.id, contextFields, definitionCache, ownerKey, selectedContractId, selectedItem]);
 
   const beginLoadingRequest = useCallback(() => {
     const requestId = ++requestSequenceRef.current;
@@ -488,6 +509,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
+    draftRevisionRef.current += 1;
+    setConfirmationError(null);
     setResolutionFeedback(null);
     setSearchText("");
     setItems([]);
@@ -931,8 +954,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
   async function selectPerson(item: AttendanceItem) {
     const requestId = ++requestSequenceRef.current;
+    const revision = ++draftRevisionRef.current;
+    const requestedScope = resolutionScope;
+    setConfirmationError(null);
     setResolutionFeedback(null);
     setSelectedItem(item);
+    setContextValues(attendanceEditContextValues(contextFields, item, contextValues));
     setObservation(item.attendance?.observation ?? "");
     setObservationExpanded(false);
     setConflict(null);
@@ -954,16 +981,17 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         personRecordId: item.person.id,
       });
 
-      if (requestId !== requestSequenceRef.current) {
+      if (!resolutionMountedRef.current || requestedScope !== resolutionScopeRef.current || requestId !== requestSequenceRef.current || revision !== draftRevisionRef.current) {
         return;
       }
 
       applyAttendanceResponse(response);
       clearVisibleError();
       setSelectedItem(response.items[0] ?? item);
+      setContextValues(attendanceEditContextValues(response.contextFields ?? contextFields, response.items[0] ?? item, contextValues));
       setObservation(response.items[0]?.attendance?.observation ?? "");
     } catch (nextError) {
-      if (requestId === requestSequenceRef.current) {
+      if (resolutionMountedRef.current && requestedScope === resolutionScopeRef.current && requestId === requestSequenceRef.current && revision === draftRevisionRef.current) {
         setError(nextError instanceof Error ? nextError.message : "No fue posible cargar la persona.");
         recordVisibleError({
           error: nextError,
@@ -991,6 +1019,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       statusOptionId: status.optionId,
     };
     const existing = selectedItem.attendance;
+    const revision = draftRevisionRef.current;
     if (!isOnline && ownerKey && existing) {
       const requestId = ++requestSequenceRef.current;
       const confirmationScope = resolutionScope;
@@ -1005,14 +1034,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         }
         return;
       }
-      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current) return;
+      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current || revision !== draftRevisionRef.current) return;
       const operation = cached?.serverId && cached.syncStatus === "pending_update"
         ? (await definitionCache.listPendingStateUpdateOperations(ownerKey)).map((item) => ({ ...item, payload: item.payload as OfflineStateUpdatePayload })).find((item) =>
             item.localRecordId === cached.localId && item.serverRecordId === cached.serverId &&
             item.contractId === selectedContractId && item.entityTypeId === appView.config.targetEntityTypeId &&
             item.payload.appViewId === appView.id && item.payload.subjectRecordId === entry.personRecordId && item.payload.date === date)
         : undefined;
-      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current) return;
+      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current || revision !== draftRevisionRef.current) return;
       const confirmedPending = operation?.payload.overwrite === true && operation.payload.expectedUpdatedAt;
       const sameConfirmedIntent = confirmedPending && stateUpdateIntentsEqual(operation.payload, {
         ...operation.payload,
@@ -1025,13 +1054,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
       // Only a synced remote snapshot can authorize a new offline replacement.
       // Pending/failed/conflict intents retain their existing explicit resolution path.
-      if (((cached?.syncStatus === "synced" && existing.statusOptionId !== status.optionId) || confirmedPending) && cached?.serverId && cached.remoteUpdatedAt === existing.updatedAt &&
+      if (((cached?.syncStatus === "synced" && attendanceContentChanged(appView.config, contextFields, selectedItem, entry)) || confirmedPending) && cached?.serverId && cached.remoteUpdatedAt === existing.updatedAt &&
           cached.values.appViewId === appView.id && cached.values.subjectRecordId === entry.personRecordId &&
           cached.values.date === date) {
         setConflict({ result: "CONFLICT", personRecordId: entry.personRecordId,
           personName: selectedItem.person.displayName, existing: { ...existing, updatedAt: confirmedPending ? operation!.payload.expectedUpdatedAt! : existing.updatedAt },
           requested: { statusOptionId: status.optionId, statusLabel: status.label },
-          confirmationScope, confirmationRequestId: requestId, confirmedEntry: entry });
+          confirmationScope, confirmationRequestId: requestId, confirmedEntry: copyAttendanceEntry(entry),
+          confirmationDraftKey: attendanceCommandKey(confirmationScope, appView.config, contextFields, entry), confirmationRevision: revision });
+        setConfirmationError(null);
         return;
       }
     }
@@ -1039,37 +1070,59 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function confirmConflict() {
-    if (!conflict || isSaving) {
-      return;
-    }
-
-    if (conflict.confirmationScope && (!resolutionMountedRef.current || conflict.confirmationScope !== resolutionScopeRef.current ||
+    if (!conflict || isSaving || saveInFlightRef.current) return;
+    const captured = conflict.confirmedEntry;
+    if (!captured || !selectedItem || !conflict.confirmationScope || !conflict.confirmationDraftKey ||
+        !resolutionMountedRef.current || conflict.confirmationScope !== resolutionScopeRef.current ||
         conflict.confirmationRequestId !== requestSequenceRef.current ||
-        conflict.personRecordId !== selectedItem?.person.id)) {
+        conflict.confirmationRevision !== draftRevisionRef.current || captured.personRecordId !== selectedItem.person.id) {
       setConflict(null);
+      setConfirmationError(null);
+      setError("El formulario cambió. Revisa los datos y vuelve a guardar para confirmar ese cambio.");
       return;
     }
-
-    const validationErrors = attendanceContextValidationErrors(contextFields, conflict.confirmedEntry?.contextValues ?? contextValues);
+    const validationErrors = attendanceContextValidationErrors(contextFields, contextValues);
     if (validationErrors.length > 0) {
-      setContextErrors(Object.fromEntries(validationErrors.map((item) => [item.fieldId, item.message])));
+      setContextErrors(Object.fromEntries(validationErrors.map(item => [item.fieldId, item.message])));
+      setConfirmationError("Revisa los campos de contexto antes de confirmar.");
       return;
     }
-
-    await saveEntry({
-      ...(conflict.confirmedEntry ?? { contextValues, observation: supportsObservation ? observation : undefined }),
-      expectedUpdatedAt: conflict.existing.updatedAt,
-      overwrite: true,
-      personRecordId: conflict.personRecordId,
-      statusOptionId: conflict.requested.statusOptionId,
-    });
+    if (conflict.confirmationDraftKey !== attendanceCommandKey(resolutionScope, appView.config, contextFields, {
+      ...captured, contextValues, observation: supportsObservation ? observation : undefined,
+    })) {
+      setConflict(null);
+      setError("El formulario cambió. Revisa los datos y vuelve a guardar para confirmar ese cambio.");
+      return;
+    }
+    setConfirmationError(null);
+    await saveEntry({ ...copyAttendanceEntry(captured), expectedUpdatedAt: conflict.existing.updatedAt, overwrite: true });
   }
 
   async function saveEntry(entry: AttendanceBatchEntry) {
-    if (!selectedContractId || !selectedItem || !ownerKey) {
+    if (!selectedContractId || !selectedItem || !ownerKey || isSaving || saveInFlightRef.current || entry.personRecordId !== selectedItem.person.id) {
       return;
     }
 
+    const requestedScope = resolutionScope;
+    const revision = draftRevisionRef.current;
+    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === requestedScope && draftRevisionRef.current === revision;
+    const capturedEntry = copyAttendanceEntry(entry);
+    let wireEntry: ReturnType<typeof attendanceEntryToStateUpdateEntry>;
+    try { wireEntry = attendanceEntryToStateUpdateEntry(capturedEntry, appView.config, contextFields); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "Revisa los campos de la asistencia.";
+      setError(message);
+      if (conflict) setConfirmationError(message);
+      return;
+    }
+    const commandKey = attendanceAttemptKey(requestedScope, { date, ...wireEntry });
+    if (!isOnline && onlineAttemptsRef.current.get(commandKey)?.uncertain) {
+      const message = "No se conoce el resultado del envío anterior. Reconecta para comprobar o reintentar la misma operación.";
+      setError(message);
+      if (conflict) setConfirmationError(message);
+      return;
+    }
+    saveInFlightRef.current = true;
     setIsSaving(true);
     setError(null);
     setRefreshError(null);
@@ -1096,9 +1149,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           targetEntityTypeId: appView.config.targetEntityTypeId,
           uniqueness: "subject-date",
         });
+        if (!isCurrent()) return;
         clearPersonFlow();
+        const clearedRevision = draftRevisionRef.current;
         await refreshLocalDayState();
         await refreshRecordsSyncSummary();
+        if (!resolutionMountedRef.current || resolutionScopeRef.current !== requestedScope || draftRevisionRef.current !== clearedRevision) return;
         clearVisibleError();
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         return;
@@ -1108,11 +1164,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      let attempt = onlineAttemptsRef.current.get(commandKey);
+      if (!attempt) {
+        attempt = { clientRequestId: createClientRequestId(), uncertain: false };
+        onlineAttemptsRef.current.set(commandKey, attempt);
+      }
+      attempt.uncertain = true;
       const response = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
-        clientRequestId: createClientRequestId(),
-        date,
-        ...attendanceEntryToStateUpdateEntry(entry, appView.config, contextFields),
+        clientRequestId: attempt.clientRequestId, date, ...wireEntry,
       });
+      attempt.uncertain = false;
+      if (onlineAttemptsRef.current.get(commandKey) === attempt) onlineAttemptsRef.current.delete(commandKey);
+      if (!isCurrent()) return;
       const attendanceResults = response.results.map((result) =>
         stateUpdateResultToAttendanceResult(result, appView.config.statusFieldId, statuses),
       );
@@ -1120,33 +1183,52 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       if (blockingResult?.result === "ERROR") {
         setError(blockingResult.message);
+        if (conflict) setConfirmationError(blockingResult.message);
         return;
       }
 
       if (blockingResult?.result === "CONFLICT") {
-        setConflict({ ...blockingResult, personName: selectedItem.person.displayName });
+        const requestedStatus = statuses.find(status => status.optionId === capturedEntry.statusOptionId);
+        const remoteConflict = response.results.find((result): result is Extract<StateUpdateBatchResult, {result: "CONFLICT"}> => result.result === "CONFLICT" && result.subjectRecordId === capturedEntry.personRecordId);
+        setConflict({ ...blockingResult, personName: selectedItem.person.displayName,
+          requested: { statusOptionId: capturedEntry.statusOptionId, statusLabel: requestedStatus?.label ?? blockingResult.requested.statusLabel },
+          remoteSnapshot: remoteConflict?.existing,
+          confirmedEntry: capturedEntry, confirmationScope: requestedScope, confirmationRequestId: requestSequenceRef.current,
+          confirmationDraftKey: attendanceCommandKey(requestedScope, appView.config, contextFields, capturedEntry), confirmationRevision: revision });
+        setConfirmationError(entry.overwrite ? "La asistencia cambió en Opco. Revisa la versión actual antes de confirmar nuevamente." : null);
         return;
       }
 
       if (hasSuccessfulAttendanceResult(attendanceResults)) {
         clearPersonFlow();
+        const clearedRevision = draftRevisionRef.current;
         await loadDay({ operation: "refresh" });
         await refreshRecordsSyncSummary();
+        if (!resolutionMountedRef.current || resolutionScopeRef.current !== requestedScope || draftRevisionRef.current !== clearedRevision) return;
         clearVisibleError();
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "server-confirmed", ownerKey });
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.");
+      if (nextError instanceof OpcoApiError && nextError.status >= 400 && nextError.status < 500 && nextError.code !== "INVALID_API_ENVELOPE") {
+        const attempt = onlineAttemptsRef.current.get(commandKey);
+        if (attempt) attempt.uncertain = false;
+      }
+      if (!isCurrent()) return;
+      const message = nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.";
+      setError(message);
+      if (conflict) setConfirmationError(message);
       recordVisibleError({
         error: nextError,
         operation: "save",
       });
     } finally {
-      setIsSaving(false);
+      saveInFlightRef.current = false;
+      if (resolutionMountedRef.current) setIsSaving(false);
     }
   }
 
   function cancelConflict() {
+    setConfirmationError(null);
     setConflict(null);
     setError(null);
   }
@@ -1275,6 +1357,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   function handleContextChange(fieldId: string, optionId: string | null) {
+    draftRevisionRef.current += 1;
     if (!ownerKey || !selectedContractId) {
       return;
     }
@@ -1303,6 +1386,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
   function changeSearchText(value: string, fieldId?: string) {
+    draftRevisionRef.current += 1;
+    setConfirmationError(null);
     setSearchText(value);
     setSearchFieldId(fieldId);
     if (fieldId !== undefined) setSearchReadId(current => current + 1);
@@ -1452,7 +1537,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               {observationExpanded ? (
                 <TextInput
                   multiline
-                  onChangeText={setObservation}
+                  onChangeText={value => { draftRevisionRef.current += 1; setObservation(value); }}
                   placeholder="Observacion"
                   style={styles.observationInput}
                   value={observation}
@@ -1501,6 +1586,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       <ConflictModal
         conflict={conflict}
         isSaving={isSaving}
+        error={confirmationError}
         onCancel={cancelConflict}
         onConfirm={confirmConflict}
       />
@@ -1562,11 +1648,13 @@ function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
 function ConflictModal({
   conflict,
   isSaving,
+  error,
   onCancel,
   onConfirm,
 }: {
   conflict: ConflictState | null;
   isSaving: boolean;
+  error: string | null;
   onCancel(): void;
   onConfirm(): void;
 }) {
@@ -1581,6 +1669,7 @@ function ConflictModal({
             <Text style={styles.conflictText}>Actual: {conflict?.existing.statusLabel ?? "Sin estado"}</Text>
             <Text style={styles.conflictText}>Solicitado: {conflict?.requested.statusLabel ?? ""}</Text>
           </View>
+          {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
           <View style={styles.modalActions}>
             <Pressable disabled={isSaving} onPress={onCancel} style={styles.modalSecondaryButton}>
               <Text style={styles.modalSecondaryText}>Cancelar</Text>

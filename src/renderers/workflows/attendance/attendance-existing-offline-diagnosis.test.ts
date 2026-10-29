@@ -1,3 +1,5 @@
+import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry} from "./attendance-edit-command";
+import {OpcoApiError} from "../../../lib/opco-api";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
@@ -24,8 +26,8 @@ function handler(name: string, context: Record<string, unknown>) {
 function context(online: boolean) {
  const saveStateUpdateLocally = vi.fn(async () => ({}));
  const saveStateUpdateWorkflow = vi.fn(async () => ({results:[]}));
- return {selectedContractId:"contract",selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{updatedAt:"2026-10-09T10:00:00.000Z"}},ownerKey:"synthetic:user",isOnline:online,token:"test-only",date:"2026-10-09",appView:{id:"view",config:{statusFieldId:"status",targetEntityTypeId:"target"}},contextFields:[],statuses:[],
- definitionCache:{saveStateUpdateLocally},api:{saveStateUpdateWorkflow},setIsSaving:vi.fn(),setError:vi.fn(),setRefreshError:vi.fn(),setSuccessMessage:vi.fn(),clearPersonFlow:vi.fn(),refreshLocalDayState:vi.fn(),refreshRecordsSyncSummary:vi.fn(),clearVisibleError:vi.fn(),reportWriteFeedback:vi.fn(),attendanceEntryExtraValues:()=>({}),attendanceStateFields:()=>[],attendanceEntryToStateUpdateEntry:(e:any)=>({subjectRecordId:e.personRecordId,stateValues:[{fieldId:"status",optionId:e.statusOptionId}],overwrite:e.overwrite,expectedUpdatedAt:e.expectedUpdatedAt}),createClientRequestId:()=>"fresh-intent",firstBlockingAttendanceResult:()=>null,hasSuccessfulAttendanceResult:()=>false,stateUpdateResultToAttendanceResult:()=>({}),recordVisibleError:vi.fn()};
+ return {attendanceAttemptKey,attendanceCommandKey,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},resolutionMountedRef:{current:true},isSaving:false,conflict:null,selectedContractId:"contract",selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{updatedAt:"2026-10-09T10:00:00.000Z"}},ownerKey:"synthetic:user",isOnline:online,token:"test-only",date:"2026-10-09",appView:{id:"view",config:{statusFieldId:"status",targetEntityTypeId:"target"}},contextFields:[],statuses:[],
+ definitionCache:{saveStateUpdateLocally},api:{saveStateUpdateWorkflow},setConfirmationError:vi.fn(),setIsSaving:vi.fn(),setError:vi.fn(),setRefreshError:vi.fn(),setSuccessMessage:vi.fn(),clearPersonFlow:vi.fn(),refreshLocalDayState:vi.fn(),refreshRecordsSyncSummary:vi.fn(),clearVisibleError:vi.fn(),reportWriteFeedback:vi.fn(),attendanceEntryExtraValues:()=>({}),attendanceStateFields:()=>[],attendanceEntryToStateUpdateEntry:(e:any)=>({subjectRecordId:e.personRecordId,stateValues:[{fieldId:"status",optionId:e.statusOptionId}],overwrite:e.overwrite,expectedUpdatedAt:e.expectedUpdatedAt}),createClientRequestId:()=>"fresh-intent",firstBlockingAttendanceResult:()=>null,hasSuccessfulAttendanceResult:()=>false,stateUpdateResultToAttendanceResult:()=>({}),recordVisibleError:vi.fn()};
 }
 describe("Attendance existing change authorization characterization",()=>{
  it("offline ordinary save retains base version but does not authorize overwrite",async()=>{
@@ -35,15 +37,17 @@ describe("Attendance existing change authorization characterization",()=>{
   expect(c.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();
  });
  it("online confirmation authorizes overwrite with conflict version",async()=>{
-  const saveEntry=vi.fn();const c={conflict:{personRecordId:"person",existing:{updatedAt:"2026-10-09T10:00:00.000Z"},requested:{statusOptionId:"present"}},isSaving:false,contextFields:[],contextValues:{},supportsObservation:false,observation:"",attendanceContextValidationErrors:()=>[],setContextErrors:vi.fn(),saveEntry};
-  await handler("confirmConflict",c)();expect(saveEntry).toHaveBeenCalledWith(expect.objectContaining({overwrite:true,expectedUpdatedAt:c.conflict.existing.updatedAt,statusOptionId:"present"}));
+  const c={...context(true),contextFields:[],contextValues:{},supportsObservation:false,observation:"",attendanceContextValidationErrors:()=>[],setContextErrors:vi.fn(),saveEntry:vi.fn(),requestSequenceRef:{current:0},setConflict:vi.fn(),setConfirmationError:vi.fn()};
+  const captured={personRecordId:"person",statusOptionId:"present"};
+  const conflict={personRecordId:"person",existing:{updatedAt:"2026-10-09T10:00:00.000Z"},requested:{statusOptionId:"present"},confirmedEntry:captured,confirmationScope:"scope",confirmationRevision:0,confirmationRequestId:0,confirmationDraftKey:attendanceCommandKey("scope",c.appView.config as never,[],captured)};
+  await handler("confirmConflict",{...c,conflict})();expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({overwrite:true,expectedUpdatedAt:conflict.existing.updatedAt,statusOptionId:"present"}));
  });
 });
 
 describe("offline Attendance replacement confirmation",()=>{
  function fixture(){
   const saveEntry=vi.fn(); const setConflict=vi.fn();
-  return {buildOfflineStateValues,stateUpdateIntentsEqual,attendanceStateFields,attendanceEntryExtraValues,statuses:[],selectedContractId:"contract",selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:"row",statusOptionId:"training",statusLabel:"Training",updatedAt:"2026-10-09T10:00:00.000Z",observation:null}},ownerKey:"synthetic:user",isSaving:false,isOnline:false,date:"2026-10-09",appView:{id:"view",config:{targetEntityTypeId:"target"}},contextFields:[],contextValues:{context:"original"},supportsObservation:true,observation:"original",attendanceContextValidationErrors:()=>[],setContextErrors:vi.fn(),setError:vi.fn(),recordVisibleError:vi.fn(),saveEntry,setConflict,
+  return {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},setConfirmationError:vi.fn(),buildOfflineStateValues,stateUpdateIntentsEqual,attendanceStateFields,attendanceEntryExtraValues,statuses:[],selectedContractId:"contract",selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:"row",statusOptionId:"training",statusLabel:"Training",updatedAt:"2026-10-09T10:00:00.000Z",observation:null}},ownerKey:"synthetic:user",isSaving:false,isOnline:false,date:"2026-10-09",appView:{id:"view",config:{targetEntityTypeId:"target"}},contextFields:[],contextValues:{context:"original"},supportsObservation:true,observation:"original",attendanceContextValidationErrors:()=>[],setContextErrors:vi.fn(),setError:vi.fn(),recordVisibleError:vi.fn(),saveEntry,setConflict,
   resolutionMountedRef:{current:true},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},requestSequenceRef:{current:0},definitionCache:{listPendingStateUpdateOperations:vi.fn(async()=>[]),getCachedRecord:vi.fn(async()=>({syncStatus:"synced",serverId:"remote",remoteUpdatedAt:"2026-10-09T10:00:00.000Z",values:{appViewId:"view",subjectRecordId:"person",date:"2026-10-09"}}))}};
  }
  it("opens the existing confirmation without changing SQLite or outbox; cancellation only clears UI",async()=>{
