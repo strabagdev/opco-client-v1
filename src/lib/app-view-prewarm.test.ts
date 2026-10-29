@@ -33,6 +33,45 @@ describe("app view prewarm", () => {
     vi.useRealTimers();
   });
 
+  it("joins the same request, but a real invalidation while preparing leaves one trailing run", async () => {
+    let release!: () => void, started!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const first = new Promise<void>(resolve => { started = resolve; });
+    const api = { getEntityDefinition: vi.fn(async () => { started(); await held; return { entity: entityDefinitionFixture }; }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn() };
+    const input = { api, store, ownerKey: "owner", contractId: "contract", token: "synthetic", appViews: [appViewsFixture[0]] };
+    const a = prewarmAssignedAppViewsOnce(input); await first;
+    expect(prewarmAssignedAppViewsOnce(input)).toBe(a);
+    const invalidated = prewarmAssignedAppViewsOnce({ ...input, invalidationKey: "reconnect-1", trigger: "reconnect" });
+    prewarmAssignedAppViewsOnce({ ...input, invalidationKey: "reconnect-1", trigger: "reconnect" });
+    prewarmAssignedAppViewsOnce({ ...input, invalidationKey: "sync-2", trigger: "reconnect" });
+    expect(api.getEntityDefinition).toHaveBeenCalledOnce();
+    release(); await Promise.all([a, invalidated]);
+    expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);
+    expect(store.offlinePreparationDiagnostics?.status).toBe("completed");
+    await prewarmAssignedAppViewsOnce(input);
+    expect(api.getEntityDefinition).toHaveBeenCalledTimes(3); // No TTL or complete-as-freshness shortcut.
+  });
+
+  it("queues changed AppView definitions while isolating other users/contracts", async () => {
+    let release!: () => void, started!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const first = new Promise<void>(resolve => { started = resolve; });
+    const api = { getEntityDefinition: vi.fn(async () => { started(); await held; return { entity: entityDefinitionFixture }; }),
+      getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn(), getEntityRecords: vi.fn() };
+    const view = appViewsFixture[0] as Extract<AppView, { type: "RECORDS" }>;
+    const input = { api, store, ownerKey: "owner", contractId: "contract", token: "synthetic", appViews: [view] };
+    const a = prewarmAssignedAppViewsOnce(input); await first;
+    const changed = { ...view, config: { entityTypeId: "changed-source" } };
+    const b = prewarmAssignedAppViewsOnce({ ...input, appViews: [changed] });
+    const c = prewarmAssignedAppViewsOnce({ ...input, ownerKey: "other" });
+    const d = prewarmAssignedAppViewsOnce({ ...input, contractId: "other" });
+    release(); await Promise.all([a, b, c, d]);
+    expect(api.getEntityDefinition).toHaveBeenCalledTimes(4);
+    expect(api.getEntityDefinition).toHaveBeenCalledWith("synthetic", "contract", "changed-source");
+    expect(store.definitions.get("owner:contract:" + view.id)?.definition.appView.config).toEqual(changed.config);
+  });
+
   it("requires the Home list to persist before preparing definitions, including an empty assignment list", async () => {
     vi.spyOn(store, "upsertAppViews").mockRejectedValueOnce(new Error("private cache failure"));
     const api = { getEntityDefinition: vi.fn(), getEntityRecords: vi.fn(), getAttendanceWorkflow: vi.fn(), getStateUpdateWorkflow: vi.fn() };

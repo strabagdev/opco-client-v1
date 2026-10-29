@@ -70,3 +70,68 @@ describe("home offline availability refresh subscription", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 });
+
+
+describe("serial availability reads", () => {
+  it("groups invalidations during a read and drains exactly one trailing refresh", async () => {
+    let emit = () => {};
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let active = 0, peak = 0;
+    const refresh = vi.fn(async () => {
+      active++; peak = Math.max(peak, active);
+      try { if (refresh.mock.calls.length === 1) await held; } finally { active--; }
+    });
+    const stop = subscribeHomeOfflineAvailabilityRefresh({ refresh, subscribe: listener => { emit = listener; return () => {}; } });
+    emit(); await Promise.resolve();
+    emit(); await Promise.resolve();
+    emit(); await Promise.resolve();
+    emit(); await Promise.resolve();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    release(); await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(peak).toBe(1);
+    await Promise.resolve(); expect(refresh).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("ignores completion and pending invalidations after losing focus/scope", async () => {
+    let emit = () => {};
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const published: string[] = [];
+    const refresh = vi.fn(async (canUpdate: () => boolean) => { await held; if (canUpdate()) published.push("old-scope"); });
+    const stop = subscribeHomeOfflineAvailabilityRefresh({ refresh, subscribe: listener => { emit = listener; return () => {}; } });
+    emit(); await Promise.resolve(); emit(); stop(); release();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(published).toEqual([]); expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("a rejected read stops without automatic retries, but a later event can recover", async () => {
+    let emit = () => {};
+    const refresh = vi.fn().mockRejectedValueOnce(new Error("synthetic read failure")).mockResolvedValue(undefined);
+    const stop = subscribeHomeOfflineAvailabilityRefresh({ refresh, subscribe: listener => { emit = listener; return () => {}; } });
+    emit(); await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(refresh).toHaveBeenCalledOnce(); emit();
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2)); stop();
+  });
+});
+
+
+it("does not publish a read invalidated by a newer definition/cache result", async () => {
+  let emit = () => {}, release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const published: number[] = [];
+  let calls = 0;
+  const stop = subscribeHomeOfflineAvailabilityRefresh({
+    subscribe: listener => { emit = listener; return () => {}; },
+    refresh: async canUpdate => {
+      const call = ++calls;
+      if (call === 1) await held;
+      if (canUpdate()) published.push(call);
+    },
+  });
+  emit(); await Promise.resolve(); emit(); release();
+  await vi.waitFor(() => expect(calls).toBe(2));
+  expect(published).toEqual([2]); stop();
+});

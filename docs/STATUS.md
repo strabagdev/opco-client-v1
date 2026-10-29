@@ -3258,3 +3258,25 @@ backups/attendance-edit-confirmation-fix/2026-10-28/: inventario/parche sobre HE
 evidencia y prueba de separación de subjectPresentation. No modifica preparaciones/recálculos de Inicio:
 esos costes siguen pendientes de otro lote.402exclusiones, subjectPresentation y demás pendientes intactos.
 Sin Core/esquema/configuración productiva/commit/push/deploy/Railway. V11 y auditoría general abiertos.
+
+
+## Inicio: agrupación de lecturas y preparación — LOCAL, SIN PUBLICAR — 2026-10-29
+
+Lote independiente sobre1714b5348becf59148b76f8d2753e64171a46ebf. Comparte /views/cache/escritura simultáneos
+con scope/generación compatibles; disponibilidad local serial con una invalidación pendiente y sólo con foco.
+Preparador conserva una pasada posterior ante invalidación real o definición cambiada; no hay TTL ni uso
+de complete como frescura. Reentrar después de finalizar sigue preparando todas; recuperar foco no lo hace
+por sí solo. Guardados y corrección Attendance no cambian. Mapa completo en STATE_UPDATE, sección «Inicio:
+lecturas compartidas y disponibilidad serial».13/13,70968ms y217current,61361ms son evidencia manual de coste,
+no prueba productiva de redundancia. Snapshot63071ms no permite inferir causa.
+
+Fixture48sujetos/2AppViews/31días, transporte sintético y SQLite real con cierre/reapertura: /views simultáneo
+2→1; entrada SQL4369→1707, cola observada230→37. Current48→48, latest sigue parcial y contenido persistido.
+Invalidación durante lectura: HEAD reabreR1, candidatoR2 con pasada posterior;96current justificados por
+frescura. Cola final0, fila conflict/outbox idénticas, integridadok. Métricas locales, no OPFS ni Safari,
+Core/navegación real nuevos. Sin suite completa/build. Checks y detalles finales en el respaldo.
+
+Siguiente etapa separada autorizada: preparar contrato current por lotes en Core/Client para reducir217
+solicitudes sin perder prueba por sujeto; aún NO IMPLEMENTADO. No se incorpora a este lote. Preservados
+subjectPresentation,402exclusiones y demás pendientes. Sin producción/configuración/commit/push/deploy.
+Respaldo reconstruible:backups/home-preparation-optimization/2026-10-29/. V11 y auditoría general abiertos.

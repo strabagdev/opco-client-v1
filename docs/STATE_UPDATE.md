@@ -3006,3 +3006,108 @@ Inventario/parche/hashes/evidencia y separación: backups/attendance-edit-confir
 subjectPresentation sigue respaldado y sin publicar; los hunks compartidos se preservan con comprobación
 inversa exacta.402exclusiones y pendientes ajenos conservados. Sin producción/migraciones/configuración,
 commit, push, deploy ni consultas Railway. V11 pausado. Preparación/disponibilidad de Inicio sigue pendiente.
+
+
+## Inicio: lecturas compartidas y disponibilidad serial — IMPLEMENTADO LOCALMENTE, SIN PUBLICAR — 2026-10-29
+
+Sobre Client1714b5348becf59148b76f8d2753e64171a46ebf, separado de subjectPresentation.
+Evidencia manual reportada:13/13 experiencias,0 fallos,70968ms; un STATE_UPDATE verificó217sujetos
+con217consultas current,61361ms; snapshot más lento63071ms. Acredita coste, no redundancia ni causa
+productiva de demoras. No se leyó producción ni se repitió la auditoría. Reutilizado el mapa previo de
+backups/attendance-navigation-confirmation-diagnosis/2026-10-28/REPORT.md; Confirmar ya corregido queda intacto.
+
+### Cambios y política de repetición
+
+loadAppViewsWithCache comparte exclusivamente lectura remota/cache y persistencia simultáneas con el
+mismo objeto API/cache, usuario, contrato, credencial y generación de invalidación. Un consumidor que
+sale no publica datos ni impide persistir al consumidor vigente. Diagnóstico y /views comparten requestId.
+Una reconexión tiene su generación propia: no se incorpora a una lectura anterior que puede estar obsoleta.
+No hay TTL ni memoización del resultado terminado; absent/error/lista vacía y errores de guardado mantienen
+su contrato. Una lista guardada correctamente sigue siendo requisito de preparación completa.
+
+Inicio serializa recálculos de disponibilidad: una pasada activa y una invalidación pendiente agrupada.
+Cambios recibidos mientras lee dejan otra pasada; no se hace polling ni se vacía la cola artificialmente.
+Una lectura invalidada no publica su resultado anterior. Foco, actualización de lista, notificación SQLite y fin de preparación usan ese mismo coordinador visual.
+Al perder el foco se retira la suscripción y se invalidan los callbacks; la preparación existente continúa.
+La lectura de /views ya no espera los recálculos locales ni los dispara además por una ruta independiente.
+Los eventos de copia local no inician preparación remota; los resultados previos compatibles siguen visibles.
+
+El vuelo global de preparación incorpora configuración de las AppViews y día lógico. Mismo trabajo en curso
+se comparte; cambio de definición o invalidación real durante el vuelo deja una ejecución posterior con los
+últimos parámetros. Repeticiones concurrentes del mismo syncRunId se agrupan. El lifecycle pasa ese ID a la
+lectura del catálogo y al preparador. Distintos objetos API/store, usuarios, contratos o credenciales no
+comparten trabajo. Las configuraciones/contextos de cada renderer conservan sus coordinadores scoped previos.
+Una finalización, incluso complete, no se trata como frescura remota. Una llamada posterior de Inicio hace
+una nueva preparación completa, aunque la anterior terminara hace poco. No se cambia esa política sin una
+señal de frescura verificable. Un error termina; no se añade reintento automático ni temporizador periódico.
+
+### Mapa de disparadores verificado en código
+
+| Evento | Lectura de pantalla | Preparación offline / alcance / condición | Envío de pendientes |
+| --- | --- | --- | --- |
+| Montar/reentrar Inicio, retry de su carga | Lista local compatible inmediata + /views. Lectores simultáneos comparten vuelo. | Todas las asignadas si la lista viene online y scope sigue vigente; misma ejecución activa se comparte. Si ya terminó, comienza otra, sin atajo por complete. | Ninguno por navegar. Lifecycle de sesión independiente. |
+| Volver por foco a la misma instancia de Inicio | Una pasada local de disponibilidad; escucha SQLite sólo con foco. | No inicia por sí solo una preparación global. | Ninguno por ese foco de ruta. |
+| Cambiar de pantalla / abrir experiencia | Carga visible y caché de esa experiencia. /views concurrentes del mismo scope pueden compartirse. | La global ya iniciada continúa. Compuesto prepara/actualiza sólo el contexto válido seleccionado con su coordinador existente. | No por cambiar de pantalla. |
+| Cambiar contrato | /views del contrato seleccionado; catálogo local separado por usuario/contrato. | Todas sus asignadas online. Inicio comparte el trabajo que siga activo y la misma lista/configuración. | Conserva lifecycle y aislamiento; no introduce envío por este acto. |
+| Cambiar fecha/contexto del renderer | Lectura de la fecha/combinación correspondiente. | Attendance conserva día/mes; compuesto sólo combinación completa actual. No producto cartesiano. | Ninguno por seleccionar contexto. |
+| Reconexión real | Lecturas de renderer según sus señales actuales. | Lifecycle global sólo si su shouldSync/readiness permite el recorrido existente; tras enviar pendientes relee sesión/lista y prepara asignadas. Generación syncRunId distinta; invalidación durante preparación conserva pasada posterior. No se añade prewarm global cuando ese lifecycle no se ejecuta. | Reconnect single-flight/debounce/readiness existentes; RECORDS y luego STATE_UPDATE. |
+| Regreso app desde segundo plano | Según estado y renderer activo. | Si online y hay pendientes elegibles, lifecycle foreground/resume, envío y actualización existentes; sin pendientes no inventa preparación global. | Sólo con las condiciones existentes de elegibilidad, conexión y single-flight. |
+| Fin de sincronización | Señales de refresco conservadas; Attendance recupera su día y compuesto su contexto. Cambios SQLite actualizan disponibilidad si Inicio tiene foco. | Sólo recuperación afectada; no se convierte toda señal en una preparación de todas las experiencias. | No encadena reenvíos ni autoriza reemplazos. |
+| Cambio SQLite / fin de prewarm | Recálculo local agrupado sólo si Inicio está enfocado. | No hace peticiones remotas por recalcular; invalidación de configuración recibida por el preparador no se pierde. | Ninguno. |
+| Resize / renders / búsqueda | Render o búsqueda existente. | No generan nuevas preparaciones globales por sí solos. | Ninguno. |
+
+Fuentes:app/(app)/index.tsx;app-navigation-cache;app-view-prewarm;home-offline-availability-refresh;
+session:setSelectedContractId;use-pending-work-lifecycle;use-session-diagnostics;use-context-preparation.
+No se reducen páginas del origen, días del mes, sujetos current ni contenido requerido para acreditar cobertura.
+
+### Comparación reproducible de HEAD y candidato
+
+Fixture idéntico:48sujetos, dos AppViews (STATE_UPDATE subject/append + Attendance),31días del mes local,
+latest parcial20/48. Transporte sintético; preparadores, callback de disponibilidad extraído de Inicio,
+coordinador y funciones de persistencia reales. SQLite sqlite3 en archivo con esquema v10; no Expo/OPFS
+ni navegador nuevo, Core/PostgreSQL o Safari físicos. Reentrada y reconexión son eventos invocados por el
+arnés, no una grabación de navegación del router. Contador current es subconjunto del GET workflow.
+No se observaron OPTIONS porque no hay transporte HTTP real; no sumarlos ni extrapolar su ausencia.
+Una muestra secuencial por escenario y versión: tiempos indicativos locales, no benchmark productivo.
+
+| Recorrido | GET /views | GET current | Operaciones SQL | Pasadas de disponibilidad | Pico de cola observado | Duración local ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| Entrada (dos lectores concurrentes) | 2 → 1 | 48 → 48 | 4369 → 1707 | 91 → 15 | 230 → 37 | 893.2 → 579.9 |
+| Reentrada tras finalizar | 1 → 1 | 48 → 48 | 4927 → 1847 | 91 → 12 | 244 → 38 | 941.2 → 474.0 |
+| Reconexión (evento simulado) | 1 → 1 | 48 → 48 | 4927 → 1847 | 91 → 12 | 244 → 38 | 958.0 → 465.7 |
+| Invalidación durante preparación | 3 → 2 | 48 → 96 | 4931 → 3652 | 91 → 23 | 244 → 38 | 932.4 → 886.5 |
+
+Invalidación controlada: el primer current capturaR1 y se retiene; el remoto sintético pasa aR2 y se emite
+una reconexión duplicada con el mismo ID. HEAD pierde esa demanda y reabre R1; candidato realiza una
+pasada posterior y reabre R2. El aumento48→96current es necesario para frescura, no una regresión de
+redundancia. Los demás escenarios conservan48current. La cola drena a0 en ambos; pico observado muestreado,
+no una cota absoluta. SQL cuenta sentencias ejecutadas (lectura/escritura/BEGIN-COMMIT), no sólo tareas
+agrupadas del coordinador; pasadas de disponibilidad y cada tipo están archivados por separado.
+
+Cada escenario cierra la conexión y crea un runtime sobre el mismo archivo, sin servicios: lista de Inicio,
+current y sus marcadores siguen persistidos. Current completo48/48 y latest parcial20/48; Attendance del día
+verificado, total0 comprobable en el fixture vacío del día. PRAGMA integrity_check=ok. Fila conflict y su
+outbox se comparan completas antes/después/reapertura, incluyendo payload, autorización, versión e IDs.
+Sin guardados remotos ni cambio del motor de envío; no se presenta esto como validación nueva de sync.
+
+Cinco regresiones focalizadas fallan en HEAD (lecturas duplicadas, solapamiento, invalidación y definición
+perdidas), y una sexta con SQLite reabreR1 en lugar deR2. En candidato pasan junto a regresiones afectadas,
+Attendance y contextos. Typecheck, lint afectado y diff-check constan en el respaldo final; sin suite
+completa, build ni cámara. Los ensayos Core/Chrome/OPFS previos sólo se reutilizan para contratos no
+modificados; no se presentan como prueba de esta optimización. subjectPresentation y402exclusiones intactos.
+
+### Siguiente etapa autorizada, NO IMPLEMENTADA: current por lotes
+
+Core actual sólo admite subjectRecordId individual. Reducir217peticiones requiere un contrato aditivo:
+GET del mismo workflow con lista acotada subjectRecordIds (propuesta máximo100), misma fecha/configuración/
+identidad compuesta, selección current y permisos. Devuelve resultado por cada ID autorizado, con evento o
+null explícito, metadata/configuración efectiva y prueba de qué IDs se resolvieron. Latest no certifica
+current ni sustituye sujetos omitidos. Client mantiene pool acotado, valida cada scope/resultado y persiste
+antes de acreditar cada sujeto.217sujetos serían tres lotes completos, sin prometer tiempo ni endpoint final.
+Sin reglas de maquinaria, sin historial completo, sin fusionar AppViews/intenciones. Faltan diseño técnico
+final y regresiones Core de autorización/parcialidad/rollback; no se ha modificado Core en este lote.
+Usuario autorizó preparar esa etapa por separado durante esta ejecución; no se integra en la entrega actual.
+
+Respaldo:backups/home-preparation-optimization/2026-10-29/. Implementación sólo Client, sin cambios de Core,
+configuración, dependencias, SQLite/namespace, guardados, confirmación Attendance o sincronización de escrituras.
+Sin producción, commit/push/deploy. V11 y auditoría general continúan abiertos.

@@ -3,7 +3,7 @@ import { usePublishDesktopCatalog } from "@/components/desktop-navigation";
 import { desktopNavigation } from "@/lib/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { Link, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -18,7 +18,7 @@ import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { buildStateUpdateCoverageScope, deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
-import { subscribeHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
+import { createHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
 import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getHomeGridLayout, HOME_DESKTOP_CARD_GAP, HOME_MAX_WIDTH } from "@/lib/app-shell-layout";
@@ -43,7 +43,9 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const [gridContentWidth, setGridContentWidth] = useState<number>();
   const gridLayout = getHomeGridLayout(width, gridContentWidth);
+  const availabilityRefreshRef = useRef<ReturnType<typeof createHomeOfflineAvailabilityRefresh> | null>(null);
   const [views, setViews] = useState<AppView[]>([]);
+  const availabilityViewsRef = useRef(views);
   const [isLoadingViews, setIsLoadingViews] = useState(false);
   const [isOfflineViews, setIsOfflineViews] = useState(false);
   const [loadedViewsScope, setLoadedViewsScope] = useState<string | null>(null);
@@ -239,11 +241,10 @@ export default function HomeScreen() {
             trigger: "home",
           }).finally(() => {
             if (isMounted) {
-              void refreshOfflineAvailability(data.views, () => isMounted);
+              void availabilityRefreshRef.current?.request();
             }
           });
         }
-        await refreshOfflineAvailability(data.views, () => isMounted);
       } catch (nextError) {
         if (isMounted) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
@@ -262,22 +263,23 @@ export default function HomeScreen() {
     };
   }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope]);
 
-  useFocusEffect(useCallback(() => {
-    if (views.length > 0) {
-      void refreshOfflineAvailability(views);
-    }
-  }, [refreshOfflineAvailability, views]));
-
   useEffect(() => {
-    if (views.length === 0) {
-      return;
-    }
+    availabilityViewsRef.current = views;
+    if (hasCompatibleViews) void availabilityRefreshRef.current?.request();
+  }, [hasCompatibleViews, views]);
 
-    return subscribeHomeOfflineAvailabilityRefresh({
-      refresh: (canUpdate) => refreshOfflineAvailability(views, canUpdate),
-      subscribe: subscribeLocalDatabaseCacheChanges,
-    });
-  }, [refreshOfflineAvailability, views]);
+  useFocusEffect(useCallback(() => {
+    if (!hasCompatibleViews) return;
+    const coordinator = createHomeOfflineAvailabilityRefresh(canUpdate => refreshOfflineAvailability(availabilityViewsRef.current, canUpdate));
+    availabilityRefreshRef.current = coordinator;
+    const unsubscribe = subscribeLocalDatabaseCacheChanges(() => { void coordinator.request(); });
+    void coordinator.request();
+    return () => {
+      coordinator.dispose();
+      unsubscribe();
+      if (availabilityRefreshRef.current === coordinator) availabilityRefreshRef.current = null;
+    };
+  }, [hasCompatibleViews, refreshOfflineAvailability]));
 
   const contractSelector = context && context.contracts.length > 1 ? (
     <CompactSelect label="Contrato activo" required value={selectedContractId ?? ""}

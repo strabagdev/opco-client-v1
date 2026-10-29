@@ -6,6 +6,51 @@ import { AppViewDefinitionCache, CachedAppViewDefinition, UpsertAppViewDefinitio
 import { AppView, ContextResponse, MeResponse, OpcoApiError, OpcoNetworkError } from "./opco-api";
 
 describe("app navigation cache", () => {
+  it("shares concurrent navigation reads and persistence without hiding a later refresh", async () => {
+    const cache = new MemoryNavigationCache();
+    let release!: (value: { views: AppView[] }) => void;
+    const remote = new Promise<{ views: AppView[] }>(resolve => { release = resolve; });
+    const api = { getAppViews: vi.fn(() => remote) };
+    const write = vi.spyOn(cache, "upsertAppViews"), read = vi.spyOn(cache, "getAppViews");
+    const input = { api, cache, ownerKey: "owner", contractId: "contract", token: "synthetic" };
+    const a = loadAppViewsWithCache(input), b = loadAppViewsWithCache(input);
+    expect(api.getAppViews).toHaveBeenCalledOnce(); expect(read).toHaveBeenCalledOnce();
+    release({ views: appViewsFixture });
+    const results = await Promise.all([a, b]);
+    await Promise.all(results.map(result => result.cacheWrite));
+    expect(write).toHaveBeenCalledOnce(); expect(results[0].cacheWrite).toBe(results[1].cacheWrite);
+    expect(results[0].syncedAt).toBe(results[1].syncedAt);
+    await loadAppViewsWithCache(input);
+    expect(api.getAppViews).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not combine users, contracts, tokens or reconnect generations", async () => {
+    const cache = new MemoryNavigationCache();
+    let release!: (value: { views: AppView[] }) => void;
+    const remote = new Promise<{ views: AppView[] }>(resolve => { release = resolve; });
+    const api = { getAppViews: vi.fn(() => remote) };
+    const input = { api, cache, ownerKey: "owner", contractId: "contract", token: "synthetic" };
+    const requests = [loadAppViewsWithCache(input),
+      loadAppViewsWithCache({ ...input, ownerKey: "another" }), loadAppViewsWithCache({ ...input, contractId: "another" }),
+      loadAppViewsWithCache({ ...input, token: "other-token" }), loadAppViewsWithCache({ ...input, invalidationKey: "real-reconnect" })];
+    expect(api.getAppViews).toHaveBeenCalledTimes(5);
+    release({ views: [] }); await Promise.all(requests);
+  });
+
+  it("one departing subscriber does not cancel another or publish to the old scope", async () => {
+    const cache = new MemoryNavigationCache();
+    let release!: (value: { views: AppView[] }) => void;
+    const remote = new Promise<{ views: AppView[] }>(resolve => { release = resolve; });
+    const api = { getAppViews: vi.fn(() => remote) };
+    const input = { api, cache, ownerKey: "owner", contractId: "contract", token: "synthetic" };
+    const write = vi.spyOn(cache, "upsertAppViews"), oldNotice = vi.fn(), newNotice = vi.fn();
+    const a = loadAppViewsWithCache({ ...input, isCurrent: () => false, onCacheWrite: oldNotice });
+    const b = loadAppViewsWithCache({ ...input, onCacheWrite: newNotice });
+    release({ views: [] }); const result = await Promise.all([a, b]); await result[1].cacheWrite;
+    expect(api.getAppViews).toHaveBeenCalledOnce(); expect(write).toHaveBeenCalledOnce();
+    expect(oldNotice).not.toHaveBeenCalled(); expect(newNotice).toHaveBeenCalledOnce(); expect(result[0].cacheWrite).toBeNull();
+  });
+
   it("stores AppViews when the remote request succeeds", async () => {
     const cache = new MemoryNavigationCache();
 

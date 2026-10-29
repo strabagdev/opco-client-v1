@@ -765,6 +765,7 @@ export function usePendingWorkLifecycle({
         contractId: nextContractId,
         ownerKey: nextOwnerKey,
         token: nextToken,
+        invalidationKey: syncRunId,
       });
 
       if (!appViewsResult.offline) {
@@ -778,6 +779,7 @@ export function usePendingWorkLifecycle({
           store: definitionCache,
           token: nextToken,
           trigger,
+          invalidationKey: syncRunId,
         });
       }
     }

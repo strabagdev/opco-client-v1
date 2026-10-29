@@ -105,25 +105,52 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & Pick<AppNavigationCac
   Partial<Pick<StateUpdateOfflineStore, "setStateUpdateCurrentCoverage">> &
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
-export function prewarmAssignedAppViewsOnce(params: {
-  homeListWrite?: Promise<AppViewsCacheWrite>;
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
-  appViews: AppView[];
-  contractId: string;
-  onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
-  ownerKey: string;
-  store: AppViewPrewarmStore;
-  token: string;
-  signal?: AbortSignal;
-  trigger?: OfflinePreparationTrigger;
-}) {
-  const key = `${params.ownerKey}:${params.contractId}`;
+type AssignedPrewarmInput = Parameters<typeof prewarmAssignedAppViews>[0] & {
+  /** A real reconnect/invalidation event, not a render or a cached complete marker. */
+  invalidationKey?: string;
+};
+type AssignedFlight = {
+  signature: string;
+  next: AssignedPrewarmInput | null;
+  seenInvalidations: Set<string>;
+  promise: Promise<void>;
+};
+const assignedFlights = new WeakMap<AppViewPrewarmStore, WeakMap<object, Map<string, AssignedFlight>>>();
 
-  if (!activePrewarms.has(key)) {
-    activePrewarms.set(key, { promise: prewarmAssignedAppViews(params).finally(() => activePrewarms.delete(key)) });
+export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promise<void> {
+  let byApi = assignedFlights.get(params.store);
+  if (!byApi) { byApi = new WeakMap(); assignedFlights.set(params.store, byApi); }
+  let flights = byApi.get(params.api);
+  if (!flights) { flights = new Map(); byApi.set(params.api, flights); }
+  const key = JSON.stringify([params.ownerKey, params.contractId, params.token]);
+  // Definitions and the logical day are part of the requested work. Never reuse a completed run as freshness proof.
+  const signature = JSON.stringify([formatLocalDateInput(new Date()), [...params.appViews].sort((a, b) => a.id.localeCompare(b.id))]);
+  const previous = flights.get(key);
+  if (previous) {
+    const invalidated = !!params.invalidationKey && !previous.seenInvalidations.has(params.invalidationKey);
+    if (params.invalidationKey) previous.seenInvalidations.add(params.invalidationKey);
+    if (invalidated || previous.signature !== signature) {
+      previous.signature = signature;
+      previous.next = params;
+    }
+    return previous.promise;
   }
-
-  return activePrewarms.get(key)!.promise;
+  const flight: AssignedFlight = { signature, next: params,
+    seenInvalidations: new Set(params.invalidationKey ? [params.invalidationKey] : []), promise: Promise.resolve() };
+  const scopeFlights = flights;
+  flight.promise = Promise.resolve().then(async () => {
+    try {
+      while (flight.next) {
+        const next = flight.next;
+        flight.next = null;
+        await prewarmAssignedAppViews(next);
+      }
+    } finally {
+      if (scopeFlights.get(key) === flight) scopeFlights.delete(key);
+    }
+  });
+  flights.set(key, flight);
+  return flight.promise;
 }
 
 export function stateUpdateContextPreparationKey(scope: StateUpdateCurrentCoverageScope) {

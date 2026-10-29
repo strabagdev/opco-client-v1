@@ -76,6 +76,45 @@ export async function persistAppViews({ cache, ownerKey, contractId, views, sync
   return result;
 }
 
+type ViewsReadFlight = {
+  scope: ReturnType<typeof beginHomeNavigation>;
+  cached: Promise<AppViewsCacheRead>;
+  remote: Promise<Awaited<ReturnType<OpcoApi["getAppViews"]>>>;
+  cacheWrite?: Promise<AppViewsCacheWrite>;
+  snapshot?: CachedAppViewsSnapshot;
+};
+const viewsReadFlights = new WeakMap<object, WeakMap<object, Map<string, ViewsReadFlight>>>();
+
+/** Share only in-flight reads. A reconnect uses its own generation; completed reads are never memoized. */
+function acquireViewsRead(api: Pick<OpcoApi, "getAppViews">, cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">,
+  ownerKey: string, contractId: string, token: string, invalidationKey?: string): ViewsReadFlight {
+  let byApi = viewsReadFlights.get(cache);
+  if (!byApi) { byApi = new WeakMap(); viewsReadFlights.set(cache, byApi); }
+  let flights = byApi.get(api);
+  if (!flights) { flights = new Map(); byApi.set(api, flights); }
+  const key = JSON.stringify([ownerKey, contractId, token, invalidationKey ?? null]);
+  const previous = flights.get(key);
+  if (previous) return previous;
+  const scope = beginHomeNavigation(ownerKey, contractId);
+  recordHomeNavigation(scope, { phase: "remote", result: "started", count: null, syncedAt: null, errorCode: null });
+  const cached = readCachedAppViews(cache, ownerKey, contractId).then(result => {
+    recordHomeNavigation(scope, { phase: "cache_read", result: result.status,
+      count: result.status === "valid" ? result.snapshot.views.length : null,
+      syncedAt: result.status === "valid" ? result.snapshot.syncedAt : null,
+      errorCode: result.status === "error" ? result.errorCode : null });
+    return result;
+  });
+  const scopeFlights = flights;
+  let remote: ViewsReadFlight["remote"];
+  try { remote = api.getAppViews(token, contractId, { diagnosticRequestId: scope.requestId }); }
+  catch (error) { remote = Promise.reject(error); }
+  const flight: ViewsReadFlight = { scope, cached, remote };
+  flights.set(key, flight);
+  const release = () => { if (scopeFlights.get(key) === flight) scopeFlights.delete(key); };
+  void flight.remote.then(release, release);
+  return flight;
+}
+
 export async function loadAppViewsWithCache({
   api,
   cache,
@@ -87,11 +126,13 @@ export async function loadAppViewsWithCache({
   isCurrent = () => true,
   token,
   ownerKey,
+  invalidationKey,
 }: {
   api: Pick<OpcoApi, "getAppViews">;
   cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">;
   contractId: string;
   now?: () => Date;
+  invalidationKey?: string;
   onCached?: (snapshot: CachedAppViewsSnapshot) => void;
   onCacheRead?: (result: AppViewsCacheRead) => void;
   onCacheWrite?: (result: AppViewsCacheWrite) => void;
@@ -99,14 +140,10 @@ export async function loadAppViewsWithCache({
   ownerKey: string;
   token: string;
 }): Promise<AppViewsResult> {
-  const scope = beginHomeNavigation(ownerKey, contractId);
-  recordHomeNavigation(scope, { phase: "remote", result: "started", count: null, syncedAt: null, errorCode: null });
+  const flight = acquireViewsRead(api, cache, ownerKey, contractId, token, invalidationKey);
+  const scope = flight.scope;
   let remoteSettled = false;
-  const cachedPromise = readCachedAppViews(cache, ownerKey, contractId).then(result => {
-    recordHomeNavigation(scope, { phase: "cache_read", result: result.status,
-      count: result.status === "valid" ? result.snapshot.views.length : null,
-      syncedAt: result.status === "valid" ? result.snapshot.syncedAt : null,
-      errorCode: result.status === "error" ? result.errorCode : null });
+  const cachedPromise = flight.cached.then(result => {
     if (!remoteSettled && isCurrent()) {
       notify(onCacheRead, result);
       if (result.status === "valid") notify(onCached, result.snapshot);
@@ -115,7 +152,7 @@ export async function loadAppViewsWithCache({
   });
   let remote;
   try {
-    remote = await api.getAppViews(token, contractId, { diagnosticRequestId: scope.requestId });
+    remote = await flight.remote;
   } catch (error) {
     if (!isNetworkLikeError(error)) {
       remoteSettled = true;
@@ -135,10 +172,9 @@ export async function loadAppViewsWithCache({
     };
   }
   remoteSettled = true;
-  const syncedAt = now().toISOString();
-  const views = sortAppViews(remote.views);
+  const { syncedAt, views } = flight.snapshot ??= { syncedAt: now().toISOString(), views: sortAppViews(remote.views) };
   if (!isCurrent()) return { fromCache: false, offline: false, syncedAt, views, cacheWrite: null };
-  const cacheWrite = persistAppViews({ cache, ownerKey, contractId, views, syncedAt, scope });
+  const cacheWrite = flight.cacheWrite ??= persistAppViews({ cache, ownerKey, contractId, views, syncedAt, scope });
   // Render remote data immediately, but expose persistence as a preparation prerequisite.
   if (onCacheWrite) void cacheWrite.then(result => { if (isCurrent()) notify(onCacheWrite, result); });
   return { fromCache: false, offline: false, syncedAt, views, cacheWrite };
