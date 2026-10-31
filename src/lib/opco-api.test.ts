@@ -2441,3 +2441,19 @@ describe("createOpcoApi", () => {
 });
 
 function legacyComparisonFixture(sourceEntityTypeId:string,mode:"record"|"global") {return {version:1,sourceEntityTypeId,fields:[],fingerprint:comparisonFingerprint(sourceEntityTypeId,[]),applied:{mode}};}
+
+it("times out a retained write response body without changing its command or retrying it", async () => {
+  vi.useFakeTimers();
+  const diagnostics = vi.fn(), fetcher = vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('{"ok":true,"data":'));
+  } }), { status: 200 }));
+  const api = createOpcoApi({ apiUrl: "https://opco.test", fetcher, timeoutMs: 10, onRequestDiagnostics: diagnostics });
+  const command = { clientRequestId: "synthetic-request", values: { synthetic: "value" } };
+  const request = api.createEntityRecord("synthetic-session", "contract", "entity", command);
+  const rejected = expect(request).rejects.toBeInstanceOf(OpcoNetworkError);
+  await vi.advanceTimersByTimeAsync(10); await rejected;
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1]).toMatchObject({ method: "POST", body: JSON.stringify(command) });
+  expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({ method: "POST", responseStarted: true, httpStatus: 200,
+    responseParsedAt: null, operationResult: "transport_timeout", abortControllerTriggered: true }));
+});

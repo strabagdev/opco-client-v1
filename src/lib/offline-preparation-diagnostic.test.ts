@@ -21,3 +21,12 @@ describe("offline preparation failure detail", () => {
     expect(offlinePreparationFailureRows(current).flat().join(" ")).toContain("Sin fallos de AppView registrados");
   });
 });
+
+// Same rows feed the existing screen and the copied diagnostic.
+it("exposes terminal persistence failure and recovery correlation without arbitrary payloads", () => {
+  const value = normalizeOfflinePreparationDiagnostics({ status: "completed", diagnosticWrite: "failed", recoveryOf: "prewarm-100-1", runErrorCode: "RECOVERY_FAILED", failedAppViews: [] });
+  const text = offlinePreparationFailureRows(value).flat().join(" ");
+  expect(text).toContain("No se pudo guardar"); expect(text).toContain("prewarm-100-1"); expect(text).toContain("RECOVERY_FAILED");
+  const unknown = normalizeOfflinePreparationDiagnostics({ status: "failed", runErrorCode: "secret-token" as never });
+  expect(offlinePreparationFailureRows(unknown).flat().join(" ")).not.toContain("secret-token");
+});

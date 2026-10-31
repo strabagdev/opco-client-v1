@@ -1,3 +1,4 @@
+import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
 import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
 import { workflowRecordMatches, SearchComparisonError, fieldSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
 import { cachedWorkflowComparison, cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
@@ -189,6 +190,9 @@ export type LocalDatabase = AppNavigationCache &
   StateUpdateSyncStore & {
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
+  getOfflinePreparationCoordinatorKey(): object;
+  getOfflinePreparationRunReceipt(ownerKey: string, contractId: string): Promise<OfflinePreparationRunReceipt | null>;
+  setOfflinePreparationRunReceipt(ownerKey: string, contractId: string, receipt: OfflinePreparationRunReceipt): Promise<void>;
   getOfflinePreparationDiagnostics(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   getAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string): Promise<string | null>;
   getSyncAttentionProblems(scope: { ownerKey: string; contractId: string }): Promise<SyncAttentionProblem[]>;
@@ -318,6 +322,9 @@ export function getLocalDatabase(): LocalDatabase {
     searchStateUpdateSubjects,
     setSelectedContractId,
     setAttendanceContextSelection,
+    getOfflinePreparationCoordinatorKey: () => getLocalDatabaseGlobalState(),
+    getOfflinePreparationRunReceipt,
+    setOfflinePreparationRunReceipt,
     setOfflinePreparationDiagnostics,
     setStateUpdateSyncDiagnosticsTelemetry,
     updateLocalRecord,
@@ -5713,6 +5720,22 @@ async function markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverag
     JSON.stringify(coverage),
   );
   notifyLocalDatabaseCacheChangeListeners();
+}
+
+function offlinePreparationReceiptKey(ownerKey: string, contractId: string) {
+  return "offline_preparation_receipt:v1:" + JSON.stringify([ownerKey, contractId]);
+}
+async function getOfflinePreparationRunReceipt(ownerKey: string, contractId: string): Promise<OfflinePreparationRunReceipt | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{value:string}>("SELECT value FROM app_metadata WHERE key=?", offlinePreparationReceiptKey(ownerKey, contractId));
+  if (!row) return null;
+  try { return normalizeOfflinePreparationRunReceipt(JSON.parse(row.value), ownerKey, contractId); } catch { return null; }
+}
+async function setOfflinePreparationRunReceipt(ownerKey: string, contractId: string, receipt: OfflinePreparationRunReceipt) {
+  const valid = normalizeOfflinePreparationRunReceipt(receipt, ownerKey, contractId);
+  if (!valid) throw Error("INVALID_PREPARATION_RECEIPT");
+  const db = await getDatabase();
+  await db.runAsync("INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)", offlinePreparationReceiptKey(ownerKey, contractId), JSON.stringify(valid));
 }
 
 async function setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics) {

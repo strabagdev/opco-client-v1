@@ -41,6 +41,8 @@ export type AppShellFeedbackInput = {
   offlinePreparationProgress?: { completed: number; failed: number; total: number } | null;
   offlinePreparationStatus?: "idle" | "running" | "completed" | "failed" | null;
   offlinePreparationHomeListFailed?: boolean;
+  offlinePreparationDiagnosticWriteFailed?: boolean;
+  offlinePreparationRecoveryFailed?: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isPendingWorkSyncing: boolean;
   localStorageRecoveryNotice?: string | null;
@@ -186,6 +188,8 @@ function resolveAppShellStatusBase({
   localStorageRecoveryNotice,
   offlinePreparationProgress = null,
   offlinePreparationHomeListFailed = false,
+  offlinePreparationDiagnosticWriteFailed = false,
+  offlinePreparationRecoveryFailed = false,
   offlinePreparationStatus = null,
   pendingCount,
   syncConfirmationVisible = false,
@@ -267,6 +271,15 @@ function resolveAppShellStatusBase({
     };
   }
 
+  if (offlinePreparationDiagnosticWriteFailed) {
+    return { accessibilityLabel: "No se pudo guardar el diagnóstico de preparación. Abre Diagnóstico para revisar.",
+      label: "Diagnóstico de preparación sin guardar", state: "pending" };
+  }
+  if (offlinePreparationRecoveryFailed) {
+    return { accessibilityLabel: "No se pudo recuperar la preparación offline. Abre Diagnóstico para revisar.",
+      label: "No se pudo recuperar la preparación", state: "pending",
+      preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "incomplete") };
+  }
   if (offlinePreparationStatus === "failed") {
     const failed = normalizePreparationCount(offlinePreparationProgress?.failed);
     const failureCount = offlinePreparationHomeListFailed ? "No se guardó Inicio" : failed === 1 ? "1 fallo" : failed + " fallos";

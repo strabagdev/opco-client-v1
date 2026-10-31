@@ -582,3 +582,12 @@ describe("app shell feedback", () => {
   });
 
 });
+
+it("does not claim readiness when terminal diagnostic persistence or orphan recovery fails", () => {
+  expect(resolveAppShellStatusIndicator({ ...baseInput, offlinePreparationStatus: "completed", offlinePreparationDiagnosticWriteFailed: true }))
+    .toMatchObject({ state: "pending", label: "Diagnóstico de preparación sin guardar" });
+  expect(resolveAppShellStatusIndicator({ ...baseInput, offlinePreparationStatus: "failed", offlinePreparationRecoveryFailed: true }))
+    .toMatchObject({ state: "pending", label: "No se pudo recuperar la preparación" });
+  expect(resolveAppShellStatusIndicator({ ...baseInput, isOfflinePreparationRunning: true, offlinePreparationDiagnosticWriteFailed: true }))
+    .toMatchObject({ state: "working", label: "Preparando uso offline…" });
+});

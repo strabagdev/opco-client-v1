@@ -3323,3 +3323,67 @@ Inicio sigue preparando todas las experiencias. No se corrigen aquí.402exclusio
 ajenos preservados; respaldo original intacto. Sin producción,Railway,commit,push,deploy o activación.
 Safari físico,offline frío de navegador/sync de esta proyección y auditoría general siguen pendientes.
 V11 pausado.
+
+
+## Recuperación acotada de preparación — LOCAL, SIN PUBLICAR — 2026-10-30
+
+Implementada sobre Client `60efa029`, a partir del diagnóstico del 30-10. La actividad se consulta y
+suscribe en el coordinador existente, con replay por scope y generación de sesión; perder el observador
+no inicia otro flight. Fachadas SQLite/API nuevas comparten el runtime de la base. Invalidaciones reales
+mantienen una pasada posterior, sin duplicar el trabajo simultáneo. Usuario/contrato y token se aíslan;
+un escritor anterior termina antes del siguiente de su mismo scope y sus callbacks no publican en la sesión nueva.
+
+El deadline HTTP existente cubre headers y consumo del cuerpo. Un cuerpo retenido termina en
+`transport_timeout`, conserva fase/HTTP recibidos y libera la actividad; una respuesta tardía no cambia
+el terminal. No se añaden reintentos HTTP ni se alteran comandos, autorización o claves idempotentes;
+una respuesta de escritura perdida sigue siendo incierta y usa la recuperación/idempotencia existentes.
+
+Al hidratar, reconectar o retornar del segundo plano, el coordinador contrasta recibo, diagnóstico y
+flight. Un `running` sin ejecución viva del runtime compartido puede recuperarse online una sola vez,
+aunque no existan escrituras. Si las hay, espera su envío por el mecanismo existente; si quedan elegibles,
+no inicia el refresh. La reclamación se persiste antes del primer GET, en `app_metadata`, clave
+`offline_preparation_receipt:v1:[ownerKey,contractId]`; no hay esquema, migración, namespace o motor nuevo.
+El reintento carga asignaciones autorizadas mediante `/views` y usa el mismo preparador/verificaciones
+de contenido. Fallo terminal o reclamación ya usada no generan bucles ni polling. Un cambio de scope o
+pérdida de elegibilidad tras reclamar detiene ese intento: no lo relanza automáticamente; la entrada
+normal a Inicio permite un nuevo run explícito del flujo existente. No es soporte de preparación multitab.
+
+El recibo terminal separado conserva el resultado si falla guardar el diagnóstico principal. Se muestra
+el fallo de persistencia en cabecera y en el detalle/copia; hidratar/reanudar puede reparar ambos metadatos
+sin descargar datos terminados. Si ambos destinos fallan, queda la señal terminal en memoria y puede
+reconciliarse mientras vive el runtime. Si se destruye ese runtime antes de guardar ningún terminal,
+no existe prueba durable de finalización: no se promete reconocerla tras reabrir. Un recibo/ACK o un
+`completed` de diagnóstico no sustituyen las verificaciones de cobertura de cada preparador.
+
+Validación: 219 casos focalizados PASS reutilizados por hashes idénticos, más una regresión complementaria PASS, un worker y timeouts estándar; SQLite real con reapertura,
+reclamación única, aislamiento/tokens y `/views` tardío, reparación sin GET, cuerpo retenido y preservación
+de Home/outbox/Attendance/confirmaciones/conflictos. Typecheck y lint afectados PASS. La caracterización
+RED histórica se preserva byte a byte fuera del candidato: afirma los defectos previos; no reemplaza estas
+regresiones. Cuatro fallos preexistentes de mocks searchComparison siguen identificados, sin corregirlos
+ni presentar una suite completa PASS.
+
+Chrome 153.0.8010.12, perfil local exclusivo, React real/SQLite OPFS/SW: 13 RECORDS sintéticos, dos cuerpos
+retenidos, cierre completo del proceso en 11/13, reapertura offline de la misma base, reconexión sin clic
+con cero pendientes, un solo run recuperado y otra reapertura offline con 13/13 persistido. API simulada;
+no Core/PostgreSQL, Safari físico, cámara ni sincronización productiva. Timeout y fallos de persistencia
+inyectados se acreditan mediante automatización SQLite, no mediante ese navegador. Export local sólo
+para este ensayo, API loopback, sin artefactos en Git. SQLite v10 y `opco-client-v10-epoch2.db` conservados.
+
+La reentrada normal a Inicio sigue preparando todas las experiencias; control de 13+13 intacto. No se
+modifican guardados, cobertura de negocio ni política de frescura. El incidente `prewarm-1793283039040-2`
+continúa sin causa histórica correlacionada (bundle no acreditado). Sin estabilidad offline general,
+producción, Core, configuración, commit, push o deploy. V11 pausado. Respaldo reproducible:
+`backups/offline-preparation-recovery/2026-10-30/` (inventario/parche/hashes/checks/REVIEW).
+
+Cierre técnico acotado 30-10:15archivos/47hunks reconstruidos y verificados. Runtime idéntico al respaldo
+inicial; sólo se añade una regresión que lee un diagnóstico legacy sin campos nuevos, reclama su
+recuperación y conserva el bloqueo a repetirla durante tres reaperturas SQLite. No representa un crash
+real en esa prueba: se reproduce su estado durable mediante salida de scope después del claim. Los
+terminales exitoso/fallido y el lifecycle Chrome/OPFS se reutilizan del contenido funcional idéntico.
+El build habitual PASS con caché temporal propia produce entry-7358c75fd46779d0970a2fbc648a1443.js,
+API efectiva https://web.opco.cl, epoch2,index/sw coincidentes y lector JS/WASM local precacheado.
+El primer build exitoso se rechaza: conservaba la URL loopback del ensayo anterior; el contraste con
+caché propia produce API pública, sin modificar configuración/compilador ni borrar cachés compartidas.
+No se atribuye una causa más amplia a ese comportamiento de caché. Build no equivale a deploy.
+Parche/inventario/hashes/checks finales:backups/offline-preparation-recovery-close/2026-10-30/.
+Límite de ambos destinos fallidos, causa histórica desconocida y política de reentrada permanecen intactos.

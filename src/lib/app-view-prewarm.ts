@@ -21,7 +21,7 @@ import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendanc
 import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore, type StateUpdateCurrentCoverageScope } from "./state-update-offline";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
 import { compositeIdentityKey } from "./state-update-identity";
-import { persistAppViews, type AppNavigationCache, type AppViewsCacheWrite } from "./app-navigation-cache";
+import { loadAppViewsWithCache, persistAppViews, type AppNavigationCache, type AppViewsCacheWrite } from "./app-navigation-cache";
 
 export const PREWARM_CONCURRENCY = 4;
 export const ATTENDANCE_MONTH_PREWARM_CONCURRENCY = 3;
@@ -73,6 +73,10 @@ export type OfflinePreparationAppViewTelemetry = {
 };
 
 export type OfflinePreparationDiagnostics = {
+  diagnosticWrite?: "stored" | "failed";
+  recoveryOf?: string;
+  runErrorCode?: "RECOVERY_FAILED" | "RECOVERY_NOT_DURABLE";
+
   homeList?: { status: "pending" | "persisted" | "error"; count: number; syncedAt: string | null; errorCode: string | null; requestId: string | null };
   appViews: {
     completed: number;
@@ -94,6 +98,9 @@ export type OfflinePreparationDiagnostics = {
 };
 
 export type AppViewPrewarmStore = AppViewDefinitionCache & Pick<AppNavigationCache, "upsertAppViews"> & {
+  getOfflinePreparationCoordinatorKey?(): object;
+  getOfflinePreparationRunReceipt?(ownerKey: string, contractId: string): Promise<OfflinePreparationRunReceipt | null>;
+  setOfflinePreparationRunReceipt?(ownerKey: string, contractId: string, receipt: OfflinePreparationRunReceipt): Promise<void>;
   getOfflinePreparationDiagnostics?(ownerKey: string): Promise<OfflinePreparationDiagnostics | null>;
   setOfflinePreparationDiagnostics?(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   getAppViewDefinition(ownerKey: string, contractId: string, appViewId: string): Promise<{
@@ -110,48 +117,186 @@ type AssignedPrewarmInput = Parameters<typeof prewarmAssignedAppViews>[0] & {
   /** A real reconnect/invalidation event, not a render or a cached complete marker. */
   invalidationKey?: string;
 };
+export type OfflinePreparationRunReceipt = {
+  version: 1;
+  diagnostics: OfflinePreparationDiagnostics;
+  recoveryAttemptOf?: string;
+};
+export type OfflinePreparationExecution = { active: boolean; diagnostics: OfflinePreparationDiagnostics | null };
+type Listener = (state: OfflinePreparationExecution) => void;
 type AssignedFlight = {
   signature: string;
   next: AssignedPrewarmInput | null;
+  current: AssignedPrewarmInput;
   seenInvalidations: Set<string>;
+  observers: Map<NonNullable<AssignedPrewarmInput["onTelemetry"]>, string>;
   promise: Promise<void>;
 };
-const assignedFlights = new WeakMap<AppViewPrewarmStore, WeakMap<object, Map<string, AssignedFlight>>>();
-
+type AssignedScope = {
+  flight?: AssignedFlight;
+  latest?: OfflinePreparationDiagnostics;
+  token?: string;
+  listeners: Set<{ token: string; notify: Listener }>;
+  reconciliation?: Promise<void>;
+  reconciliationToken?: string;
+  reconciliationOnline?: boolean;
+  recovering?: boolean;
+};
+// The existing coordinator owns work across API recreation; never infer liveness from UI observers.
+const assignedFlights = new WeakMap<object, Map<string, AssignedScope>>();
+function assignedScope(store: AppViewPrewarmStore, ownerKey: string, contractId: string) {
+  const identity = store.getOfflinePreparationCoordinatorKey?.() ?? store;
+  let scopes = assignedFlights.get(identity);
+  if (!scopes) { scopes = new Map(); assignedFlights.set(identity, scopes); }
+  const key = JSON.stringify([ownerKey, contractId]);
+  let scope = scopes.get(key);
+  if (!scope) { scope = { listeners: new Set() }; scopes.set(key, scope); }
+  return scope;
+}
+function execution(scope: AssignedScope, token: string): OfflinePreparationExecution {
+  return { active: Boolean(scope.flight || scope.recovering),
+    diagnostics: scope.token === token ? scope.latest ?? null : null };
+}
+function notifyExecution(scope: AssignedScope) {
+  for (const listener of scope.listeners) {
+    try { listener.notify(execution(scope, listener.token)); } catch { /* observers do not own work */ }
+  }
+}
+export function getOfflinePreparationExecution(input: { store: AppViewPrewarmStore; ownerKey: string; contractId: string; token: string }) {
+  return execution(assignedScope(input.store, input.ownerKey, input.contractId), input.token);
+}
+export function subscribeOfflinePreparationExecution(input: { store: AppViewPrewarmStore; ownerKey: string; contractId: string; token: string; onChange: Listener }) {
+  const scope = assignedScope(input.store, input.ownerKey, input.contractId);
+  const listener = { token: input.token, notify: input.onChange };
+  scope.listeners.add(listener); listener.notify(execution(scope, input.token));
+  return () => { scope.listeners.delete(listener); };
+}
 export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promise<void> {
-  let byApi = assignedFlights.get(params.store);
-  if (!byApi) { byApi = new WeakMap(); assignedFlights.set(params.store, byApi); }
-  let flights = byApi.get(params.api);
-  if (!flights) { flights = new Map(); byApi.set(params.api, flights); }
-  const key = JSON.stringify([params.ownerKey, params.contractId, params.token]);
-  // Definitions and the logical day are part of the requested work. Never reuse a completed run as freshness proof.
-  const signature = JSON.stringify([formatLocalDateInput(new Date()), [...params.appViews].sort((a, b) => a.id.localeCompare(b.id))]);
-  const previous = flights.get(key);
+  const scope = assignedScope(params.store, params.ownerKey, params.contractId);
+  const signature = JSON.stringify([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id))]);
+  const previous = scope.flight;
   if (previous) {
+    if (params.onTelemetry) previous.observers.set(params.onTelemetry, params.token);
     const invalidated = !!params.invalidationKey && !previous.seenInvalidations.has(params.invalidationKey);
     if (params.invalidationKey) previous.seenInvalidations.add(params.invalidationKey);
-    if (invalidated || previous.signature !== signature) {
-      previous.signature = signature;
-      previous.next = params;
+    if (invalidated || previous.signature !== signature || previous.current.token !== params.token) {
+      previous.signature = signature; previous.next = params;
     }
+    if (scope.token === params.token && scope.latest && params.onTelemetry) {
+      const replay = scope.latest;
+      void Promise.resolve().then(() => {
+        if (scope.token === params.token && scope.latest === replay && scope.flight === previous) return params.onTelemetry?.(replay);
+      }).catch(() => undefined);
+    }
+    notifyExecution(scope);
     return previous.promise;
   }
-  const flight: AssignedFlight = { signature, next: params,
-    seenInvalidations: new Set(params.invalidationKey ? [params.invalidationKey] : []), promise: Promise.resolve() };
-  const scopeFlights = flights;
+  const flight: AssignedFlight = { signature, next: params, current: params,
+    seenInvalidations: new Set(params.invalidationKey ? [params.invalidationKey] : []),
+    observers: new Map(params.onTelemetry ? [[params.onTelemetry, params.token]] : []), promise: Promise.resolve() };
+  scope.flight = flight; scope.token = params.token; scope.latest = undefined;
   flight.promise = Promise.resolve().then(async () => {
     try {
       while (flight.next) {
-        const next = flight.next;
-        flight.next = null;
-        await prewarmAssignedAppViews(next);
+        const next = flight.next; flight.next = null; flight.current = next; scope.token = next.token; scope.latest = undefined; notifyExecution(scope);
+        await prewarmAssignedAppViews({ ...next, onTelemetry: async diagnostics => {
+          scope.latest = diagnostics; scope.token = next.token; notifyExecution(scope);
+          for (const [observer, token] of flight.observers) if (token === next.token) {
+            try { await observer(diagnostics); } catch { /* best effort */ }
+          }
+        } });
       }
     } finally {
-      if (scopeFlights.get(key) === flight) scopeFlights.delete(key);
+      if (scope.flight === flight) scope.flight = undefined;
+      notifyExecution(scope);
     }
   });
-  flights.set(key, flight);
+  notifyExecution(scope);
   return flight.promise;
+}
+
+export function normalizeOfflinePreparationRunReceipt(value: unknown, ownerKey: string, contractId: string): OfflinePreparationRunReceipt | null {
+  const receipt = value as OfflinePreparationRunReceipt | null;
+  const diagnostics = normalizeOfflinePreparationDiagnostics(receipt?.diagnostics);
+  if (receipt?.version !== 1 || !diagnostics || !isOfflinePreparationDiagnosticsCurrent(diagnostics, ownerKey, contractId)) return null;
+  return { version: 1, diagnostics,
+    ...(typeof receipt.recoveryAttemptOf === "string" ? { recoveryAttemptOf: receipt.recoveryAttemptOf } : {}) };
+}
+
+type ReconciliationInput = { store: AppViewPrewarmStore & Pick<AppNavigationCache,"getAppViews">; api: AssignedPrewarmInput["api"] & Pick<OpcoApi,"getAppViews">;
+  ownerKey: string; contractId: string; token: string; online: boolean;
+  isCurrent(): boolean; canRecover?(): boolean; beforeRecovery(): Promise<boolean> };
+/** Reconcile observation first; recovery is event-driven and durably claimed once, never polling. */
+export function reconcileOfflinePreparation(input: ReconciliationInput): Promise<void> {
+  const scope = assignedScope(input.store, input.ownerKey, input.contractId);
+  if (scope.flight) { notifyExecution(scope); return Promise.resolve(); }
+  if (scope.reconciliation) {
+    if (input.online && !scope.reconciliationOnline) {
+      scope.reconciliationOnline = true;
+      return scope.reconciliation.then(() => input.isCurrent() ? reconcileOfflinePreparation(input) : undefined);
+    }
+    return scope.reconciliationToken === input.token ? scope.reconciliation : scope.reconciliation.then(() =>
+      input.isCurrent() ? reconcileOfflinePreparation(input) : undefined);
+  }
+  const promise = (async () => {
+    const { store, ownerKey, contractId } = input;
+    let receipt = await store.getOfflinePreparationRunReceipt?.(ownerKey, contractId);
+    if (!input.isCurrent() || scope.flight) { notifyExecution(scope); return; }
+    const stored = await store.getOfflinePreparationDiagnostics?.(ownerKey);
+    if (!input.isCurrent() || scope.flight) { notifyExecution(scope); return; }
+    const candidates = [receipt?.diagnostics, stored, scope.latest].filter((d): d is OfflinePreparationDiagnostics =>
+      !!d && isOfflinePreparationDiagnosticsCurrent(d, ownerKey, contractId));
+    // Prefer the newest run; within it, a terminal proves the work finished even if its legacy copy failed.
+    candidates.sort((a,b) => (Date.parse(b.prewarmStartedAt ?? "") || 0) - (Date.parse(a.prewarmStartedAt ?? "") || 0) ||
+      Number(b.runId?.split("-").at(-1) ?? 0) - Number(a.runId?.split("-").at(-1) ?? 0) ||
+      Number(a.status === "running") - Number(b.status === "running") || b.appViews.completed - a.appViews.completed);
+    let diagnostics = candidates[0];
+    if (!diagnostics) return;
+    if (receipt?.diagnostics.runId !== diagnostics.runId) receipt = undefined;
+    scope.latest = diagnostics; scope.token = input.token; notifyExecution(scope);
+    if (diagnostics.status !== "running") {
+      // A durable terminal is evidence of finished work, not proof of data freshness or coverage.
+      if (diagnostics.diagnosticWrite === "failed") {
+        const repaired = { ...diagnostics, diagnosticWrite: "stored" as const };
+        try {
+          if (!input.isCurrent() || scope.flight) return;
+          await store.setOfflinePreparationDiagnostics?.(ownerKey, repaired);
+          if (!input.isCurrent() || scope.flight) return;
+          await store.setOfflinePreparationRunReceipt?.(ownerKey, contractId, { version:1, ...receipt, diagnostics: repaired });
+          if (input.isCurrent() && !scope.flight) { scope.latest = repaired; notifyExecution(scope); }
+        } catch { /* Keep explicit failure and durable receipt; no downloads. */ }
+      }
+      return;
+    }
+    const canRecover = () => input.online && input.isCurrent() && (input.canRecover?.() ?? true);
+    if (!canRecover() || !diagnostics.runId || receipt?.recoveryAttemptOf) return;
+    const orphanId = diagnostics.runId;
+    scope.recovering = true; notifyExecution(scope);
+    try {
+      if (!(await input.beforeRecovery()) || !canRecover() || scope.flight) return;
+      if (!store.setOfflinePreparationRunReceipt) throw Error("RECOVERY_NOT_DURABLE");
+      receipt = { version: 1, diagnostics, recoveryAttemptOf: orphanId };
+      try { await store.setOfflinePreparationRunReceipt(ownerKey, contractId, receipt); }
+      catch { throw Error("RECOVERY_NOT_DURABLE"); }
+      if (!canRecover() || scope.flight) return;
+      const result = await loadAppViewsWithCache({ api: input.api, cache: store, ownerKey, contractId,
+        token: input.token, isCurrent: input.isCurrent });
+      if (!canRecover() || scope.flight) return;
+      if (result.offline) throw Error("RECOVERY_FAILED");
+      await prewarmAssignedAppViewsOnce({ ...input, appViews: result.views,
+        homeListWrite: result.cacheWrite ?? undefined, recoveryOf: orphanId, trigger: "other" });
+    } catch (error) {
+      if (!input.isCurrent() || scope.flight) return;
+      diagnostics = { ...diagnostics, status: "failed", recoveryOf: orphanId,
+        prewarmCompletedAt: new Date().toISOString(), appViews: { ...diagnostics.appViews, running: 0 },
+        runErrorCode: error instanceof Error && error.message === "RECOVERY_NOT_DURABLE" ? "RECOVERY_NOT_DURABLE" : "RECOVERY_FAILED" };
+      await recordOfflinePreparationTelemetry({ diagnostics, ownerKey, contractId, store,
+        onTelemetry: value => { if (input.isCurrent() && !scope.flight) { scope.latest = value; notifyExecution(scope); } } });
+    } finally { scope.recovering = false; notifyExecution(scope); }
+  })();
+  scope.reconciliation = promise; scope.reconciliationToken = input.token; scope.reconciliationOnline = input.online;
+  void promise.finally(() => { if (scope.reconciliation === promise) scope.reconciliation = undefined; }).catch(() => undefined);
+  return promise;
 }
 
 export function stateUpdateContextPreparationKey(scope: StateUpdateCurrentCoverageScope) {
@@ -220,8 +365,10 @@ export async function prewarmAssignedAppViews({
   store,
   token,
   trigger = "other",
+  recoveryOf,
   signal,
 }: {
+  recoveryOf?: string;
   homeListWrite?: Promise<AppViewsCacheWrite>;
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
   appViews: AppView[];
@@ -259,7 +406,7 @@ export async function prewarmAssignedAppViews({
       appViewTelemetry,
       contractId,
       ownerKey,
-      runId,
+      runId, recoveryOf,
       startedAt,
       startedMs,
       status: "running",
@@ -268,6 +415,7 @@ export async function prewarmAssignedAppViews({
     }),
     onTelemetry,
     ownerKey,
+    contractId,
     store,
   });
 
@@ -289,7 +437,7 @@ export async function prewarmAssignedAppViews({
           appViewTelemetry,
           contractId,
           ownerKey,
-          runId,
+          runId, recoveryOf,
           startedAt,
           startedMs,
           status: "running",
@@ -298,6 +446,7 @@ export async function prewarmAssignedAppViews({
         }),
         onTelemetry,
         ownerKey,
+        contractId,
         store,
       });
 
@@ -325,7 +474,7 @@ export async function prewarmAssignedAppViews({
           appViewTelemetry,
           contractId,
           ownerKey,
-          runId,
+          runId, recoveryOf,
           startedAt,
           startedMs,
           status: "running",
@@ -334,6 +483,7 @@ export async function prewarmAssignedAppViews({
         }),
         onTelemetry,
         ownerKey,
+        contractId,
         store,
       });
     });
@@ -344,7 +494,7 @@ export async function prewarmAssignedAppViews({
         appViewTelemetry,
         contractId,
         ownerKey,
-        runId,
+        runId, recoveryOf,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
@@ -355,6 +505,7 @@ export async function prewarmAssignedAppViews({
       }),
       onTelemetry,
       ownerKey,
+      contractId,
       store,
     });
   } catch {
@@ -364,7 +515,7 @@ export async function prewarmAssignedAppViews({
         appViewTelemetry,
         contractId,
         ownerKey,
-        runId,
+        runId, recoveryOf,
         completedAt: new Date().toISOString(),
         completedMs: Date.now(),
         startedAt,
@@ -375,6 +526,7 @@ export async function prewarmAssignedAppViews({
       }),
       onTelemetry,
       ownerKey,
+      contractId,
       store,
     });
   }
@@ -851,7 +1003,7 @@ function buildOfflinePreparationDiagnostics({
   completedMs,
   contractId,
   ownerKey,
-  runId,
+  runId, recoveryOf,
   startedAt,
   startedMs,
   status,
@@ -865,6 +1017,7 @@ function buildOfflinePreparationDiagnostics({
   contractId: string;
   ownerKey: string;
   runId: string;
+  recoveryOf?: string;
   startedAt: string;
   startedMs: number;
   status: OfflinePreparationDiagnostics["status"];
@@ -899,7 +1052,7 @@ function buildOfflinePreparationDiagnostics({
     prewarmCompletedAt: completedAt,
     prewarmDurationMs,
     prewarmStartedAt: startedAt,
-    runId,
+    runId, ...(recoveryOf ? { recoveryOf } : {}),
     scopeKey: offlinePreparationScopeKey(ownerKey, contractId),
     slow: Boolean((prewarmDurationMs && prewarmDurationMs > OFFLINE_PREPARATION_SLOW_THRESHOLD_MS) || appViews.some((appView) => appView.slow)),
     slowestStages,
@@ -926,24 +1079,32 @@ async function recordOfflinePreparationTelemetry({
   diagnostics,
   onTelemetry,
   ownerKey,
+  contractId,
   store,
 }: {
   diagnostics: OfflinePreparationDiagnostics;
   onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
   ownerKey: string;
+  contractId?: string;
   store: AppViewPrewarmStore;
 }) {
-  try {
-    await store.setOfflinePreparationDiagnostics?.(ownerKey, diagnostics);
-  } catch {
-    // Offline preparation telemetry is observational and must not block prewarm.
-  }
+  const contractScope = diagnostics.scopeKey;
+  // Receipt methods are scoped by the contract, which is deliberately not inferred from a fingerprint.
 
-  try {
-    await onTelemetry?.(diagnostics);
-  } catch {
-    // UI telemetry listeners are best-effort; prewarm owns the real work.
+  const terminal = diagnostics.status !== "running";
+  const receipt = (value: OfflinePreparationDiagnostics): OfflinePreparationRunReceipt => ({ version: 1,
+    diagnostics: value, ...(value.recoveryOf ? { recoveryAttemptOf: value.recoveryOf } : {}) });
+  if (contractId && contractScope && (terminal || !diagnostics.lastAppView)) {
+    try { await store.setOfflinePreparationRunReceipt?.(ownerKey, contractId, receipt({ ...diagnostics, diagnosticWrite: "failed" })); } catch { /* primary may still persist */ }
   }
+  let value = { ...diagnostics, diagnosticWrite: "stored" as "stored" | "failed" };
+  try { await store.setOfflinePreparationDiagnostics?.(ownerKey, value); }
+  catch { value = { ...value, diagnosticWrite: "failed" }; }
+  if (terminal && contractId) {
+    try { await store.setOfflinePreparationRunReceipt?.(ownerKey, contractId, receipt(value)); } catch { /* memory remains explicit */ }
+  }
+  try { await onTelemetry?.(value); } catch { /* observers do not own work */ }
+
 }
 
 function sanitizePrewarmError(error: unknown) {
@@ -991,6 +1152,9 @@ export function normalizeOfflinePreparationDiagnostics(
       errorCode: value.homeList.status === "error" ? value.homeList.errorCode === "HOME_CACHE_SCOPE_MISMATCH" ? "HOME_CACHE_SCOPE_MISMATCH" : "HOME_CACHE_WRITE_FAILED" : null,
       requestId: typeof value.homeList.requestId === "string" && /^home-views-\d+-\d+$/.test(value.homeList.requestId) ? value.homeList.requestId : null,
     } } : {}),
+    ...(value.diagnosticWrite === "stored" || value.diagnosticWrite === "failed" ? { diagnosticWrite: value.diagnosticWrite } : {}),
+    ...(typeof value.recoveryOf === "string" ? { recoveryOf: value.recoveryOf } : {}),
+    ...(["RECOVERY_FAILED", "RECOVERY_NOT_DURABLE"].includes(value.runErrorCode ?? "") ? { runErrorCode: value.runErrorCode } : {}),
     appViews: {
       completed: normalizeCount(value.appViews?.completed),
       failed: normalizeCount(value.appViews?.failed),

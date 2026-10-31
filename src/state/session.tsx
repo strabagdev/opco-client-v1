@@ -1,3 +1,4 @@
+import {useOfflinePreparationRecovery} from "./use-offline-preparation-recovery";
 import { copyStateUpdateDiagnosticsWithCoverage } from "./state-update-coverage-copy";
 import { recordHomeNavigationTransport } from "@/lib/home-navigation-diagnostics";
 import {
@@ -22,9 +23,8 @@ import {
 } from "@/diagnostics/state-update-route-logic";
 import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import {
+  getOfflinePreparationExecution,
   OfflinePreparationDiagnostics,
-  isOfflinePreparationDiagnosticsCurrent,
-  offlinePreparationScopeKey,
   prewarmAssignedAppViewsOnce,
 } from "@/lib/app-view-prewarm";
 import { useConnectivityStatus } from "@/lib/connectivity";
@@ -184,11 +184,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const connectivityStatus = useConnectivityStatus();
   const showStateUpdateDiagnostics = shouldShowStateUpdateDiagnostics();
   const ownerKey = me && context ? buildOwnerKey(me, context) : null;
-  const offlinePreparationScopeRef = useRef<string | null>(null);
-  const offlinePreparationScope = ownerKey && selectedContractIdState
-    ? offlinePreparationScopeKey(ownerKey, selectedContractIdState)
-    : null;
   const isOfflinePreparationRunning = activeOfflinePreparationRuns.size > 0;
+  const preparationSession = useRef({ownerKey,contractId:selectedContractIdState,token});
+  useEffect(() => { preparationSession.current = {ownerKey,contractId:selectedContractIdState,token}; }, [ownerKey,selectedContractIdState,token]);
   const clearOfflinePreparationRuntime = useCallback(() => {
     setActiveOfflinePreparationRuns(new Set());
   }, []);
@@ -299,66 +297,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [definitionCache, ownerKey, selectedContractIdState]);
 
   const recordOfflinePreparationDiagnostics = useCallback((diagnostics: OfflinePreparationDiagnostics) => {
-    if (!diagnostics.scopeKey || diagnostics.scopeKey !== offlinePreparationScopeRef.current) {
-      return;
-    }
-
-    setOfflinePreparationDiagnostics(diagnostics);
-    const runKey = diagnostics.runId ?? diagnostics.prewarmStartedAt;
-
-    if (runKey) {
-      setActiveOfflinePreparationRuns((current) => {
-        const next = new Set(current);
-
-        if (diagnostics.status === "running") {
-          next.add(runKey);
-        } else {
-          next.delete(runKey);
-        }
-
-        return next.size === current.size && [...next].every((key) => current.has(key)) ? current : next;
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    offlinePreparationScopeRef.current = offlinePreparationScope;
-  }, [offlinePreparationScope]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function hydrateOfflinePreparationDiagnostics() {
-      await Promise.resolve();
-
-      if (!isMounted) return;
-
-      setOfflinePreparationDiagnostics(null);
-      setActiveOfflinePreparationRuns(new Set());
-
-      if (!ownerKey || !selectedContractIdState) {
-        return;
-      }
-
-      try {
-        const diagnostics = await definitionCache.getOfflinePreparationDiagnostics(ownerKey);
-
-        if (isMounted && isOfflinePreparationDiagnosticsCurrent(diagnostics, ownerKey, selectedContractIdState)) {
-          setOfflinePreparationDiagnostics(diagnostics);
-        }
-      } catch {
-        if (isMounted) {
-          setOfflinePreparationDiagnostics(null);
-        }
-      }
-    }
-
-    void hydrateOfflinePreparationDiagnostics();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [definitionCache, ownerKey, selectedContractIdState]);
+    const scope = preparationSession.current;
+    if (!scope.ownerKey || !scope.contractId || !scope.token) return;
+    const execution = getOfflinePreparationExecution({store:definitionCache,ownerKey:scope.ownerKey,contractId:scope.contractId,token:scope.token});
+    if (execution.diagnostics?.runId !== diagnostics.runId) return;
+    setOfflinePreparationDiagnostics(execution.diagnostics);
+    setActiveOfflinePreparationRuns(new Set(execution.active ? [diagnostics.runId ?? "preparation"] : []));
+  }, [definitionCache]);
 
   const {
     isStateUpdateDiagnosticSyncing,
@@ -444,6 +389,25 @@ export function SessionProvider({ children }: PropsWithChildren) {
     status,
     syncPendingStateUpdatesWithTelemetry,
     token,
+  });
+
+  useOfflinePreparationRecovery({ api, store:definitionCache, ownerKey, contractId:selectedContractIdState,
+    token, connectivityStatus,
+    canRecover: (status === "authenticated" || status === "offline") && !isAuthSessionRestoring && !isOperationalCoreReadinessChecking && !isPendingWorkSyncing,
+    beforeRecovery: async () => {
+      const scope = preparationSession.current;
+      if (!scope.ownerKey || !scope.token) return false;
+      const pending = await definitionCache.countPendingOperations(scope.ownerKey);
+      const operations = await definitionCache.listPendingStateUpdateOperations(scope.ownerKey);
+      if (pending > 0 || operations.length > 0) await syncPendingRecords();
+      if (preparationSession.current.ownerKey !== scope.ownerKey || preparationSession.current.contractId !== scope.contractId || preparationSession.current.token !== scope.token) return false;
+      return (await definitionCache.countPendingOperations(scope.ownerKey)) === 0 &&
+        (await definitionCache.listPendingStateUpdateOperations(scope.ownerKey)).length === 0;
+    },
+    onChange: execution => {
+      setOfflinePreparationDiagnostics(execution.diagnostics);
+      setActiveOfflinePreparationRuns(new Set(execution.active ? [execution.diagnostics?.runId ?? "preparation"] : []));
+    },
   });
 
   const retryFailedRecordOperation = useCallback(async (manualRetryToken: string) => {

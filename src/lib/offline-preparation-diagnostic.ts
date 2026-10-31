@@ -5,6 +5,10 @@ export function offlinePreparationFailureRows(diagnostics: OfflinePreparationDia
   if (!diagnostics) return [["Fallos individuales", "Sin ejecución registrada"]];
   const rows = [["runId", diagnostics.runId ?? "Sin información"], ["Scope", diagnostics.scopeKey ?? "Sin información"],
     ["Lista de Inicio", diagnostics.homeList ? `fase=cache_write | resultado=${diagnostics.homeList.status} | cantidad=${diagnostics.homeList.count} | fecha=${diagnostics.homeList.syncedAt ?? "Sin información"} | código=${diagnostics.homeList.errorCode ?? "none"} | requestId=${diagnostics.homeList.requestId ?? "none"}` : "No verificada por esta versión histórica"]];
+  if (diagnostics.diagnosticWrite) rows.push(["Persistencia del diagnóstico", diagnostics.diagnosticWrite === "failed"
+    ? "No se pudo guardar el diagnóstico principal; reconciliar el recibo sin repetir descargas" : "Guardado"]);
+  if (diagnostics.recoveryOf) rows.push(["Recuperación de run", diagnostics.recoveryOf]);
+  if (diagnostics.runErrorCode) rows.push(["Error de recuperación", diagnostics.runErrorCode]);
   if (!diagnostics.failedAppViews) {
     return [...rows, ["Fallos individuales", "Detalle no conservado por esta versión; repetir la preparación para capturarlo"]];
   }

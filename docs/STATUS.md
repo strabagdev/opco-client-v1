@@ -3341,3 +3341,31 @@ AppView configurada con editor antiguo. Sin migraciones,namespace o payloads nue
 Inventario/parches/checks verificables:backups/subject-presentation-close/2026-10-29/.
 402exclusiones y pendientes ajenos preservados. Continúan separados la interrupción11/13 sin causa
 y la preparación de todas las experiencias al volver a Inicio. Sin publicación/activación. V11 pausado.
+
+
+## Recuperación del ciclo de preparación — LOCAL, SIN PUBLICAR — 2026-10-30
+
+Coordinador vivo como fuente de actividad, replay por usuario/contrato/sesión y deadline HTTP hasta
+consumir cuerpo. Run abandonado: una reclamación durable antes de recuperar con el preparador existente,
+también con cero escrituras; fallo terminal sin bucles. Recibo separado conserva un terminal cuyo
+diagnóstico principal no se pudo guardar; se muestra y puede reconciliar sin nuevas descargas.
+Si ambos metadatos fallan y se pierde el runtime, no se promete reconocer una finalización no persistida.
+
+219 casos focalizados PASS reutilizados + una regresión complementaria PASS (SQLite real y reapertura, scopes/respuestas tardías, recuperación única,
+Attendance/outbox/conflictos/confirmación); typecheck/lint afectados y diff-check PASS. Chrome153/OPFS real,
+perfil exclusivo y cierre completo:11/13→reapertura offline→reconexión automática sin clic/cero pendientes
+→13/13→otra reapertura offline. Transporte sintético, sin Core/Safari/cámara o sync productivo acreditados.
+Export local indispensable para OPFS; no suite completa. Cuatro fallos antiguos siguen fuera del alcance.
+
+Política intacta: reentrar normalmente a Inicio prepara todas las experiencias. El incidente histórico
+11/13 sigue sin atribuirse; esta entrega no acredita estabilidad offline general. Detalle/limitaciones en
+STATE_UPDATE, «Recuperación acotada de preparación». Inventario/parche/checks/hashes duraderos:
+`backups/offline-preparation-recovery/2026-10-30/`. Las402exclusiones y pendientes ajenos se preservan.
+Sin producción, Core, migración, configuración, commit/push/deploy; V11 pausado.
+
+Cierre técnico:15archivos/47hunks, runtime idéntico; nueva prueba de diagnóstico legacy y reclamación
+durable durante tres reaperturas. Build habitual PASS usando caché temporal propia; API pública,epoch2,
+index/sw y lector JS/WASM precacheado verificados. Primer artefacto rechazado por URL loopback conservada;
+sin cambios de configuración ni limpieza de cachés ajenas. Sin repetir navegador/suite. Listo para
+siguiente etapa de publicación autorizada; todavía sin commit/push/deploy. Respaldo final:
+backups/offline-preparation-recovery-close/2026-10-30/. Mantener límites explícitos ya documentados.

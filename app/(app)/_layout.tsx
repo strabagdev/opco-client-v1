@@ -167,6 +167,8 @@ export default function AppLayout() {
     offlinePreparationProgress: offlinePreparationDiagnostics?.appViews ?? null,
     offlinePreparationStatus: offlinePreparationDiagnostics?.status ?? null,
     offlinePreparationHomeListFailed: offlinePreparationDiagnostics?.homeList?.status === "error",
+    offlinePreparationDiagnosticWriteFailed: offlinePreparationDiagnostics?.diagnosticWrite === "failed",
+    offlinePreparationRecoveryFailed: Boolean(offlinePreparationDiagnostics?.runErrorCode),
     pendingCount: pendingRecordsCount,
     syncConfirmationVisible: toast?.id === "sync-success",
     writeFeedback,

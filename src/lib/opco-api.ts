@@ -1241,10 +1241,14 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     const diagnosticSyncRunId = init.diagnosticSyncRunId ?? null;
     const requestTimeoutMs = init.timeoutMs ?? timeoutMs;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      abortControllerTriggered = true;
-      controller.abort();
-    }, requestTimeoutMs);
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        abortControllerTriggered = true;
+        controller.abort();
+        reject(Object.assign(new Error("Request timed out"), { name: "AbortError" }));
+      }, requestTimeoutMs);
+    });
     const {
       diagnosticAttemptNumber: _diagnosticAttemptNumber,
       diagnosticOperation: _diagnosticOperation,
@@ -1253,22 +1257,8 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       ...fetchInit
     } = init;
 
-    try {
-      response = await fetcher(`${apiUrl}${path}`, {
-        ...fetchInit,
-        signal: controller.signal,
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          ...fetchInit.headers,
-          [OPCO_REQUEST_ID_HEADER]: diagnosticRequestId,
-        },
-      });
-      responseStarted = true;
-      fetchResolvedAt = new Date();
-      responseRequestId = sanitizeDiagnosticRequestId(response.headers.get(OPCO_REQUEST_ID_HEADER));
-      serverTiming = parseServerTimingHeader(response.headers.get("Server-Timing"));
-    } catch (error) {
+    function networkFailure(error: unknown) {
+      const timedOut = abortControllerTriggered || isAbortError(error);
       const diagnostics = requestDiagnostics({
         abortControllerTriggered,
         attemptNumber: diagnosticAttemptNumber,
@@ -1277,9 +1267,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         diagnosticSyncRunId,
         errorCode: null,
         fetchResolvedAt,
-        httpStatus: null,
+        httpStatus: responseStarted ? response.status : null,
         init,
-        operationResult: isAbortError(error) ? "transport_timeout" : "network_error",
+        operationResult: timedOut ? "transport_timeout" : "network_error",
         path,
         requestStartedAt,
         requestStartedMs,
@@ -1292,13 +1282,29 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       });
       safeRequestDiagnostics(options.onRequestDiagnostics, diagnostics);
 
-      if (isAbortError(error)) {
-        throw new OpcoNetworkError("La solicitud a Opco agoto el tiempo de espera.", diagnostics);
-      }
+      return new OpcoNetworkError(timedOut
+        ? "La solicitud a Opco agoto el tiempo de espera."
+        : "No fue posible conectar con Opco.", diagnostics);
+    }
 
-      throw new OpcoNetworkError("No fue posible conectar con Opco.", diagnostics);
-    } finally {
-      clearTimeout(timeoutId);
+    try {
+      response = await Promise.race([fetcher(`${apiUrl}${path}`, {
+        ...fetchInit,
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...fetchInit.headers,
+          [OPCO_REQUEST_ID_HEADER]: diagnosticRequestId,
+        },
+      }), deadline]);
+      responseStarted = true;
+      fetchResolvedAt = new Date();
+      responseRequestId = sanitizeDiagnosticRequestId(response.headers.get(OPCO_REQUEST_ID_HEADER));
+      serverTiming = parseServerTimingHeader(response.headers.get("Server-Timing"));
+    } catch (error) {
+      clearTimeout(timeoutId!);
+      throw networkFailure(error);
     }
 
     responseBodyStartedAt = new Date();
@@ -1306,9 +1312,12 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     let responseParseFailed = false;
 
     try {
-      body = await response.json();
-    } catch {
+      body = await Promise.race([response.json(), deadline]);
+    } catch (error) {
+      if (abortControllerTriggered || isAbortError(error)) throw networkFailure(error);
       responseParseFailed = true;
+    } finally {
+      clearTimeout(timeoutId!);
     }
 
     responseParsedAt = new Date();
