@@ -243,3 +243,8 @@ function readJwtExpirationMs(token: string) {
     return null;
   }
 }
+
+/** Remote changes have no push signal. Reconnect/resume revalidate reads even without writes. */
+export function shouldRevalidateAssignedPreparation(trigger: StateUpdateSyncTrigger, pendingWork: boolean) {
+  return pendingWork || trigger === "reconnect" || trigger === "foreground/resume";
+}

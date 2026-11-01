@@ -181,4 +181,12 @@ describe("reconnect sync controller", () => {
     expect(runSync).toHaveBeenCalledTimes(2);
     expect(onSynced).toHaveBeenCalledOnce();
   });
+  it("does not publish a read-refresh signal when readiness or scope cancelled the lifecycle", async () => {
+    const onSynced = vi.fn(), runSync = vi.fn(async () => false as const);
+    const controller = createReconnectSyncController({ debounceMs: 100, runSync, onSynced });
+    controller.handleConnectivityStatus("offline"); controller.handleConnectivityStatus("online");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(runSync).toHaveBeenCalledOnce(); expect(onSynced).not.toHaveBeenCalled(); controller.dispose();
+  });
+
 });

@@ -1,3 +1,4 @@
+import { watchAttendanceLocalDay } from "@/lib/attendance-local-day";
 import { CompactSelect } from "@/components/compact-select";
 import { usePublishDesktopCatalog } from "@/components/desktop-navigation";
 import { desktopNavigation } from "@/lib/desktop-navigation";
@@ -5,6 +6,7 @@ import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { Link, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +37,7 @@ export default function HomeScreen() {
     definitionCache,
     ownerKey,
     recordOfflinePreparationDiagnostics,
+    recordsReconnectRefreshKey,
     selectedContractId,
     setSelectedContractId,
     status,
@@ -64,7 +67,12 @@ export default function HomeScreen() {
     if (hasCompatibleViews) publishCatalog(JSON.stringify([ownerKey, selectedContractId]), views);
   }, [hasCompatibleViews, ownerKey, selectedContractId, views, publishCatalog]);
   const selectedCategory = isWideLayout ? desktopNavigation(hasCompatibleViews ? views : [], "/", category).selectedCategory : null;
-  const today = formatLocalDateInput(new Date());
+  const [today, setToday] = useState(() => formatLocalDateInput(new Date()));
+  useEffect(() => {
+    const clock = watchAttendanceLocalDay(setToday);
+    const resume = AppState.addEventListener("change", state => { if (state === "active") clock.refresh(); });
+    return () => { clock.dispose(); resume.remove(); };
+  }, []);
   const currentMonthDates = useMemo(() => currentMonthDateKeys(new Date(`${today}T00:00:00`)), [today]);
 
   const selectedContract = useMemo(
@@ -238,7 +246,8 @@ export default function HomeScreen() {
             ownerKey,
             store: definitionCache,
             token,
-            trigger: "home",
+            trigger: viewsRetryVersion > 0 ? "manual-retry" : "home",
+            reuseCompleted: viewsRetryVersion === 0,
           }).finally(() => {
             if (isMounted) {
               void availabilityRefreshRef.current?.request();
@@ -261,7 +270,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope]);
+  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope, recordsReconnectRefreshKey]);
 
   useEffect(() => {
     availabilityViewsRef.current = views;

@@ -3387,3 +3387,212 @@ caché propia produce API pública, sin modificar configuración/compilador ni b
 No se atribuye una causa más amplia a ese comportamiento de caché. Build no equivale a deploy.
 Parche/inventario/hashes/checks finales:backups/offline-preparation-recovery-close/2026-10-30/.
 Límite de ambos destinos fallidos, causa histórica desconocida y política de reentrada permanecen intactos.
+
+
+## Inicio: reutilización verificada de preparación — LOCAL, SIN PUBLICAR — 2026-11-01
+
+Sobre Client2d00e933. Sustituye únicamente la política histórica de repetir todas las preparaciones al
+volver a Inicio; la recuperación única publicada de runs abandonados y su hook permanecen idénticos.
+No hay feed, ETag, versión de datos o señal remota por experiencia en el contrato de lectura actual.
+`/views` detecta asignaciones/configuración de AppViews, no cambios silenciosos en registros o campos de
+entidad. **Cobertura es contenido persistido, no frescura remota**. Sin señal, permanecer online y volver
+a Inicio no permite saber si otro cliente escribió: no se promete descubrir ese cambio en ese acto.
+
+Política acotada por eventos, sin TTL ni polling: conservar la lista local inmediata y revalidar `/views`
+al entrar; reutilizar sólo dentro del mismo runtime SQLite, usuario/contrato/token y día aplicable,
+tras un trabajo efectivamente terminado y pruebas locales legibles. Reapertura online, reconexión real,
+retorno del segundo plano y actualización explícita mantienen revalidación. La entrada online a cada
+experiencia conserva sus lecturas existentes; contextos STATE_UPDATE compuestos conservan el preparador
+automático del contexto seleccionado. No se descarga ningún producto cartesiano. Cambios remotos sin
+señal se observan al ejecutar esas lecturas/eventos, no mediante un marcador complete ni al pasar tiempo.
+
+El coordinador conserva en memoria por AppView el resultado verificable: definición/configuración,
+fuente preparada y marcadores requeridos; Attendance exige todos los días del mes y los lectores actuales
+siguen acreditando persistencia incluida Observación. Current fechado exige cobertura sourceComplete y
+sujetos verificados por el lector v10. Un latest parcial puede reutilizarse como la misma página parcial,
+conservando ese límite; RECORDS/REPORT/PANEL conservan el alcance de preparación anterior, sin inventar
+cachés completas. Presentación configurada se contrasta con su verificador existente. Ausencia/error de
+lectura/prueba incompleta impide reutilizar esa AppView. Un fallo de la lista de Inicio sigue terminal
+explícito; no se certifica el requisito sólo por conservar otras definiciones. Recibo/diagnóstico completed
+no sustituye estas comprobaciones ni se usa como autorización de frescura tras reabrir.
+
+Hay un solo flight por scope; reentrar comparte trabajo activo. Cambiar definiciones, día o generación
+durante él mantiene una pasada posterior. El epoch capturado antes de leer evita reutilizar un resultado
+anterior a la invalidación. Configuración/asignaciones nuevas, eliminación de una asignación y pérdida de
+marcadores se resuelven por las AppViews afectadas, manteniendo la lista completa para reconciliar
+asignaciones y sin consumir intenciones retiradas. Los éxitos de un run parcialmente fallido se conservan
+para no repetirlos al recuperar otro. No se alteran filas/outbox, conflictos, autorización o confirmaciones.
+Los contadores del diagnóstico describen el conjunto trabajado en ese run, no todos los datos offline.
+
+### Disparadores, alcance y deduplicación
+
+| Evento | Lectura de pantalla | Preparación offline | Envío / protección |
+| --- | --- | --- | --- |
+| Primera entrada / runtime o token nuevo | Cache local inmediato + `/views` autorizado | Sin prueba en memoria: asignadas, alcance original | Guardados y sync existentes, sin motor nuevo |
+| Volver a Inicio, mismas pruebas | Cache + `/views`; sigue comprobación local | No repite descargas verificadas; sólo ausentes/inválidas | No inicia envíos por la navegación |
+| Reentrada durante run | Comparte `/views` en curso donde corresponde | Misma promesa; no otro run por observarla | Outbox intacta |
+| Asignación/configuración cambiada | Lista remota; mantiene contenido compatible | Sólo nuevas/cambiadas; retiradas reconcilian definiciones | Retiro no elimina filas ni outbox |
+| Día local nuevo | Reloj existente a medianoche y al resume, sin UTC | Reevalúa sólo pruebas de fecha aplicable | Sin cambiar DATE, límites Attendance ni otros workflows |
+| offline→online | Lifecycle existente: readiness/auth/contexto y `/views` | Invalida generación y revalida, también con cero escrituras | Mismo push antes de refresh; cancelación/readiness no emiten éxito de lectura |
+| background→active online | Mismo lifecycle, single-flight | Revalidación por evento; copia anterior visible | Sigue gating/scope existente, sin polling |
+| Sync completado / invalidación local | Señal existing records refresh notifica Inicio; lectores actuales conservados | Si falta prueba, sólo experiencias afectadas; señal global opaca conserva alcance conservador | No se cambian comandos/idempotencia/conflictos |
+| Reapertura offline | Lista/definiciones/snapshots persistidos | No toma completed como frescura ni prepara sin respuesta online | Pendientes y conflictos sobreviven |
+| Abandono acreditado | Reconciliación publicada | Recuperación única/receipt intactos | No se rearma el claim por navegación |
+
+La revalidación de reconexión/resume se concentra en `use-pending-work-lifecycle`, no se agrega otro
+preparador al hook de recuperación. `unknown→online` inicial sin pendientes conserva el gate anterior;
+la primera carga online de Inicio ya prepara. El coordinador de reconexión diferencia cancelación de
+lectura terminada, evitando avisar a Inicio tras bloqueo de readiness o cambio de scope. No se cambian
+métodos HTTP, endpoints, auth, envío de outbox, esquema, namespace o Core. Campos de entidad cambiados
+sin cambiar `/views` carecen de señal: se observan al revalidar los workflows/entidades existentes.
+
+### Evidencia local y límites
+
+Fixture idéntico HEAD/candidato:48sujetos, dos AppViews STATE_UPDATE/Attendance, current por lotes20,
+30días de noviembre. API/eventos simulados, preparadores y sqlite3 reales, cierre/reapertura de archivo.
+Las cifras son invocaciones equivalentes a GET; no hubo socket HTTP/Core/PostgreSQL o navegador nuevos.
+Current es subconjunto de workflow: no sumarlo dos veces. No incluyen auth/readiness del lifecycle real.
+
+| Recorrido | GET equivalentes totales | Current por lotes | Attendance | Operaciones SQL | ms locales |
+| --- | --- | --- | --- | --- | --- |
+| Entrada | 38 → 38 | 3 → 3 | 30 → 30 | 1368 → 1407 | 903.3 → 974.8 |
+| Tres reentradas | 114 → 3 | 9 → 0 | 90 → 0 | 4108 → 127 | 1363.5 → 26.1 |
+| Reconexión | 38 → 38 | 3 → 3 | 30 → 30 | 1370 → 1409 | 397.6 → 316.9 |
+
+La comprobación añade39lecturas SQL en la primera preparación/reconexión; no se oculta ese coste.
+En tres reentradas sólo quedan3`/views`, se reutilizan dos preparaciones; sin descargas current ni del mes.
+Cambiar la definición de Attendance o perder su día: HEAD rehace3current ajenos; candidato0 y recupera
+sólo Attendance. Cola final0, current complete48/48, latest partial20/48 sin promoción, conflictos y
+outbox byte a byte iguales, reapertura offline conservaR2 e integrity_check=ok. Sin señal, R1 permanece
+como copia local y se actualiza aR2 al invalidar/reconectar: prueba explícita de cobertura≠frescura.
+Tiempos de una muestra local, no extrapolables a producción, OPFS o Safari.
+
+165 casos focalizados únicos PASS (sin suite completa, un worker/timeouts estándar), incluidas tres
+regresiones RED en HEAD→GREEN, cambio de día/usuario/contrato/definición, invalidación retenida, lifecycle
+con cero escrituras, cancelar lectura por scope/readiness, abandono/recibo y Attendance/confirmaciones.
+Typecheck/lint afectados/diff-check PASS. No build/navegador/cámara nuevos; cambios de calendario usan el
+watcher ya existente, sin añadir APIs Expo. Cuatro fallos preexistentes de mocks searchComparison siguen
+independientes, no se presentan como PASS ni se modifican. El incidente histórico11/13 permanece sin
+causa correlacionada; esto no acredita estabilidad offline general. Preservados402exclusiones y demás
+pendientes, Core e índices/HEAD intactos. Respaldo reconstruible:backups/home-preparation-reuse/2026-11-01/.
+Sin configuración productiva, migraciones, commit, push, deploy o acceso productivo. V11 pausado.
+
+
+### Cierre Chromium/OPFS de reutilización — BLOQUEADO, NO PUBLICAR — 2026-11-01
+
+Reconstrucción exacta inicial10archivos/39hunks y hashes PASS. Runtime idéntico:se reutilizan165casos,
+typecheck/lint; build habitual22.052s PASS con caché temporal propia, API efectiva https://web.opco.cl,
+epoch2,index/sw coincidentes y lector JS/WASM local precacheado. No suite nueva ni cambios funcionales.
+
+Chromium153/OPFS/SW/router/renderers reales, perfiles exclusivos; API sintética interceptada y destinos
+productivos bloqueados. Cambio de pestaña generó visibilitychange nativo y CDP de red eventos online/
+offline nativos (`isTrusted=true`), sin dispatchEvent manual. No implica radio/internet físico ni Core.
+Tres reentradas a STATE_UPDATE no iniciaron otro run. Control de exactamente tres más R1→R2/foreground:
+un run nuevo, R2 persistido y cola0. Una entrada fue estable también. Concurrencia en control independiente
+con renderer RECORDS:reentrada comparte run retenido, invalidación por reconexión deja uno posterior,
+R5 current complete3/3 y latest partial2/3. No más solicitudes en ventana500ms; código sin polling añadido.
+Cierre completo de Chromium (exit0), reapertura offline del mismo perfil y renderer STATE_UPDATE real:
+R5 y lista3 persistidos, sin run nuevo, epoch2, cola0 e integrity_check=ok.
+
+**Bloqueo:** el recorrido adicional de cuatro entradas STATE_UPDATE antes de foreground/R1→R2 produjo
+ráfaga de lecturas y cola creciente en candidato:942GET equivalentes STATE_UPDATE acumulados (9tras
+las tres reentradas; incluye lecturas del preparador y del renderer) y23operaciones SQL en espera; reconexión llegó a1889GET acumulados y otro tramo con cuerpo retenido alcanzó
+cola66/cobertura parcial. No eran cientos de runs:el contador global avanzó sólo una vez por evento.
+Un cuerpo retenido venció; intentar liberarlo después produjo un error del arnés sobre un stream abortado.
+Ese error de liberación no se atribuye al runtime ni a VFS; el recorrido conjunto no quedó acreditado.
+
+Contraste acotado HEAD2d00e933, fixture completo equivalente con R1→R2 y cuatro entradas, perfiles/bases
+independientes:sin ráfaga en la ventana observada, cola0 después de foreground y del handler existente
+de sync vacío;8GET STATE_UPDATE adicionales en ese último control, sin escrituras de negocio. La lectura
+automática de HEAD con cero pendientes estaba gated; no se equipara a una actualización remota exitosa.
+Primero hubo un fixture con IDs de configuración omitidos y un contraste sin cambio R2:ambos se conservan
+como evidencia preliminar NO concluyente. El fixture completo también reprodujo el bloqueo; no se presenta
+la omisión como causa. Tres entradas/una entrada estables y cuatro problemáticas son ensayos observados,
+no un umbral determinista demostrado. No está aislada la causa a una línea o callback; el diferencial
+impide aprobar el lote. No se amplía la política ni se corrige el renderer en este cierre.
+
+Falta aislar y corregir la realimentación de lecturas en navegación repetida/foreground, manteniendo
+la revalidación de Inicio visible, y repetir ese recorrido. Recepción de recordsReconnectRefreshKey,
+consumidores retenidos y generación de callbacks son fronteras para trazar, no causas ya probadas.
+Cobertura≠frescura:permanecer online sin señal no garantiza detectar cambios remotos; no TTL/polling.
+Incidente11/13 aún sin causa histórica; recuperación publicada y sus límites siguen intactos. Respaldo:
+backups/home-preparation-reuse-close/2026-11-01/. Core,402exclusiones y pendientes preservados; sin
+producción, commit/push/deploy. V11 pausado. **Cierre BLOQUEADO**, aunque checks estáticos y unidades pasen.
+
+
+### Ráfaga de lectura home-preparation-reuse — CORRECCIÓN LOCAL, PUBLICACIÓN BLOQUEADA — 2026-11-01
+
+La cadencia rápida archivada reproduce una realimentación, no cientos de preparaciones. Con cuatro
+entradas STATE_UPDATE y un visibilitychange nativo al volver a Inicio, el nuevo refresco sin escrituras
+alimenta un acoplamiento previo del renderer: escrituras diagnósticas read/modify/write intercaladas
+alternan el syncRunId vacío/del foreground; éste cambiaba recordVisibleError → loadWorkflow → efectos
+inicial/de búsqueda. Sus GET generan más telemetría y repiten el ciclo, incluso con Inicio visible y
+renderers retenidos en navegación. Traza pasiva:2.436 escrituras,587 transiciones de esos IDs. Un único
+evento de foreground y un único run global nuevo; no se acredita duplicación de listeners ni un bucle
+del coordinador como causa. Con pausas entre entradas no se reprodujo: no es un umbral determinista de4.
+
+Corrección mínima: recordVisibleError lee el run diagnóstico vigente mediante ref actualizada en layout,
+sin cambiar de identidad por observaciones diagnósticas. Las señales reales de refresh, búsqueda y
+scope siguen siendo dependencias de lectura. No se cambian consultas, cobertura, política de Inicio,
+serialización de telemetría, payloads, outbox o recuperación publicada. No se suprime ninguna actualización
+necesaria ni se añade TTL/polling. La regresión ejecuta callbacks/dependencias/efectos reales del renderer:
+antes12 lecturas frente a2esperadas y3frente a1tras refresh; después GREEN. Error conserva run vigente.
+
+Control idéntico, API sintética/Chromium153/OPFS real, cinco segundos desde foreground nativo:
+
+| Versión | STATE_UPDATE antes de foreground | Nuevas lecturas STATE_UPDATE en5s | Nuevas API totales en5s | Cola a5s | Revisión |
+| --- | ---: | ---: | ---: | ---: | --- |
+| HEAD2d00e933 |23|0|0|0|R1, sin revalidar con cero pendientes |
+| Candidato original |11|311|338|44|R2; lecturas siguen activas |
+| Corrección |10|4|42|0|R2, termina |
+
+El único GET de diferencia antes de foreground es el debounce pendiente de la cuarta entrada. De311,
+308son GET del renderer con page/pageSize;3son definición/current del preparador. En corregido:1renderer,
+1definición,2lotes current; permanecen30lecturas Attendance del mes y el trabajo de fuente/catálogo/auth.
+Los runIds reales, requests por endpoint/AppView/disparador y límites de atribución constan en comparison.json
+/request-breakdown del respaldo. No inventar un runId de preparación para peticiones del renderer: no lo
+transportan. El ensayo rápido más largo también conservó cola23 con2runs, comparable a la ráfaga archivada.
+
+Recorrido conjunto corregido:foregroundR2, reconexiónR3, cuerpo retenidoR4, reentrada comparte run y
+reconexión durante preparación conserva pasada posteriorR5.243API acumuladas; ninguna nueva durante
+1,5s adicionales, cola0 y sin actividad. Cierre total de Chromium y reapertura offline del mismo perfil:
+lista3,R5,current complete3/3,latest partial2/3,epoch2 e integrity_check=ok. Eventos del navegador nativos,
+transporte/valores sintéticos; no Core/PostgreSQL, Safari físico, radio real o escrituras productivas.
+
+44casos focalizados cubiertos: primera pasada43/44, un fallo a5268,8ms/STACK_TRACE_ERROR en prueba SQLite;
+repetición del archivo13/13 con timeout estándar (primer caso1083ms). Se conserva el fallo; causa de esa
+pasada no demostrada ni timeout aumentado. Regresión final2RED→2GREEN. Typecheck/lint afectados/build y
+artefacto API pública/epoch2/index/sw/lector local precacheado PASS.165casos previos sólo se reutilizan
+para archivos idénticos; no suite completa. Cuatro fallos preexistentes y causa histórica11/13 siguen aparte.
+
+Respaldo:backups/home-preparation-read-storm/2026-11-01/. Inventario combinado actualizado, parche de
+corrección separado y reconstrucción sobre HEAD; publicación sigue BLOQUEADA por instrucción del usuario,
+pendiente de revisión del lote modificado. Prefijos documentales/402exclusiones/Core/recuperación publicada
+intactos. No se declara estabilidad offline general ni arreglados otros problemas diagnósticos. V11 pausado.
+
+Inventario combinado de esta investigación:12archivos/43hunks;delta separado sobre el candidato archivado.
+
+
+### Cierre del candidato combinado de reutilización y ráfaga — LISTO PARA PUSH, SIN PUBLICAR — 2026-11-01
+
+El lote12archivos/43hunks se reconstruyó exactamente desde el respaldo de la corrección.306archivos
+coinciden con el árbol fuente usado para build/typecheck/lint y Chromium/OPFS; la actualización final
+es documental. Parche/hashes y diff-check PASS. Sin cambios funcionales adicionales ni otra política.
+
+Única ejecución del conjunto que obtuvo43/44:5archivos,44/44PASS,1worker,timeout estándar5s,13,974s.
+Incluye13regresiones SQLite con reapertura, observación diagnóstica estable, conflictos/feedback y la
+regresión de la ráfaga. Se conserva el primer fallo a5268,8ms/STACK_TRACE_ERROR: su causa sigue sin
+acreditarse y estePASS no demuestra por qué ocurrió; no se repitió hastaPASS ni se elevó el timeout.
+
+Se reutilizan los recorridos ya archivados del mismo runtime:foregroundR1→R2,4STATE_UPDATE en5s y cola0,
+lecturas terminadas, reentrada durante ejecución, reconexión/invalidation con pasada posteriorR5, y
+cierre completo/reapertura offline en OPFS con currentcomplete3/3/latestpartial2/3/integridadok. Son API
+simulada y Chromium real, no Core/PostgreSQL/Safari físico. Datos remotos sin señales siguen sin garantía
+de frescura; no TTL/polling. No se afirma estabilidad general ni se resuelve históricamente11/13.
+
+El bloqueo de publicación era el cierre pendiente del runtime corregido/pasada conjunta; no queda un
+bloqueo técnico demostrado de este lote. Queda listo para push bajo autorización posterior, sin ejecutar
+commit/push/deploy. Respaldo final reconstruible:backups/home-preparation-reuse-read-storm-close/2026-11-01/.
+Resultados JSON, metadatos de checks, hashes y evidencia sintética previa permanecen disponibles. Logs
+rechazados no copiados ni respaldados por otra vía.402exclusiones/prefijos ajenos/Core/recuperación publicada
+y respaldos anteriores intactos. Cuatro fallos preexistentes siguen aparte. V11 pausado.

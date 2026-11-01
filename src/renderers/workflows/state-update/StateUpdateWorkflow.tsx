@@ -220,6 +220,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.syncRunId ??
     stateUpdateReconnectDiagnostics.lastStateUpdateSync?.syncRunId ??
     null;
+  // Diagnostic writes observe reads; they must not invalidate the read callbacks.
+  const currentStateUpdateSyncRunIdRef = useRef(currentStateUpdateSyncRunId);
+  useLayoutEffect(() => {
+    currentStateUpdateSyncRunIdRef.current = currentStateUpdateSyncRunId;
+  }, [currentStateUpdateSyncRunId]);
 
   const hasDate = Boolean(visibleResponse?.dateFieldId ?? appView.config.dateFieldId);
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
@@ -318,7 +323,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       error: nextError,
       operation,
       resolution,
-      syncRunId: operation === "refresh" || operation === "sync" ? currentStateUpdateSyncRunId : null,
+      syncRunId: operation === "refresh" || operation === "sync" ? currentStateUpdateSyncRunIdRef.current : null,
     });
 
     setVisibleErrorDiagnostics(event);
@@ -326,7 +331,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     if (ownerKey) {
       void definitionCache.recordStateUpdateVisibleErrorEvent(ownerKey, event).catch(() => undefined);
     }
-  }, [currentStateUpdateSyncRunId, definitionCache, ownerKey, setVisibleErrorDiagnostics]);
+  }, [definitionCache, ownerKey, setVisibleErrorDiagnostics]);
 
   const recordedPreparationError = useRef<unknown>(null);
   useEffect(() => {

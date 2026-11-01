@@ -3369,3 +3369,87 @@ index/sw y lector JS/WASM precacheado verificados. Primer artefacto rechazado po
 sin cambios de configuración ni limpieza de cachés ajenas. Sin repetir navegador/suite. Listo para
 siguiente etapa de publicación autorizada; todavía sin commit/push/deploy. Respaldo final:
 backups/offline-preparation-recovery-close/2026-10-30/. Mantener límites explícitos ya documentados.
+
+
+## Inicio: no repetir preparación sólo por reentrada — LOCAL, SIN PUBLICAR — 2026-11-01
+
+Client2d00e933:reutiliza trabajo por AppView sólo dentro del mismo runtime/usuario/contrato/token/día,
+con definición y pruebas persistidas válidas. Sigue mostrando lista local inmediata y consultando
+`/views`; un marcador completed no se convierte en frescura. Sin feed remoto, la revalidación se limita
+a eventos: apertura online nueva, reconexión, resume, cambios detectables de configuración y lecturas
+online de experiencias. No TTL/polling. La recuperación única publicada permanece intacta.
+
+Fixture48sujetos/2AppViews/lotes20/30días, API simulada+sqlite3 real:3reentradas pasan114→3GET equivalentes,
+4108→127operacionesSQL; reconexión conserva38GET y obtieneR2. Primera preparación conserva38GET, agrega39
+lecturas de prueba; no se oculta ese coste. Definición o día Attendance inválido:current ajeno3→0. Datos,
+cobertura current completa y latest parcial, conflictos/outbox e integridad sobreviven la reapertura.
+165regresiones focalizadas PASS, typecheck/lint/diff-check; sin suite/build/navegador/Core nuevos.
+
+Señales de reconexión/resume se ejecutan en el lifecycle existente, incluso sin escrituras, manteniendo
+push/readiness/scopes y sin otro motor. Cancelación de lectura no notifica éxito. Reentrada durante run
+comparte promesa; invalidación real conserva pasada posterior. Campos remotos sin señal no se prometen
+actualizados sólo por navegar:detalle/política y mapa en STATE_UPDATE, sección1-11. El incidente11/13 y
+los4fallos de mocks siguen independientes; sin estabilidad offline general.402exclusiones y pendientes
+preservados. Respaldo:backups/home-preparation-reuse/2026-11-01/. Sin commit/push/deploy/producción; V11 pausado.
+
+
+### Cierre home-preparation-reuse — BLOQUEADO — 2026-11-01
+
+10archivos/39hunks reconstruidos; runtime idéntico,165pruebas/typecheck/lint reutilizados. Build web PASS,
+API pública/epoch2/index/sw/JS-WASM lector precacheado verificados. Chromium/OPFS reales con API simulada:
+tres reentradas sin nuevo run; control de tres+foreground con R2/cola0; concurrencia independiente conserva
+pasada posterior/R5; cierre/reapertura offline conserva datos y current complete, latest parcial, integridadok.
+
+No aprobar:en ensayo adicional de cuatro entradas STATE_UPDATE+foreground/R1→R2 apareció ráfaga hasta942GET acumulados
+y cola23, después1889GET acumulados tras reconectar y cola66 durante retención. Global runs no se duplicaron
+así:se repiten lecturas del workflow. HEAD equivalente no mostró la ráfaga en el control observado; fuente
+exacta todavía no aislada. Intentos iniciales con metadata incompleta/contraste R2 no igualado se preservan
+como no concluyentes. No se corrigió ni amplió implementación. Detalle/números/límites en STATE_UPDATE y
+backups/home-preparation-reuse-close/2026-11-01/. Cobertura y frescura siguen distintas, sin TTL/polling.
+Core/402exclusiones/pendientes/recuperación publicada intactos. Sin commit/push/deploy/producción; V11 pausado.
+
+
+### Investigación de ráfaga home-preparation-reuse — CORRECCIÓN LOCAL, NO PUBLICAR — 2026-11-01
+
+Causa reproducida: telemetría intercalada alterna syncRunId; ese dato observacional cambiaba el callback
+de errores de STATE_UPDATE y realimentaba sus efectos de lectura. El refresco nuevo sin pendientes expuso
+el acoplamiento previo. No eran cientos de runs ni se demuestra duplicación de listeners. Corrección mínima:
+ref diagnóstica vigente, callback estable; invalidaciones reales/búsqueda/scope intactos. Regresión real de
+callback/efectos12vs2y3vs1RED→GREEN, sin alterar preparador/queries/outbox/recuperación publicada.
+
+Misma cadencia/fixture, ventana5s foreground: HEAD0lecturasSTATE_UPDATE/cola0/R1(no refrescó); original311/
+cola44; corregido4/cola0/R2. Detalle por endpoint/AppView/disparador/runId en respaldo. Reentrada durante
+preparación e invalidación posterior conservadas;243API se estabilizan, cola0, R5. Cierre completo y reapertura
+offline Chromium/OPFS reales conservan lista/current3/3/latest parcial2/3 e integridadok. API simulada, no Core
+real/Safari/cámara nuevos. No extrapolar a producción ni generalizar offline.
+
+44pruebas focalizadas cubiertas; primer43/44con fallo SQLite a5268,8ms/STACK_TRACE_ERROR conservado, luego
+archivo13/13 estándar sin aumentar timeout; causa de esa pasada no atribuida. Typecheck/lint/build/artefacto
+PASS; no suite completa. Límites y cuatro fallos preexistentes/11/13 independientes en STATE_UPDATE.
+Respaldo reconstruible:backups/home-preparation-read-storm/2026-11-01/. Inventario combinado actualizado;
+publicación mantiene bloqueo hasta revisión posterior.402exclusiones/prefijos ajenos/Core/respaldos intactos.
+Sin producción, commit/push/deploy; no TTL/polling ni cambios adicionales de política. V11 pausado.
+
+Inventario combinado de esta investigación:12archivos/43hunks;delta separado sobre el candidato archivado.
+
+
+### Cierre combinado home-preparation-reuse + read-storm — LISTO PARA PUSH, SIN PUBLICAR — 2026-11-01
+
+12archivos/43hunks reconstruidos sobre2d00e933, parche/hashes/árbol y diff-check verificados. Una única
+pasada conjunta de los5archivos focalizados:44/44PASS, un worker, timeout estándar5s,13,974s de proceso;
+no aumentos de timeout ni repeticiones hastaPASS. El43/44anterior queda documentado: falloSQLite a5268,8ms
+conSTACK_TRACE_ERROR, causa no demostrada. No se declara explicada ni corregida esa falla histórica.
+
+306archivos del candidato inicial idénticos al árbol usado para build/typecheck/lint/Chromium-OPFS;
+sólo se añaden estas secciones de cierre. Se reutiliza evidencia:foregroundR1→R2con4lecturasSTATE_UPDATE
+frente a311, terminación/cola0, invalidación posteriorR5y cierre/reapertura offline del mismo perfil,
+current3/3,latest parcial2/3e integridadok. API sintética, Chromium/OPFS reales; no Core/Safari físico.
+
+No queda bloqueo técnico reproducible de este lote. El bloqueo previo era la revisión del runtime
+corregido y la falta de una pasada conjunta limpia; cierre completado. Commit/push requieren autorización
+separada y comprobar el remoto entonces. Evidencia permitida: resultados JSON estructurados, hashes,
+comparativas/capturas sintéticas ya archivadas; logs rechazados no copiados ni convertidos por otra vía.
+Respaldo final:backups/home-preparation-reuse-read-storm-close/2026-11-01/.402exclusiones, recuperación
+publicada, Core y pendientes ajenos intactos. Cobertura≠frescura;11/13y cuatro fallos preexistentes siguen
+independientes. Sin estabilidad offline general, suite/build/navegador nuevos, producción o publicación.
+V11 pausado.

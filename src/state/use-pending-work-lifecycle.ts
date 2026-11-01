@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import { buildOwnerKey, loadAppViewsWithCache } from "../lib/app-navigation-cache";
-import { OfflinePreparationDiagnostics, prewarmAssignedAppViewsOnce } from "../lib/app-view-prewarm";
+import { OfflinePreparationDiagnostics, prewarmAssignedAppViewsOnce, invalidateHomePreparation } from "../lib/app-view-prewarm";
 import { ConnectivityStatus } from "../lib/connectivity";
 import { selectContractId } from "../lib/contract-selection";
 import { LocalDatabase } from "../lib/local-db";
@@ -16,6 +16,7 @@ import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state
 import * as tokenStorage from "../lib/token-storage";
 import {
   isSessionLifecycleScopeCurrent,
+  shouldRevalidateAssignedPreparation,
   getSessionLifecycleScopeMismatchReason,
   isRecoverableAuthRefreshError,
   getOperationalCoreReadyRecoveryDelayMs,
@@ -90,7 +91,7 @@ export function usePendingWorkLifecycle({
   syncPendingStateUpdatesWithTelemetry,
   token,
 }: UsePendingWorkLifecycleInput) {
-  const reconnectSessionAndRecordsRef = useRef<(trigger?: StateUpdateSyncTrigger) => Promise<void>>(
+  const reconnectSessionAndRecordsRef = useRef<(trigger?: StateUpdateSyncTrigger) => Promise<void | false>>(
     () => Promise.resolve(),
   );
   const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
@@ -362,7 +363,7 @@ export function usePendingWorkLifecycle({
             return undefined;
           }
 
-          return reconnectSessionAndRecordsRef.current("startup-with-pending");
+          return reconnectSessionAndRecordsRef.current("startup-with-pending").then(() => undefined);
         })
         .catch(() => undefined);
     }, delayMs);
@@ -689,7 +690,7 @@ export function usePendingWorkLifecycle({
 
   const reconnectSessionAndRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "reconnect") => {
     if (!token) {
-      return;
+      return false;
     }
 
     let nextToken = token;
@@ -720,22 +721,26 @@ export function usePendingWorkLifecycle({
 
       if (syncResult === "readiness-blocked") {
         scheduleReadinessRecovery(runScope);
-        return;
+        return false;
       }
 
       if (syncResult === "blocked" || syncResult === "cancelled") {
-        return;
+        return false;
       }
 
       pendingWorkAlreadyHandled = syncResult === "completed" || syncResult === "already-running";
     }
 
+    if ((trigger === "reconnect" || trigger === "foreground/resume") && runScope.ownerKey && runScope.selectedContractId &&
+      isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+      invalidateHomePreparation({ store: definitionCache, ownerKey: runScope.ownerKey, contractId: runScope.selectedContractId, token: nextToken });
+    }
     const nextMe = await api.getMe(nextToken);
     const nextContext = await api.getContext(nextToken);
     const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
 
     if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
-      return;
+      return false;
     }
 
     await tokenStorage.setSessionOwnerKey(nextOwnerKey);
@@ -785,7 +790,7 @@ export function usePendingWorkLifecycle({
     }
 
     if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
-      return;
+      return false;
     }
 
     if (!pendingWorkAlreadyHandled) {
@@ -802,7 +807,7 @@ export function usePendingWorkLifecycle({
       }
     }
     if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
-      return;
+      return false;
     }
 
     if (shouldShowStateUpdateDiagnostics) {
@@ -909,7 +914,7 @@ export function usePendingWorkLifecycle({
         if (!shouldSync) {
           return undefined;
         }
-        return reconnectSessionAndRecordsRef.current("startup-with-pending");
+        return reconnectSessionAndRecordsRef.current("startup-with-pending").then(() => undefined);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -946,13 +951,13 @@ export function usePendingWorkLifecycle({
         return;
       }
 
+      const runScope = { ...latestSessionScopeRef.current };
       foregroundResumeSyncPromiseRef.current = reconnectShouldSyncRef.current()
         .then((shouldSync) => {
-          if (!shouldSync) {
-            return undefined;
-          }
-
-          return reconnectSessionAndRecordsRef.current("foreground/resume");
+          if (!shouldRevalidateAssignedPreparation("foreground/resume", shouldSync)) return undefined;
+          return reconnectSessionAndRecordsRef.current("foreground/resume").then(result => {
+            if (result !== false && isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) setRecordsReconnectRefreshKeyRef.current(key => key + 1);
+          });
         })
         .catch(() => undefined)
         .finally(() => {
@@ -1033,8 +1038,8 @@ export function usePendingWorkLifecycle({
       runSync({ trigger }) {
         return reconnectSessionAndRecordsRef.current(trigger);
       },
-      shouldSync() {
-        return reconnectShouldSyncRef.current();
+      async shouldSync() {
+        return shouldRevalidateAssignedPreparation(reconnectPreflightRef.current?.trigger ?? "unknown-to-online", await reconnectShouldSyncRef.current());
       },
     });
 

@@ -1,3 +1,4 @@
+import { homePreparationDay, homePreparationProof, preparationSignature } from "./home-preparation-policy";
 import {preparedPresentationAvailable} from "./subject-presentation-cache";
 import {
   AppViewDefinitionCache,
@@ -110,12 +111,15 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & Pick<AppNavigationCac
   upsertEntityDefinition(contractId: string, entityTypeId: string, definition: EntityDefinition, syncedAt: string): Promise<void>;
 } & Pick<OfflineRecordStore, "listCachedRecords" | "reconcileRemoteRecordsSnapshot"> &
   Pick<StateUpdateOfflineStore, "markAttendanceDaySnapshotHydrated" | "markStateUpdateSnapshotCoverage" | "upsertStateUpdateSnapshot"> &
-  Partial<Pick<StateUpdateOfflineStore, "setStateUpdateCurrentCoverage">> &
+  Partial<Pick<StateUpdateOfflineStore, "setStateUpdateCurrentCoverage" | "getStateUpdateCurrentCoverage" | "getAttendanceDaySnapshotHydration" | "getStateUpdateSnapshotCoverage">> &
+  Partial<Pick<SyncTelemetryStore, "getSyncTelemetry">> &
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 type AssignedPrewarmInput = Parameters<typeof prewarmAssignedAppViews>[0] & {
   /** A real reconnect/invalidation event, not a render or a cached complete marker. */
   invalidationKey?: string;
+  /** Home navigation only: reuse locally verified work from this document/session/day. */
+  reuseCompleted?: boolean;
 };
 export type OfflinePreparationRunReceipt = {
   version: 1;
@@ -141,6 +145,8 @@ type AssignedScope = {
   reconciliationToken?: string;
   reconciliationOnline?: boolean;
   recovering?: boolean;
+  reuseEpoch?: number;
+  prepared?: Map<string, { token: string; day: string; epoch: number; proof: string }>;
 };
 // The existing coordinator owns work across API recreation; never infer liveness from UI observers.
 const assignedFlights = new WeakMap<object, Map<string, AssignedScope>>();
@@ -171,9 +177,15 @@ export function subscribeOfflinePreparationExecution(input: { store: AppViewPrew
   scope.listeners.add(listener); listener.notify(execution(scope, input.token));
   return () => { scope.listeners.delete(listener); };
 }
+/** Reconnect/resume invalidate freshness, independent of pending writes. No polling or persisted freshness claim. */
+export function invalidateHomePreparation(input: { store: AppViewPrewarmStore; ownerKey: string; contractId: string; token: string }) {
+  const scope = assignedScope(input.store, input.ownerKey, input.contractId);
+  scope.reuseEpoch = (scope.reuseEpoch ?? 0) + 1;
+}
+
 export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promise<void> {
   const scope = assignedScope(params.store, params.ownerKey, params.contractId);
-  const signature = JSON.stringify([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id))]);
+  const signature = preparationSignature([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id)), scope.reuseEpoch ?? 0]);
   const previous = scope.flight;
   if (previous) {
     if (params.onTelemetry) previous.observers.set(params.onTelemetry, params.token);
@@ -194,17 +206,48 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
   const flight: AssignedFlight = { signature, next: params, current: params,
     seenInvalidations: new Set(params.invalidationKey ? [params.invalidationKey] : []),
     observers: new Map(params.onTelemetry ? [[params.onTelemetry, params.token]] : []), promise: Promise.resolve() };
-  scope.flight = flight; scope.token = params.token; scope.latest = undefined;
+  scope.flight = flight; scope.token = params.token;
   flight.promise = Promise.resolve().then(async () => {
     try {
       while (flight.next) {
-        const next = flight.next; flight.next = null; flight.current = next; scope.token = next.token; scope.latest = undefined; notifyExecution(scope);
-        await prewarmAssignedAppViews({ ...next, onTelemetry: async diagnostics => {
+        const next = flight.next; flight.next = null; flight.current = next; scope.token = next.token;
+        const day = formatLocalDateInput(new Date()), epoch = scope.reuseEpoch ?? 0;
+        const work: AppView[] = [];
+        scope.prepared ??= new Map();
+        for (const view of next.appViews) {
+          const known = scope.prepared.get(view.id);
+          const proof = next.reuseCompleted && !next.invalidationKey && known?.token === next.token && known.day === homePreparationDay(view, day) && known.epoch === epoch
+            ? await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day) : null;
+          if (!proof || proof !== known?.proof) work.push(view);
+        }
+        for (const id of scope.prepared.keys()) if (!next.appViews.some(view => view.id === id)) scope.prepared.delete(id);
+        if (!work.length && next.reuseCompleted && scope.latest?.status === "completed") {
+          // Still persist/revalidate the authorized Home list. Failure must remain visible, not complete.
+          const saved = await (next.homeListWrite ?? persistAppViews({ cache: next.store, ownerKey: next.ownerKey, contractId: next.contractId, views: next.appViews, syncedAt: new Date().toISOString() }));
+          if (saved.status === "persisted" && saved.scope.ownerKey === next.ownerKey && saved.scope.contractId === next.contractId &&
+            preparationSignature([...saved.scope.appViewIds].sort()) === preparationSignature(next.appViews.map(view => view.id).sort())) {
+            await next.store.reconcileAppViewDefinitions(next.ownerKey, next.contractId, next.appViews.map(view => view.id));
+            continue;
+          }
+          // The existing preparer records the failed prerequisite; it performs no downloads.
+          next.homeListWrite = Promise.resolve(saved);
+        }
+        for (const view of work) scope.prepared.delete(view.id);
+        scope.latest = undefined; notifyExecution(scope);
+        const preparedIds = new Set<string>();
+        await prewarmAssignedAppViews({ ...next, onAppViewPrepared: id => { preparedIds.add(id); }, prepareAppViewIds: next.reuseCompleted ? work.map(view => view.id) : undefined, onTelemetry: async diagnostics => {
           scope.latest = diagnostics; scope.token = next.token; notifyExecution(scope);
           for (const [observer, token] of flight.observers) if (token === next.token) {
             try { await observer(diagnostics); } catch { /* best effort */ }
           }
         } });
+        // Only completed work with a readable persisted proof may be reused. Epoch captured before work:
+        // an invalidation during any await makes this output ineligible for a later Home navigation.
+        for (const view of work.filter(view => preparedIds.has(view.id))) {
+          const proof = await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day);
+          if (proof) scope.prepared.set(view.id, { token: next.token, day: homePreparationDay(view, day), epoch, proof });
+          else scope.prepared.delete(view.id);
+        }
       }
     } finally {
       if (scope.flight === flight) scope.flight = undefined;
@@ -367,7 +410,12 @@ export async function prewarmAssignedAppViews({
   trigger = "other",
   recoveryOf,
   signal,
+  prepareAppViewIds,
+  onAppViewPrepared,
 }: {
+  onAppViewPrepared?(appViewId: string): void;
+  /** Internal bounded work set; assignments/list reconciliation always use the full list. */
+  prepareAppViewIds?: string[];
   recoveryOf?: string;
   homeListWrite?: Promise<AppViewsCacheWrite>;
   api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
@@ -383,6 +431,7 @@ export async function prewarmAssignedAppViews({
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const runId = createOfflinePreparationRunId(startedMs);
+  const workViews = prepareAppViewIds ? appViews.filter(view => prepareAppViewIds.includes(view.id)) : appViews;
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
   let homeList: NonNullable<OfflinePreparationDiagnostics["homeList"]> = { status: "pending", count: appViews.length, syncedAt: null, errorCode: null, requestId: null };
   const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
@@ -410,7 +459,7 @@ export async function prewarmAssignedAppViews({
       startedAt,
       startedMs,
       status: "running",
-      total: appViews.length,
+      total: workViews.length,
       trigger,
     }),
     onTelemetry,
@@ -427,7 +476,7 @@ export async function prewarmAssignedAppViews({
       errorCode: sameScope ? saved.errorCode : "HOME_CACHE_SCOPE_MISMATCH" };
     if (homeList.status !== "persisted" || signal?.aborted) throw new Error("HOME_LIST_PREPARATION_INCOMPLETE");
     await store.reconcileAppViewDefinitions(ownerKey, contractId, appViews.map((view) => view.id));
-    await runWithConcurrency(appViews, PREWARM_CONCURRENCY, async (appView) => {
+    await runWithConcurrency(workViews, PREWARM_CONCURRENCY, async (appView) => {
       const initial = createAppViewTelemetry(appView);
 
       appViewTelemetry.set(appView.id, initial);
@@ -441,7 +490,7 @@ export async function prewarmAssignedAppViews({
           startedAt,
           startedMs,
           status: "running",
-          total: appViews.length,
+          total: workViews.length,
           trigger,
         }),
         onTelemetry,
@@ -468,6 +517,7 @@ export async function prewarmAssignedAppViews({
       }
 
       appViewTelemetry.set(appView.id, nextTelemetry);
+      if (nextTelemetry.result !== "failed") onAppViewPrepared?.(appView.id);
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
           homeList,
@@ -478,7 +528,7 @@ export async function prewarmAssignedAppViews({
           startedAt,
           startedMs,
           status: "running",
-          total: appViews.length,
+          total: workViews.length,
           trigger,
         }),
         onTelemetry,
@@ -500,7 +550,7 @@ export async function prewarmAssignedAppViews({
         startedAt,
         startedMs,
         status: hasFailedAppViews(appViewTelemetry) ? "failed" : "completed",
-        total: appViews.length,
+        total: workViews.length,
         trigger,
       }),
       onTelemetry,
@@ -521,7 +571,7 @@ export async function prewarmAssignedAppViews({
         startedAt,
         startedMs,
         status: "failed",
-        total: appViews.length,
+        total: workViews.length,
         trigger,
       }),
       onTelemetry,

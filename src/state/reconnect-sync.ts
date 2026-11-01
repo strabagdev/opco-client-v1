@@ -20,7 +20,7 @@ type ReconnectSyncControllerOptions = {
     previousConnectivityStatus: ConnectivityStatus;
     resultingConnectivityStatus: ConnectivityStatus;
     trigger: StateUpdateSyncTrigger;
-  }): Promise<void>;
+  }): Promise<void | false>;
   shouldSync?: () => boolean | Promise<boolean>;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
@@ -74,8 +74,8 @@ export function createReconnectSyncController({
     isSyncing = true;
 
     try {
-      await runSync(input);
-      onSynced?.();
+      const result = await runSync(input);
+      if (result !== false) onSynced?.();
     } catch {
       // The sync engine owns failure state. A later offline -> online transition should retry.
     } finally {
