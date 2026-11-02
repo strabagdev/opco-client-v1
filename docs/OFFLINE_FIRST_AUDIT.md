@@ -851,3 +851,62 @@ state-update-implementation.patch y state-update-documentation.patch; ambos apli
 el HEAD indicado y reproducen exactamente los archivos seleccionados. Sin secretos, .env,
 configuración local, bases SQLite/PostgreSQL, logs, builds ni experimentos en el lote.
 Main, índice y pendientes excluidos se conservan. Sin commit/push/deploy.
+
+
+## Corrección local de lectura RECORDS — alcance acotado — 01-11-2026
+
+Implementación derivada del diagnóstico de Protocolos, genérica y sin activación productiva. No reabre
+la auditoría. Guardia por generación/scope invalida lecturas retiradas antes de publicar resultados,
+errores o diagnóstico, incluidos awaits SQLite, paginación y lectura post-sync. Respuestas HTTP retiradas
+se rechazan antes de reconciliar; una operación SQLite ya admitida no se borra ni revierte por navegar y
+conserva su scope original. No cambia intenciones, outbox, autorización, idempotencia, schema10 ni epoch2.
+
+El lector común soporta modo local-only. Offline conocido no llama a getEntityDefinition ni getEntityRecords;
+bootstrap compartido /views queda intacto y puede intentar red con fallback autorizado. Un marcador de
+full refresh del scope, junto con definición legible, permite reconocer colección completa, incluso vacía.
+Una página sin ese recibo sólo es parcial. Ausencia, definición no guardada y fallo de lectura tienen
+feedback distinto. Datos compatibles y cambios locales se conservan si falla una actualización online;
+el fallo no se transforma en éxito ni certifica frescura. Lista/cargar más no quedan bloqueados tras fallar.
+
+Historial de aperturas registra cada intento y espera la persistencia terminal, sin bloquear presentación
+por fallos del almacenamiento diagnóstico (besteffort existente). Actividad usa el resultado vigente;
+partial terminal sin error actual limpia el error precedente, pero no uno actual ni de otro reporter/scope.
+El conteo visual deja de sumar dos veces isLoading/isRefreshing del mismo intento. El título muestra sólo
+conteos verificables y fecha de última copia completa, nunca fecha de metadata como sincronización de datos.
+
+Regresión específica del catch archivado: RED en lector anterior y GREEN en nuevo, conservando la edición
+observable de error y el caso de SQLite retenido. 92 controles afectados PASS; incluye offline→reconexión,
+cache parcial/vacía, fallo de lectura, respuesta HTTP/SQLite tardía, scope, búsqueda/páginas, post-sync y
+payloads de pendientes/conflictos byte a byte. Typecheck/lint y build final PASS; sin suite completa.
+Chromium153/OPFS real, perfil sintético exclusivo: metadata-only no implica datos; reconexión prepara3filas,
+cierre total y reapertura offline conserva filas/cobertura, 0 API de RECORDS/cola0/integridadok. Transporte
+simulado, sin Core/PostgreSQL/Safari físico o escritura productiva. No demuestra causa del incidente real.
+
+No se descargan colecciones desde Inicio. Propuesta separada y NO IMPLEMENTADA en OFFLINE_FIRST_GUIDE.
+Detalle, límites, evidencia e inventario: backups/records-offline-read-fix/2026-11-01/. Sin secretos/logs/DB
+en el parche. Preservados 402exclusiones, Core, recuperación y secciones ajenas. V11 y auditoría general siguen
+abiertos; no se atribuye esta corrección al bundle desconocido del incidente.
+
+
+### Cierre RECORDS y compatibilidad de caché anterior — 01-11-2026
+
+Se verificó reconstrucción/hashes/diff-check del lote12archivos/65hunks.307archivos idénticos permiten
+reutilizar92casos, regresiónRED→GREEN, typecheck/lint/build y el recorrido Chromium/OPFS ya documentado.
+No se repitieron pruebas, export ni navegador; revalidación estática del artefacto existente PASS.
+Sólo se añaden estas secciones, sin cambios de implementación o pruebas.
+
+La ausencia de metadata de cobertura no certifica una colección vacía o completa. Un cache legacy con
+filas y sin lastFullRefreshCompletedAt es parcial; sin filas/recibo es no preparado. Los casos SQLite
+archivados ejercitan ausencia de fila de telemetría y reapertura, no sólo un objeto mock. La colección
+preparada vacía requiere definición y recibo del scope. Si falta la definición, se explica esa limitación;
+si falla leer SQLite, se informa error y se conserva lo disponible. El nuevo estado de presentación es
+efímero: sin migración, namespace nuevo, reescritura de cache/payloads, cambio de IDs o nuevos campos API.
+Recibos válidos anteriores siguen siendo admitidos por las reglas existentes; no se confunden con frescura.
+
+No bloqueo técnico demostrado; listo para publicación autorizada posterior. Se mantiene explícito:
+Inicio prepara sólo metadata. La propuesta configurable de colecciones en OFFLINE_FIRST_GUIDE sigue
+NO IMPLEMENTADA y no forma parte de la corrección funcional. Sin acceso productivo ni configuración.
+Evidencia/artefacto/inventario final: backups/records-offline-read-fix-close/2026-11-01/. Se preservan los
+límites de almacenamiento diagnóstico besteffort, bootstrap /views y ausencia de Core/Safari físicos,
+la falta de correlación histórica del incidente y la auditoría general abierta. Core/recuperación/
+402exclusiones y secciones ajenas intactos; sin commit/push/deploy. V11 pausado.

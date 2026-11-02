@@ -254,7 +254,21 @@ export type UpsertRemoteRecordsInput = BaseScopedInput & {
 
 export type ReconcileRemoteRecordsSnapshotInput = UpsertRemoteRecordsInput;
 
-export type LoadRecordsParams = BaseScopedInput & {
+export class RecordsReadCancelledError extends Error {
+  readonly code = "RECORDS_READ_CANCELLED";
+  constructor() { super("La lectura de registros ya no está activa."); }
+}
+
+export function assertRecordsReadActive(isActive?: () => boolean) {
+  if (isActive && !isActive()) throw new RecordsReadCancelledError();
+}
+
+type RecordsReadOptions = {
+  isActive?(): boolean;
+  onNetworkFallback?(error: unknown): void;
+};
+
+export type LoadRecordsParams = BaseScopedInput & RecordsReadOptions & {
   api: Pick<OpcoApi, "getEntityRecords">;
   direction?: "asc" | "desc";
   fieldIdHasValue?: string;
@@ -281,8 +295,11 @@ export async function loadRecordsWithOfflineCache({
   sort,
   store,
   token,
+  isActive,
+  onNetworkFallback,
 }: LoadRecordsParams): Promise<CachedRecordsResult> {
   try {
+    assertRecordsReadActive(isActive);
     const remote = await api.getEntityRecords(token, contractId, entityTypeId, {
       page,
       pageSize,
@@ -292,6 +309,7 @@ export async function loadRecordsWithOfflineCache({
       sort,
     });
 
+    assertRecordsReadActive(isActive);
     await store.upsertRemoteRecords({
       contractId,
       entityTypeId,
@@ -299,7 +317,8 @@ export async function loadRecordsWithOfflineCache({
       records: remote.records,
     });
 
-    return store.listCachedRecords({
+    assertRecordsReadActive(isActive);
+    const cached = await store.listCachedRecords({
       contractId,
       entityTypeId,
       ownerKey,
@@ -311,8 +330,12 @@ export async function loadRecordsWithOfflineCache({
       search,
       sort,
     });
+    assertRecordsReadActive(isActive);
+    return cached;
   } catch (error) {
+    assertRecordsReadActive(isActive);
     if (isNetworkLikeError(error)) {
+      onNetworkFallback?.(error);
       const cached = await store.listCachedRecords({
         contractId,
         entityTypeId,
@@ -325,6 +348,7 @@ export async function loadRecordsWithOfflineCache({
         search,
         sort,
       });
+      assertRecordsReadActive(isActive);
 
       return {
         ...cached,
@@ -337,7 +361,7 @@ export async function loadRecordsWithOfflineCache({
   }
 }
 
-export type RefreshEntityRecordsCacheParams = BaseScopedInput & {
+export type RefreshEntityRecordsCacheParams = BaseScopedInput & RecordsReadOptions & {
   api: Pick<OpcoApi, "getEntityRecords">;
   onDiagnostics?: (diagnostics: RecordsRefreshDiagnostics) => void;
   pageSize?: number;
@@ -360,7 +384,10 @@ export async function refreshEntityRecordsCache({
   store,
   suppressNetworkTelemetry = false,
   token,
+  isActive,
+  onNetworkFallback,
 }: RefreshEntityRecordsCacheParams): Promise<CachedRecordsResult> {
+  assertRecordsReadActive(isActive);
   let currentTelemetryPhase: "refreshing" | "reconciling" = "refreshing";
   const diagnostics: RecordsRefreshDiagnostics = {
     lastHttpStatus: null,
@@ -374,6 +401,7 @@ export async function refreshEntityRecordsCache({
   };
 
   diagnostics.beforeRefresh = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
+  assertRecordsReadActive(isActive);
 
   if (!suppressNetworkTelemetry) {
     await store.markSyncPhase?.({
@@ -391,10 +419,12 @@ export async function refreshEntityRecordsCache({
     let totalPages = 1;
 
     do {
+      assertRecordsReadActive(isActive);
       const remote = await api.getEntityRecords(token, contractId, entityTypeId, {
         page,
         pageSize,
       });
+      assertRecordsReadActive(isActive);
 
       diagnostics.lastHttpStatus = 200;
       diagnostics.pages.push({ count: remote.records.length, page, pageSize });
@@ -411,6 +441,7 @@ export async function refreshEntityRecordsCache({
       page += 1;
     } while (page <= totalPages);
 
+    assertRecordsReadActive(isActive);
     if (!suppressNetworkTelemetry) {
       await store.markSyncPhaseCompleted?.({
         contractId,
@@ -418,6 +449,7 @@ export async function refreshEntityRecordsCache({
         ownerKey,
         phase: "refreshing",
       });
+      assertRecordsReadActive(isActive);
       await store.markSyncPhase?.({
         contractId,
         entityTypeId,
@@ -425,6 +457,7 @@ export async function refreshEntityRecordsCache({
         phase: "reconciling",
       });
     }
+    assertRecordsReadActive(isActive);
     currentTelemetryPhase = "reconciling";
     const reconcileDiagnostics = await store.reconcileRemoteRecordsSnapshot({
       contractId,
@@ -432,6 +465,7 @@ export async function refreshEntityRecordsCache({
       ownerKey,
       records,
     });
+    assertRecordsReadActive(isActive);
     diagnostics.afterUpsert = reconcileDiagnostics?.afterUpsert;
     diagnostics.afterReconcile = reconcileDiagnostics?.afterReconcile ?? await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
     diagnostics.writeScope = reconcileDiagnostics?.writeScope ?? diagnostics.writeScope;
@@ -441,6 +475,7 @@ export async function refreshEntityRecordsCache({
       throw new RecordsRefreshInvariantError("El refresco remoto devolvio registros, pero el cache local quedo sin registros sincronizados.");
     }
     if (!suppressNetworkTelemetry) {
+      assertRecordsReadActive(isActive);
       await store.markSyncPhaseCompleted?.({
         contractId,
         entityTypeId,
@@ -448,6 +483,7 @@ export async function refreshEntityRecordsCache({
         phase: "reconciling",
       });
     }
+    assertRecordsReadActive(isActive);
 
     const cached = await store.listCachedRecords({
       contractId,
@@ -456,6 +492,7 @@ export async function refreshEntityRecordsCache({
       page: 1,
       pageSize: resultPageSize,
     });
+    assertRecordsReadActive(isActive);
     diagnostics.beforeRender = await store.getRecordCacheStatusCounts?.({ contractId, entityTypeId, ownerKey });
     onDiagnostics?.(diagnostics);
 
@@ -465,6 +502,8 @@ export async function refreshEntityRecordsCache({
       offline: false,
     };
   } catch (error) {
+    assertRecordsReadActive(isActive);
+    if (error instanceof RecordsReadCancelledError) throw error;
     if (error instanceof RecordsRefreshInvariantError) {
       onDiagnostics?.(diagnostics);
       await store.markSyncError?.({
@@ -492,6 +531,7 @@ export async function refreshEntityRecordsCache({
     }
 
     if (isNetworkLikeError(error)) {
+      onNetworkFallback?.(error);
       const cached = await store.listCachedRecords({
         contractId,
         entityTypeId,
@@ -499,6 +539,7 @@ export async function refreshEntityRecordsCache({
         page: 1,
         pageSize: resultPageSize,
       });
+      assertRecordsReadActive(isActive);
 
       return {
         ...cached,

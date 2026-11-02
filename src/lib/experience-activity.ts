@@ -99,7 +99,7 @@ export function reportExperienceActivity({
   }
 
   const nextResult = nextCount > 0 ? "running" : errorCode ? "error" : result ?? snapshot.result;
-  const nextErrorCode = errorCode ?? (nextCount === 0 && result === "success" ? null : snapshot.errorCode);
+  const nextErrorCode = errorCode ?? (nextCount === 0 && (result === "success" || result === "partial") ? null : snapshot.errorCode);
   if (
     readCount === snapshot.readCount &&
     readMode === snapshot.readMode &&

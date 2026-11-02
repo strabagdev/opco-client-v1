@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  RecordsLocalReadError,
+  recordsLocalCoverage,
+  recordsLocalCoverageMessage,
   clearRecordsOpeningHistorySnapshot,
   getRecordsOpeningHistorySnapshot,
   hydrateRecordsOpeningHistory,
@@ -192,3 +195,28 @@ function cachedRecord(id: string, syncStatus: "synced" | "pending_create") {
     values: {},
   };
 }
+
+
+describe("RECORDS local-only opening and coverage", () => {
+  it("never starts the remote callback when offline is known", async () => {
+    const refreshRemote=vi.fn(async()=>"remote");
+    const onPresentLocal=vi.fn();
+    const result=await loadRecordsCacheFirst({offline:true,canPresentLocal:()=>true,onPresentLocal,readLocal:async()=>[],refreshRemote});
+    expect(result).toMatchObject({local:[],localPresented:true,remote:null});
+    expect(refreshRemote).not.toHaveBeenCalled();expect(onPresentLocal).toHaveBeenCalledWith([]);
+  });
+  it("reports a storage read failure instead of an absent collection and never falls through to network offline", async () => {
+    const refreshRemote=vi.fn(async()=>"remote"),onLocalReadError=vi.fn();
+    await expect(loadRecordsCacheFirst({offline:true,canPresentLocal:()=>true,onPresentLocal:vi.fn(),readLocal:async()=>{throw new Error("storage")},refreshRemote,onLocalReadError})).rejects.toBeInstanceOf(RecordsLocalReadError);
+    expect(refreshRemote).not.toHaveBeenCalled();expect(onLocalReadError).toHaveBeenCalledOnce();
+  });
+  it("requires a full refresh receipt even if a page has rows, while accepting a prepared empty collection", () => {
+    expect(recordsLocalCoverage(true,null,25)).toBe("partial");
+    expect(recordsLocalCoverage(true,null,0)).toBe("unprepared");
+    expect(recordsLocalCoverage(true,"valid-full-refresh",0)).toBe("complete");
+    expect(recordsLocalCoverage(false,"valid-full-refresh",0)).toBe("unprepared");
+    expect(recordsLocalCoverageMessage("unprepared",true)).toContain("aún no está preparada");
+    expect(recordsLocalCoverageMessage("partial",true)).toContain("incompleta");
+    expect(recordsLocalCoverageMessage("complete",true)).toBeNull();
+  });
+});

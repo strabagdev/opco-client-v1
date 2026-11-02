@@ -3453,3 +3453,53 @@ Respaldo final:backups/home-preparation-reuse-read-storm-close/2026-11-01/.402ex
 publicada, Core y pendientes ajenos intactos. Cobertura≠frescura;11/13y cuatro fallos preexistentes siguen
 independientes. Sin estabilidad offline general, suite/build/navegador nuevos, producción o publicación.
 V11 pausado.
+
+
+## Lectura RECORDS: recuperación y modo offline — IMPLEMENTADA LOCALMENTE, SIN PUBLICAR — 01-11-2026
+
+Sobre eda6753. Cada intento tiene una generación por usuario/contrato/AppView/entidad/búsqueda/sesión.
+Los resultados y errores retirados no actualizan pantalla ni diagnóstico, tampoco tras esperar SQLite.
+Incluye paginación y la lectura posterior a sync; no cambia el envío de pendientes. Los helpers de
+lectura admiten un guard opcional antes de persistir respuestas tardías; sus consumidores anteriores
+conservan el comportamiento por defecto.
+
+RECORDS, con offline conocido, sólo lee SQLite: definición, filas y recibo de full refresh. Sin recibo
+no acredita colección completa: muestra ausencia o datos parciales con aviso; una colección preparada
+vacía es válida y un fallo de lectura es distinto. Un refresh remoto fallido conserva datos y mantiene
+el fallo visible. La cabecera de la lista no inventa total ni frescura a partir de metadata: usa último
+full refresh, conserva acciones y feedback local de cargar más. Actividad cuenta un intento lógico;
+resultado parcial terminal sin error actual reemplaza el error anterior, respetando reporter/scope.
+
+92 pruebas afectadas PASS (1 worker/timeout estándar); regresión archivada RED→GREEN, SQLite real con
+reapertura, búsqueda/páginas/scopes/pendientes/conflictos y respuestas tardías. Typecheck/lint PASS.
+Build web habitual final PASS. Chromium153/OPFS reales: preparación de metadata→offline no preparado
+sin GET de entidad/registros→reconexión/3filas→cierre completo→reapertura offline mismo perfil, API de
+RECORDS=0, cola0 e integridadok. API sintética; no Core/Safari físico ni causa productiva acreditados.
+El bootstrap compartido puede intentar /views y usar su lista cacheada: no se modificó en este lote.
+
+Inicio sigue preparando sólo metadata de RECORDS. Propuesta opt-in de colección completa, con límites,
+paginación/verificación y señales de actualización: OFFLINE_FIRST_GUIDE, sección separada NO IMPLEMENTADA.
+Respaldo e inventario: backups/records-offline-read-fix/2026-11-01/. Sólo cambios propios; 402exclusiones,
+Core, recuperación publicada y pendientes ajenos preservados. Sin configuración/datos productivos,
+commit/push/deploy. V11 pausado; incidente histórico de Protocolos sigue sin correlación suficiente.
+
+
+### Cierre acotado records-offline-read-fix — LISTO PARA PUSH, SIN PUBLICAR — 01-11-2026
+
+12 archivos/65 hunks reconstruidos exactamente desde el respaldo. Hashes por archivo/parche/árbol y
+diff-check PASS; 307 archivos coinciden con el candidato de implementación. Se reutilizan92pruebas,
+RED→GREEN, typecheck/lint/build y Chromium/OPFS: no hubo ejecuciones nuevas de esos checks. Sólo cambia
+documentación de cierre; runtime y pruebas finales son byte a byte idénticos.
+
+Artefacto existente revalidado por lectura: entry-07a9a53427c00c0d3fc7370a2e87998a.js, API efectiva
+https://web.opco.cl, epoch2, index/sw coincidentes y lector JS/WASM3.1.6 local/33recursos precacheados.
+Cache anterior sin recibo de full refresh: filas→parcial; sin filas→no preparada, nunca vacía/completa
+por inferencia. Definición y recibo válidos admiten colección completa vacía; fallos de lectura siguen
+siendo error. No se reescriben filas, identidades, intenciones o metadata para fabricar cobertura.
+
+Sin bloqueo técnico demostrado para este lote. Listo para push bajo autorización posterior y verificación
+del remoto entonces; no se publica aquí. Inicio sólo prepara metadata y la preparación automática de
+colecciones continúa NO IMPLEMENTADA en su propuesta separada de OFFLINE_FIRST_GUIDE. Bootstrap /views,
+diagnóstico besteffort y límites de API sintética/Chromium frente a Core/Safari físico se conservan.
+Respaldo final: backups/records-offline-read-fix-close/2026-11-01/. Core, recuperación publicada,402exclusiones
+y pendientes ajenos intactos. Sin producción, commit/push/deploy ni ampliación funcional. V11 pausado.

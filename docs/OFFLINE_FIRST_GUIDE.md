@@ -212,3 +212,43 @@ Se mantienen como **D**, sin convertir pruebas con mocks en evidencia OPFS/Core 
 Para detalles y hallazgos históricos: `docs/OFFLINE_FIRST_AUDIT.md`. Para el mapa completo:
 `docs/CLIENT_ARCHITECTURE.md`. Para el workflow compartido: Client y Core
 `docs/STATE_UPDATE.md`.
+
+
+## Propuesta: preparación configurable de colecciones RECORDS desde Inicio — NO IMPLEMENTADA — 01-11-2026
+
+El comportamiento publicado y este lote de lectura conservan la preparación de metadata. `completed`
+del run no significa que se descargó una colección RECORDS. No se añade configuración ni descarga con
+esta propuesta. La lectura local puede mostrar una copia parcial sin presentarla como completa.
+
+Recomendación única para una etapa posterior: opt-in por experiencia, desactivado por defecto. El editor
+permitiría solicitar colección completa de la entidad configurada, con presupuestos explícitos aprobados
+por el administrador: máximo de registros, páginas y bytes. No se eligen límites productivos aquí ni se
+habilita una descarga ilimitada. Las experiencias sin opt-in siguen demand-cached. Configuración lógica
+ilustrativa, aún sin contrato implementado: `offlinePreparation.records.version=1`, `mode=full` y límites
+obligatorios. No activar un filtro de búsqueda como si fuera toda la colección; filtros/ventanas parciales
+requerirían otra identidad de cobertura y quedan fuera de la primera entrega.
+
+Alcance: usuario/contrato/entidad autorizados, definición vigente y la proyección permitida por Core.
+AppView decide el opt-in; caché de filas completa se comparte sólo entre vistas autorizadas de la misma
+entidad/scope, según el diseño actual. Labels RELATION ya incluidos se conservan; disponibilidad de catálogos
+para editar relaciones debe declararse aparte y no inferirse de ver una etiqueta.
+
+Reutilizar coordinador/preparador y full refresh existentes. Recorrer páginas antes de persistir/reconciliar
+la colección; verificar IDs únicos, totales/páginas coherentes, límites y contenido persistido. Una página,
+un ACK o finalizar tareas no certifican cobertura. Sólo emitir recibo completo al verificar toda la salida
+requerida, scoped y vinculada a configuración/definición. Una colección vacía puede ser completa si el remoto
+la confirma y se persiste. Exceder límites/fallar/interrumpirse deja cobertura incompleta, conserva copia
+válida y pendientes/conflictos y permite reintento explícito sin bucles. Nunca limpiar ausencias a partir
+de una búsqueda o descarga parcial. Core no ofrece aquí un snapshot transaccional de varias páginas:
+no prometer una vista puntual consistente frente a cambios remotos durante el recorrido sin acreditarla.
+
+Actualización: compartir trabajo activo y conservar una invalidación posterior; reutilizar señales existentes
+de reconexión/foreground, cambios de asignación/definición e invalidaciones/sync de la entidad afectada.
+No ampliar una invalidación local a todas las colecciones si puede aislarse. No polling ni TTL arbitrario.
+Conservar la copia durante actualización y distinguir cobertura de frescura; sin señal remota no se promete
+observar cambios externos mientras se permanece online. Un fallo no rejuvenece el recibo anterior.
+
+Validación futura: permisos y scopes, paginación real, colección vacía, cambio de totales durante recorrido,
+presupuesto excedido, escritura/readback fallidos, interrupción/reintento, guardias tardías, reapertura OPFS,
+pendientes/conflictos intactos y coste medido por colección. No se consideran acreditados por la corrección
+de lectura RECORDS; requieren autorización y lote separados.

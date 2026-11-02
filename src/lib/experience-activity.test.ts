@@ -129,3 +129,15 @@ function report(
 ) {
   reportExperienceActivity({ activeCount, errorCode, result, scopeKey });
 }
+
+
+it("a terminal partial read without a current error replaces the preceding RECORDS failure", () => {
+  resetExperienceActivityForTests();activate("scope-records", "Registro");
+  report("scope-records",0,"RECORDS_LOCAL_READ_FAILED","error");
+  report("scope-records",1,null,null);
+  expect(getExperienceActivitySnapshot().errorCode).toBe("RECORDS_LOCAL_READ_FAILED");
+  report("scope-records",0,null,"partial");
+  expect(getExperienceActivitySnapshot()).toMatchObject({result:"partial",errorCode:null,activeRuns:[]});
+  report("scope-records",0,"CURRENT_READ_FAILURE","partial");
+  expect(getExperienceActivitySnapshot()).toMatchObject({result:"error",errorCode:"CURRENT_READ_FAILURE"});
+});

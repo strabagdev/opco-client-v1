@@ -21,6 +21,8 @@ type OpeningInput<TLocal, TRemote> = {
   onPresentLocal(local: TLocal): void;
   readLocal(): Promise<TLocal>;
   refreshRemote(): Promise<TRemote>;
+  offline?: boolean;
+  onLocalReadError?(error: unknown): void;
 };
 
 let historySnapshot: RecordsOpeningHistorySnapshot = { history: [], scopeKey: null };
@@ -34,8 +36,10 @@ export async function loadRecordsCacheFirst<TLocal, TRemote>({
   onPresentLocal,
   readLocal,
   refreshRemote,
-}: OpeningInput<TLocal, TRemote>): Promise<OpeningResult<TLocal, TRemote>> {
-  const remoteOutcome = refreshRemote().then(
+  offline = false,
+  onLocalReadError,
+}: OpeningInput<TLocal, TRemote>): Promise<OpeningResult<TLocal, TRemote | null>> {
+  const remoteOutcome = offline ? null : refreshRemote().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ error, ok: false as const }),
   );
@@ -43,7 +47,9 @@ export async function loadRecordsCacheFirst<TLocal, TRemote>({
 
   try {
     local = await readLocal();
-  } catch {
+  } catch (error) {
+    onLocalReadError?.(error);
+    if (offline) throw new RecordsLocalReadError();
     // Local cache availability must not block an otherwise valid remote opening.
   }
 
@@ -53,6 +59,8 @@ export async function loadRecordsCacheFirst<TLocal, TRemote>({
     onPresentLocal(local);
   }
 
+  if (!remoteOutcome) return { local, localPresented, remote: null };
+
   const outcome = await remoteOutcome;
 
   if (!outcome.ok) {
@@ -60,6 +68,26 @@ export async function loadRecordsCacheFirst<TLocal, TRemote>({
   }
 
   return { local, localPresented, remote: outcome.value };
+}
+
+export type RecordsLocalCoverage = "unprepared" | "partial" | "complete";
+
+export class RecordsLocalReadError extends Error {
+  readonly code = "RECORDS_LOCAL_READ_FAILED";
+  constructor() { super("No pudimos leer los registros guardados en este dispositivo. Vuelve a intentar."); }
+}
+
+export function recordsLocalCoverage(hasDefinition: boolean, fullRefreshAt: string | null | undefined, count: number): RecordsLocalCoverage {
+  if (hasDefinition && fullRefreshAt) return "complete";
+  return count > 0 ? "partial" : "unprepared";
+}
+
+export function recordsLocalCoverageMessage(coverage: RecordsLocalCoverage | null, hasDefinition: boolean) {
+  if (!coverage || coverage === "complete") return null;
+  if (!hasDefinition) return "La definición de esta experiencia no está guardada en este dispositivo. Conéctate para cargarla.";
+  return coverage === "unprepared"
+    ? "Esta colección aún no está preparada sin conexión. Conéctate para cargar sus registros."
+    : "Colección disponible parcialmente: se muestran sólo los registros guardados. La lista puede estar incompleta.";
 }
 
 export async function hydrateRecordsOpeningHistory({
@@ -106,7 +134,7 @@ export function recordRecordsOpeningMeasurement({
   const scopeKey = openingScopeKey(ownerKey, contractId);
   const current = historySnapshot.scopeKey === scopeKey ? historySnapshot.history : [];
   setHistorySnapshot({ history: upsertRecordsOpeningHistory(current, measurement), scopeKey });
-  void store.upsertRecordsOpeningMeasurement(ownerKey, contractId, measurement).catch(() => undefined);
+  return store.upsertRecordsOpeningMeasurement(ownerKey, contractId, measurement).catch(() => undefined);
 }
 
 export function clearRecordsOpeningHistorySnapshot(ownerKey?: string | null) {

@@ -1,7 +1,7 @@
 import type { ConnectivityStatus } from "@/lib/connectivity";
 import type { SyncTelemetry } from "@/lib/sync-telemetry";
 
-export const RECORDS_LIST_LOAD_ERROR_MESSAGE = "No pudimos cargar la lista de personas";
+export const RECORDS_LIST_LOAD_ERROR_MESSAGE = "No pudimos cargar los registros. Conservamos los datos disponibles para que puedas volver a intentar.";
 
 export type RecordsRendererScope = {
   appViewId: string;
@@ -62,7 +62,13 @@ export function getRecordsSyncProblemMessage({
 }
 
 export function getRecordsListErrorMessage(error: unknown) {
+  if (error instanceof Error && "code" in error && error.code === "RECORDS_LOCAL_READ_FAILED") return error.message;
   return error ? RECORDS_LIST_LOAD_ERROR_MESSAGE : null;
+}
+
+export function getRecordsReadErrorCode(error: unknown) {
+  return error instanceof Error && "code" in error && error.code === "RECORDS_LOCAL_READ_FAILED"
+    ? "RECORDS_LOCAL_READ_FAILED" : "RECORDS_READ_FAILED";
 }
 
 export function getRecordsInlineSyncSummary({

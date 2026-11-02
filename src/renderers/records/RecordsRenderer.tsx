@@ -1,5 +1,5 @@
 import { Link } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -17,13 +17,15 @@ import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { buildRecordListItem } from "@/lib/entity-record-display";
 import {
+  assertRecordsReadActive,
+  RecordsReadCancelledError,
   CachedEntityRecord,
   loadRecordsWithOfflineCache,
   refreshEntityRecordsCache,
 } from "@/lib/offline-records";
 import { EntityDefinition, EntityRecordPagination, RecordsAppView } from "@/lib/opco-api";
 import type { RecordsOpeningMeasurement } from "@/lib/records-opening-history";
-import { classifySyncTelemetryError, formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
+import { formatLastSuccessfulSyncAt, SyncTelemetry } from "@/lib/sync-telemetry";
 import {
   stableTextInputStyle,
   STABLE_LOAD_MORE_BUTTON_MIN_WIDTH,
@@ -31,6 +33,7 @@ import {
 import {
   getRecordsInlineSyncSummary,
   getRecordsListErrorMessage,
+  getRecordsReadErrorCode,
   getRecordsSyncProblemMessage,
   resolveRecordsSearchForScopeChange,
 } from "@/renderers/records/records-renderer-state";
@@ -39,7 +42,10 @@ import {
   hydrateRecordsOpeningHistory,
   loadRecordsCacheFirst,
   recordRecordsOpeningMeasurement,
-  selectPresentableLocalRecords,
+  RecordsLocalReadError,
+  recordsLocalCoverage,
+  recordsLocalCoverageMessage,
+  type RecordsLocalCoverage,
   shouldStartRecordsOpeningMeasurement,
 } from "@/renderers/records/records-opening";
 import { AppViewRendererProps } from "@/renderers/types";
@@ -62,8 +68,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [pagination, setPagination] = useState<EntityRecordPagination | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [isOfflineData, setIsOfflineData] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [storedError, setError] = useState<string | null>(null);
+  const [lastReadScope, setLastReadScope] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [localCoverage, setLocalCoverage] = useState<RecordsLocalCoverage | null>(null);
+  const [readErrorCode, setReadErrorCode] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -75,8 +84,20 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const measuredOpeningScopeRef = useRef<string | null>(null);
 
+  const readGenerationRef = useRef(0);
+  const loadMoreFlightRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    readGenerationRef.current += 1;
+    return () => { readGenerationRef.current += 1; };
+  }, [ownerKey, selectedContractId, appView.id, entityTypeId, debouncedSearch, token]);
+  const knownOffline = connectivityStatus === "offline" || status === "offline";
+
   const canLoadMore = pagination ? pagination.page < pagination.totalPages : false;
-  const dataScopeKey = ownerKey && selectedContractId ? `${ownerKey}:${selectedContractId}:${entityTypeId}:${JSON.stringify(debouncedSearch)}` : null;
+  const dataScopeKey = ownerKey && selectedContractId ? `${ownerKey}:${selectedContractId}:${appView.id}:${entityTypeId}:${JSON.stringify(debouncedSearch)}` : null;
+  const scopePending = lastReadScope !== dataScopeKey;
+  const error = scopePending ? null : storedError;
+  const visibleCoverage = scopePending ? null : localCoverage;
+  const localCoverageNotice = recordsLocalCoverageMessage(visibleCoverage, Boolean(definition));
   const hasCompatibleRecords = Boolean(dataScopeKey && loadedScope === dataScopeKey);
   const hasSyncIssues = recordsSyncSummary.failedCount > 0 || recordsSyncSummary.conflictCount > 0;
   const hasSyncActivity =
@@ -86,11 +107,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     recordsSyncSummary.conflictCount > 0;
   const inlineSyncSummary = getRecordsInlineSyncSummary(recordsSyncSummary);
   useExperienceActivityReporter(appView, {
-    activeCount: Number(isLoading) + Number(isRefreshing) + Number(isLoadingMore),
-    readCount: Number(isLoading || isRefreshing),
+    activeCount: Number(scopePending || isLoading || isRefreshing) + Number(isLoadingMore),
+    readCount: Number(scopePending || isLoading || isRefreshing),
     readMode: hasCompatibleRecords ? "refresh" : "initial",
-    errorCode: error ? "RECORDS_READ_FAILED" : null,
-    result: error ? "error" : !isRefreshing && !isLoading ? "success" : null,
+    errorCode: error ? readErrorCode ?? "RECORDS_READ_FAILED" : null,
+    result: error ? "error" : !scopePending && !isRefreshing && !isLoading ? localCoverageNotice ? "partial" : "success" : null,
   });
 
   useEffect(() => {
@@ -120,25 +141,30 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     };
   }, [searchText]);
 
-  const refreshCurrentSyncTelemetry = useCallback(async () => {
+  const refreshCurrentSyncTelemetry = useCallback(async (isActive: () => boolean = () => true) => {
+    const generation = readGenerationRef.current;
     if (!ownerKey || !selectedContractId || !entityTypeId) {
       setRecordsSyncTelemetry(null);
       return;
     }
 
     try {
-      setRecordsSyncTelemetry(await definitionCache.getSyncTelemetry({
+      const telemetry = await definitionCache.getSyncTelemetry({
         contractId: selectedContractId,
         entityTypeId,
         ownerKey,
-      }));
+      });
+      if (isActive() && generation === readGenerationRef.current) setRecordsSyncTelemetry(telemetry);
     } catch {
-      setRecordsSyncTelemetry(null);
+      if (isActive() && generation === readGenerationRef.current) setRecordsSyncTelemetry(null);
     }
   }, [definitionCache, entityTypeId, ownerKey, selectedContractId]);
 
   useEffect(() => {
     let isMounted = true;
+    const generation = ++readGenerationRef.current;
+    const isActive = () => isMounted && generation === readGenerationRef.current;
+    loadMoreFlightRef.current = null;
     let measurement: RecordsOpeningMeasurement | null = null;
     let measurementContractId: string | null = null;
     let measurementOwnerKey: string | null = null;
@@ -151,9 +177,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         return;
       }
 
+      setLastReadScope(dataScopeKey);
+      setIsLoadingMore(false);
       setIsLoading(true);
-      setIsRefreshing(true);
+      setIsRefreshing(!knownOffline);
       setError(null);
+      setReadErrorCode(null);
       const activeOwnerKey = ownerKey;
       const activeContractId = selectedContractId;
       measurementOwnerKey = activeOwnerKey;
@@ -162,8 +191,8 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       const openingScopeKey = `${scopeKey}:${appView.id}`;
       const shouldMeasureOpening = shouldStartRecordsOpeningMeasurement(measuredOpeningScopeRef.current, openingScopeKey);
       if (shouldMeasureOpening) measuredOpeningScopeRef.current = openingScopeKey;
-      const openingStartedAt = sharedOpening?.monotonicStartedAt ?? monotonicNow();
-      const openingStartedAtIso = sharedOpening?.startedAt ?? new Date().toISOString();
+      const openingStartedAt = (shouldMeasureOpening ? sharedOpening?.monotonicStartedAt : null) ?? monotonicNow();
+      const openingStartedAtIso = (shouldMeasureOpening ? sharedOpening?.startedAt : null) ?? new Date().toISOString();
       let localReadMs: number | null = null;
       let localSnapshotComplete = false;
       let hasPresentableLocalRecords = false;
@@ -172,7 +201,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       let presentedCount = 0;
       let presentedSource: "local" | "remote" | "none" = "none";
       let remoteStartedAt: number | null = null;
-      measurement = shouldMeasureOpening ? {
+      let remoteFallbackError: unknown = null;
+      let currentCoverage: RecordsLocalCoverage = "unprepared";
+      measurement = {
         appViewId: appView.id,
         appViewTitle: appView.name,
         coverage: "unknown",
@@ -180,7 +211,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         appViewResolutionMs: sharedOpening?.resolutionMs ?? null,
         appViewType: "RECORDS",
         firstUsefulContentMs: null,
-        id: sharedOpening?.id ?? createOpeningMeasurementId(),
+        id: (shouldMeasureOpening ? sharedOpening?.id : null) ?? createOpeningMeasurementId(),
         origin: sharedOpening?.origin ?? "renderer",
         localReadMs: null,
         preparationMs: null,
@@ -191,13 +222,13 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         source: "none",
         startedAt: openingStartedAtIso,
         timeToFirstRowsMs: null,
-        variant: null,
-      } : null;
+        variant: shouldMeasureOpening ? null : "refresh",
+      };
 
       function publishOpeningMeasurement(patch: Partial<RecordsOpeningMeasurement>) {
-        if (!isMounted || !measurement) return;
+        if (!isActive() || !measurement) return;
         measurement = { ...measurement, ...patch, localReadMs };
-        recordRecordsOpeningMeasurement({
+        return recordRecordsOpeningMeasurement({
           contractId: activeContractId,
           measurement,
           ownerKey: activeOwnerKey,
@@ -215,7 +246,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         const nextItems = result.records.map((record) => buildRecordListItem({ definition: nextDefinition, record }));
         const preparationMs = elapsedMs(preparationStartedAt);
 
-        if (!isMounted) return;
+        if (!isActive()) return;
         if (firstRowsAt === null && nextItems.length > 0) firstRowsAt = monotonicNow();
         presentedCount = result.records.length;
         presentedSource = source;
@@ -223,11 +254,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         setRecords(result.records);
         setListItems(nextItems);
         setPagination(result.pagination);
-        setIsOfflineData(result.offline);
+        setIsOfflineData(knownOffline || result.offline);
         loadedScopeRef.current = scopeKey;
         setLoadedScope(scopeKey);
         publishOpeningMeasurement({
-          coverage: source === "remote" && !result.fromCache ? "complete" : measurement?.coverage ?? "unknown",
+          coverage: currentCoverage === "unprepared" ? "unknown" : currentCoverage,
           preparationMs,
           processedCount: source === "remote" ? result.pagination.total : result.records.length,
           remoteRefreshMs,
@@ -241,10 +272,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       if (shouldMeasureOpening) {
         activateRecordsOpeningHistoryOwner(activeOwnerKey);
         void hydrateRecordsOpeningHistory({ contractId: activeContractId, ownerKey: activeOwnerKey, store: definitionCache });
-        publishOpeningMeasurement({});
       }
+      publishOpeningMeasurement({});
 
       if (loadedScopeRef.current !== scopeKey) {
+        setLocalCoverage(null);
+        setRecordsSyncTelemetry(null);
         setDefinition(null);
         setRecords([]);
         setListItems([]);
@@ -254,32 +287,30 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
       }
 
       try {
-        remoteStartedAt = monotonicNow();
+        remoteStartedAt = knownOffline ? null : monotonicNow();
         const opening = await loadRecordsCacheFirst({
+          offline: knownOffline,
           canPresentLocal: (local) => {
             localSnapshotComplete = Boolean(local.definition && local.telemetry?.lastFullRefreshCompletedAt);
-            hasPresentableLocalRecords = localSnapshotComplete ||
-              local.records.records.some((record) => record.syncStatus !== "synced");
-            return hasPresentableLocalRecords && Boolean(local.definition);
+            currentCoverage = recordsLocalCoverage(Boolean(local.definition), local.telemetry?.lastFullRefreshCompletedAt, local.records.records.length);
+            hasPresentableLocalRecords = Boolean(local.definition);
+            return hasPresentableLocalRecords;
           },
-          isActive: () => isMounted,
+          isActive,
           onPresentLocal: (local) => {
+            if (!isActive()) return;
+            setLocalCoverage(currentCoverage);
             if (local.definition) {
               localDefinition = local.definition.definition;
-              const recordsToPresent = localSnapshotComplete
-                ? local.records
-                : selectPresentableLocalRecords(local.records, false);
-              if (measurement) {
-                measurement = { ...measurement, coverage: localSnapshotComplete ? "complete" : "partial" };
-              }
-              presentRecords(local.definition.definition, recordsToPresent, "local", null);
-              setSyncedAt(local.definition.syncedAt);
+              presentRecords(local.definition.definition, local.records, "local", null);
+              setSyncedAt(local.telemetry?.lastFullRefreshCompletedAt ?? null);
               setIsLoading(false);
             }
           },
           readLocal: async () => {
             const localStartedAt = monotonicNow();
-            const [cachedDefinition, cachedRecords, telemetry] = await Promise.all([
+            let values;
+            try { values = await Promise.all([
               definitionCache.getEntityDefinition(selectedContractId, entityTypeId),
               definitionCache.listCachedRecords({
                 contractId: selectedContractId,
@@ -290,15 +321,21 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                 search: debouncedSearch,
               }),
               definitionCache.getSyncTelemetry({ contractId: selectedContractId, entityTypeId, ownerKey }),
-            ]);
+            ]); } catch { throw new RecordsLocalReadError(); }
             localReadMs = elapsedMs(localStartedAt);
+            const [cachedDefinition, cachedRecords, telemetry] = values;
             return { definition: cachedDefinition, records: cachedRecords, telemetry };
           },
           refreshRemote: async () => {
+            const onNetworkFallback = (error: unknown) => { if (isActive()) remoteFallbackError = error; };
             const [definitionResult, recordsResult] = await Promise.all([
               getEntityDefinitionWithCache({
-                api,
-                cache: definitionCache,
+                api: { getEntityDefinition: async (...args) => {
+                  try { const value = await api.getEntityDefinition(...args); assertRecordsReadActive(isActive); return value; }
+                  catch (error) { onNetworkFallback(error); throw error; }
+                } },
+                cache: { getEntityDefinition: definitionCache.getEntityDefinition,
+                  upsertEntityDefinition: async (...args) => { assertRecordsReadActive(isActive); await definitionCache.upsertEntityDefinition(...args); } },
                 contractId: selectedContractId,
                 entityTypeId,
                 token,
@@ -311,6 +348,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                     ownerKey,
                     page: 1,
                     pageSize: PAGE_SIZE,
+                    isActive, onNetworkFallback,
                     search: debouncedSearch,
                     store: definitionCache,
                     token,
@@ -322,69 +360,62 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                     ownerKey,
                     resultPageSize: PAGE_SIZE,
                     store: definitionCache,
-                    suppressNetworkTelemetry: status === "offline",
+                    isActive, onNetworkFallback,
+                    suppressNetworkTelemetry: false,
                     token,
                   }),
             ]);
             return { definitionResult, recordsResult };
           },
         });
-        const remoteRefreshMs = elapsedMs(remoteStartedAt);
-
-        if (opening.remote.recordsResult.fromCache && !localSnapshotComplete) {
-          throw new Error("No existe un snapshot local completo para esta experiencia.");
-        }
-
-        presentRecords(
-          opening.remote.definitionResult.definition,
-          opening.remote.recordsResult,
-          opening.remote.recordsResult.fromCache ? "local" : "remote",
-          remoteRefreshMs,
-        );
-        if (isMounted) setSyncedAt(opening.remote.definitionResult.syncedAt);
-        terminalResult = true;
-        publishOpeningMeasurement({ errorCode: null, result: "completed" });
-        await refreshRecordsSyncSummary();
-        await refreshCurrentSyncTelemetry();
-      } catch (nextError) {
-        if (isMounted) {
-          const message = getRecordsListErrorMessage(nextError) ?? "No pudimos cargar la lista de personas";
-
-          try {
-            const cached = await definitionCache.listCachedRecords({
-              contractId: selectedContractId,
-              entityTypeId,
-              ownerKey,
-              page: 1,
-              pageSize: PAGE_SIZE,
-              search: debouncedSearch,
-            });
-
-            if (isMounted && localSnapshotComplete && localDefinition && cached.records.length > 0) {
-              presentRecords(localDefinition, { ...cached, offline: true }, "local", null);
-            }
-          } catch {
-            // The original load error is more useful to the user and diagnostics.
-          }
-
-          setError(message);
+        if (!isActive()) return;
+        const remoteRefreshMs = remoteStartedAt === null ? null : elapsedMs(remoteStartedAt);
+        if (knownOffline) {
+          currentCoverage = recordsLocalCoverage(Boolean(opening.local?.definition), opening.local?.telemetry?.lastFullRefreshCompletedAt, opening.local?.records.records.length ?? 0);
+          setLocalCoverage(currentCoverage);
           terminalResult = true;
-          publishOpeningMeasurement({
-            errorCode: classifySyncTelemetryError(nextError),
-            processedCount: presentedCount,
-            remoteRefreshMs: remoteStartedAt === null ? null : elapsedMs(remoteStartedAt),
-            result: "error",
-            source: !measurement || measurement.source === "none" ? presentedSource : measurement.source,
-          });
+          await publishOpeningMeasurement({ errorCode: null, result: currentCoverage === "complete" ? "completed" : "partial" });
+        } else if (opening.remote) {
+          if (!opening.remote.recordsResult.fromCache && !debouncedSearch) currentCoverage = "complete";
+          setLocalCoverage(currentCoverage);
+          presentRecords(opening.remote.definitionResult.definition, opening.remote.recordsResult,
+            opening.remote.recordsResult.fromCache ? "local" : "remote", remoteRefreshMs);
+          terminalResult = true;
+          if (remoteFallbackError) throw remoteFallbackError;
+          await publishOpeningMeasurement({ errorCode: null, result: currentCoverage === "complete" ? "completed" : "partial" });
         }
+        if (!isActive()) return;
         try {
           await refreshRecordsSyncSummary();
-          await refreshCurrentSyncTelemetry();
-        } catch {
-          // Diagnostics refresh must not replace the list load failure.
-        }
+          if (!isActive()) return;
+          await refreshCurrentSyncTelemetry(isActive);
+        } catch { /* Sync-summary observation cannot turn a successful list read into a list failure. */ }
+      } catch (nextError) {
+        if (!isActive() || nextError instanceof RecordsReadCancelledError) return;
+        // Keep the compatible local/in-memory presentation; failed refresh is not a new empty snapshot.
+        try {
+          const cached = await definitionCache.listCachedRecords({ contractId: activeContractId, entityTypeId,
+            ownerKey: activeOwnerKey, page: 1, pageSize: PAGE_SIZE, search: debouncedSearch });
+          if (!isActive()) return;
+          if (localDefinition && (localSnapshotComplete || cached.records.length > 0)) {
+            presentRecords(localDefinition, { ...cached, offline: true }, "local", null);
+          }
+        } catch { /* Retain the original read failure and any visible compatible data. */ }
+        if (!isActive()) return;
+        setError(getRecordsListErrorMessage(nextError));
+        setReadErrorCode(getRecordsReadErrorCode(nextError));
+        terminalResult = true;
+        await publishOpeningMeasurement({ errorCode: getRecordsReadErrorCode(nextError), processedCount: presentedCount,
+          remoteRefreshMs: remoteStartedAt === null ? null : elapsedMs(remoteStartedAt), result: "error",
+          source: presentedSource });
+        if (!isActive()) return;
+        try {
+          await refreshRecordsSyncSummary();
+          if (!isActive()) return;
+          await refreshCurrentSyncTelemetry(isActive);
+        } catch { /* Summary failures must not replace the list read result. */ }
       } finally {
-        if (isMounted) {
+        if (isActive()) {
           setIsLoading(false);
           setIsRefreshing(false);
         }
@@ -420,51 +451,66 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     retryCount,
     selectedContractId,
     status,
+    knownOffline,
     sharedOpening,
     token,
   ]);
 
   async function loadMoreRecords() {
-    if (!token || !selectedContractId || !entityTypeId || !ownerKey || !pagination || isLoadingMore) {
-      return;
-    }
-
+    if (!token || !selectedContractId || !entityTypeId || !ownerKey || !pagination || scopePending || isLoadingMore || isLoading || isRefreshing || loadMoreFlightRef.current !== null) return;
+    const generation = readGenerationRef.current;
+    const isActive = () => generation === readGenerationRef.current;
+    loadMoreFlightRef.current = generation;
+    const startedMs = monotonicNow();
+    const measurement: RecordsOpeningMeasurement = {
+      id: createOpeningMeasurementId(), appViewId: appView.id, appViewTitle: appView.name, appViewType: "RECORDS",
+      startedAt: new Date().toISOString(), result: "in_progress", coverage: localCoverage === "unprepared" ? "unknown" : localCoverage ?? "unknown",
+      source: knownOffline ? "local" : "remote", variant: "load-more", origin: "renderer", errorCode: null,
+      localReadMs: null, remoteRefreshMs: null, preparationMs: null, processedCount: 0, shownCount: 0,
+      timeToFirstRowsMs: null,
+    };
+    const publish = (patch: Partial<RecordsOpeningMeasurement>) => {
+      if (isActive()) return recordRecordsOpeningMeasurement({ ownerKey, contractId: selectedContractId, store: definitionCache,
+        measurement: { ...measurement, ...patch } });
+    };
+    void publish({});
     setIsLoadingMore(true);
     setError(null);
-
+    setReadErrorCode(null);
     try {
-      const result = await loadRecordsWithOfflineCache({
-        api,
-        contractId: selectedContractId,
-        entityTypeId,
-        ownerKey,
-        page: pagination.page + 1,
-        pageSize: PAGE_SIZE,
-        search: debouncedSearch,
-        store: definitionCache,
-        token,
-      });
-
-      setRecords((current) => [...current, ...result.records]);
-      if (definition) {
-        setListItems((current) => [
-          ...current,
-          ...result.records.map((record) => buildRecordListItem({ definition, record })),
-        ]);
-      }
+      let fallbackError: unknown = null;
+      const result = knownOffline
+        ? await definitionCache.listCachedRecords({ contractId: selectedContractId, entityTypeId, ownerKey,
+            page: pagination.page + 1, pageSize: PAGE_SIZE, search: debouncedSearch }).catch(() => { throw new RecordsLocalReadError(); })
+        : await loadRecordsWithOfflineCache({ api, contractId: selectedContractId, entityTypeId, ownerKey,
+            page: pagination.page + 1, pageSize: PAGE_SIZE, search: debouncedSearch, store: definitionCache, token,
+            isActive, onNetworkFallback: error => { fallbackError = error; } });
+      if (!isActive()) return;
+      setRecords(current => [...current, ...result.records]);
+      if (definition) setListItems(current => [...current, ...result.records.map(record => buildRecordListItem({ definition, record }))]);
       setPagination(result.pagination);
-      setIsOfflineData((current) => current || result.offline);
+      setIsOfflineData(current => current || knownOffline || result.offline);
+      if (fallbackError) throw fallbackError;
+      await publish({ result: localCoverage === "complete" ? "completed" : "partial", shownCount: result.records.length,
+        processedCount: result.records.length, localReadMs: knownOffline ? elapsedMs(startedMs) : null,
+        remoteRefreshMs: knownOffline ? null : elapsedMs(startedMs) });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No fue posible cargar mas registros.");
+      if (!isActive() || nextError instanceof RecordsReadCancelledError) return;
+      setError(getRecordsListErrorMessage(nextError));
+      setReadErrorCode(getRecordsReadErrorCode(nextError));
+      await publish({ result: "error", errorCode: getRecordsReadErrorCode(nextError) });
     } finally {
-      setIsLoadingMore(false);
+      if (isActive()) { loadMoreFlightRef.current = null; setIsLoadingMore(false); }
     }
   }
 
   async function synchronizeRecords() {
+    const generation = readGenerationRef.current;
+    const isActive = () => generation === readGenerationRef.current;
     await syncPendingRecords();
-    await refreshCurrentSyncTelemetry();
-    setRetryCount((count) => count + 1);
+    if (!isActive()) return;
+    await refreshCurrentSyncTelemetry(isActive);
+    if (isActive()) setRetryCount((count) => count + 1);
   }
 
   return (
@@ -476,9 +522,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         <View style={styles.headerText}>
           <Text style={styles.title}>{appView.name}</Text>
           <Text style={styles.meta}>
-            {definition?.name ? `${definition.name} · ${pagination ? `${pagination.total} registros` : "Registros"}` : "Registros"}
+            {hasCompatibleRecords && definition?.name ? `${definition.name} · ${visibleCoverage === "complete" && pagination ? `${pagination.total} registros` : visibleCoverage === "partial" && pagination ? `${pagination.total} guardados` : "Registros"}` : "Registros"}
           </Text>
-          <SyncTelemetrySummary connectivityStatus={connectivityStatus} fallbackSyncedAt={syncedAt} telemetry={recordsSyncTelemetry} />
+          <SyncTelemetrySummary connectivityStatus={connectivityStatus} fallbackSyncedAt={visibleCoverage === "complete" ? syncedAt : null} telemetry={hasCompatibleRecords ? recordsSyncTelemetry : null} />
         </View>
       </View>
 
@@ -519,14 +565,16 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         </Link>
       </View>
 
+      {localCoverageNotice ? <Text accessibilityLiveRegion="polite" style={styles.meta}>{localCoverageNotice}</Text> : null}
       <RecordsListContent
         canLoadMore={canLoadMore}
         debouncedSearch={debouncedSearch}
         error={error}
-        isLoading={isLoading}
+        isLoading={scopePending || isLoading}
         isRefreshing={isRefreshing}
         isLoadingMore={isLoadingMore}
         isOfflineData={isOfflineData}
+        localCoverage={visibleCoverage}
         items={hasCompatibleRecords ? listItems : []}
         onLoadMore={loadMoreRecords}
         onRetry={() => setRetryCount((count) => count + 1)}
@@ -561,6 +609,7 @@ function RecordsListContent({
   isRefreshing,
   isLoadingMore,
   isOfflineData,
+  localCoverage,
   items,
   onLoadMore,
   onRetry,
@@ -574,6 +623,7 @@ function RecordsListContent({
   isRefreshing: boolean;
   isLoadingMore: boolean;
   isOfflineData: boolean;
+  localCoverage: RecordsLocalCoverage | null;
   items: ReturnType<typeof buildRecordListItem>[];
   onLoadMore: () => void;
   onRetry: () => void;
@@ -588,10 +638,10 @@ function RecordsListContent({
           <Text style={styles.retryText}>Volver a cargar</Text>
         </Pressable>
       ) : null}
-      {!isLoading && !error && records.length === 0 ? (
+      {!isLoading && !error && localCoverage === "complete" && records.length === 0 ? (
         <Text style={styles.empty}>
           {isOfflineData && !debouncedSearch
-            ? "No hay datos guardados para esta experiencia."
+            ? "La colección preparada no tiene registros."
             : debouncedSearch ? "No hay registros para esta busqueda." : "Esta experiencia no tiene registros."}
         </Text>
       ) : null}
@@ -622,7 +672,7 @@ function RecordsListContent({
       </View>
 
       {canLoadMore ? (
-        <Pressable disabled={isLoadingMore} onPress={onLoadMore} style={styles.loadMoreButton}>
+        <Pressable disabled={isLoadingMore || isRefreshing || isLoading} onPress={onLoadMore} style={styles.loadMoreButton}>
           {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
         </Pressable>
       ) : null}
@@ -645,13 +695,13 @@ function SyncTelemetrySummary({
     return <Text style={styles.syncProblemText}>{problemMessage}</Text>;
   }
 
-  const formatted = formatLastSuccessfulSyncAt(telemetry?.lastSuccessfulSyncAt ?? null) ?? fallbackSyncedAt;
+  const formatted = formatLastSuccessfulSyncAt(telemetry?.lastFullRefreshCompletedAt ?? null) ?? fallbackSyncedAt;
 
   if (!formatted) {
     return null;
   }
 
-  return <Text style={styles.lastSyncText}>Ultima sincronizacion: {formatted}</Text>;
+  return <Text style={styles.lastSyncText}>Última copia completa: {formatted}</Text>;
 }
 
 function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {

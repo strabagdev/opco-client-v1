@@ -149,7 +149,7 @@ describe("records renderer state", () => {
 
   it("uses a user-facing list load error instead of leaking refresh internals", () => {
     expect(getRecordsListErrorMessage(new Error("El refresco remoto devolvio registros, pero el cache local quedo sin registros sincronizados.")))
-      .toBe("No pudimos cargar la lista de personas");
+      .toBe("No pudimos cargar los registros. Conservamos los datos disponibles para que puedas volver a intentar.");
   });
 
   it("keeps inline records sync messaging distinct from the global error count", () => {
