@@ -1,5 +1,6 @@
 import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
 import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
+import { panelDefinitionKey, parseCoherentPanelDefinition, type PanelDefinitionScope } from "./panel-definition";
 import { workflowRecordMatches, SearchComparisonError, fieldSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
 import { cachedWorkflowComparison, cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
 import { validateScheduleResolution, type CachedStateUpdateScheduleContext, type StateUpdateSchedulePolicy } from "./state-update-schedule";
@@ -92,7 +93,7 @@ import {
   fingerprintRecordsScope,
   normalizeRecordValuesForPersistence,
 } from "./offline-records";
-import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, OpcoApiError, PanelResponse, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
+import { AppView, ContextResponse, EntityDefinition, EntityField, EntityRecord, EntityRecordValue, MeResponse, OpcoApi, OpcoApiError, PanelResponse, PanelAppView, ReportResponse, StateUpdateBatchResult, StateUpdateItem } from "./opco-api";
 import {
   emptySyncTelemetry,
   SyncErrorCode,
@@ -198,6 +199,7 @@ export type LocalDatabase = AppNavigationCache &
   getSyncAttentionProblems(scope: { ownerKey: string; contractId: string }): Promise<SyncAttentionProblem[]>;
   getSelectedContractId(ownerKey?: string | null): Promise<string | null>;
   getPanelSnapshot(input: PanelSnapshotScope): Promise<CachedPanelSnapshot | null>;
+  getCoherentPanelDefinition(input: PanelDefinitionScope): Promise<PanelAppView | null>;
   getReportSnapshot(input: ReportSnapshotScope): Promise<CachedReportSnapshot | null>;
   setAttendanceContextSelection(ownerKey: string, contractId: string, appViewId: string, fieldId: string, optionId: string | null): Promise<void>;
   markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotScope & { refreshedAt?: string }): Promise<void>;
@@ -205,7 +207,7 @@ export type LocalDatabase = AppNavigationCache &
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
   getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics;
-  upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string; assertActive?: () => void }): Promise<void>;
+  upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; definition?: PanelAppView; syncedAt?: string; assertActive?: () => void }): Promise<void>;
   upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
 } & RecordsOpeningHistoryStore;
 
@@ -284,6 +286,7 @@ export function getLocalDatabase(): LocalDatabase {
     getSelectedContractId,
     getSQLiteCoordinatorDiagnostics,
     getPanelSnapshot,
+    getCoherentPanelDefinition,
     getReportSnapshot,
     listCachedRecords,
     listFailedRecordOperations,
@@ -1337,6 +1340,7 @@ async function upsertPanelSnapshot({
   configRevision,
   contractId,
   datasetId,
+  definition,
   filters,
   ownerKey,
   page,
@@ -1344,9 +1348,12 @@ async function upsertPanelSnapshot({
   panel,
   search,
   syncedAt = new Date().toISOString(),
-}: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string; assertActive?: () => void }) {
+}: PanelSnapshotScope & { panel: PanelResponse; definition?: PanelAppView; syncedAt?: string; assertActive?: () => void }) {
   const db = await getDatabase();
   const revision = configRevision || panel.configRevision;
+  if (definition && (definition.id !== appViewId || definition.type !== "PANEL" || definition.configRevision !== revision)) {
+    throw new Error("PANEL_DEFINITION_INVALID");
+  }
 
   // Check inside the shared coordinator, not before waiting for its queue. A retired
   // read that loses its scope while INSERT is pending rolls back before another writer.
@@ -1368,10 +1375,25 @@ async function upsertPanelSnapshot({
       JSON.stringify(panel),
       syncedAt,
     );
+    if (definition) {
+      await transaction.runAsync("INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)",
+        panelDefinitionKey({ ownerKey, contractId, appViewId }), JSON.stringify({ version: 1, appView: definition }));
+    }
     assertActive?.();
   }, "transaction:panel-snapshot");
 
   notifyLocalDatabaseCacheChangeListeners();
+}
+
+async function getCoherentPanelDefinition(scope: PanelDefinitionScope): Promise<PanelAppView | null> {
+  const db = await getDatabase();
+  const receipt = await db.getFirstAsync<{ value: string }>("SELECT value FROM app_metadata WHERE key = ?", panelDefinitionKey(scope));
+  if (!receipt) return null;
+  const definition = parseCoherentPanelDefinition(receipt.value, scope.appViewId);
+  if (!definition) return null;
+  const persisted = await db.getFirstAsync("SELECT 1 FROM panel_snapshots WHERE owner_key = ? AND contract_id = ? AND app_view_id = ? AND config_revision = ? LIMIT 1",
+    scope.ownerKey, scope.contractId, scope.appViewId, definition.configRevision!);
+  return persisted ? definition : null;
 }
 
 async function getPanelSnapshot({

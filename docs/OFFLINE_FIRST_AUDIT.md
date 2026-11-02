@@ -931,3 +931,26 @@ Online conserva el atajo de query ya cargada y el fallback compatible; cobertura
 frescura. Inicio no prepara datasets ni combinaciones nunca consultadas; preparación automática
 PANEL sigue fuera de este lote. Bootstrap compartido /views no se modificó. Evidencia/inventario:
 backups/panel-offline-read-fix/2026-11-02/.402exclusiones/Core/pendientes conservados;sin publicación.
+
+
+### PANEL — definición coherente y consulta exacta tras reapertura — 02-11-2026
+
+Corrección local del camino demostrado R1/responseR2: sólo se publica R2 después de confirmar la
+definición asignada de la misma revisión mediante una lectura acotada de /views. Si datasets o
+significado de filtros cambian, se pide revisar el contexto; no se reutilizan selecciones bajo otra
+semántica. No se renombran ni eliminan snapshots R1/R2. Recibo de definición y snapshot comparten
+transacción/vigencia; un retiro o fallo revierte ambos. El recibo no concede asignación ni cobertura
+de otra consulta: una clave exacta ausente continúa ausente, aunque exista un resumen.
+
+SQLite con reapertura y Chromium153/OPFS real verifican: navegación cacheada R1 + consulta persistida
+R2 → reapertura offline → lectura exacta R2; cero API PANEL, copias separadas e integridad ok. Una
+revisión R3 no confirmada conserva los snapshots anteriores y termina sin realimentación. 122 pruebas
+únicas afectadas PASS, typecheck/lint/build/diff-check PASS. Transporte sintético; no Core/Safari físico
+ni correlación histórica de CN-099. No cambia la preparación de Inicio ni se preparan consultas nuevas.
+
+Diagnóstico sanitizado en la sección existente y su copia: readId, fases, revisiones, fingerprints de
+scope/clave/dataset y fecha del commit confirmado. Sin valores de filtros, búsqueda o registros; las
+huellas son observabilidad, no autorización. Compatibilidad: snapshots anteriores sin recibo siguen
+su lectura exacta anterior; runtimes anteriores ignoran el recibo y no reciben esta corrección. No
+hay cambio de formato de intenciones, esquema ni namespace. Evidencia/inventario:
+backups/panel-revision-reconciliation/2026-11-02/. Core/402 exclusiones/pendientes preservados.

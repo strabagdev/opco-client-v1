@@ -24,6 +24,7 @@ import { AppViewRendererProps } from "@/renderers/types";
 import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
+import { PanelDefinitionError } from "@/lib/panel-definition";
 
 import {
   buildPanelKpiModel,
@@ -60,9 +61,14 @@ type PanelTableModuleConfig = PanelModuleConfig & {
 const DATASET_KEY_SEPARATOR = "\u0000";
 const relatedFieldId = (relationFieldId: string, fieldId: string) => `related:${relationFieldId}:${fieldId}`;
 
-export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
+export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps<PanelAppView>) {
   const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
   const knownOffline = connectivityStatus === "offline" || status === "offline";
+  const assignedScopeKey = JSON.stringify([ownerKey, selectedContractId, assignedAppView.id, assignedAppView.configRevision ?? assignedAppView.config]);
+  const [reconciled, setReconciled] = useState<{ assignedScopeKey: string; definition: PanelAppView } | null>(null);
+  const appView = reconciled?.assignedScopeKey === assignedScopeKey ? reconciled.definition : assignedAppView;
+  const adoptedScopeRef = useRef<string | null>(null);
+  const resetScopeRef = useRef<string | null>(null);
   const { width } = useWindowDimensions();
   const configuredModules = useMemo(() => appView.config.modules ?? [], [appView.config.modules]);
   const appViewConfigKey = JSON.stringify(appView.config);
@@ -101,6 +107,13 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   }, [datasetStates]);
 
   useEffect(() => {
+    const resetKey = JSON.stringify([datasetScopeKey, appViewConfigKey]);
+    if (resetScopeRef.current === resetKey) return;
+    resetScopeRef.current = resetKey;
+    if (adoptedScopeRef.current === datasetScopeKey) {
+      adoptedScopeRef.current = null;
+      return;
+    }
     setDatasetStates({});
     datasetStatesRef.current = {};
     setPages(Object.fromEntries(initialDatasetIds.map((id) => [id, 1])));
@@ -111,7 +124,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     setRelationOptions({});
     setRelationSearch({});
     setFilterMetadataError(null);
-  }, [appView.id, appView.configRevision, appViewConfigKey, initialDatasetIds, ownerKey, selectedContractId]);
+  }, [appView.id, appView.configRevision, appViewConfigKey, datasetScopeKey, initialDatasetIds, ownerKey, selectedContractId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -275,6 +288,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
         try {
           const result = await loadPanelDatasetWithOfflineCache({
             api,
+            appView,
             appViewId: appView.id,
             configRevision: appView.configRevision ?? previous?.panel?.configRevision,
             requireConfigRevision: hasComposedKpi,
@@ -298,6 +312,13 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
             continue;
           }
 
+          const resultScopeKey = result.definition
+            ? JSON.stringify([ownerKey, selectedContractId, appView.id, result.definition.configRevision ?? JSON.stringify(result.definition.config)])
+            : datasetScopeKey;
+          if (result.definition && resultScopeKey !== datasetScopeKey) {
+            adoptedScopeRef.current = resultScopeKey;
+            setReconciled({ assignedScopeKey, definition: result.definition });
+          }
           const executedDatasetId = result.panel.datasets[0]?.id;
           setDatasetStates((current) => ({
             ...current,
@@ -308,7 +329,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
               isLoading: false,
               panel: result.panel,
               queryKey,
-              scopeKey: datasetScopeKey,
+              scopeKey: resultScopeKey,
               syncedAt: result.syncedAt,
             },
             ...(executedDatasetId && executedDatasetId !== datasetId
@@ -320,12 +341,14 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
                     isLoading: false,
                     panel: result.panel,
                     queryKey,
-                    scopeKey: datasetScopeKey,
+                    scopeKey: resultScopeKey,
                     syncedAt: result.syncedAt,
                   },
                 }
               : {}),
           }));
+          // Remaining modules must use the adopted definition, not the retiring one.
+          if (resultScopeKey !== datasetScopeKey) return;
         } catch (error) {
           if (cancelled || requestSeq.current !== seq) {
             continue;
@@ -335,7 +358,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
             ...current,
             [datasetId]: {
               error: error instanceof Error ? error.message : "No fue posible cargar el dataset.",
-              errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError ? error.code : "PANEL_READ_FAILED",
+              errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError || error instanceof PanelDefinitionError ? error.code : "PANEL_READ_FAILED",
               fromCache: false,
               isLoading: false,
               panel: hasCompatiblePanel ? previous?.panel ?? null : null,
@@ -356,6 +379,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   }, [
     api,
     appView,
+    assignedScopeKey,
     datasetIdsKey,
     definitionCache,
     configuredFilters,

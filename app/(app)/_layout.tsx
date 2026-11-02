@@ -7,6 +7,7 @@ import { Redirect, Stack, usePathname, useRouter } from "expo-router";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getHomeNavigationEvents, homeNavigationCachePresent, homeNavigationRows, subscribeHomeNavigationEvents } from "@/lib/home-navigation-diagnostics";
+import { getPanelReadEvents, panelReadRows, subscribePanelReadEvents } from "@/lib/panel-read-diagnostics";
 import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -796,6 +797,8 @@ function SyncStatusDiagnosticsPanel({
   const { ownerKey, selectedContractId } = useSession();
   const navigationEvents = useSyncExternalStore(subscribeHomeNavigationEvents, getHomeNavigationEvents, getHomeNavigationEvents);
   const navigationRows = homeNavigationRows(navigationEvents, ownerKey, selectedContractId);
+  const panelEvents = useSyncExternalStore(subscribePanelReadEvents, getPanelReadEvents, getPanelReadEvents);
+  const panelRows = panelReadRows(panelEvents, ownerKey, selectedContractId);
   const [copyState, setCopyState] = useState<"idle" | "success" | "error">("idle");
   const copyResetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSince = [...history.events].reverse().find((event) => event.process === "Indicador")?.at ?? null;
@@ -807,7 +810,7 @@ function SyncStatusDiagnosticsPanel({
     }
 
     try {
-      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history, getSQLiteDiagnostics()) + "\n\nInicio — lista offline (historial en memoria, máximo 30 eventos)\n" + navigationRows.map(([label, value]) => `${label}: ${value}`).join("\n"));
+      await copyTextToClipboard(formatSyncStatusDiagnosticsCopy(diagnostics, history, getSQLiteDiagnostics()) + "\n\nInicio — lista offline (historial en memoria, máximo 30 eventos)\n" + navigationRows.map(([label, value]) => `${label}: ${value}`).join("\n") + "\n\nPANEL — revisiones y snapshots (historial en memoria, máximo 80 eventos)\n" + panelRows.map(([label, value]) => `${label}: ${value}`).join("\n"));
       setCopyState("success");
       copyResetTimeout.current = setTimeout(() => setCopyState("idle"), 2000);
     } catch {
@@ -866,6 +869,9 @@ function SyncStatusDiagnosticsPanel({
       <Text style={styles.diagnosticsTitle}>Inicio — lista offline</Text>
       <Text style={styles.syncHistoryNotice}>Sólo metadata del scope activo; historial en memoria, máximo 30 eventos.</Text>
       {navigationRows.map(([label, value]) => <View key={label}><Text style={styles.diagnosticsLabel}>{label}</Text><Text selectable style={styles.diagnosticsValue}>{value}</Text></View>)}
+      <Text style={styles.diagnosticsTitle}>PANEL — revisiones y snapshots</Text>
+      <Text style={styles.syncHistoryNotice}>Sólo revisiones y huellas del scope activo; sin filtros, búsquedas ni datos de registros. Memoria, máximo 80 eventos.</Text>
+      {panelRows.map(([label, value]) => <View key={label}><Text style={styles.diagnosticsLabel}>{label}</Text><Text selectable style={styles.diagnosticsValue}>{value}</Text></View>)}
       <Text style={styles.diagnosticsTitle}>Historial breve</Text>
       <Text style={styles.syncHistoryNotice}>En memoria, máximo 50 eventos; se limpia al cerrar o cambiar sesión/contrato.</Text>
       {history.events.length ? [...history.events].reverse().map((event, index) => (

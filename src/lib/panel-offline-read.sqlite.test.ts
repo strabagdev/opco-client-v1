@@ -5,11 +5,22 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ts from "typescript";
+import { PanelDefinitionError, coherentCachedPanelViews } from "./panel-definition";
+import { getPanelReadEvents, panelReadRows } from "./panel-read-diagnostics";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID, PanelReadCancelledError, PanelLocalReadError, PanelSnapshotMissingError } from "./offline-panels";
 import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
 import { OpcoNetworkError, OpcoApiError, type PanelResponse, type PanelAppView } from "./opco-api";
 import { panelDatasetQueryKey, missingRequiredPanelFilters } from "../renderers/panels/panel-renderer-logic";
+// Test-only legacy source override demonstrates the public regression against HEAD.
+let reconciliationReader = loadPanelDatasetWithOfflineCache;
+if (process.env.PANEL_RECONCILIATION_LEGACY) {
+ const source = readFileSync(process.env.PANEL_RECONCILIATION_LEGACY, "utf8");
+ const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+ const exports: Record<string, unknown> = {};
+ new Function("require", "exports", code)((id: string) => { if (id === "./opco-api") return { OpcoNetworkError }; throw Error("Unexpected legacy dependency " + id); }, exports);
+ reconciliationReader = exports.loadPanelDatasetWithOfflineCache as typeof reconciliationReader;
+}
 const sqlite=vi.hoisted(()=>({openDatabaseAsync:vi.fn()}));vi.mock("expo-sqlite",()=>sqlite);
 function sqliteFile(path: string) {
   const worker = spawn("python3", ["-u", "-c", `
@@ -87,7 +98,7 @@ function visit(n:ts.Node){if(ts.isCallExpression(n)&&n.expression.getText(ast)==
 const effectCode=ts.transpileModule(effect.getText(ast).replace("void loadDatasets();","captureTask(loadDatasets());"),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText.trim().replace(/^"use strict";\s*/, "").replace(/;$/,"");
 const pageCode=ts.transpileModule(pageFn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const configuredPageSize=new Function(pageCode+";return configuredPageSize;")();
-function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,
+function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>,reconciled:null as any},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,PanelDefinitionError,adoptedScopeRef:{current:null},setReconciled:(value:any)=>{model.reconciled=value;},assignedScopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),
 setDatasetStates:(next:any)=>{model.datasetStates=typeof next==="function"?next(model.datasetStates):next;refs.datasetStatesRef.current=model.datasetStates;}};
 function run(changes:any={}){Object.assign(env,changes);env.knownOffline=env.connectivityStatus==="offline";env.datasetScopeKey=JSON.stringify([env.ownerKey,env.selectedContractId,env.appView.id,env.appView.configRevision??JSON.stringify(env.appView.config)]);let done!:Promise<void>;const active={...env,captureTask:(p:Promise<void>)=>{done=p;}};const cleanup=new Function(...Object.keys(active),"return ("+effectCode+")();")(...Object.values(active));return{done,cleanup};}
 function dependencies(){return new Function(...Object.keys(env),"return "+deps!.getText(ast))(...Object.values(env));}
@@ -160,4 +171,33 @@ it("changing owner or definition never retains the previous query as compatible"
  attempt=f.run({ownerKey:"another:user",connectivityStatus:"offline"});await attempt.done;expect(f.model.datasetStates.reportes.panel).toBeNull();expect(f.model.datasetStates.reportes.errorCode).toBe("PANEL_SNAPSHOT_MISSING");attempt.cleanup();
  attempt=f.run({ownerKey:scope.ownerKey,appView:{...view,configRevision:"r2"}});await attempt.done;expect(f.model.datasetStates.reportes.panel).toBeNull();expect(f.model.datasetStates.reportes.errorCode).toBe("PANEL_SNAPSHOT_MISSING");attempt.cleanup();expect(api.getPanel).toHaveBeenCalledOnce();
  expect((await store.getPanelSnapshot({...scope,...query,configRevision:"r1"}))?.panel.datasets[0].rows[0].values.code).toBe("R2");
+});
+
+it("RED to GREEN: reconciled R2 definition and query survive reopen despite old R1 navigation metadata",async()=>{
+ const next={...view,configRevision:"r2",config:{...view.config,layout:{columns:12,rowHeight:96}}};const api={getPanel:vi.fn().mockResolvedValue({...panel("R2"),configRevision:"r2"}),getAppViews:vi.fn().mockResolvedValue({views:[next]})};
+ await store.upsertPanelSnapshot({...scope,...query,configRevision:"r1",panel:panel("R1")});await store.upsertAppViews(scope.ownerKey,scope.contractId,[view],"2026-11-02T00:00:00.000Z");
+ const result=await reconciliationReader(options(api,{appView:view}));expect(result.definition).toEqual(next);expect(api.getAppViews).toHaveBeenCalledOnce();
+ await reopen();const cached=await store.getAppViews(scope.ownerKey,scope.contractId);expect(cached!.views[0]).toMatchObject({type:"PANEL",configRevision:"r1"});const coherent=await coherentCachedPanelViews(store,scope,cached!.views,view.id);expect(coherent[0]).toMatchObject({type:"PANEL",configRevision:"r2"});
+ const restored=await loadPanelDatasetWithOfflineCache(options(api,{appView:next,configRevision:next.configRevision,knownOffline:true}));expect(restored.panel.datasets[0].rows[0].values.code).toBe("R2");expect((await store.getPanelSnapshot({...scope,...query,configRevision:"r1"}))?.panel.datasets[0].rows[0].values.code).toBe("R1");expect(api.getPanel).toHaveBeenCalledOnce();
+});
+it("a failed reconciliation preserves R1 and raw R2 without accrediting R2 or retrying automatically",async()=>{
+ const api={getPanel:vi.fn().mockResolvedValue({...panel("R2"),configRevision:"r2"}),getAppViews:vi.fn().mockResolvedValue({views:[view]})};await seed(panel("R1"));await expect(loadPanelDatasetWithOfflineCache(options(api,{appView:view}))).rejects.toMatchObject({code:"PANEL_DEFINITION_UNAVAILABLE"});
+ expect(api.getPanel).toHaveBeenCalledOnce();expect(api.getAppViews).toHaveBeenCalledOnce();expect(await store.getCoherentPanelDefinition(scope)).toBeNull();expect(await store.getPanelSnapshot({...scope,...query,configRevision:"r1"})).not.toBeNull();expect(await store.getPanelSnapshot({...scope,...query,configRevision:"r2"})).not.toBeNull();
+});
+it("coherent definition receipt rolls back atomically with a retired snapshot and preserves the older definition",async()=>{
+ const api={getPanel:vi.fn().mockResolvedValue(panel("R1"))};await loadPanelDatasetWithOfflineCache(options(api,{appView:view}));const original=db.runAsync,entered=deferred(),release=deferred();let active=true;
+ db.runAsync=async(sql:string,...args:unknown[])=>{const result=await original(sql,...args);if(sql.includes("app_metadata")&&args.some(a=>typeof a==="string"&&a.includes('"configRevision":"r2"'))){entered.resolve();await release.promise;}return result;};
+ const next={...view,configRevision:"r2"};const pending=store.upsertPanelSnapshot({...scope,...query,configRevision:"r2",panel:{...panel("R2"),configRevision:"r2"},definition:next,assertActive(){if(!active)throw new PanelReadCancelledError();}});const rejected=expect(pending).rejects.toBeInstanceOf(PanelReadCancelledError);await entered.promise;active=false;release.resolve();await rejected;db.runAsync=original;await reopen();expect((await store.getCoherentPanelDefinition(scope))?.configRevision).toBe("r1");expect(await store.getPanelSnapshot({...scope,...query,configRevision:"r2"})).toBeNull();
+});
+it("coherent receipts stay scoped and do not survive missing snapshot content as authority",async()=>{
+ await loadPanelDatasetWithOfflineCache(options({getPanel:vi.fn().mockResolvedValue(panel())},{appView:view}));expect(await store.getCoherentPanelDefinition({...scope,ownerKey:"other"})).toBeNull();expect(await store.getCoherentPanelDefinition({...scope,contractId:"other"})).toBeNull();expect(await store.getCoherentPanelDefinition({...scope,appViewId:"other"})).toBeNull();await db.runAsync("DELETE FROM panel_snapshots");expect(await store.getCoherentPanelDefinition(scope)).toBeNull();
+});
+it("diagnostics distinguish R1 response expectation from R2 committed/read keys without query values",async()=>{
+ const next={...view,configRevision:"r2"};const api={getPanel:vi.fn().mockResolvedValue({...panel("R2"),configRevision:"r2"}),getAppViews:vi.fn().mockResolvedValue({views:[next]})};await loadPanelDatasetWithOfflineCache(options(api,{appView:view}));await loadPanelDatasetWithOfflineCache(options(api,{knownOffline:true,configRevision:"r2"}));
+ const events=getPanelReadEvents();const write=[...events].reverse().find(e=>e.phase==="snapshot_write"&&e.result==="persisted")!,read=events.at(-1)!;expect(read.result).toBe("hit");expect(read.keyFingerprint).toBe(write.keyFingerprint);expect(write.expectedRevision).not.toBe(write.actualRevision);const copy=JSON.stringify(panelReadRows(events,scope.ownerKey,scope.contractId));expect(copy).not.toContain("synthetic-equipment");expect(copy).not.toContain(scope.ownerKey);
+});
+it("a retired cached read is diagnosed as cancellation, not a storage failure",async()=>{
+ await seed();const original=store.getPanelSnapshot.bind(store),entered=deferred(),release=deferred();let active=true;store.getPanelSnapshot=async input=>{entered.resolve();await release.promise;return original(input);};
+ const pending=loadPanelDatasetWithOfflineCache(options({getPanel:vi.fn()},{knownOffline:true,isActive:()=>active}));const rejected=expect(pending).rejects.toBeInstanceOf(PanelReadCancelledError);await entered.promise;active=false;release.resolve();await rejected;store.getPanelSnapshot=original;
+ const last=getPanelReadEvents().at(-1)!;expect(last).toMatchObject({phase:"snapshot_read",result:"cancelled",errorCode:"PANEL_READ_CANCELLED"});expect(last.errorCode).not.toBe("PANEL_LOCAL_READ_FAILED");
 });

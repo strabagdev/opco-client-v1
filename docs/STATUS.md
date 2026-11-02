@@ -3549,3 +3549,31 @@ Sin migraciones, configuración ni Core. Consultas exactas previamente guardadas
 automática NO IMPLEMENTADA, Safari físico y causa J-152 sin acreditar. Artefacto inicial rechazado
 y limitaciones del transporte sintético se conservan. Respaldo final: backups/panel-offline-read-fix-close/2026-11-02/.
 402exclusiones, Core, prefijos documentales y pendientes ajenos preservados. V11 pausado.
+
+
+### PANEL — reconciliación local de definición y snapshot — 02-11-2026
+
+Implementado sobre 9dec0c9, sin publicar. Una respuesta R2 no se presenta con una definición R1:
+se relee /views una sola vez si difiere la revisión y se exige la definición asignada R2. Si conserva
+el significado de datasets/filtros, se adopta sin perder selección, búsqueda ni página y sin otra
+petición PANEL. Cambios incompatibles o una revisión no confirmada terminan con error explícito;
+la respuesta queda bajo su revisión real y no se acredita como consulta coherente.
+
+Snapshot y recibo de definición coherente se guardan atómicamente en SQLite mediante el coordinador
+existente. La reapertura cacheada usa ese recibo sólo para una AppView ya asignada y con snapshot
+persistido de esa revisión. Las consultas siguen siendo exactas; R1/R2 permanecen separadas. Sin
+migraciones ni cambios de namespace, permisos, outbox o preparación automática.
+
+Diagnóstico existente, pantalla y copia: revisión esperada/recibida, fingerprints de scope/clave/dataset,
+readId correlacionado con la petición y fases de lectura/escritura con fecha de persistencia. Sin
+valores de filtros/búsqueda, registros, payloads ni credenciales; historial acotado y aislado por scope.
+
+Regresión contra HEAD RED y candidato GREEN. 122 pruebas afectadas únicas PASS (1 worker, 5s),
+typecheck, lint afectado, build y diff-check PASS. Chromium153/OPFS real y API sintética: consulta R2
+persistida, cierre completo y reapertura offline con navegación R1, resultado R2 encontrado y cero
+API PANEL; R1/R2 conservados, integridad ok. Revisión no reconciliable: terminal, cola drenada, sin
+bucle. Pantalla/copia del diagnóstico y desktop/móvil emulado revisados; sin Safari físico/Core real.
+
+La causa histórica de CN-099 continúa sin confirmar. Preparación automática PANEL fuera de alcance.
+Respaldo reproducible: backups/panel-revision-reconciliation/2026-11-02/. Core, 402 exclusiones y
+pendientes ajenos preservados. Sin commit/push/deploy ni producción. V11 permanece pausado.

@@ -1627,7 +1627,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         token,
       );
     },
-    getPanel(token: string, contractId: string, appViewId: string, query: PanelQuery = {}) {
+    getPanel(token: string, contractId: string, appViewId: string, query: PanelQuery = {}, diagnostics?: { diagnosticRequestId: string }) {
       const searchParams = new URLSearchParams();
 
       if (query.datasetId?.trim()) {
@@ -1657,6 +1657,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           serializedQuery ? `?${serializedQuery}` : ""
         }`,
         token,
+        diagnostics ? { headers: { "X-Opco-Request-Id": diagnostics.diagnosticRequestId } } : undefined,
       );
     },
     createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {

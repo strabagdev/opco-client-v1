@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({
   effects: [] as (() => (() => void) | undefined)[],
   publish: vi.fn(),
   api: { getAppViews: vi.fn() },
-  cache: { getAppViews: vi.fn(), upsertAppViews: vi.fn() },
+  cache: { getAppViews: vi.fn(), upsertAppViews: vi.fn(), getCoherentPanelDefinition: vi.fn() },
 }));
 vi.mock("react", async (original) => ({
   ...await original<typeof import("react")>(),
@@ -23,7 +23,7 @@ vi.mock("@/state/session", () => ({ useSession: () => ({
 }) }));
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
-beforeEach(() => { vi.clearAllMocks(); state.effects = []; state.cache.getAppViews.mockResolvedValue(null); state.cache.upsertAppViews.mockResolvedValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); state.effects = []; state.cache.getAppViews.mockResolvedValue(null); state.cache.upsertAppViews.mockResolvedValue(undefined); state.cache.getCoherentPanelDefinition.mockResolvedValue(null); });
 
 describe("direct experience route publishes its existing authorized load", () => {
   it("publishes the complete assigned remote catalog without another API request", async () => {
@@ -54,4 +54,15 @@ describe("direct experience route publishes its existing authorized load", () =>
     expect(state.publish).not.toHaveBeenCalled();
     expect(state.api.getAppViews).toHaveBeenCalledTimes(1);
   });
+});
+
+it("restores only an assigned PANEL coherent definition from persisted cache", async () => {
+ const old = { id: "panel", type: "PANEL", name: "Panel", configRevision: "r1", config: { schemaVersion: 1 } }, next = { ...old, configRevision: "r2" };
+ state.cache.getAppViews.mockResolvedValue({ views: [old], syncedAt: "2026-11-02T00:00:00.000Z" }); state.cache.getCoherentPanelDefinition.mockResolvedValue(next); state.api.getAppViews.mockRejectedValue(new Error("offline"));
+ useAppView("panel"); state.effects[0](); await settle(); expect(state.publish).toHaveBeenLastCalledWith(JSON.stringify(["owner-a", "contract-a"]), [next]); expect(state.api.getAppViews).toHaveBeenCalledOnce();
+});
+it("a held cached coherent definition cannot overwrite a fresh remote definition", async () => {
+ const old = { id: "panel", type: "PANEL", name: "Panel", configRevision: "r1", config: { schemaVersion: 1 } }, cached = { ...old, configRevision: "r2" }, fresh = { ...old, configRevision: "r3" };
+ let release!: (value: unknown) => void, remote!: (value: unknown) => void; state.cache.getAppViews.mockResolvedValue({ views: [old], syncedAt: "2026-11-02T00:00:00.000Z" }); state.cache.getCoherentPanelDefinition.mockImplementation(() => new Promise(done => { release = done; })); state.api.getAppViews.mockImplementation(() => new Promise(done => { remote = done; }));
+ useAppView("panel"); state.effects[0](); await settle(); remote({ views: [fresh] }); await settle(); release(cached); await settle(); expect(state.publish).toHaveBeenLastCalledWith(JSON.stringify(["owner-a", "contract-a"]), [fresh]); expect(state.api.getAppViews).toHaveBeenCalledOnce();
 });

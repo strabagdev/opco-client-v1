@@ -7,6 +7,7 @@ import { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
 import { getAppViewBootstrapState, resolveAppViewLoadError } from "./use-app-view-state";
+import { coherentCachedPanelViews } from "../lib/panel-definition";
 
 export function useAppView(appViewId: string | undefined) {
   const { api, context, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
@@ -32,6 +33,16 @@ export function useAppView(appViewId: string | undefined) {
 
   useEffect(() => {
     let isMounted = true;
+    let settled = false;
+    let cachedViews: AppView[] | undefined;
+    let coherentRead: Promise<AppView[]> | undefined;
+    function resolveCached(views: AppView[]) {
+      if (views !== cachedViews) {
+        cachedViews = views;
+        coherentRead = coherentCachedPanelViews(definitionCache, { ownerKey: ownerKey!, contractId: effectiveContractId! }, views, appViewId!);
+      }
+      return coherentRead!;
+    }
 
     async function loadViews() {
       if (bootstrapState === "pending") {
@@ -61,19 +72,26 @@ export function useAppView(appViewId: string | undefined) {
           cache: definitionCache,
           contractId: effectiveContractId,
           onCached(cached) {
-            if (isMounted && cached.views.some((view) => view.id === appViewId)) {
-              publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), cached.views);
-              setViews(cached.views);
-              setIsLoading(false);
-            }
+            void resolveCached(cached.views).then(coherent => {
+              if (isMounted && !settled && coherent.some(view => view.id === appViewId)) {
+                publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), coherent);
+                setViews(coherent);
+                setIsLoading(false);
+              }
+            }).catch(() => { /* Remote/fallback below remains authoritative on a local read failure. */ });
           },
           ownerKey,
           token,
+          isCurrent: () => isMounted,
         });
 
+        const coherent = data.fromCache
+          ? await resolveCached(data.views)
+          : data.views;
+        settled = true;
         if (isMounted) {
-          publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), data.views);
-          setViews(data.views);
+          publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), coherent);
+          setViews(coherent);
           setError(null);
         }
       } catch (nextError) {
