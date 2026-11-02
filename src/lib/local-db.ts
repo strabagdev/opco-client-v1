@@ -205,7 +205,7 @@ export type LocalDatabase = AppNavigationCache &
   setOfflinePreparationDiagnostics(ownerKey: string, diagnostics: OfflinePreparationDiagnostics): Promise<void>;
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
   getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics;
-  upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }): Promise<void>;
+  upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string; assertActive?: () => void }): Promise<void>;
   upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
 } & RecordsOpeningHistoryStore;
 
@@ -1333,6 +1333,7 @@ async function getReportSnapshot({
 
 async function upsertPanelSnapshot({
   appViewId,
+  assertActive,
   configRevision,
   contractId,
   datasetId,
@@ -1343,26 +1344,32 @@ async function upsertPanelSnapshot({
   panel,
   search,
   syncedAt = new Date().toISOString(),
-}: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string }) {
+}: PanelSnapshotScope & { panel: PanelResponse; syncedAt?: string; assertActive?: () => void }) {
   const db = await getDatabase();
   const revision = configRevision || panel.configRevision;
 
-  await db.runAsync(
-    `
-      INSERT INTO panel_snapshots (owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision, panel_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision)
-      DO UPDATE SET panel_json = excluded.panel_json, synced_at = excluded.synced_at
-    `,
-    ownerKey,
-    contractId,
-    appViewId,
-    datasetId,
-    panelSnapshotQueryKey({ filters, page, pageSize, search }),
-    revision,
-    JSON.stringify(panel),
-    syncedAt,
-  );
+  // Check inside the shared coordinator, not before waiting for its queue. A retired
+  // read that loses its scope while INSERT is pending rolls back before another writer.
+  await db.withTransactionAsync(async (transaction) => {
+    assertActive?.();
+    await transaction.runAsync(
+      `
+        INSERT INTO panel_snapshots (owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision, panel_json, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(owner_key, contract_id, app_view_id, dataset_id, query_key, config_revision)
+        DO UPDATE SET panel_json = excluded.panel_json, synced_at = excluded.synced_at
+      `,
+      ownerKey,
+      contractId,
+      appViewId,
+      datasetId,
+      panelSnapshotQueryKey({ filters, page, pageSize, search }),
+      revision,
+      JSON.stringify(panel),
+      syncedAt,
+    );
+    assertActive?.();
+  }, "transaction:panel-snapshot");
 
   notifyLocalDatabaseCacheChangeListeners();
 }

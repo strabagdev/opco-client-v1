@@ -910,3 +910,24 @@ Evidencia/artefacto/inventario final: backups/records-offline-read-fix-close/202
 límites de almacenamiento diagnóstico besteffort, bootstrap /views y ausencia de Core/Safari físicos,
 la falta de correlación histórica del incidente y la auditoría general abierta. Core/recuperación/
 402exclusiones y secciones ajenas intactos; sin commit/push/deploy. V11 pausado.
+
+
+### PANEL — corrección local de lectura y persistencia retirada — 02-11-2026
+
+Sobre e5d5446: knownOffline evita API del dataset y de sus filtros/catálogos; sólo SQLite. Ausencia
+exacta no se muestra como error de conexión (PANEL_SNAPSHOT_MISSING); fallo local tiene código seguro
+PANEL_LOCAL_READ_FAILED. Copia vacía/paginada válida se conserva, sin inferir otra query o cobertura.
+Guards de scope/consulta protegen pantalla y diagnóstico; assertActive se ejecuta dentro de la
+transacción serializada antes/después de INSERT: retiro revierte la escritura antes del siguiente
+escritor. R1 tardío no sobrescribe R2, incluidos cola e intercalado. Sin nueva cola ni migración.
+
+95pruebas/1worker/5s PASS, typecheck/lint afectados y build final PASS. SQLite con reapertura y
+Chromium153/OPFS:25IDs/R2 conservados tras cerrar proceso completo y reabrir offline;0API PANEL/
+entidades, cola0/integridadok. Transporte sintético, no Core/Safari ni causa histórica J-152 acreditada.
+Artefacto inicial con destino API local se rechazó; siguiente export con TMPDIR propio y API pública
+verificada. Dificultad adicional del arnés: timestamp sintético no canónico, corregido sin tocar Client.
+
+Online conserva el atajo de query ya cargada y el fallback compatible; cobertura no equivale a
+frescura. Inicio no prepara datasets ni combinaciones nunca consultadas; preparación automática
+PANEL sigue fuera de este lote. Bootstrap compartido /views no se modificó. Evidencia/inventario:
+backups/panel-offline-read-fix/2026-11-02/.402exclusiones/Core/pendientes conservados;sin publicación.

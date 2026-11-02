@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { ReadLoadingState } from "@/components/read-loading-indicator";
-import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID } from "@/lib/offline-panels";
+import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID, PanelLocalReadError, PanelSnapshotMissingError } from "@/lib/offline-panels";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
 import { EntityField, PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
@@ -41,10 +41,12 @@ import {
 
 type DatasetState = {
   error: string | null;
+  errorCode: string | null;
   fromCache: boolean;
   isLoading: boolean;
   panel: PanelResponse | null;
   queryKey: string | null;
+  scopeKey: string;
   syncedAt: string | null;
 };
 
@@ -59,10 +61,12 @@ const DATASET_KEY_SEPARATOR = "\u0000";
 const relatedFieldId = (relationFieldId: string, fieldId: string) => `related:${relationFieldId}:${fieldId}`;
 
 export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
-  const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, token } = useSession();
+  const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
+  const knownOffline = connectivityStatus === "offline" || status === "offline";
   const { width } = useWindowDimensions();
   const configuredModules = useMemo(() => appView.config.modules ?? [], [appView.config.modules]);
   const appViewConfigKey = JSON.stringify(appView.config);
+  const datasetScopeKey = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.configRevision ?? appViewConfigKey]);
   const hasComposedKpi = configuredModules.some((module) => module.visualization.type === "KPI" && Boolean(module.visualization.config.composition));
   const configuredFilters = useMemo(() => appView.config.filters ?? [], [appView.config.filters]);
   const configuredColumns = appView.config.layout?.columns ?? 12;
@@ -81,8 +85,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
   const requestSeq = useRef(0);
 
   const latestPanel = useMemo(
-    () => Object.values(datasetStates).find((state) => state.panel)?.panel ?? null,
-    [datasetStates],
+    () => Object.values(datasetStates).find((state) => state.scopeKey === datasetScopeKey && state.panel)?.panel ?? null,
+    [datasetScopeKey, datasetStates],
   );
   const modules = latestPanel?.modules.length ? latestPanel.modules : configuredModules;
   const filters = latestPanel?.filters.length ? latestPanel.filters : configuredFilters;
@@ -107,7 +111,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     setRelationOptions({});
     setRelationSearch({});
     setFilterMetadataError(null);
-  }, [appView.id, appViewConfigKey, initialDatasetIds, selectedContractId]);
+  }, [appView.id, appView.configRevision, appViewConfigKey, initialDatasetIds, ownerKey, selectedContractId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,10 +121,17 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
       const entityIds = Array.from(new Set(datasets.filter((dataset) => dataset.filters?.some((binding) =>
         binding.type === "PANEL_FILTER")).map((dataset) => dataset.source.entityTypeId)));
       try {
+        async function readDefinition(entityTypeId: string) {
+          if (knownOffline) {
+            const cached = await definitionCache.getEntityDefinition(selectedContractId!, entityTypeId);
+            if (!cached) throw new Error("Filter definition unavailable offline");
+            return cached.definition;
+          }
+          return (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId!, entityTypeId, token: token! })).definition;
+        }
         const definitions = await Promise.all(entityIds.map(async (entityTypeId) => ({
           entityTypeId,
-          definition: (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId,
-            entityTypeId, token })).definition,
+          definition: await readDefinition(entityTypeId),
         })));
         const definitionsById = new Map(definitions.map((item) => [item.entityTypeId, item.definition]));
         const relatedTargets = new Set<string>();
@@ -137,8 +148,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
         }
         const targetDefinitions = await Promise.all([...relatedTargets].map(async (entityTypeId) => ({
           entityTypeId,
-          definition: (await getEntityDefinitionWithCache({ api, cache: definitionCache, contractId: selectedContractId,
-            entityTypeId, token })).definition,
+          definition: await readDefinition(entityTypeId),
         })));
         for (const item of targetDefinitions) definitionsById.set(item.entityTypeId, item.definition);
         const fields: Record<string, EntityField> = {};
@@ -165,7 +175,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     }
     void loadFilterMetadata();
     return () => { cancelled = true; };
-  }, [api, appViewConfigKey, appView.config.datasets, configuredFilters, definitionCache, ownerKey, selectedContractId, token]);
+  }, [api, appViewConfigKey, appView.config.datasets, configuredFilters, definitionCache, knownOffline, ownerKey, selectedContractId, token]);
 
   useEffect(() => {
     if (!token || !selectedContractId || !ownerKey) return;
@@ -175,9 +185,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     const timer = setTimeout(() => {
       void Promise.all(targets.map(async (entityTypeId) => {
         try {
-          const result = await loadRecordsWithOfflineCache({ api, contractId: selectedContractId, entityTypeId,
+          const localQuery = { contractId: selectedContractId, entityTypeId,
             ownerKey, page: 1, pageSize: 100, search: relationSearch[entityTypeId] || undefined,
-            sort: "displayName", direction: "asc", store: definitionCache, token });
+            sort: "displayName" as const, direction: "asc" as const };
+          const result = knownOffline
+            ? await definitionCache.listCachedRecords(localQuery)
+            : await loadRecordsWithOfflineCache({ ...localQuery, api, store: definitionCache, token });
           if (!cancelled) setRelationOptions((current) => {
             const selectedIds = new Set(Object.entries(filterFields).filter(([, field]) =>
               getRelationTargetEntityTypeId(field) === entityTypeId).map(([id]) => filterInputs[id]).filter(Boolean));
@@ -192,7 +205,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
       }));
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [api, definitionCache, filterFields, filterInputs, ownerKey, relationSearch, selectedContractId, token]);
+  }, [api, definitionCache, filterFields, filterInputs, knownOffline, ownerKey, relationSearch, selectedContractId, token]);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
@@ -205,10 +218,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
       if (!token || !selectedContractId || !ownerKey) {
         setDatasetStates(Object.fromEntries(activeDatasetIds.map((datasetId) => [datasetId, {
           error: "Selecciona un contrato antes de abrir paneles.",
+          errorCode: null,
           fromCache: false,
           isLoading: false,
           panel: null,
           queryKey: null,
+          scopeKey: datasetScopeKey,
           syncedAt: null,
         }])));
         return;
@@ -220,7 +235,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
         const page = pages[datasetId] ?? 1;
         const pageSize = configuredPageSize(appView, null, datasetId);
         const search = searchByDataset[datasetId]?.trim() ?? "";
-        const previous = datasetStatesRef.current[datasetId];
+        const stored = datasetStatesRef.current[datasetId];
+        const previous = stored?.scopeKey === datasetScopeKey ? stored : undefined;
         const queryKey = panelDatasetQueryKey({
           filters: activeFilters,
           page,
@@ -231,7 +247,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
         if (missingFilters.length > 0) {
           setDatasetStates((current) => ({ ...current, [datasetId]: {
             error: `Selecciona ${missingFilters.map((filter) => filter.label || filter.id).join(", ")}.`,
-            fromCache: false, isLoading: false, panel: null, queryKey, syncedAt: null,
+            errorCode: null, fromCache: false, isLoading: false, panel: null, queryKey, scopeKey: datasetScopeKey, syncedAt: null,
           } }));
           continue;
         }
@@ -246,10 +262,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
           ...current,
           [datasetId]: {
             error: null,
+            errorCode: null,
             fromCache: false,
             isLoading: true,
             panel: hasCompatiblePanel ? previous?.panel ?? null : null,
             queryKey,
+            scopeKey: datasetScopeKey,
             syncedAt: hasCompatiblePanel ? previous?.syncedAt ?? null : null,
           },
         }));
@@ -261,6 +279,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
             configRevision: appView.configRevision ?? previous?.panel?.configRevision,
             requireConfigRevision: hasComposedKpi,
             contractId: selectedContractId,
+            isActive: () => !cancelled && requestSeq.current === seq,
+            knownOffline,
             ownerKey,
             query: {
               ...(isDiscovery ? {} : { datasetId }),
@@ -283,20 +303,24 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
             ...current,
             [datasetId]: {
               error: null,
+              errorCode: null,
               fromCache: result.fromCache,
               isLoading: false,
               panel: result.panel,
               queryKey,
+              scopeKey: datasetScopeKey,
               syncedAt: result.syncedAt,
             },
             ...(executedDatasetId && executedDatasetId !== datasetId
               ? {
                   [executedDatasetId]: {
                     error: null,
+                    errorCode: null,
                     fromCache: result.fromCache,
                     isLoading: false,
                     panel: result.panel,
                     queryKey,
+                    scopeKey: datasetScopeKey,
                     syncedAt: result.syncedAt,
                   },
                 }
@@ -311,10 +335,12 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
             ...current,
             [datasetId]: {
               error: error instanceof Error ? error.message : "No fue posible cargar el dataset.",
+              errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError ? error.code : "PANEL_READ_FAILED",
               fromCache: false,
               isLoading: false,
               panel: hasCompatiblePanel ? previous?.panel ?? null : null,
               queryKey,
+              scopeKey: datasetScopeKey,
               syncedAt: hasCompatiblePanel ? previous?.syncedAt ?? null : null,
             },
           }));
@@ -333,6 +359,8 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     datasetIdsKey,
     definitionCache,
     configuredFilters,
+    knownOffline,
+    datasetScopeKey,
     hasComposedKpi,
     normalizedFiltersKey,
     ownerKey,
@@ -349,19 +377,19 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
     modules,
     rowHeight: configuredRowHeight,
   }), [configuredColumns, configuredRowHeight, modules, width]);
-  const isOffline = connectivityStatus === "offline" || Object.values(datasetStates).some((state) => state.fromCache);
-  const liveDatasetStates = Object.values(datasetStates);
+  const isOffline = knownOffline || Object.values(datasetStates).some((state) => state.scopeKey === datasetScopeKey && state.fromCache);
+  const liveDatasetStates = Object.values(datasetStates).filter((state) => state.scopeKey === datasetScopeKey);
   const liveFailedCount = liveDatasetStates.filter((state) => state.error).length;
   const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
   useExperienceActivityReporter(appView, {
     activeCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readMode: liveLoadedCount > 0 ? "refresh" : "initial",
-    errorCode: liveFailedCount > 0 ? "PANEL_PARTIAL_LOAD_FAILED" : null,
+    errorCode: liveDatasetStates.find((state) => state.error)?.errorCode ?? (liveFailedCount > 0 ? "PANEL_PARTIAL_LOAD_FAILED" : null),
     result: liveFailedCount > 0 && liveLoadedCount > 0 ? "partial" : liveFailedCount > 0 ? "error" : liveDatasetStates.length > 0 ? "success" : null,
   });
   const openingStatus = useMemo(() => {
-    const states = Object.values(datasetStates);
+    const states = Object.values(datasetStates).filter((state) => state.scopeKey === datasetScopeKey);
     const settled = states.length > 0 && states.every((state) => !state.isLoading);
     const failed = states.filter((state) => state.error).length;
     const loaded = states.filter((state) => state.panel && !state.error).length;
@@ -374,7 +402,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
       result: settled ? (failed > 0 && loaded > 0 ? "partial" as const : failed > 0 ? "error" as const : "completed" as const) : "in_progress" as const,
       source: states.some((state) => state.fromCache) ? "local" as const : loaded > 0 ? "remote" as const : "unknown" as const,
     };
-  }, [datasetStates]);
+  }, [datasetScopeKey, datasetStates]);
   useExperienceOpeningTelemetry(appView, openingStatus);
 
   return (
@@ -419,7 +447,7 @@ export function PanelRenderer({ appView }: AppViewRendererProps<PanelAppView>) {
               }}
               page={pages[module.datasetId] ?? 1}
               search={searchByDataset[module.datasetId] ?? ""}
-              state={datasetStates[module.datasetId]}
+              state={datasetStates[module.datasetId]?.scopeKey === datasetScopeKey ? datasetStates[module.datasetId] : undefined}
               currentQueryKey={panelDatasetQueryKey({
                 filters: normalizedFilters,
                 page: pages[module.datasetId] ?? 1,

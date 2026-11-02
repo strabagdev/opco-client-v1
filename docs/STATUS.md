@@ -3503,3 +3503,49 @@ colecciones continúa NO IMPLEMENTADA en su propuesta separada de OFFLINE_FIRST_
 diagnóstico besteffort y límites de API sintética/Chromium frente a Core/Safari físico se conservan.
 Respaldo final: backups/records-offline-read-fix-close/2026-11-01/. Core, recuperación publicada,402exclusiones
 y pendientes ajenos intactos. Sin producción, commit/push/deploy ni ampliación funcional. V11 pausado.
+
+
+### PANEL — lectura offline y snapshots vigentes — CORRECCIÓN LOCAL, SIN PUBLICAR — 02-11-2026
+
+Offline conocido (conectividad/sesión): datasets, metadata de filtros y catálogos sólo leen SQLite.
+Snapshot ausente muestra PANEL_SNAPSHOT_MISSING con limitación de esa consulta; error local usa
+PANEL_LOCAL_READ_FAILED sin SQL/valores. Vacío guardado y página disponible conservan respuesta y
+paginación; no acreditan una colección completa. Clave usuario/organización+contrato+AppView+dataset+
+revisión+filtros+búsqueda+página/tamaño intacta. Guards de pantalla/actividad también verifican scope.
+
+Persistencia comprueba vigencia dentro de una transacción del coordinador compartido y después del
+INSERT; retiro durante ejecución causa rollback. Respuestas viejas no sobrescriben R2, incluidos
+intentos encolados y alias discovery. Sin cambios a esquema, namespace, Core, guardados o outbox.
+Online conserva solicitud/fallback y el atajo de consulta ya cargada: no promete nueva frescura ni
+redefine su política de actualización. Inicio sigue sin descargar datasets PANEL automáticamente.
+
+95pruebas afectadas PASS,1worker/timeout5s; dos RED del renderer anterior→GREEN. SQLite con reapertura,
+intercalado antes/durante INSERT, rollback, scopes, vacío/paginación/ausencia, error local y pendientes/
+conflictos intactos. Typecheck/lint afectados/diff-check PASS. Build final aislado PASS: API pública,
+epoch2, index/sw y lectorJS/WASM local precacheado. Primer artefacto con API local rechazado; causa
+interna no demostrada. Export con TMPDIR propio correcto; no se cambió configuración del proyecto.
+
+Chromium153/OPFS reales, API sintética y destinos productivos bloqueados: A→B→A con R1 tardío conserva
+R2; escritor retirado durante INSERT hace rollback; cierre completo/reapertura offline mismo perfil
+conserva R2 y sus25IDs,0API de PANEL/entidades, cola0 e integridadok. Vacío, filtro/página no visitados
+y móvil390 comprobados con renderer real. Sin Safari físico, Core real ni correlación del incidente
+J-152. Arranque compartido puede intentar /views; queda fuera del lector PANEL y usa su caché.
+
+Respaldo/inventario reproducible: backups/panel-offline-read-fix/2026-11-02/. Sólo código/pruebas y
+estas secciones documentales propias; diagnóstico anterior,402exclusiones,Core y pendientes ajenos
+preservados. Sin producción, commit/push/deploy. Preparación automática separada; V11 pausado.
+
+
+### Cierre acotado PANEL offline — LISTO PARA PUSH, SIN PUBLICAR — 02-11-2026
+
+6archivos/31hunks reconstruidos desde el respaldo validado; hashes/parche/árbol y diff-check PASS.
+Runtime y pruebas idénticos: se reutilizan95pruebas, typecheck, lint, build y Chromium/OPFS; no hubo
+ejecuciones nuevas. Sólo se añade este cierre documental. Artefacto existente entry-ada13a1b7fda36efe21d69f099b20e1b.js
+verificado: API https://web.opco.cl, epoch2, index/sw y33recursos precacheados, incluido lectorJS/WASM.
+Lectura/clave/formato/migración de snapshots y coordinador compartido intactos; sólo se modifica
+la función de persistencia PANEL para comprobar vigencia en transacción. Funciones de guardado
+RECORDS/STATE_UPDATE y outbox no cambian; sus regresiones y conservación de pendientes se reutilizan.
+Sin migraciones, configuración ni Core. Consultas exactas previamente guardadas; preparación
+automática NO IMPLEMENTADA, Safari físico y causa J-152 sin acreditar. Artefacto inicial rechazado
+y limitaciones del transporte sintético se conservan. Respaldo final: backups/panel-offline-read-fix-close/2026-11-02/.
+402exclusiones, Core, prefijos documentales y pendientes ajenos preservados. V11 pausado.
