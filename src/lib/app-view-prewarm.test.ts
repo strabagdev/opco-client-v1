@@ -287,6 +287,17 @@ describe("app view prewarm", () => {
     });
   });
 
+  it("prepares RELATION context metadata without claiming or downloading its catalog", async () => {
+    const api = {
+      getAttendanceWorkflow: vi.fn(async (_token, _contract, _view, query: { date: string }) => ({ ...attendanceWorkflowResponse(query.date), contextFields: [{ id: "related", key: "related_key", name: "Related context", required: true, type: "RELATION" as const, config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } }] })),
+      getStateUpdateWorkflow: vi.fn(), getEntityDefinition: vi.fn(async () => ({ entity: entityDefinitionFixture })),
+      getEntityRecords: vi.fn(async () => ({ pagination: { page: 1, pageSize: 100, total: 0, totalPages: 1 }, records: [] })),
+    };
+    await prewarmAssignedAppViewsOnce({ api, appViews: appViewsFixture, contractId: "contract_1", ownerKey: "org_1:user_1", store, token: "synthetic" });
+    expect((await store.getAppViewDefinition("org_1:user_1", "contract_1", "view_workflow"))?.definition).toMatchObject({ kind: "state-update", extraFields: [expect.objectContaining({ type: "RELATION", config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } })] });
+    expect(api.getEntityRecords.mock.calls.some(call => (call as unknown[])[2] === "catalog")).toBe(false);
+  });
+
   it("caches partial Attendance prewarm days without marking them as fully hydrated", async () => {
     const api = {
       getAttendanceWorkflow: vi.fn(async (_token, _contractId, _appViewId, query: { date: string }) => ({

@@ -1,3 +1,4 @@
+import {workflowWriteMetadata, type WorkflowWriteCommand, type WorkflowWriteContract} from "./workflow-write-contract";
 import {verifyPresentationDefinition,type SubjectPresentationConfig,type SubjectPresentationDefinition,type SubjectPresentationProjection} from "./subject-presentation";
 import { verifyWorkflowSearchComparison, SearchComparisonError, type WorkflowSearchComparison } from "./search-comparison";
 import { stateUpdateScheduleMetadata, stateUpdateScheduleRequest, type StateUpdateScheduleMetadata } from "./state-update-schedule";
@@ -157,6 +158,7 @@ export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
 
 export type AttendanceWorkflowConfig = {
+  workflowWritePolicy?: unknown;
   subjectPresentation?: SubjectPresentationConfig;
   codeSearch?: { fieldId: string };
   contextFieldIds?: string[];
@@ -171,6 +173,7 @@ export type AttendanceWorkflowConfig = {
 };
 
 export type StateUpdateWorkflowConfig = {
+  workflowWritePolicy?: unknown;
   subjectPresentation?: SubjectPresentationConfig;
   codeSearch?: { fieldId: string };
   dateFieldId?: string;
@@ -596,17 +599,17 @@ export type AttendanceContextField = {
   id: string;
   key?: string;
   name: string;
-  options: {
-    label: string;
-    optionId: string;
-    order?: number;
-    value?: string;
-  }[];
   required: boolean;
+} & ({
   type: "SELECT";
-};
+  options: { label: string; optionId: string; order?: number; value?: string }[];
+} | {
+  type: "RELATION";
+  multiple?: false;
+  config: EntityField["config"];
+});
 
-export type AttendanceContextValues = Record<string, { label: string; optionId: string } | string | null>;
+export type AttendanceContextValues = Record<string, { label: string; optionId: string } | { id: string; displayName?: string } | string | null>;
 
 export type AttendanceItem = {
   attendance: {
@@ -638,6 +641,7 @@ export type AttendanceLatestItem = {
 };
 
 export type AttendanceResponse = {
+  workflowWriteContract?: WorkflowWriteContract | null;
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
   subjectPresentation?:SubjectPresentationDefinition;
@@ -669,6 +673,7 @@ export type AttendanceResponse = {
 };
 
 export type AttendanceBatchEntry = {
+  writeCommand?: WorkflowWriteCommand;
   contextValues?: Record<string, string | null>;
   expectedUpdatedAt?: string;
   observation?: string | null;
@@ -835,6 +840,7 @@ export type StateUpdateCurrentBatch = { version: 1; requestedSubjectIds: string[
   results: { subjectRecordId: string; status: "resolved" | "error"; code?: string }[] };
 
 export type StateUpdateResponse = {
+  workflowWriteContract?: WorkflowWriteContract | null;
   currentBatchCapabilities?: StateUpdateCurrentBatchCapabilities;
   currentBatch?: StateUpdateCurrentBatch;
   contractId?: string;
@@ -922,6 +928,7 @@ type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "la
 };
 
 export type StateUpdateEntry = StateUpdateScheduleMetadata & {
+  writeCommand?: WorkflowWriteCommand;
   identity?: CompositeStateIdentity;
   expectedUpdatedAt?: string;
   extraValues?: Record<string, EntityRecordValue>;
@@ -940,7 +947,7 @@ export type StateUpdateRequest = StateUpdateEntry & {
   date?: string;
 };
 
-export type StateUpdateBatchResult =
+export type StateUpdateBatchResult = (
   | {
       scheduleApplication?: StateUpdateScheduleMetadata["scheduleApplication"];
       schedule?: StateUpdateScheduleMetadata["schedule"];
@@ -958,6 +965,7 @@ export type StateUpdateBatchResult =
         updatedAt: string;
       };
       requested: StateUpdateScheduleMetadata & {
+        writeCommand?:WorkflowWriteCommand;
         extraValuesFormat?: "field-value";
         extraValues?: Record<string, EntityRecordValue>;
         stateValues: StateUpdateCurrentFieldValue[];
@@ -971,7 +979,7 @@ export type StateUpdateBatchResult =
       message: string;
       result: "ERROR";
       subjectRecordId: string;
-    };
+    }) & {writeCommand?:WorkflowWriteCommand};
 
 export type StateUpdateBatchResponse = {
   identity?: CompositeStateIdentity;
@@ -2164,6 +2172,7 @@ function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse, sub
 
 function serializeStateUpdateRequest(input: StateUpdateRequest) {
   return {
+    ...workflowWriteMetadata(input),
     ...stateUpdateScheduleRequest(input),
     ...(input.identity ? { identity: input.identity } : {}),
     clientRequestId: input.clientRequestId,
@@ -2210,6 +2219,7 @@ function normalizeStateUpdateBatchResult(result: StateUpdateApiResult, submitted
     },
     extraValues: extraDifferences.length > 0 ? extraDifferences : undefined,
     requested: {
+      ...workflowWriteMetadata(requestedCommand),
       ...stateUpdateScheduleMetadata(result.requested),
       extraValuesFormat: result.existing.extraValuesFormat,
       extraValues: requestedCommand ? requestedCommand.extraValues : objectFromConflictExtraValues(extraDifferences, "localValue"),

@@ -1,3 +1,4 @@
+import {workflowWriteMetadata,WorkflowWriteReviewError} from "../lib/workflow-write-contract";
 import { StateUpdateScheduleReviewError, stateUpdateScheduleMetadata } from "../lib/state-update-schedule";
 import { compositeIdentityKey } from "../lib/state-update-identity";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
@@ -101,6 +102,7 @@ async function runSync({
       result.operationsAttempted += 1;
 
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
+        ...workflowWriteMetadata(payload),
         ...stateUpdateScheduleMetadata(payload),
         identity: payload.identity,
         clientRequestId: operation.clientRequestId,
@@ -261,7 +263,7 @@ function shouldAttemptRemoteStateUpdateReconcile(
   classification: ReturnType<typeof classifyStateUpdateSyncError>,
   payload: OfflineStateUpdatePayload,
 ) {
-  if (payload.historyMode === "append" || payload.uniqueness === "none") {
+  if (payload.writeCommand || payload.historyMode === "append" || payload.uniqueness === "none") {
     return false;
   }
 
@@ -270,6 +272,7 @@ function shouldAttemptRemoteStateUpdateReconcile(
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {
+  if(error instanceof WorkflowWriteReviewError) return {action:"fail",code:error.code,message:error.message};
   if (error instanceof StateUpdateScheduleReviewError) {
     return { action: "fail", code: error.code, message: error.message };
   }

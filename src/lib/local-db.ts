@@ -1,3 +1,4 @@
+import {pinnedWorkflowWriteMetadata,workflowWriteMetadata,WorkflowWriteReviewError} from "./workflow-write-contract";
 import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
 import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
 import { panelDefinitionKey, parseCoherentPanelDefinition, type PanelDefinitionScope } from "./panel-definition";
@@ -2924,6 +2925,8 @@ async function saveStateUpdateLocallyWithRecordId(
         )
       : null;
     const pinnedPayload = existingOperation ? parsePendingStateUpdatePayload(existingOperation.payload_json) : null;
+    const writeMetadata = pinnedWorkflowWriteMetadata(input,pinnedPayload,!!pinnedPayload);
+    if (pinnedPayload?.writeCommand && !resolvedLocalRecordId && input.expectedUpdatedAt !== undefined && (input.expectedUpdatedAt ?? null) !== (pinnedPayload.expectedUpdatedAt ?? null)) throw new Error("La versión base de la intención requiere revisión explícita.");
     const durableSchedule = pinnedStateUpdateScheduleMetadata(existingRecord?.values, pinnedPayload);
     const requestedSchedule = stateUpdateScheduleMetadata(input);
     if (Object.keys(durableSchedule).length && Object.keys(requestedSchedule).length && !stateUpdateSchedulesEqual(durableSchedule, requestedSchedule)) {
@@ -2938,10 +2941,11 @@ async function saveStateUpdateLocallyWithRecordId(
     if (Object.keys(schedule).length && pinnedPayload && !resolvedLocalRecordId && input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== pinnedPayload.expectedUpdatedAt) {
       throw new StateUpdateScheduleReviewError();
     }
-    const expectedUpdatedAt = Object.keys(schedule).length && pinnedPayload && !resolvedLocalRecordId
+    const expectedUpdatedAt = (Object.keys(schedule).length || writeMetadata.writeCommand) && pinnedPayload && !resolvedLocalRecordId
       ? pinnedPayload.expectedUpdatedAt ?? null : input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
     const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
     const values: OfflineStateUpdateValues = {
+      ...writeMetadata,
       ...schedule,
       identity: input.identity,
       appViewId: input.appViewId,
@@ -2957,6 +2961,7 @@ async function saveStateUpdateLocallyWithRecordId(
       subjectRecordId: input.subjectRecordId,
     };
     const nextPayload: OfflineStateUpdatePayload = {
+      ...writeMetadata,
       ...schedule,
       expectedRecordId: resolvedLocalRecordId
         ? (existingRecord?.conflictRemoteValues as OfflineStateUpdateValues | null)?.remoteRecordId ?? existingRecord?.serverId ?? undefined
@@ -3788,12 +3793,14 @@ async function completeStateUpdateOperationInTransaction(
       (payload.expectedRecordId && result.recordId !== payload.expectedRecordId)) {
     throw new OpcoApiError("Opco devolvio un registro distinto de la intencion seleccionada.", "STATE_UPDATE_RESULT_IDENTITY_MISMATCH", 422);
   }
+  if (payload.writeCommand && JSON.stringify(workflowWriteMetadata(payload)) !== JSON.stringify(workflowWriteMetadata(result))) throw new WorkflowWriteReviewError("WORKFLOW_COMMAND_RECEIPT_INCOMPATIBLE");
   const sentSchedule = stateUpdateScheduleMetadata(payload);
   const acknowledgedSchedule = stateUpdateScheduleMetadata(result);
   if (Object.keys(acknowledgedSchedule).length && canonicalScheduleMetadata(stateUpdateScheduleRequest(sentSchedule)) !== canonicalScheduleMetadata(stateUpdateScheduleRequest(acknowledgedSchedule))) {
     throw new StateUpdateScheduleReviewError();
   }
   const values: OfflineStateUpdateValues = {
+    ...workflowWriteMetadata(payload),
     ...sentSchedule,
     ...acknowledgedSchedule,
     clientRequestId: operation.clientRequestId,

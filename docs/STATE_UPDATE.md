@@ -3596,3 +3596,95 @@ commit/push/deploy. Respaldo final reconstruible:backups/home-preparation-reuse-
 Resultados JSON, metadatos de checks, hashes y evidencia sintética previa permanecen disponibles. Logs
 rechazados no copiados ni respaldados por otra vía.402exclusiones/prefijos ajenos/Core/recuperación publicada
 y respaldos anteriores intactos. Cuatro fallos preexistentes siguen aparte. V11 pausado.
+
+
+### Attendance — contexto SELECT y RELATION simple — implementación local 03-11-2026
+
+contextFieldIds admite SELECT simple (contrato anterior intacto) y RELATION ONE del destino. El
+contexto permanece antes del buscador; sus obligatorios se validan al confirmar, sin condicionar
+la búsqueda. SELECT recuerda optionId y escribe FieldOption.value; RELATION recuerda/escribe el ID
+remoto. No cambia persona+fecha/update-current, estados, autorizaciones, base ni clientRequestId.
+
+Se reutilizan useExtraRelations, loadStateUpdateRelationPage y RecordFieldInput: catálogo autorizado,
+búsqueda/páginas de25, caché scoped y sin fallback tras rechazo de permisos. La selección recordada
+no se descarta por estar fuera de la página; etiqueta del registro actual o del catálogo guardado.
+Editar hidrata la relación propia del registro, sin sustituirla por el contexto de nuevas capturas.
+Clear del formulario conserva el contexto para la siguiente persona. Snapshots del día conservan
+ID/label; comandos/outbox sólo el ID. Restauración preparada conserva metadata RELATION. Catálogo
+parcial/ausente se informa: no se descarga entero ni se certifica cobertura por preparar Attendance.
+
+Sin esquema/migración ni cambio SQLite v10/epoch2. Core primero y Client después, sin configurar
+RELATION hasta disponer de runtime compatible; Client anterior no soporta este contexto. SELECT y
+operaciones anteriores no se reescriben. No habilitado en producción. Evidencia, inventarios y
+límites: backups/attendance-relation-context/2026-11-03/. V11 y pendientes independientes intactos.
+
+
+### Attendance RELATION — evidencia integrada y límite de unicidad — 03-11-2026
+
+Chromium/OPFS y Core/PostgreSQL locales reales acreditan contexto recordado, búsqueda RUT, captura A/B,
+edición, comando durable tras cierre/reapertura y ACK real con posterior lectura offline. SELECT original
+online/offline conserva optionId/valor canónico y confirmación. Sin cambiar implementación ni cobertura:
+catálogo sólo cacheado, no preparación automática de todo el catálogo. No se probó Safari físico.
+
+La identidad lógica persona+fecha no impone hoy unicidad transaccional de altas concurrentes: dos HTTP
+con requestId diferentes crearon dos filas, también en HEAD/SELECT. Secuencial igual UNCHANGED y distinto
+CONFLICT→confirmación→UPDATED; idempotencia de un replay funciona, pero no sustituye exclusión de otras
+solicitudes. NO-GO para asegurar un retiro diario hasta proteger lookup+creación por la identidad común
+en Core y las puertas de escritura pertinentes. Sin corregir esa lógica en este lote. Activar RELATION
+requiere Core→Client y runtimes compatibles; el anterior no renderiza ese contexto. Datos/pending reales
+intactos. Evidencia sanitizada y parches: backups/attendance-relation-validation/2026-11-03/.
+
+### Attendance — unicidad concurrente Core y propuesta genérica — local 03-11-2026
+
+Core corrige lookup+escritura de subject/subject-date update-current mediante bloqueo transaccional
+PostgreSQL compartido entre AppViews/endpoint legacy y STATE_UPDATE. No hay cambio funcional Client:
+payload, IDs, extraValues SELECT/RELATION, base, autorización, clientRequestId y sync se conservan.
+Una duplicidad histórica devuelve ERROR DUPLICATE_STATE_UPDATE_IDENTITY, sin modificar filas; la cola
+conserva la intención para revisión. No se reescribe ni borra el outbox. No cambia identidad a lote/turno.
+
+El lock protege escritores workflow participantes, no RECORDS/editor/importador legacy ni instancias
+antiguas de Core. Por ello GO técnico limitado al lote/ensayo controlado por Attendance; activación
+requiere Core nuevo en todos los escritores, lectura autorizada de duplicados y ausencia de escrituras
+genéricas concurrentes sobre el target. Unicidad universal por entidad sigue NO-GO sin su política.
+Orden Core→Client RELATION; verificar runtime ejecutado antes de configurar RELATION. Sin activación.
+
+No hay tipo/workflow DAILY en código. Un modelo operacional con fecha usa entidades/relaciones y una
+identidad configurada explícitamente; no se deduce de nombre/naturaleza/createdAt. Core puede usar día
+UTC si se omite date; Client envía su fecha lógica. La propuesta v2, NO IMPLEMENTADA, reutiliza lógicamente
+Definition/Slot con componentes por fieldId sin sujeto/fecha obligatorios. Es canónica en Core
+`docs/STATE_UPDATE.md`, sección Identidad y unicidad; no se introduce editor, módulo ni migración aquí.
+Evidencia actualizada: backups/attendance-uniqueness-identity-review/2026-11-03/REVIEW.md. Casos sin
+horario, contextos y sync conservados; Safari físico y garantía universal quedan fuera de lo acreditado.
+
+### Capacidad optativa de escritura por destino — local, sin activar — 04-11-2026
+
+Attendance/STATE_UPDATE conservan en la definición preparada `workflowWriteContract` de Core: versión,
+huella efectiva, capacidades requeridas, autorización y pausa. null confirma ausencia; metadata antigua
+no demuestra soporte. El formulario sigue permitiendo búsqueda y lectura. Sólo al construir un comando
+nuevo se captura `writeCommand` con relation-context-v1 y la huella; un scope nuevo no hereda esa prueba.
+Una experiencia conocida como protegida sin metadata compatible muestra revisión, sin fallback legacy.
+
+El comando se copia con la confirmación y se persiste en values/pending_operations JSON; transmite
+exactamente el valor guardado. Misma intención conserva clientRequestId. Huella distinta cambia la
+comparación semántica, pero una intención pendiente ya existente no admite sustitución silenciosa de
+capacidad/base: conserva lo original y requiere revisión explícita. No se añaden capacidades a una
+operación antigua, ni se cambia su autorización, overwrite o clave para que el servidor la acepte.
+
+ACK requiere recibo compatible antes de retirar la operación; una respuesta tardía no consume la
+intención posterior. Conflicto y Usar mi cambio conservan la capacidad de la intención, cambiando la
+base/clave sólo por el comando explícito existente. Un rechazo por política es fallo terminal visible,
+no retry infinito ni conciliación por una lectura igual. Un timeout de intención protegida conserva
+el envío para replay idempotente: igualdad del estado remoto no acredita aceptación del protocolo.
+Pausa del servidor no sustituye el comando; su reserva sin efecto se libera y puede reintentarse con
+la misma clave después de reabrir capturas.
+
+Definiciones/capacidades sobreviven cierre/reapertura SQLite y respetan owner/contrato/AppView.
+SCHEMA_VERSION sigue10 en app_metadata; namespace opco-client-v10-epoch2.db, sin migración ni motor nuevo.
+Sin política, el payload, identidad, SELECT/RELATION, guardado y confirmación previos no añaden campos.
+Un runtime viejo offline todavía puede generar trabajo local; el servidor evita aceptarlo silenciosamente,
+no puede impedir su edición local. Verificar dispositivos del piloto y revisar pendientes antes de activar.
+Un SW nuevo no retira runtimes anteriores; después, rollback sólo a builds compatibles con las guardas.
+
+Pruebas del lote en PostgreSQL local, SQLite real y handlers/transportes sintéticos; no nuevo recorrido
+Chromium/OPFS, Safari físico ni producción. El flujo RELATION visual integrado previo se conserva por
+identidad funcional. V11, calendarios automáticos y cambios de preparación permanecen fuera.

@@ -673,7 +673,9 @@ async function prewarmOneAppView({
           definition: {
             appView,
             dateFieldId: attendanceConfig.dateFieldId,
-            extraFields: (response.contextFields ?? []).map((field) => ({
+            extraFields: (response.contextFields ?? []).map((field) => field.type === "RELATION" ? ({
+              ...field, active: true, key: field.key ?? field.id,
+            }) : ({
               active: true,
               id: field.id,
               key: field.key ?? field.id,
@@ -690,6 +692,7 @@ async function prewarmOneAppView({
             })),
             historyMode: "update-current",
             kind: "state-update",
+            workflowWriteContract: response.workflowWriteContract,
             ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
             ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),
@@ -1401,6 +1404,7 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     extraFields: response.extraFields ?? [],
     historyMode: response.historyMode,
     kind: "state-update",
+    workflowWriteContract: response.workflowWriteContract,
     ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
             ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),

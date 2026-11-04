@@ -3577,3 +3577,71 @@ bucle. Pantalla/copia del diagnóstico y desktop/móvil emulado revisados; sin S
 La causa histórica de CN-099 continúa sin confirmar. Preparación automática PANEL fuera de alcance.
 Respaldo reproducible: backups/panel-revision-reconciliation/2026-11-02/. Core, 402 exclusiones y
 pendientes ajenos preservados. Sin commit/push/deploy ni producción. V11 permanece pausado.
+
+
+### Attendance — contexto RELATION simple — implementación local, sin publicar — 03-11-2026
+
+Editor/Core y Client admiten contexto SELECT + RELATION ONE, sin condiciones de negocio específicas.
+Selector antes del buscador; obligatorio al confirmar. Selección recordada entre personas, relación
+real al editar y payload extraValues por ID. Reutiliza controles/catálogos/SQLite/outbox STATE_UPDATE;
+conserva persona+fecha, confirmaciones y guardas de borrador. Sin migraciones ni configuración real.
+
+Validación: regresiones HEAD RED→candidato GREEN, pruebas afectadas Core/Client, PostgreSQL local
+con fixtures propios y limpieza, SQLite real con cierre/reapertura, controles reales SSR a390/1440,
+typecheck/lint/build de ambos. Detalle exacto en backups/attendance-relation-context/2026-11-03/.
+Client lint mantiene dos advertencias previas en records-sync.local-db-regression.test.ts; sin errores.
+No hubo navegador, OPFS ni Safari físico nuevos: SSR no acredita esos recorridos. Catálogo offline
+sólo cacheado, sin cobertura total certificada. Core→Client; activar RELATION requiere runtime nuevo.
+402 exclusiones/prefijos documentales/pendientes preservados; sin producción, commit/push/deploy.
+
+
+### Attendance RELATION — validación integrada / NO-GO unicidad diaria — 03-11-2026
+
+Candidato funcional anterior intacto. Chromium153/OPFS real + rutas HTTP reales Core/PostgreSQL local:
+Lote antes de búsqueda RUT, A/B, trabajadores consecutivos, cambio de lote, reload, cierre completo y
+reapertura offline con mismo comando, reconexión/ACK y nueva apertura offline PASS. Asistencia SELECT
+crea/edita/confirma y reabre offline PASS; Client publicado + Core nuevo con RELATION desactivado PASS.
+Core anterior rechaza RELATION; Client anterior muestra error de renderizado al activarlo, sin POST.
+
+Bloqueo demostrado: dos peticiones concurrentes con requestId distintos, misma persona/fecha/contenido,
+crean dos filas. Reproducido también con SELECT/Core HEAD, motor de escritura idéntico. Doble clic UI
+produce un envío; repetición idéntica secuencial UNCHANGED; cambio explícitamente confirmado UPDATED
+sobre la misma fila. No se modificó esta lógica. NO-GO para retiros productivos con garantía única diaria;
+corrección recomendada: exclusión/claim transaccional por identidad declarada persona+fecha en Core,
+independiente de idempotencia y respetada por otras puertas de escritura. No añadir lote/turno a identidad.
+
+Checks anteriores266Core/166Client, typecheck/lint/build se reutilizan por contenido funcional idéntico.
+Dos warnings Client previos, sin nuevos. Informe/inventario: backups/attendance-relation-validation/2026-11-03/.
+Sin producción/configuración real/publicación; fixtures locales propios retirados. Safari físico pendiente.
+
+### Attendance — carrera corregida localmente / identidad genérica propuesta — 03-11-2026
+
+Se integra explícitamente el candidato RELATION 03-11 y se corrige sólo Core: transacción+lock por
+identidad declarada para legacy update-current; Attendance es consumidor. Carrera reproducida RED
+(4 filas)→GREEN (1 fila/CREATED+3UNCHANGED), conflictos/corrección por versión y replay conservados.
+Duplicados históricos se rechazan sin editar/borrar. No hay cambio funcional Client ni migración.
+La garantía cubre los escritores Attendance/STATE_UPDATE participantes; el editor genérico aún puede
+crear otra fila. GO técnico para revisión/publicación del lote acotado, con activación controlada
+condicionada a Core nuevo, preflight de duplicados y captura exclusiva por workflow. NO-GO universal.
+
+Sin modelo DAILY en código; se documenta identidad configurable v2 sin imponer sujeto/fecha ni añadir
+módulo/editor. Propuesta canónica Core STATE_UPDATE; revisión/evidencia/parches reconstruibles:
+backups/attendance-uniqueness-identity-review/2026-11-03/. Core→Client; sin producción, configuración,
+commit/push/deploy.402 exclusiones, pendientes ajenos y respaldos RELATION preservados. V11 pausado.
+
+### Attendance + RELATION — guardas optativas de escritores y comando — local 04-11-2026
+
+Lote separado sobre el candidato validado, sin activar ni publicar. Política por destino en JSON
+AppView, allowlist validada y locks transaccionales: editor/importador/API genérica/borrado/cascadas/purga
+rechazados; workflows autorizados requieren capacidad relation-context-v1, huella y contextos explícitos.
+El editor conserva política omitida por formularios antiguos; pausa/desarme explícitos y auditados.
+Client captura/persiste/envía la capacidad con la intención, conserva base/clave/autorización y rechaza
+upgrade automático de pendientes antiguos. ACK, conflicto, respuesta tardía y reapertura verificados.
+Sin política se conserva legacy; no esquema/migración ni cambio SQLite v10/epoch2.
+
+GO técnico local condicionado a revisión de este lote separado; NO-GO activación hoy: soporte sin publicar,
+Lote real aún pendiente de simple/required/contexto, runtimes y pendientes del piloto por comprobar.
+Core→Client, política inicialmente pausada, configuración por editor y activación autorizada separadamente.
+Rollback sólo compatible; no borrar outbox ni datos. Evidencia/inventarios y límites detallados en
+backups/workflow-write-guards/2026-11-04/REVIEW.md. Los cuatro fallos históricos ajenos quedan separados;
+no suite completa ni nueva acreditación de Safari/OPFS/productivo.402 exclusiones y candidato previo intactos.

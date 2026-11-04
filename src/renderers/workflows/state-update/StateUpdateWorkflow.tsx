@@ -1,3 +1,4 @@
+import {captureWorkflowWriteCommand,workflowWriteMetadata} from "../../../lib/workflow-write-contract";
 import {SubjectIdentity} from "../../../components/subject-identity";
 import { CodeSearchCacheError } from "../../../lib/workflow-code-search";
 import { CodeReader } from "../../../components/code-reader";
@@ -155,6 +156,10 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const preparationDateFieldId = response?.dateFieldId;
   const preparationUniqueness = response?.uniqueness;
   const preparationHistoryMode = response?.historyMode;
+  const writeContractRequirementRef = useRef({scope:"",required:false});
+  const writePolicyScope = JSON.stringify([ownerKey,selectedContractId,appView.id]);
+  useLayoutEffect(()=>{if(writeContractRequirementRef.current.scope!==writePolicyScope)writeContractRequirementRef.current={scope:writePolicyScope,required:false};},[writePolicyScope]);
+  useEffect(()=>{if(response?.workflowWriteContract)writeContractRequirementRef.current.required=true;else if(response?.workflowWriteContract===null)writeContractRequirementRef.current.required=false;},[response?.workflowWriteContract]);
   const preparationScheduleBindingId = response?.schedulePolicy?.bindingId;
   const preparationBatchFingerprint = response?.currentBatchCapabilities?.configurationFingerprint;
   const preparationBatchMax = response?.currentBatchCapabilities?.maxSubjects;
@@ -359,7 +364,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
     const definition = prepared.definition;
     if (compositeMode && !contextReady) {
       setResponse({ appView: { id: appView.id, name: appView.name, slug: appView.slug }, date, dateFieldId: definition.dateFieldId,
-        ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
+        workflowWriteContract:definition.workflowWriteContract,
+      ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy} : {}),
         identityFields: definition.identityFields, identityDefinition: definition.identityDefinition, identityContext: null, contextRequired: true,
         codeSearchField: definition.codeSearchField,
         searchComparison: definition.searchComparison, subjectPresentation:definition.subjectPresentation,
@@ -433,6 +439,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         name: appView.name,
         slug: appView.slug,
       },
+      workflowWriteContract:definition.workflowWriteContract,
       ...(definition.schedulePolicy ? {schedulePolicy:definition.schedulePolicy,scheduleResolution:scheduleContext?.resolution} : {}),
       date: scope.date,
       dateField: definition.dateFieldId
@@ -568,7 +575,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           status: "ready", lastPreparedAt: new Date().toISOString(), definition: { appView, kind: "state-update", codeSearchField: nextResponse.codeSearchField, subjectPresentation:nextResponse.subjectPresentation, searchComparison:nextResponse.searchComparison, sourceEntityTypeId: nextResponse.sourceEntityType.id,
             sourceEntityTypeName: nextResponse.sourceEntityType.name, targetEntityTypeId: nextResponse.targetEntityType.id, targetEntityTypeName: nextResponse.targetEntityType.name,
             dateFieldId: nextResponse.dateFieldId, subjectFieldId: nextResponse.subjectFieldId, stateFields: nextResponse.stateFields, extraFields: nextResponse.extraFields,
-            schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
+            workflowWriteContract:nextResponse.workflowWriteContract,schedulePolicy:nextResponse.schedulePolicy, identityFields: nextResponse.identityFields, identityDefinition: nextResponse.identityDefinition, historyMode: nextResponse.historyMode, uniqueness: nextResponse.uniqueness } });
         return;
       }
       const localConflicts = ownerKey
@@ -602,7 +609,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       setRefreshError(null);
       clearVisibleError();
       if (ownerKey) {
-        if(nextResponse.schedulePolicy || nextResponse.codeSearchField || nextResponse.searchComparison) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,subjectPresentation:nextResponse.subjectPresentation, searchComparison:nextResponse.searchComparison,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,schedulePolicy:nextResponse.schedulePolicy}});
+        if(nextResponse.workflowWriteContract !== undefined || nextResponse.schedulePolicy || nextResponse.codeSearchField || nextResponse.searchComparison) await definitionCache.upsertAppViewDefinition({appViewId:appView.id,appViewType:"WORKFLOW",workflowKey:"state-update",ownerKey,contractId:selectedContractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:{appView,kind:"state-update",codeSearchField:nextResponse.codeSearchField,subjectPresentation:nextResponse.subjectPresentation, searchComparison:nextResponse.searchComparison,sourceEntityTypeId:nextResponse.sourceEntityType.id,sourceEntityTypeName:nextResponse.sourceEntityType.name,targetEntityTypeId:nextResponse.targetEntityType.id,targetEntityTypeName:nextResponse.targetEntityType.name,subjectFieldId:nextResponse.subjectFieldId,dateFieldId:nextResponse.dateFieldId,stateFields:nextResponse.stateFields,extraFields:nextResponse.extraFields,identityFields:nextResponse.identityFields,identityDefinition:nextResponse.identityDefinition,historyMode:nextResponse.historyMode,uniqueness:nextResponse.uniqueness,workflowWriteContract:nextResponse.workflowWriteContract,schedulePolicy:nextResponse.schedulePolicy}});
         const pagination = nextResponse.latestPagination ?? {
           hasMore: false,
           page: latestPageToLoad,
@@ -881,7 +888,11 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       }
     }
     const savingScope = resolutionScope;
+    let writeMetadata;
+    try { writeMetadata = overwrite && conflict ? workflowWriteMetadata(conflict.requested) : captureWorkflowWriteCommand(response.workflowWriteContract,Boolean(appView.config.workflowWritePolicy)||writeContractRequirementRef.current.required); }
+    catch(error) { setError(error instanceof Error ? error.message : "Actualiza la experiencia antes de guardar.");return; }
     const entry: StateUpdateEntry = {
+      ...writeMetadata,
       ...selectedSchedule,
       identity,
       expectedUpdatedAt,
@@ -905,6 +916,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
         const localRecord = await definitionCache.saveStateUpdateLocally({
           ...selectedSchedule,
+      ...workflowWriteMetadata(entry),
           appViewId: appView.id,
           identity,
           contractId: selectedContractId,
@@ -1092,6 +1104,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
     try {
       const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
+        ...workflowWriteMetadata(record),
         ...(record.schedule ? { schedule: record.schedule } : {}),
         ...(record.scheduleApplication ? { scheduleApplication: record.scheduleApplication } : {}),
         conflictIdentity: record.conflictIdentity ?? "",

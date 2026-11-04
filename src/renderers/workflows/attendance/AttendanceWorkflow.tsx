@@ -1,3 +1,7 @@
+import {captureWorkflowWriteCommand,workflowWriteMetadata,type WorkflowWriteContract} from "../../../lib/workflow-write-contract";
+import { useAttendanceContextRelations } from "./use-context-relations";
+import { RecordFieldInput } from "../../records/RecordFieldInput";
+import { getRelationTargetEntityTypeId } from "../../../lib/record-form";
 import { attendanceAttemptKey, attendanceCommandKey, attendanceContentChanged, attendanceEditContextValues, copyAttendanceEntry } from "./attendance-edit-command";
 import {SubjectIdentity} from "../../../components/subject-identity";
 import type {SubjectPresentationDefinition} from "../../../lib/subject-presentation";
@@ -54,6 +58,7 @@ import {
 import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
   attendanceContextFieldsFromPreparedDefinition,
+  attendanceRelationField,
   attendanceContextValidationErrors,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
@@ -165,6 +170,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
   const [contextFields, setContextFields] = useState<AttendanceContextField[]>([]);
+  const writePolicyConfigured = Boolean(appView.config.workflowWritePolicy);
+  const [writeContract,setWriteContract] = useState<WorkflowWriteContract | null | undefined>();
+  const writeContractRequiredRef = useRef(writePolicyConfigured);
   const [contextValues, setContextValues] = useState<Record<string, string | null>>({});
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
   const [latest, setLatest] = useState<AttendanceLatestItem[]>([]);
@@ -197,6 +205,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const resolutionMountedRef = useRef(false);
   useLayoutEffect(() => {
     if (resolutionScopeRef.current !== resolutionScope) {
+      setWriteContract(undefined);
+      writeContractRequiredRef.current=writePolicyConfigured;
       draftRevisionRef.current += 1;
       setSelectedItem(null);
       setConflict(null);
@@ -204,7 +214,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setObservation("");
     }
     resolutionScopeRef.current = resolutionScope;
-  }, [resolutionScope]);
+  }, [resolutionScope, writePolicyConfigured]);
   useLayoutEffect(() => {
     resolutionMountedRef.current = true;
     return () => { resolutionMountedRef.current = false; };
@@ -215,6 +225,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
+  const contextRelations = useAttendanceContextRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
+    fields: contextFields, values: contextValues, selectedItem, online: isOnline, scope: resolutionScope });
+  const contextRelationReadCount = Object.values(contextRelations.catalogs).filter(catalog => catalog.loading).length;
   const screenTitle = "Registro de Asistencia";
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const hasCompatibleDay = loadedDate === date;
@@ -264,14 +277,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ? "ATTENDANCE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
-    activeCount: Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount,
-    readCount: Number(isLoading) + Number(isSearching) + recoveryReadCount,
+    activeCount: Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount + contextRelationReadCount,
+    readCount: Number(isLoading) + Number(isSearching) + recoveryReadCount + contextRelationReadCount,
     readMode: loadedDate === date ? "refresh" : "initial",
     errorCode: experienceErrorCode,
-    result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isSaving ? "success" : null,
+    result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isSaving && contextRelationReadCount === 0 ? "success" : null,
   });
 
   const applyAttendanceResponse = useCallback((response: {
+    workflowWriteContract?: WorkflowWriteContract | null;
     subjectPresentation?:SubjectPresentationDefinition;
     contextFields?: AttendanceContextField[];
     latest: AttendanceLatestItem[];
@@ -279,6 +293,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     summary: { totalRegistered: number };
   }, options: { updateLatest?: boolean } = {}) => {
     if("subjectPresentation" in response)setPresentationDefinition(response.subjectPresentation);
+    if(response.workflowWriteContract) writeContractRequiredRef.current=true;
+    if(response.workflowWriteContract===null) writeContractRequiredRef.current=false;
+    setWriteContract(response.workflowWriteContract);
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
     setContextFields(response.contextFields ?? []);
 
@@ -490,7 +507,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
       if (prepared && (prepared.definition.kind === "state-update" || prepared.definition.kind === "attendance")) {
         await definitionCache.upsertAppViewDefinition({ ...prepared, lastPreparedAt: new Date().toISOString(),
-          definition: { ...prepared.definition, appView, codeSearchField: response.codeSearchField, subjectPresentation:response.subjectPresentation, searchComparison:response.searchComparison } });
+          definition: { ...prepared.definition, workflowWriteContract:response.workflowWriteContract, appView, codeSearchField: response.codeSearchField, subjectPresentation:response.subjectPresentation, searchComparison:response.searchComparison } });
       }
     }
     await cacheAttendanceRemoteSnapshot({
@@ -840,6 +857,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
             const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
 
+            if (prepared?.definition.kind === "attendance" || prepared?.definition.kind === "state-update") {
+              setWriteContract(prepared.definition.workflowWriteContract);
+              writeContractRequiredRef.current=Boolean(prepared.definition.workflowWriteContract || writePolicyConfigured);
+            }
             if (prepared?.definition.kind === "attendance") {
               setStatuses(prepared.definition.statuses);
             }
@@ -921,6 +942,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       isMounted = false;
     };
   }, [
+    writePolicyConfigured,
     api,
     appView.config.defaultCheckInOptionId,
     appView.config.contextFieldIds,
@@ -1018,7 +1040,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
 
+    let writeMetadata;
+    try { writeMetadata=captureWorkflowWriteCommand(writeContract,writeContractRequiredRef.current); }
+    catch(error) { setError(error instanceof Error ? error.message : "Actualiza la experiencia antes de guardar.");return; }
     const entry: AttendanceBatchEntry = {
+      ...writeMetadata,
       contextValues: { ...contextValues },
       observation: supportsObservation ? observation : undefined,
       personRecordId: selectedItem.person.id,
@@ -1139,6 +1165,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         const extraValues = attendanceEntryExtraValues(entry, appView.config, contextFields);
 
         await definitionCache.saveStateUpdateLocally({
+          ...workflowWriteMetadata(capturedEntry),
           appViewId: appView.id,
           contractId: selectedContractId,
           date,
@@ -1264,6 +1291,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }, appView.config, contextFields);
 
       const saved = await definitionCache.resolveStateUpdateConflictWithLocal({
+        ...workflowWriteMetadata(record),
         localRecordId: record.localRecordId,
         conflictIdentity: record.conflictIdentity ?? "",
         appViewId: appView.id,
@@ -1460,6 +1488,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ) : null}
 
       <AttendanceContextSelectors
+        relations={contextRelations}
         errors={contextErrors}
         fields={contextFields}
         onChange={handleContextChange}
@@ -1601,6 +1630,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 }
 
 function AttendanceContextSelectors({
+  relations,
   errors,
   fields,
   onChange,
@@ -1608,6 +1638,7 @@ function AttendanceContextSelectors({
 }: {
   errors: Record<string, string>;
   fields: AttendanceContextField[];
+  relations: ReturnType<typeof useAttendanceContextRelations>;
   onChange(fieldId: string, optionId: string | null): void;
   values: Record<string, string | null>;
 }) {
@@ -1620,11 +1651,20 @@ function AttendanceContextSelectors({
     <View style={styles.contextBlock}>
       {fields.map((field) => (
         <View key={field.id} style={styles.contextField}>
+          {field.type === "RELATION" ? <RecordFieldInput field={attendanceRelationField(field)} value={values[field.id] ?? ""}
+            error={errors[field.id]} onChange={value => { if (typeof value === "string") onChange(field.id, value || null); }}
+            relationTargetEntityTypeId={getRelationTargetEntityTypeId(attendanceRelationField(field))}
+            relationOptions={relations.catalogs[field.id]?.options ?? []}
+            relationOptionsError={relations.catalogs[field.id]?.error ?? (relations.catalogs[field.id]?.offline ? "Sin conexión: sólo catálogo guardado; disponibilidad no certificada." : null)}
+            relationOptionsLoading={relations.catalogs[field.id]?.loading}
+            onRelationSearch={search => relations.search(field.id, search)}
+            onRelationLoadMore={relations.catalogs[field.id]?.hasMore ? () => relations.more(field.id) : undefined} /> : <>
           <Text style={styles.contextLabel}>{field.name}</Text>
           <CompactSelect label={field.name} required={field.required} value={values[field.id] ?? ""}
             options={field.options.map(option => ({ value: option.optionId, label: option.label }))}
             onChange={value => onChange(field.id, String(value) || null)} />
           {errors[field.id] ? <Text style={styles.error}>{errors[field.id]}</Text> : null}
+          </>}
         </View>
       ))}
     </View>

@@ -1,3 +1,5 @@
+import {workflowWriteMetadata} from "../../../lib/workflow-write-contract";
+import { getRelationTargetEntityTypeId, isRelationFieldMultiple } from "../../../lib/record-form";
 import {
   AttendanceBatchEntry,
   AttendanceBatchResult,
@@ -8,6 +10,7 @@ import {
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
   EntityField,
+  EntityRecordValue,
   StateUpdateItem,
 } from "@/lib/opco-api";
 
@@ -284,12 +287,17 @@ function attendanceLatestExtraValues(contextValues: AttendanceContextValues | un
   return Object.keys(extraValues).length > 0 ? extraValues : undefined;
 }
 
+export function attendanceRelationField(field: Extract<AttendanceContextField, { type: "RELATION" }>): EntityField {
+  return { ...field, key: field.key ?? field.id };
+}
+
 export function sanitizeAttendanceContextSelections(
   fields: AttendanceContextField[],
   values: Record<string, string | null | undefined>,
 ) {
   return Object.fromEntries(fields.map((field) => {
     const optionId = values[field.id];
+    if (field.type === "RELATION") return [field.id, typeof optionId === "string" && optionId ? optionId : null];
     const option = optionId
       ? field.options.find((item) => item.optionId === optionId)
       : null;
@@ -316,6 +324,10 @@ export function attendanceContextValidationErrors(
       continue;
     }
 
+    if (field.type === "RELATION") {
+      if (!getRelationTargetEntityTypeId(attendanceRelationField(field)) || isRelationFieldMultiple(attendanceRelationField(field))) errors.push({ fieldId: field.id, message: `${field.name} no tiene un catálogo simple disponible. Actualiza la definición con conexión.` });
+      continue;
+    }
     const option = field.options.find((item) => item.optionId === optionId || item.value === optionId);
 
     if (!option?.value) {
@@ -333,7 +345,8 @@ export function attendanceContextExtraValues(
   return Object.fromEntries(fields
     .map((field) => {
       const optionId = values[field.id] ?? null;
-      const option = optionId ? field.options.find((item) => item.optionId === optionId || item.value === optionId) : null;
+      if (field.type === "RELATION") return [field.id, canonicalAttendanceContextValue(field, optionId)] as const;
+      const option = optionId ? field.options.find(item => item.optionId === optionId || item.value === optionId) : null;
       return [field.id, option?.value ?? null] as const;
     })
     .filter(([, value]) => value !== null));
@@ -345,6 +358,7 @@ export function attendanceEntryToStateUpdateEntry(
   contextFields: AttendanceContextField[],
 ) {
   return {
+    ...workflowWriteMetadata(entry),
     expectedUpdatedAt: entry.expectedUpdatedAt,
     extraValues: attendanceEntryExtraValues(entry, config, contextFields),
     overwrite: entry.overwrite,
@@ -380,7 +394,7 @@ function attendanceCurrentExtraValues(
   observationFieldId: string | undefined,
   observation: string | null,
 ) {
-  const extraValues: Record<string, string | null> = {};
+  const extraValues: Record<string, EntityRecordValue> = {};
 
   if (contextValues) {
     for (const [fieldId, value] of Object.entries(contextValues)) {
@@ -404,48 +418,39 @@ function contextValueToCanonicalValue(
     return null;
   }
 
-  const optionId = typeof value === "string" ? value : value.optionId;
   const field = fields.find((item) => item.id === fieldId);
+  if (field?.type === "RELATION") return typeof value === "string" ? value : "id" in value ? value : null;
+  const optionId = typeof value === "string" ? value : "optionId" in value ? value.optionId : null;
   const option = field?.options.find((item) => item.optionId === optionId || item.value === optionId);
-
   return option?.value ?? null;
 }
 
-function canonicalAttendanceContextValue(field: AttendanceContextField | undefined, optionId: string | null) {
-  if (!optionId) {
-    return null;
+export function canonicalAttendanceContextValue(field: AttendanceContextField | undefined, optionId: EntityRecordValue | undefined) {
+  if (!optionId) return null;
+  if (field?.type === "RELATION") {
+    if (!getRelationTargetEntityTypeId(attendanceRelationField(field)) || isRelationFieldMultiple(attendanceRelationField(field))) throw new Error(`${field.name} no tiene un catálogo simple disponible. Actualiza la definición con conexión.`);
+    const recordId = typeof optionId === "string" ? optionId
+      : typeof optionId === "object" && !Array.isArray(optionId) && "id" in optionId && typeof optionId.id === "string" ? optionId.id : null;
+    if (!recordId) throw new Error(`${field.name} no tiene una relación simple válida.`);
+    return recordId;
   }
-
   const option = field?.options.find((item) => item.optionId === optionId || item.value === optionId);
-
-  if (!option?.value) {
-    throw new Error(`${field?.name ?? "Campo de contexto"} no tiene una opcion valida.`);
-  }
-
+  if (!option?.value) throw new Error(`${field?.name ?? "Campo de contexto"} no tiene una opcion valida.`);
   return option.value;
 }
 
-export function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]) {
-  const fieldsById = new Map(fields.map((field) => [field.id, field]));
-
-  return contextFieldIds
-    .map((fieldId) => fieldsById.get(fieldId))
-    .filter((field): field is EntityField => field !== undefined && field.type === "SELECT" && !field.multiple)
-    .map((field) => ({
-      id: field.id,
-      key: field.key,
-      name: field.name,
-      options: (field.options ?? [])
-        .filter((option) => option.active !== false)
-        .map((option) => ({
-          label: option.label,
-          optionId: option.id,
-          order: option.order,
-          value: option.value,
-        })),
-      required: field.required,
-      type: "SELECT" as const,
-    }));
+export function attendanceContextFieldsFromPreparedDefinition(fields: EntityField[], contextFieldIds: string[]): AttendanceContextField[] {
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  return contextFieldIds.flatMap(fieldId => {
+    const field = fieldsById.get(fieldId);
+    if (!field || field.multiple || field.active === false) return [];
+    if (field.type === "RELATION" && !isRelationFieldMultiple(field) && getRelationTargetEntityTypeId(field)) {
+      return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "RELATION", config: field.config } as AttendanceContextField];
+    }
+    if (field.type !== "SELECT") return [];
+    return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "SELECT", options: (field.options ?? [])
+      .filter(option => option.active !== false).map(option => ({ label: option.label, optionId: option.id, order: option.order, value: option.value })) } as AttendanceContextField];
+  });
 }
 
 function attendanceLatestDedupeKey(item: AttendanceLatestItem) {

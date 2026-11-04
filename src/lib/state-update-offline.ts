@@ -1,3 +1,4 @@
+import {workflowWriteMetadata, type WorkflowWriteMetadata} from "./workflow-write-contract";
 import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, stateUpdateScheduleIntentFingerprint, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
 import type { CompositeStateIdentity } from "./opco-api";
@@ -22,7 +23,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
-export type OfflineStateUpdatePayload = StateUpdateScheduleMetadata & {
+export type OfflineStateUpdatePayload = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   identity?: CompositeStateIdentity;
   snapshotConfiguration?: string;
   expectedRecordId?: string;
@@ -79,7 +80,7 @@ export type StateUpdateSyncErrorDetails = {
   fields: StateUpdateSyncErrorFieldDetails[];
 };
 
-export type OfflineStateUpdateValues = StateUpdateScheduleMetadata & {
+export type OfflineStateUpdateValues = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   extraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
   __opcoStateUpdateRemote?: { format: 1; recordId: string };
@@ -98,7 +99,7 @@ export type OfflineStateUpdateValues = StateUpdateScheduleMetadata & {
   subjectRecordId: string;
 };
 
-export type CachedStateUpdateRecord = StateUpdateScheduleMetadata & {
+export type CachedStateUpdateRecord = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   conflictRemoteSchedule?: StateUpdateScheduleMetadata["schedule"];
   conflictRemoteScheduleApplication?: StateUpdateScheduleMetadata["scheduleApplication"];
   extraValuesFormat?: "field-value";
@@ -788,7 +789,7 @@ export type StateUpdateScope = {
   targetEntityTypeId: string;
 };
 
-export type SaveStateUpdateLocallyInput = StateUpdateScope & StateUpdateScheduleMetadata & {
+export type SaveStateUpdateLocallyInput = WorkflowWriteMetadata & StateUpdateScope & StateUpdateScheduleMetadata & {
   // Attendance may repeat an already-confirmed immutable intent without resetting its delivery.
   preserveIdenticalConfirmedIntent?: boolean;
   expectedUpdatedAt?: string | null;
@@ -1022,6 +1023,7 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientReq
     clientRequestId: clientRequestId ?? (typeof values.clientRequestId === "string" ? values.clientRequestId : undefined),
     conflictIdentity: JSON.stringify([record.localId, record.serverId, record.values, record.conflictRemoteValues,
       record.conflictRemoteUpdatedAt, clientRequestId ?? values.clientRequestId]),
+    ...workflowWriteMetadata(values),
     ...stateUpdateScheduleMetadata(values),
     ...(conflictValues?.schedule !== undefined ? { conflictRemoteSchedule: conflictValues.schedule } : {}),
     ...(conflictValues?.scheduleApplication !== undefined ? { conflictRemoteScheduleApplication: conflictValues.scheduleApplication } : {}),
@@ -1115,6 +1117,7 @@ export function stateUpdateIntentsEqual(
 export function normalizeStateUpdateIntent(payload: OfflineStateUpdatePayload) {
   const schedule = stateUpdateScheduleIntentFingerprint(payload);
   return {
+    ...workflowWriteMetadata(payload),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(payload.identity ? { identity: compositeIdentityKey(payload.identity) } : {}),
     appViewId: payload.appViewId,

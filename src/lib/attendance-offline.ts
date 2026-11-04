@@ -1,3 +1,4 @@
+import {workflowWriteMetadata, type WorkflowWriteMetadata} from "./workflow-write-contract";
 import {
   AttendanceContextValues,
   AttendanceItem,
@@ -13,7 +14,7 @@ import { CachedStateUpdateRecord } from "./state-update-offline";
 
 export type AttendanceSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
-export type CachedAttendanceRecord = {
+export type CachedAttendanceRecord = WorkflowWriteMetadata & {
   conflictIdentity?: string;
   attempts?: number;
   conflictRemoteStatusLabel?: string | null;
@@ -135,6 +136,7 @@ export function stateUpdateConflictToAttendanceRecord(
     expectedUpdatedAt: record.expectedUpdatedAt,
     localRecordId: record.localRecordId,
     observation: readObservation(record.extraValues, observationFieldId),
+    ...workflowWriteMetadata(record),
     contextValues: record.extraValues,
     person: record.subject,
     statusLabel: status?.label ?? null,
@@ -165,7 +167,7 @@ function readContextValues(extraValues: Record<string, EntityRecordValue> | unde
     .filter(([, value]) =>
       value === null ||
       typeof value === "string" ||
-      (Boolean(value) && typeof value === "object" && !Array.isArray(value) && "optionId" in value),
+      (Boolean(value) && typeof value === "object" && !Array.isArray(value) && ("optionId" in value || "id" in value)),
     )) as AttendanceContextValues;
 
   return Object.keys(contextValues).length > 0 ? contextValues : undefined;

@@ -42,6 +42,7 @@ export type PreparedAppViewDefinition =
   | {
       appView: AppView;
       kind: "attendance";
+      workflowWriteContract?: import("./workflow-write-contract").WorkflowWriteContract | null;
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
       searchComparison?: import("./search-comparison").WorkflowSearchComparison;
@@ -59,6 +60,7 @@ export type PreparedAppViewDefinition =
       extraFields: EntityField[];
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
+      workflowWriteContract?: import("./workflow-write-contract").WorkflowWriteContract | null;
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
       searchComparison?: import("./search-comparison").WorkflowSearchComparison;

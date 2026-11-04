@@ -1,5 +1,6 @@
+import {captureWorkflowWriteCommand,workflowWriteMetadata,type WorkflowWriteContract} from "./workflow-write-contract";
 import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry} from "../renderers/workflows/attendance/attendance-edit-command";
-import {OpcoApiError} from "./opco-api";
+import {OpcoApiError, OpcoNetworkError} from "./opco-api";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
@@ -112,7 +113,7 @@ afterEach(()=>{harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{r
 async function reopen(){await harness.db.closeAsync();__resetLocalDatabaseForTests();harness=sqliteHarness(directory+"/db.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();await store.getSelectedContractId();}
 function input(overwrite?:boolean){return {...scope,subjectRecordId:"person",subjectDisplayName:"Synthetic",historyMode:"update-current" as const,uniqueness:"subject-date" as const,stateFields:fields,stateValues:[{fieldId:"status",optionId:"present"}],expectedUpdatedAt:base,overwrite};}
 function rendererContext(before:any){
-  const c:any={attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},setConfirmationError:vi.fn(),conflict:null,buildOfflineStateValues,stateUpdateIntentsEqual,resolutionMountedRef:{current:true},requestSequenceRef:{current:0},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},selectedContractId:scope.contractId,selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:before.localRecordId,statusOptionId:"present",statusLabel:"Present",updatedAt:base}},ownerKey:scope.ownerKey,isSaving:false,isOnline:false,date:scope.date,appView:{id:scope.appViewId,config:{statusFieldId:"status",targetEntityTypeId:scope.targetEntityTypeId}},contextFields:[],contextValues:{},supportsObservation:false,observation:"",statuses:fields[0].options,definitionCache:store,attendanceContextValidationErrors:()=>[],attendanceStateFields,attendanceEntryExtraValues,attendanceEntryToStateUpdateEntry};
+  const c:any={captureWorkflowWriteCommand,workflowWriteMetadata,writeContract:undefined,writeContractRequiredRef:{current:false},attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},setConfirmationError:vi.fn(),conflict:null,buildOfflineStateValues,stateUpdateIntentsEqual,resolutionMountedRef:{current:true},requestSequenceRef:{current:0},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},selectedContractId:scope.contractId,selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:before.localRecordId,statusOptionId:"present",statusLabel:"Present",updatedAt:base}},ownerKey:scope.ownerKey,isSaving:false,isOnline:false,date:scope.date,appView:{id:scope.appViewId,config:{statusFieldId:"status",targetEntityTypeId:scope.targetEntityTypeId}},contextFields:[],contextValues:{},supportsObservation:false,observation:"",statuses:fields[0].options,definitionCache:store,attendanceContextValidationErrors:()=>[],attendanceStateFields,attendanceEntryExtraValues,attendanceEntryToStateUpdateEntry};
   for(const name of ["setContextErrors","setIsSaving","setError","setRefreshError","setSuccessMessage","clearPersonFlow","refreshLocalDayState","refreshRecordsSyncSummary","clearVisibleError","reportWriteFeedback","recordVisibleError","setConflict"]) c[name]=vi.fn();
   c.saveEntry=handler("saveEntry",c);return c;
 }
@@ -155,5 +156,64 @@ describe("observation-only confirmed replacement across SQLite reopen",()=>{
   c.saveEntry=handler("saveEntry",c);await handler("saveStatus",c)({optionId:"training",label:"Training"});expect(c.setConflict).toHaveBeenCalledOnce();const conflict=c.setConflict.mock.calls[0][0];await handler("confirmConflict",{...c,conflict})();expect(c.recordVisibleError).not.toHaveBeenCalled();
   const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(before.payload).toMatchObject({overwrite:true,expectedUpdatedAt:base,stateValues:[{optionId:"training"}],extraValues:{note:"Edited",shift:"FIRST"}});await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
   const reopened=rendererContext(before);Object.assign(reopened,{contextFields:c.contextFields,contextValues:c.contextValues,supportsObservation:true,observation:"Edited",appView:c.appView,selectedItem:{...c.selectedItem,attendance:{...c.selectedItem.attendance,statusOptionId:"training",observation:"Edited"}}});reopened.saveEntry=handler("saveEntry",reopened);await handler("saveStatus",reopened)({optionId:"training",label:"Training"});expect(reopened.setConflict).not.toHaveBeenCalled();await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+ });
+});
+
+
+describe("Attendance relation context durability and sync", () => {
+ const contextFields = [{ id: "related", name: "Related", type: "RELATION" as const, required: true, config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } },
+  { id: "shift", name: "Choice", type: "SELECT" as const, required: true, options: [{ optionId: "a", label: "A", value: "FIRST" }] }];
+ it("remembers one context across consecutive captures, reopens and sends each exact ID once", async () => {
+  await store.setAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related", "catalog-one");
+  for (const subjectRecordId of ["new-person-one", "new-person-two"]) {
+   const related = await store.getAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related");
+   const c = rendererContext({ localRecordId: subjectRecordId });
+   Object.assign(c, { contextFields, contextValues: { related, shift: "a" }, selectedItem: { person: { id: subjectRecordId, displayName: "Synthetic subject" }, attendance: null } });
+   c.appView.config.contextFieldIds = ["related", "shift"]; c.saveEntry = handler("saveEntry", c);
+   await handler("saveStatus", c)({ optionId: "present", label: "Present" });
+   expect(c.clearPersonFlow).toHaveBeenCalledOnce(); expect(c.recordVisibleError).not.toHaveBeenCalled();
+   expect(await store.getAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related")).toBe(related);
+  }
+  const pending = await store.listPendingStateUpdateOperations(scope.ownerKey); expect(pending).toHaveLength(2);
+  await reopen(); expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual(pending); expect(await store.getAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related")).toBe("catalog-one");
+  expect(await store.getAttendanceContextSelection("another:user", scope.contractId, scope.appViewId, "related")).toBeNull();
+  const api = { saveStateUpdateWorkflow: vi.fn<OpcoApi["saveStateUpdateWorkflow"]>(async (_token, _contract, _view, request) => ({ appView: { id: scope.appViewId, name: "Synthetic", slug: "synthetic" }, results: [{ result: "CREATED", subjectRecordId: request.subjectRecordId!, recordId: "remote-" + request.subjectRecordId, updatedAt: "2026-11-03T12:00:00.000Z" }] })) };
+  await syncPendingStateUpdatesOnce({ api, store, ownerKey: scope.ownerKey, token: "synthetic" }); expect(api.saveStateUpdateWorkflow).toHaveBeenCalledTimes(2);
+  for (const call of api.saveStateUpdateWorkflow.mock.calls) expect(call[3]).toMatchObject({ extraValues: { related: "catalog-one", shift: "FIRST" }, clientRequestId: expect.any(String) });
+  await reopen(); expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]); expect(await harness.db.getFirstAsync("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+ });
+ it("editing only the content preserves the existing relation, base and authorization after reopen", async () => {
+  await store.upsertStateUpdateSnapshot({ ...scope, historyMode: "update-current", uniqueness: "subject-date", complete: false, latest: [], items: [{ subject: { id: "person", displayName: "Synthetic" }, current: { recordId: "remote", updatedAt: base, stateValues: [{ fieldId: "status", optionId: "training", label: "Training" }], extraValues: { related: { id: "catalog-existing", displayName: "Existing label" }, shift: "FIRST" } } }] });
+  const c = rendererContext({ localRecordId: "remote" }); Object.assign(c, { contextFields, contextValues: { related: "catalog-existing", shift: "a" } }); c.appView.config.contextFieldIds = ["related", "shift"];
+  c.selectedItem.attendance = { recordId: "remote", statusOptionId: "training", statusLabel: "Training", updatedAt: base, contextValues: { related: { id: "catalog-existing", displayName: "Existing label" }, shift: "a" } };
+  c.saveEntry = handler("saveEntry", c); await handler("saveStatus", c)({ optionId: "present", label: "Present" }); const conflict = c.setConflict.mock.calls[0][0]; await handler("confirmConflict", { ...c, conflict })();
+  const before = (await store.listPendingStateUpdateOperations(scope.ownerKey))[0]; expect(before.payload).toMatchObject({ overwrite: true, expectedUpdatedAt: base, extraValues: { related: "catalog-existing", shift: "FIRST" } }); await reopen(); expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+  const api = { saveStateUpdateWorkflow: vi.fn<OpcoApi["saveStateUpdateWorkflow"]>().mockRejectedValueOnce(new OpcoNetworkError("Synthetic lost response")).mockResolvedValueOnce({ appView: { id: scope.appViewId, name: "Synthetic", slug: "synthetic" }, results: [{ result: "UPDATED", subjectRecordId: "person", recordId: "remote", updatedAt: "2026-11-03T12:00:00.000Z" }] }) };
+  await syncPendingStateUpdatesOnce({ api, store, ownerKey: scope.ownerKey, token: "synthetic" }); await reopen(); expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0].clientRequestId).toBe(before.clientRequestId);
+  await syncPendingStateUpdatesOnce({ api, store, ownerKey: scope.ownerKey, token: "synthetic" }); expect(api.saveStateUpdateWorkflow.mock.calls[1][3]).toEqual(api.saveStateUpdateWorkflow.mock.calls[0][3]); await reopen(); expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+ });
+});
+
+it("offline relation catalog stays paginated while a remembered selection label survives outside the page", async () => {
+ await store.upsertRemoteRecords({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "catalog", records: Array.from({ length: 26 }, (_, i) => ({ id: "catalog-" + i, displayName: "Synthetic " + String(i).padStart(2, "0"), values: {}, updatedAt: "2026-11-03T10:00:00.000Z" })) });
+ await store.setAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related", "catalog-25"); await reopen();
+ const { loadStateUpdateRelationPage } = await import("./state-update-relations");
+ const api = { getEntityRecords: vi.fn() }; const result = await loadStateUpdateRelationPage({ api, store, token: "synthetic", ownerKey: scope.ownerKey, contractId: scope.contractId, online: false, field: { id: "related", key: "related", name: "Related", type: "RELATION", required: true, config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } } });
+ expect(result.options).toHaveLength(25); expect(result.hasMore).toBe(true); expect(result.options.some(option => option.id === "catalog-25")).toBe(false); expect(api.getEntityRecords).not.toHaveBeenCalled(); expect(result).not.toHaveProperty("complete");
+ expect(await store.getAttendanceContextSelection(scope.ownerKey, scope.contractId, scope.appViewId, "related")).toBe("catalog-25"); expect(await store.getCachedRecord({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "catalog", recordId: "catalog-25" })).toMatchObject({ serverId: "catalog-25", displayName: "Synthetic 25" });
+});
+
+
+describe("opt-in command capability in real Attendance handlers",()=>{
+ const contract:WorkflowWriteContract={version:1,configurationFingerprint:"d".repeat(64),requiredCapabilities:["relation-context-v1"],authorized:true,acceptNewCommands:true};
+ it("captures the relation capability once and keeps the exact offline command after reopen",async()=>{
+  const c=rendererContext({localRecordId:"unused"});c.selectedItem={person:{id:"another-person",displayName:"Synthetic"},attendance:null};c.writeContract=contract;c.writeContractRequiredRef.current=true;
+  c.contextFields=[{id:"related",name:"Context",type:"RELATION",required:true,config:{relation:{targetEntityTypeId:"catalog",relationKind:"ONE"}}}];c.appView.config.contextFieldIds=["related"];c.contextValues={related:"synthetic-catalog"};c.saveEntry=handler("saveEntry",c);
+  await handler("saveStatus",c)({optionId:"present",label:"Present"});expect(c.clearPersonFlow).toHaveBeenCalledOnce();expect(c.recordVisibleError).not.toHaveBeenCalled();
+  const original=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(original.payload).toMatchObject({writeCommand:{version:1,configurationFingerprint:contract.configurationFingerprint,capabilities:["relation-context-v1"]},extraValues:{related:"synthetic-catalog"}});await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(original);
+ });
+ it("does not silently capture when a known protected experience loses its capability metadata",async()=>{
+  const c=rendererContext({localRecordId:"unused"});c.selectedItem={person:{id:"another-person",displayName:"Synthetic"},attendance:null};c.writeContractRequiredRef.current=true;
+  const before=await harness.db.getAllAsync("SELECT * FROM pending_operations");await handler("saveStatus",c)({optionId:"present",label:"Present"});expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("revisión explícita"));expect(c.clearPersonFlow).not.toHaveBeenCalled();expect(await harness.db.getAllAsync("SELECT * FROM pending_operations")).toEqual(before);
  });
 });
