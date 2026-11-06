@@ -1,3 +1,4 @@
+import { relationKind, relationKindIsAmbiguous } from "./relation-cardinality";
 import { decimalPlaces, decimalFractionLength } from "./decimal-precision";
 import { EntityDefinition, EntityField, EntityRecordValue, OpcoApiError } from "./opco-api";
 
@@ -78,6 +79,10 @@ export function validateFormFields(fields: EntityField[], values: RecordFormValu
     }
 
     const value = values[field.key];
+    if (field.type === "RELATION") {
+      if (relationKindIsAmbiguous(field.config)) errors[field.key] = "La definición de cardinalidad es ambigua. Revisa el campo; los valores se conservan.";
+      else if (!isRelationFieldMultiple(field) && Array.isArray(value) && value.length > 1) errors[field.key] = "Este campo admite solo una relación. Revisa los valores conservados antes de guardar.";
+    }
     if ((field.type === "SELECT" || field.type === "MULTISELECT") && field.options) {
       const selected = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
       if (selected.some(entry => !field.options!.some(option => option.value === entry && option.active !== false))) {
@@ -130,17 +135,7 @@ export function getRelationTargetEntityTypeId(field: EntityField) {
 }
 
 export function isRelationFieldMultiple(field: EntityField) {
-  if (field.multiple) {
-    return true;
-  }
-
-  const relation = readRecord(field.config?.relation);
-
-  if (relation?.relationKind === "MANY") {
-    return true;
-  }
-
-  return field.config?.relationKind === "MANY";
+  return relationKind(field.config) === "MANY";
 }
 
 export function getUnknownRelationValueErrors(
@@ -219,8 +214,12 @@ function formValueFromRecordValue(value: EntityRecordValue | undefined, field: E
     return Array.isArray(value) ? value.map((item) => String(readRelationId(item) ?? item)) : [];
   }
 
-  if (field.type === "RELATION" && isRelationFieldMultiple(field)) {
-    return Array.isArray(value) ? value.map((item) => String(readRelationId(item) ?? item)) : [];
+  if (field.type === "RELATION" && (isRelationFieldMultiple(field) || Array.isArray(value))) {
+    if (Array.isArray(value)) {
+      const ids = value.map((item) => String(readRelationId(item) ?? item));
+      return !isRelationFieldMultiple(field) && ids.length <= 1 ? ids[0] ?? "" : ids;
+    }
+    return typeof value === "string" ? [value] : value && typeof value === "object" ? [String(readRelationId(value) ?? "")] : [];
   }
 
   if (field.type === "RELATION") {

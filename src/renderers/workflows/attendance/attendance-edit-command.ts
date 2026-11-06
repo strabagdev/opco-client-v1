@@ -1,6 +1,6 @@
 import {workflowWriteMetadata} from "../../../lib/workflow-write-contract";
 import type { AttendanceBatchEntry, AttendanceContextField, AttendanceItem, AttendanceWorkflowConfig } from "../../../lib/opco-api";
-import { attendanceEntryExtraValues } from "./attendance-workflow-logic";
+import { attendanceEntryExtraValues, canonicalAttendanceContextValue } from "./attendance-workflow-logic";
 
 export function copyAttendanceEntry(entry: AttendanceBatchEntry): AttendanceBatchEntry {
   return { ...entry, ...workflowWriteMetadata(entry), ...(entry.contextValues ? { contextValues: { ...entry.contextValues } } : {}) };
@@ -12,7 +12,7 @@ export function attendanceEditContextValues(fields: AttendanceContextField[], it
   const stored = item.attendance.contextValues ?? {};
   return Object.fromEntries(fields.filter(field => Object.prototype.hasOwnProperty.call(stored, field.id)).map(field => {
     const raw = stored[field.id];
-    if (field.type === "RELATION") return [field.id, typeof raw === "string" ? raw : raw && "id" in raw ? raw.id : null];
+    if (field.type === "RELATION") return [field.id, canonicalAttendanceContextValue(field, raw)];
     const value = raw && typeof raw === "object" ? "optionId" in raw ? raw.optionId : null : raw;
     const option = field.options.find(option => option.optionId === value || option.value === value);
     return [field.id, option?.optionId ?? value ?? null];

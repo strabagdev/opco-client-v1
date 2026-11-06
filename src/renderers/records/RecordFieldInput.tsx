@@ -1,3 +1,4 @@
+import { relationCardinalityIssue, relationKindIsAmbiguous } from "../../lib/relation-cardinality";
 import { decimalPlaces } from "../../lib/decimal-precision";
 import { useMemo, useState } from "react";
 import { Text, TextInput, Pressable, StyleSheet, View } from "react-native";
@@ -166,6 +167,8 @@ function RelationFieldInput({
 }) {
   const [search, setSearch] = useState("");
   const isMultiple = isRelationFieldMultiple(field);
+  const cardinalityIssue = relationCardinalityIssue(field);
+  const blockedCardinality = relationKindIsAmbiguous(field.config) || (!isMultiple && selectedRelationCount(value) > 1);
   const selectedValues = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
   const optionIds = useMemo(() => new Set(options.map((option) => option.id)), [options]);
   const unknownValues = selectedValues.filter((item) => !optionIds.has(item));
@@ -204,7 +207,9 @@ function RelationFieldInput({
           {!optionsLoading && !optionsError && options.length === 0 ? (
             <Text style={styles.fieldError}>No hay registros disponibles en el catalogo para seleccionar.</Text>
           ) : null}
-          <CompactSelect label={field.name} required={field.required} multiple={isMultiple}
+          {cardinalityIssue || blockedCardinality ? <Text accessibilityRole="alert" style={styles.fieldError}>{cardinalityIssue ?? "Este campo conserva varias relaciones y requiere revisión antes de guardar."}</Text> : null}
+          {blockedCardinality && selectedValues.length > 1 ? <Text style={styles.help}>{selectedValues.map(id => options.find(option => option.id === id)?.displayName ?? "Selección no disponible").join(", ")}</Text> : null}
+          <CompactSelect label={field.name} required={field.required} multiple={isMultiple} disabled={blockedCardinality}
             value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
             options={[...filteredOptions, ...options.filter(option => selectedValues.includes(option.id) && !filteredOptions.some(filtered => filtered.id === option.id))].map(option => ({ value: option.id, label: option.displayName }))}
             onChange={onChange} />
@@ -217,6 +222,8 @@ function RelationFieldInput({
     </View>
   );
 }
+
+function selectedRelationCount(value: FieldInputProps["value"]) { return Array.isArray(value) ? value.length : value ? 1 : 0; }
 
 function FieldError({ error }: { error?: string }) {
   return error ? <Text style={styles.fieldError}>{error}</Text> : null;

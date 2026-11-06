@@ -1,3 +1,4 @@
+import { relationKind } from "./relation-cardinality";
 import { createClientRequestId } from "./client-request-id";
 import {
   EntityField,
@@ -751,7 +752,7 @@ function normalizeRelationConflictIdentity(field: EntityField, value: EntityReco
     return null;
   }
 
-  if (isManyRelationField(field)) {
+  if (isManyRelationField(field) || Array.isArray(value)) {
     const items = Array.isArray(value) ? value : [value];
 
     return items.map((item) => readRelationRecordId(item)).filter(Boolean).sort();
@@ -828,17 +829,7 @@ function normalizeRecordValueForPersistence(field: EntityField, value: EntityRec
 }
 
 function isManyRelationField(field: EntityField) {
-  if (field.multiple) {
-    return true;
-  }
-
-  const relationConfig = readObject(field.config?.relation);
-
-  if (relationConfig?.relationKind === "MANY") {
-    return true;
-  }
-
-  return field.config?.relationKind === "MANY";
+  return relationKind(field.config) === "MANY";
 }
 
 function getRelationTargetEntityTypeId(field: EntityField) {

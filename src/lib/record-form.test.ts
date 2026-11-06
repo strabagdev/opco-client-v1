@@ -268,3 +268,16 @@ function field({
     type,
   };
 }
+
+
+describe("RELATION canonical cardinality", () => {
+  it("uses explicit ONE instead of the stale generic multiple flag", () => {
+    expect(isRelationFieldMultiple({...field({key:"relation",required:false,type:"RELATION",config:{relation:{relationKind:"ONE"}}}),multiple:true})).toBe(false);
+  });
+  it("preserves every legacy relation when ONE has an array requiring review", () => {
+    const relation={...field({key:"relation",required:false,type:"RELATION",config:{relationKind:"ONE"}}),multiple:false};
+    const initial=buildInitialFormValues({...entityDefinitionFixture,fields:[relation]},{relation:[{id:"a",displayName:"Synthetic A",entityTypeId:"catalog"},{id:"b",displayName:"Synthetic B",entityTypeId:"catalog"}]});
+    expect(initial.relation).toEqual(["a","b"]);
+    expect(validateFormFields([relation],initial).relation).toBeTruthy();
+  });
+});

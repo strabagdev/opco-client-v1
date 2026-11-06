@@ -1,3 +1,4 @@
+import { readAttendanceContextValue } from "../../../lib/attendance-context-values";
 import {workflowWriteMetadata} from "../../../lib/workflow-write-contract";
 import { getRelationTargetEntityTypeId, isRelationFieldMultiple } from "../../../lib/record-form";
 import {
@@ -419,8 +420,8 @@ function contextValueToCanonicalValue(
   }
 
   const field = fields.find((item) => item.id === fieldId);
-  if (field?.type === "RELATION") return typeof value === "string" ? value : "id" in value ? value : null;
-  const optionId = typeof value === "string" ? value : "optionId" in value ? value.optionId : null;
+  if (field?.type === "RELATION") return readAttendanceContextValue(field, value) ?? null;
+  const optionId = typeof value === "string" ? value : typeof value === "object" && "optionId" in value ? value.optionId : null;
   const option = field?.options.find((item) => item.optionId === optionId || item.value === optionId);
   return option?.value ?? null;
 }
@@ -429,8 +430,10 @@ export function canonicalAttendanceContextValue(field: AttendanceContextField | 
   if (!optionId) return null;
   if (field?.type === "RELATION") {
     if (!getRelationTargetEntityTypeId(attendanceRelationField(field)) || isRelationFieldMultiple(attendanceRelationField(field))) throw new Error(`${field.name} no tiene un catálogo simple disponible. Actualiza la definición con conexión.`);
-    const recordId = typeof optionId === "string" ? optionId
-      : typeof optionId === "object" && !Array.isArray(optionId) && "id" in optionId && typeof optionId.id === "string" ? optionId.id : null;
+    const restored = readAttendanceContextValue(field, optionId);
+    if (restored === null) return null;
+    const recordId = typeof restored === "string" ? restored
+      : restored && typeof restored === "object" && !Array.isArray(restored) && "id" in restored && typeof restored.id === "string" ? restored.id : null;
     if (!recordId) throw new Error(`${field.name} no tiene una relación simple válida.`);
     return recordId;
   }
@@ -443,7 +446,7 @@ export function attendanceContextFieldsFromPreparedDefinition(fields: EntityFiel
   const fieldsById = new Map(fields.map(field => [field.id, field]));
   return contextFieldIds.flatMap(fieldId => {
     const field = fieldsById.get(fieldId);
-    if (!field || field.multiple || field.active === false) return [];
+    if (!field || (field.type !== "RELATION" && field.multiple) || field.active === false) return [];
     if (field.type === "RELATION" && !isRelationFieldMultiple(field) && getRelationTargetEntityTypeId(field)) {
       return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "RELATION", config: field.config } as AttendanceContextField];
     }

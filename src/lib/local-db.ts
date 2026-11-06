@@ -1,3 +1,4 @@
+import { relationKind } from "./relation-cardinality";
 import {pinnedWorkflowWriteMetadata,workflowWriteMetadata,WorkflowWriteReviewError} from "./workflow-write-contract";
 import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
 import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
@@ -4403,7 +4404,7 @@ async function normalizeConflictRelationValue(
     return normalizeRecordValuesForPersistence([field], { [field.key]: value })[field.key];
   }
 
-  if (isManyRelationField(field)) {
+  if (isManyRelationField(field) || Array.isArray(value)) {
     const values = Array.isArray(value) ? value : [value];
     const ids = await Promise.all(values.map((item) => resolveRelationServerRecordId(db, {
       contractId,
@@ -4441,17 +4442,7 @@ function getRelationTargetEntityTypeId(field: EntityField) {
 }
 
 function isManyRelationField(field: EntityField) {
-  if (field.multiple) {
-    return true;
-  }
-
-  const relationConfig = readLocalRecordObject(field.config?.relation);
-
-  if (relationConfig?.relationKind === "MANY") {
-    return true;
-  }
-
-  return field.config?.relationKind === "MANY";
+  return relationKind(field.config) === "MANY";
 }
 
 function readRelationRecordId(value: unknown) {

@@ -773,7 +773,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         if(requestId!==requestSequenceRef.current)return;
         setComparisonMetadataAvailable(Boolean(prepared && "searchComparison" in prepared.definition && prepared.definition.searchComparison));
         setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
-        setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId, appView.config.observationFieldId)));
+        const preparedContextFields = prepared && "extraFields" in prepared.definition ? attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []) : [];
+        setItems(localItems.map((item) => stateUpdateItemToAttendanceItem(item, appView.config.statusFieldId, appView.config.observationFieldId, preparedContextFields)));
         await refreshLocalDayState();
         return;
       }
@@ -986,8 +987,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     const requestedScope = resolutionScope;
     setConfirmationError(null);
     setResolutionFeedback(null);
+    let restoredContext;
+    try {
+      restoredContext = attendanceEditContextValues(contextFields, item, contextValues);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No fue posible restaurar el contexto. Los valores conservados requieren revisión.");
+      return;
+    }
     setSelectedItem(item);
-    setContextValues(attendanceEditContextValues(contextFields, item, contextValues));
+    setContextValues(restoredContext);
     setObservation(item.attendance?.observation ?? "");
     setObservationExpanded(false);
     setConflict(null);
@@ -1013,10 +1021,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
 
+      const restoredContext = attendanceEditContextValues(response.contextFields ?? contextFields, response.items[0] ?? item, contextValues);
       applyAttendanceResponse(response);
       clearVisibleError();
       setSelectedItem(response.items[0] ?? item);
-      setContextValues(attendanceEditContextValues(response.contextFields ?? contextFields, response.items[0] ?? item, contextValues));
+      setContextValues(restoredContext);
       setObservation(response.items[0]?.attendance?.observation ?? "");
     } catch (nextError) {
       if (resolutionMountedRef.current && requestedScope === resolutionScopeRef.current && requestId === requestSequenceRef.current && revision === draftRevisionRef.current) {

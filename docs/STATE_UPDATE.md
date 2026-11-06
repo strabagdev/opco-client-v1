@@ -3688,3 +3688,23 @@ Un SW nuevo no retira runtimes anteriores; después, rollback sólo a builds com
 Pruebas del lote en PostgreSQL local, SQLite real y handlers/transportes sintéticos; no nuevo recorrido
 Chromium/OPFS, Safari físico ni producción. El flujo RELATION visual integrado previo se conserva por
 identidad funcional. V11, calendarios automáticos y cambios de preparación permanecen fuera.
+
+
+### Cardinalidad RELATION — corrección genérica local 05-11-2026
+
+`relationKind` (plano o anidado) determina ONE/MANY; el booleano `multiple` no convierte por sí solo una relación ONE en múltiple. El editor Core deriva y bloquea ese espejo y el servidor rechaza nuevas contradicciones. No se reparan configuraciones existentes: su revisión al guardar es explícita. El inventario READ ONLY encontró 10/20 RELATION contradictorios, sin más de un vínculo por origen en los afectados; IDs en backups/relation-cardinality-fix/2026-11-05/production-inventory.json.
+
+Los controles, restauración Attendance y normalización/conflictos locales usan el mismo criterio. Un arreglo histórico de un solo ID se presenta como selección única; varios valores bajo ONE se conservan íntegros y bloquean el guardado/control para revisión. Una contradicción plana/anidada no se interpreta silenciosamente. No se reescribe outbox, autorización, versión base ni clientRequestId al actualizar metadata o reabrir SQLite. El transporte anterior escalar/arreglo simple sigue aceptado por Core; replay sin duplicar. SELECT, identidad persona+fecha, scopes, preparación y namespace SQLite10/epoch2 se conservan.
+
+Core coordina reducción de cardinalidad y escritores mediante bloqueos existentes, rechazando tanto vínculos múltiples actuales como planes viejos que continúan después. Orden futuro Core→Client; metadata/formato legacy retenidos para no romper Client publicado. No modificar definiciones ni reparar relaciones durante despliegue.
+
+Evidencia focalizada: Core 450 casos (14 PostgreSQL), Client 130, tres nuevas pruebas SQLite con cierre/reapertura y sync simulado, controles reales SSR; typecheck/lint/build habituales. Sin nuevo navegador/OPFS ni Safari físico. Primer artefacto Client rechazado por API local; el final, con caché temporal aislada, acredita https://web.opco.cl, epoch2 e index/sw/lector local. Causa exacta del primer artefacto no demostrada. Fallos previos e intermedios se conservan en REVIEW; no se ampliaron timeouts ni la auditoría. V11 y pendientes independientes intactos.
+
+
+### Restauración de contextos RELATION ONE histórico — local 06-11-2026
+
+El adaptador Attendance usa tipo/config.relationKind del campo preparado, plano o anidado, para interpretar un arreglo histórico de un elemento como una relación ONE. Conserva ID y displayName, incluidos snapshots y edición; MANY no se aplana. Sin metadata no se adivina la cardinalidad ni se descarta el arreglo: se conserva hasta la interpretación por un campo conocido. ONE con varios elementos/metadata ambigua permanece intacto y se rechaza su edición explícitamente; no se convierte en selección vacía ni se toma el primer destino. La pantalla conserva el borrador anterior si no puede restaurar un contexto válido; guards de scope/respuesta tardía y SELECT no cambian.
+
+Es una proyección de lectura, no una reparación: SQLite/outbox no se reescriben al abrir/restaurar. Confirmación y sincronización conservan comando, versión base, overwrite, capacidad y clientRequestId; resolver un conflicto sigue requiriendo el comando explícito existente. Sólo ese comando puede cambiar base/clave. No cambia persona+fecha, namespace v10/epoch2, permisos, cobertura ni preparación. Core conserva el formato legacy para runtimes anteriores, verificado en PostgreSQL local para current individual/por lotes y replay.
+
+Validación: regresión archivada RED→GREEN, SELECT/MANY, handler real de selección/confirmación, SQLite real en archivo con cierre/reapertura, etiquetas, edición, ACK/conflicto/resolución explícita, intención antigua en arreglo y transmisión exacta. Transporte Client simulado, separado de la aceptación real PostgreSQL Core; sin nuevo navegador/OPFS, Safari físico ni producción. Los fallos previos y controles HEAD quedan identificados en REVIEW; no se aumentan timeouts ni se afirma estabilidad general. Requiere renovar el respaldo operativo antes de publicar el lote combinado. Detalle reproducible: backups/attendance-relation-context-restoration/2026-11-06/.

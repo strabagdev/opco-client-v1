@@ -1,5 +1,7 @@
+import { readAttendanceContextValue } from "./attendance-context-values";
 import {workflowWriteMetadata, type WorkflowWriteMetadata} from "./workflow-write-contract";
 import {
+  AttendanceContextField,
   AttendanceContextValues,
   AttendanceItem,
   AttendanceLatestItem,
@@ -85,6 +87,7 @@ export function stateUpdateItemToAttendanceItem(
   item: StateUpdateItem,
   statusFieldId: string,
   observationFieldId?: string,
+  contextFields?: AttendanceContextField[],
 ): AttendanceItem {
   const status = item.current?.stateValues.find((value) => value.fieldId === statusFieldId);
 
@@ -92,7 +95,7 @@ export function stateUpdateItemToAttendanceItem(
     attendance: item.current
       ? {
           observation: readObservation(item.current.extraValues, observationFieldId),
-          contextValues: readContextValues(item.current.extraValues, observationFieldId),
+          contextValues: readContextValues(item.current.extraValues, observationFieldId, contextFields),
           recordId: item.current.recordId,
           statusLabel: status?.label ?? null,
           statusOptionId: status?.optionId ?? null,
@@ -106,11 +109,13 @@ export function stateUpdateItemToAttendanceItem(
 export function stateUpdateLatestToAttendanceLatest(
   item: StateUpdateLatestItem,
   statusFieldId: string,
+  contextFields?: AttendanceContextField[],
 ): AttendanceLatestItem {
   const status = item.stateValues?.find((value) => value.fieldId === statusFieldId);
 
   return {
     attendanceRecordId: item.recordId,
+    ...(item.extraValues ? { contextValues: readContextValues(item.extraValues, undefined, contextFields) } : {}),
     person: item.subject,
     statusLabel: status?.label ?? null,
     statusOptionId: status?.optionId ?? null,
@@ -122,6 +127,7 @@ export function stateUpdateConflictToAttendanceRecord(
   record: CachedStateUpdateRecord,
   statusFieldId: string,
   observationFieldId?: string,
+  contextFields?: AttendanceContextField[],
 ): CachedAttendanceRecord {
   const status = record.stateValues.find((value) => value.fieldId === statusFieldId);
   const remoteStatus = record.conflictRemoteStateValues?.find((value) => value.fieldId === statusFieldId);
@@ -137,7 +143,7 @@ export function stateUpdateConflictToAttendanceRecord(
     localRecordId: record.localRecordId,
     observation: readObservation(record.extraValues, observationFieldId),
     ...workflowWriteMetadata(record),
-    contextValues: record.extraValues,
+    contextValues: record.extraValues && Object.fromEntries(Object.entries(record.extraValues).map(([fieldId, value]) => [fieldId, readAttendanceContextValue(contextFields?.find(field => field.id === fieldId), value) ?? null])),
     person: record.subject,
     statusLabel: status?.label ?? null,
     statusOptionId: status?.optionId ?? null,
@@ -157,7 +163,7 @@ function readObservation(extraValues: Record<string, EntityRecordValue> | undefi
   return typeof value === "string" ? value : null;
 }
 
-function readContextValues(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string) {
+function readContextValues(extraValues: Record<string, EntityRecordValue> | undefined, observationFieldId?: string, fields?: AttendanceContextField[]) {
   if (!extraValues) {
     return undefined;
   }
@@ -167,8 +173,9 @@ function readContextValues(extraValues: Record<string, EntityRecordValue> | unde
     .filter(([, value]) =>
       value === null ||
       typeof value === "string" ||
+      Array.isArray(value) ||
       (Boolean(value) && typeof value === "object" && !Array.isArray(value) && ("optionId" in value || "id" in value)),
-    )) as AttendanceContextValues;
+    ).map(([fieldId, value]) => [fieldId, readAttendanceContextValue(fields?.find(field => field.id === fieldId), value)])) as AttendanceContextValues;
 
   return Object.keys(contextValues).length > 0 ? contextValues : undefined;
 }

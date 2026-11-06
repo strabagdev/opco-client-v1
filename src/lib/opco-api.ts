@@ -609,7 +609,8 @@ export type AttendanceContextField = {
   config: EntityField["config"];
 });
 
-export type AttendanceContextValues = Record<string, { label: string; optionId: string } | { id: string; displayName?: string } | string | null>;
+// Read DTOs retain historical relation arrays until field metadata can interpret them.
+export type AttendanceContextValues = Record<string, { label: string; optionId: string } | { id: string; displayName?: string } | string | null | unknown[]>;
 
 export type AttendanceItem = {
   attendance: {

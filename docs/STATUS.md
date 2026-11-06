@@ -3645,3 +3645,13 @@ Core→Client, política inicialmente pausada, configuración por editor y activ
 Rollback sólo compatible; no borrar outbox ni datos. Evidencia/inventarios y límites detallados en
 backups/workflow-write-guards/2026-11-04/REVIEW.md. Los cuatro fallos históricos ajenos quedan separados;
 no suite completa ni nueva acreditación de Safari/OPFS/productivo.402 exclusiones y candidato previo intactos.
+
+
+## Cardinalidad RELATION — candidato local 05-11-2026
+
+Core/editor y Client preparados localmente con kind canónico ONE/MANY; checkbox `multiple` derivado/bloqueado y guardas de creación/edición/reducción. Históricos e intenciones conservados sin reparación automática. Inventario READ ONLY 10/20 campos contradictorios; ninguno modificado. Core 450 pruebas (14 PostgreSQL) y Client 130; typecheck/lint/build habituales verificados. Sin nuevo navegador físico, activación, commit/push/deploy ni migraciones. Informe/inventario/parches: backups/relation-cardinality-fix/2026-11-05/. Los 402 pendientes excluidos, V11 y demás trabajos permanecen separados. Véase STATE_UPDATE, Cardinalidad RELATION.
+
+
+### Restauración Attendance / ONE histórico — candidato local 06-11-2026
+
+Corrección incremental sobre relation-cardinality-fix: interpretación de arreglos unitarios por metadata, ID/etiqueta conservados y revisión explícita para valores incompatibles. No se regularizaron los diez campos ni se reescribió outbox; MANY, SELECT, guardas y comandos existentes conservados. Evidencia/parches combinados y límites: backups/attendance-relation-context-restoration/2026-11-06/REVIEW.md. Ver STATE_UPDATE, Restauración. Publicación/activación no autorizadas en esta ejecución; respaldo operativo actualizado pendiente. 402 exclusiones, pendientes ajenos y V11 preservados.

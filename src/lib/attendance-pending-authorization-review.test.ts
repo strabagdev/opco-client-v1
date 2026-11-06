@@ -1,5 +1,5 @@
 import {captureWorkflowWriteCommand,workflowWriteMetadata,type WorkflowWriteContract} from "./workflow-write-contract";
-import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry} from "../renderers/workflows/attendance/attendance-edit-command";
+import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,attendanceEditContextValues,copyAttendanceEntry} from "../renderers/workflows/attendance/attendance-edit-command";
 import {OpcoApiError, OpcoNetworkError} from "./opco-api";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import ts from "typescript";
 import type {OpcoApi} from "./opco-api";
-import {buildOfflineStateValues,stateUpdateIntentsEqual} from "./state-update-offline";
-import { attendanceStateFields } from "./attendance-offline";
-import { attendanceEntryToStateUpdateEntry, attendanceEntryExtraValues } from "../renderers/workflows/attendance/attendance-workflow-logic";
+import {buildOfflineStateValues,stateUpdateIntentsEqual,type OfflineStateUpdatePayload} from "./state-update-offline";
+import { stateUpdateItemToAttendanceItem, stateUpdateConflictToAttendanceRecord, attendanceStateFields } from "./attendance-offline";
+import { attendanceContextFieldsFromPreparedDefinition, attendanceEntryToStateUpdateEntry, attendanceEntryExtraValues } from "../renderers/workflows/attendance/attendance-workflow-logic";
+import { stateUpdateResolutionFeedback } from "../renderers/workflows/state-update/state-update-workflow-logic";
 import { syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 const sqlite = vi.hoisted(() => ({
   openDatabaseAsync: vi.fn()
@@ -215,5 +216,62 @@ describe("opt-in command capability in real Attendance handlers",()=>{
  it("does not silently capture when a known protected experience loses its capability metadata",async()=>{
   const c=rendererContext({localRecordId:"unused"});c.selectedItem={person:{id:"another-person",displayName:"Synthetic"},attendance:null};c.writeContractRequiredRef.current=true;
   const before=await harness.db.getAllAsync("SELECT * FROM pending_operations");await handler("saveStatus",c)({optionId:"present",label:"Present"});expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("revisión explícita"));expect(c.clearPersonFlow).not.toHaveBeenCalled();expect(await harness.db.getAllAsync("SELECT * FROM pending_operations")).toEqual(before);
+ });
+});
+
+describe("historical ONE/true Attendance restoration on real SQLite",()=>{
+ const relationField={id:"related",key:"related",name:"Related",type:"RELATION" as const,required:true,multiple:true,config:{relation:{relationKind:"ONE",targetEntityTypeId:"catalog"}}};
+ const selectField={id:"shift",key:"shift",name:"Shift",type:"SELECT" as const,required:true,options:[{id:"a",value:"FIRST",label:"A",active:true,order:0}]};
+ const config={workflowKey:"attendance" as const,sourceEntityTypeId:"people",targetEntityTypeId:scope.targetEntityTypeId,personFieldId:"subject",dateFieldId:"date",statusFieldId:"status",observationFieldId:"note",contextFieldIds:["related","shift"]};
+ const related={id:"catalog-existing",displayName:"Existing synthetic label",entityTypeId:"catalog"};
+ async function prepare(){
+  await store.upsertAppViewDefinition({...scope,appViewType:"WORKFLOW",workflowKey:"attendance",status:"ready",lastPreparedAt:base,definition:{kind:"state-update",appView:{id:scope.appViewId,name:"Synthetic",slug:"synthetic",type:"WORKFLOW",icon:null,sortOrder:0,config},sourceEntityTypeId:"people",subjectFieldId:"subject",dateFieldId:"date",targetEntityTypeId:scope.targetEntityTypeId,extraFields:[relationField,selectField],stateFields:fields,historyMode:"update-current",uniqueness:"subject-date"}});
+  await store.upsertRemoteRecords({ownerKey:scope.ownerKey,contractId:scope.contractId,entityTypeId:"people",records:[{id:"person",displayName:"Synthetic",values:{},updatedAt:base}]});
+  await store.upsertStateUpdateSnapshot({...scope,historyMode:"update-current",uniqueness:"subject-date",complete:false,latest:[],items:[{subject:{id:"person",displayName:"Synthetic"},current:{recordId:"remote",updatedAt:base,stateValues:[{fieldId:"status",optionId:"training",label:"Training"}],extraValues:{related:[related],shift:"FIRST",note:"Original"}}}]});
+ }
+ async function restore(){
+  const prepared=await store.getAppViewDefinition(scope.ownerKey,scope.contractId,scope.appViewId);
+  if(!prepared || prepared.definition.kind!=="state-update")throw Error("Synthetic metadata missing");
+  expect(prepared.definition.extraFields[0]).toMatchObject({multiple:true,config:{relation:{relationKind:"ONE"}}});
+  const contextFields=attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields,config.contextFieldIds);
+  const rows=await store.searchStateUpdateSubjects({...scope,sourceEntityTypeId:"people",search:""});
+  const selectedItem=stateUpdateItemToAttendanceItem(rows[0],"status","note",contextFields);
+  expect(selectedItem.attendance?.contextValues?.related).toEqual(related);
+  return {contextFields,selectedItem,contextValues:attendanceEditContextValues(contextFields,selectedItem,{related:"remembered-other",shift:"a"})};
+ }
+ it.each([false,true])("restores labels offline, explicitly edits and preserves base/auth on reopen and sync; conflict=%s",async(changed)=>{
+  await prepare();await reopen();const restored=await restore();expect(restored.contextValues).toEqual({related:related.id,shift:"a"});
+  const c=rendererContext({localRecordId:"remote"});Object.assign(c,restored);c.appView.config=config;c.supportsObservation=true;c.observation="Edited synthetic";
+  c.saveEntry=handler("saveEntry",c);await handler("saveStatus",c)({optionId:"training",label:"Training"});
+  const conflict=c.setConflict.mock.calls[0][0];await handler("confirmConflict",{...c,conflict})();
+  const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];
+  expect(before.payload).toMatchObject({overwrite:true,expectedUpdatedAt:base,extraValues:{related:related.id,shift:"FIRST",note:"Edited synthetic"}});
+  await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+  const result=changed?{result:"CONFLICT" as const,subjectRecordId:"person",existing:{recordId:"remote",updatedAt:"2026-11-06T11:00:00.000Z",stateValues:[{fieldId:"status",optionId:"present",label:"Present"}],extraValues:{related:[{...related,id:"remote-related"}],shift:"FIRST",note:"Remote synthetic"}},requested:{stateValues:[{fieldId:"status",optionId:"training",label:"Training"}]}}:{result:"UPDATED" as const,subjectRecordId:"person",recordId:"remote",updatedAt:"2026-11-06T11:00:00.000Z"};
+  const api={saveStateUpdateWorkflow:vi.fn<OpcoApi["saveStateUpdateWorkflow"]>(async()=>({appView:{id:scope.appViewId,name:"Synthetic",slug:"synthetic"},results:[result]}))};
+  await syncPendingStateUpdatesOnce({api,store,ownerKey:scope.ownerKey,token:"synthetic"});
+  expect(api.saveStateUpdateWorkflow.mock.calls[0][3]).toMatchObject({clientRequestId:before.clientRequestId,expectedUpdatedAt:base,overwrite:true,extraValues:(before.payload as OfflineStateUpdatePayload).extraValues});
+  await reopen();if(changed){const conflicts=await store.listStateUpdateConflicts(scope);expect(conflicts).toHaveLength(1);const adapted=stateUpdateConflictToAttendanceRecord(conflicts[0],"status","note",restored.contextFields);expect(adapted.contextValues?.related).toBe(related.id);expect(adapted.expectedUpdatedAt).toBe(base);expect(adapted.conflictRemoteUpdatedAt).toBe("2026-11-06T11:00:00.000Z");const retained=await harness.db.getFirstAsync("SELECT client_request_id,payload_json FROM pending_operations WHERE id=?",before.id);expect(retained.client_request_id).toBe(before.clientRequestId);expect(JSON.parse(retained.payload_json)).toMatchObject({overwrite:true,expectedUpdatedAt:base,extraValues:(before.payload as OfflineStateUpdatePayload).extraValues});
+   const resolution={...c,isOnline:false,resolutionInFlightRef:{current:false},setResolutionFeedback:vi.fn(),stateUpdateResolutionFeedback};
+   await handler("handleUseLocalConflictChange",resolution)(adapted);
+   expect(resolution.setError).toHaveBeenLastCalledWith(null);expect(resolution.setResolutionFeedback).toHaveBeenCalledWith(expect.objectContaining({outcome:"pending"}));
+   const explicit=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];expect(explicit.clientRequestId).not.toBe(before.clientRequestId);expect(explicit.payload).toMatchObject({overwrite:true,expectedUpdatedAt:"2026-11-06T11:00:00.000Z",extraValues:{related:related.id,shift:"FIRST",note:"Edited synthetic"}});await reopen();expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(explicit);
+  }
+  else expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+  expect(await harness.db.getFirstAsync("PRAGMA integrity_check")).toEqual({integrity_check:"ok"});
+ });
+ it("reading and reopening never rewrites an old pending array, its capability, authorization, base or idempotency key",async()=>{
+  await prepare();const writeCommand={version:1 as const,configurationFingerprint:"f".repeat(64),capabilities:["relation-context-v1"] as ["relation-context-v1"]};
+  await store.saveStateUpdateLocally({...input(true),...workflowWriteMetadata({writeCommand}),extraValues:{related:[related.id],shift:"FIRST"}});
+  const before=(await store.listPendingStateUpdateOperations(scope.ownerKey))[0];await reopen();
+  const metadata=attendanceContextFieldsFromPreparedDefinition([relationField,selectField],config.contextFieldIds);
+  const rows=await store.searchStateUpdateSubjects({...scope,sourceEntityTypeId:"people",search:""});
+  expect(stateUpdateItemToAttendanceItem(rows[0],"status","note",metadata).attendance?.contextValues?.related).toBe(related.id);
+  expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0]).toEqual(before);
+  const api={saveStateUpdateWorkflow:vi.fn<OpcoApi["saveStateUpdateWorkflow"]>(async()=>({appView:{id:scope.appViewId,name:"Synthetic",slug:"synthetic"},results:[{result:"UPDATED",subjectRecordId:"person",recordId:"remote",updatedAt:"2026-11-06T11:00:00.000Z",writeCommand}]}))};
+  await syncPendingStateUpdatesOnce({api,store,ownerKey:scope.ownerKey,token:"synthetic"});
+  expect(api.saveStateUpdateWorkflow.mock.calls[0][3]).toMatchObject({clientRequestId:before.clientRequestId,expectedUpdatedAt:base,overwrite:true,writeCommand,extraValues:{related:[related.id],shift:"FIRST"}});
+  expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);await reopen();expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+  expect(await harness.db.getFirstAsync("PRAGMA integrity_check")).toEqual({integrity_check:"ok"});
  });
 });

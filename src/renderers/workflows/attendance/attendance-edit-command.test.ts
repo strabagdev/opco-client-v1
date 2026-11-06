@@ -61,3 +61,19 @@ describe('actual subject read and edit protection',()=>{
  it('existing contexts win over remembered defaults, including canonical values; unavailable choices are retained for validation',()=>{const c=fixture();expect(attendanceEditContextValues(fields,c.selectedItem,{shift:'b'})).toEqual({shift:'a'});c.selectedItem.attendance.contextValues.shift='FIRST';expect(attendanceEditContextValues(fields,c.selectedItem,{shift:'b'})).toEqual({shift:'a'});c.selectedItem.attendance.contextValues.shift='retired';expect(attendanceEditContextValues(fields,c.selectedItem,{})).toEqual({shift:'retired'});});
  it.each(['observation','context','state'])('offline change of %s requires replacement rather than comparing only state',kind=>{const c=fixture(),entry={personRecordId:'person',statusOptionId:kind==='state'?'other':'present',contextValues:{shift:kind==='context'?'b':'a'},observation:kind==='observation'?'New':'Original'};expect(attendanceContentChanged(config,fields,c.selectedItem,entry)).toBe(true);expect(attendanceContentChanged(config,fields,c.selectedItem,{...entry,statusOptionId:'present',contextValues:{shift:'a'},observation:'Original'})).toBe(false);});
 });
+
+
+describe('historical relation restoration in actual subject-selection handler',()=>{
+ const relation={id:'related',name:'Synthetic relation',type:'RELATION' as const,required:false,config:{relation:{relationKind:'ONE',targetEntityTypeId:'catalog'}}};
+ it('offline selection hydrates a singleton array by metadata and retains the stored label',async()=>{
+  const base=fixture();const c={...base,isOnline:false,contextFields:[relation],contextValues:{related:'remembered-other'},selectedItem:{...base.selectedItem,attendance:{...base.selectedItem.attendance,contextValues:{related:[{id:'stored-related',displayName:'Synthetic stored label'}]}}}};
+  await actual('selectPerson',c)(c.selectedItem);
+  expect(c.setContextValues).toHaveBeenCalledWith({related:'stored-related'});expect(c.setSelectedItem).toHaveBeenCalledWith(c.selectedItem);expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();expect(c.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();
+  expect(c.selectedItem.attendance.contextValues.related).toEqual([{id:'stored-related',displayName:'Synthetic stored label'}]);
+ });
+ it('incompatible ONE values remain recoverable and show review instead of becoming an empty optional context',async()=>{
+  const c={...fixture(),isOnline:false,contextFields:[relation],contextValues:{related:'remembered-other'}};const item={...c.selectedItem,attendance:{...c.selectedItem.attendance,contextValues:{related:['first','second']}}};
+  await actual('selectPerson',c)(item);
+  expect(c.setError).toHaveBeenCalledWith(expect.stringContaining('relación simple válida'));expect(c.setSelectedItem).not.toHaveBeenCalled();expect(c.setContextValues).not.toHaveBeenCalled();expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();expect(c.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();expect(item.attendance.contextValues.related).toEqual(['first','second']);
+ });
+});
