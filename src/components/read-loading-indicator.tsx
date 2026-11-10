@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { typography } from "../theme/tokens";
+import { colors } from "../theme/paint";
 import { AccessibilityInfo, StyleSheet, Text, View } from "react-native";
 
 // Only the shell animates reads. The initial body and PANEL module states are static.
@@ -24,5 +26,5 @@ export function useReducedMotion() {
 const styles = StyleSheet.create({
   container: { justifyContent: "center", minHeight: 64 },
   compact: { minHeight: 28 },
-  label: { color: "#587078", fontSize: 13, lineHeight: 18 },
+  label: { color: colors.textSecondary, ...typography.meta },
 });

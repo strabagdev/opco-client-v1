@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { StyleSheet, Text, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
@@ -44,23 +45,23 @@ const styles = StyleSheet.create({
   },
   icon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: colors.selection,
     borderRadius: 8,
     height: 42,
     justifyContent: "center",
     width: 42,
   },
   message: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 16,
     lineHeight: 22,
   },
   meta: {
-    color: "#587078",
+    color: colors.textSecondary,
     marginTop: 3,
   },
   title: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 26,
     fontWeight: "800",
   },

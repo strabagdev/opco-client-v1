@@ -1,12 +1,13 @@
+import { colors } from "../theme/paint";
 import { StyleSheet, type TextStyle, type ViewStyle } from "react-native";
 
 // Scoped presentation tokens, never a global/native/mobile theme override.
 export const desktopPalette = {
-  background: "#F4F6F8", surface: "#FFFFFF", sidebar: "#18263A",
-  primary: "#315DA8", selection: "#E8EFFA", text: "#202B3A",
-  muted: "#536174", border: "#DCE2EA", controlBorder: "#7B879A",
-  sidebarText: "#E5EAF2", organization: "#B7C6DC", hover: "#22334D",
-  active: "#263F64", activeMark: "#90B8FF", sidebarFocus: "#A8C7FF",
+  background: colors.canvas, surface: colors.surface, sidebar: colors.nav,
+  primary: colors.primary, selection: colors.selection, text: colors.text,
+  muted: colors.textSecondary, border: colors.border, controlBorder: colors.controlBorder,
+  sidebarText: colors.onNav, organization: colors.navSecondary, hover: colors.navHover,
+  active: colors.navSelected, activeMark: colors.navMark, sidebarFocus: colors.focusOnNavigation,
 } as const;
 
 const oldColors: Record<string, string> = {

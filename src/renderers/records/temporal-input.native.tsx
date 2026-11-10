@@ -1,5 +1,8 @@
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useState } from "react";
+import { metrics, space, typography } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
+import { controlFrame } from "../../theme/control-presentation";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
@@ -78,8 +81,8 @@ export function DateTimeFieldInput({ onChange, required, value, label, disabled 
         <TimeFieldInput label={label ? `${label}: hora` : "Hora"} disabled={disabled} onChange={(nextValue) => updatePart("time", nextValue)} required={required} value={time} />
       </View>
       {!required && (date || time || value) ? (
-        <Pressable accessibilityRole="button" accessibilityLabel={`Limpiar ${label ?? "fecha y hora"}`} disabled={disabled} onPress={clear} style={styles.clearButton}>
-          <Text style={styles.clearText}>Limpiar</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Limpiar ${label ?? "fecha y hora"}`} disabled={disabled} onPress={clear} style={[styles.clearButton, disabled && styles.disabled]}>
+          <Text style={[styles.clearText, disabled && styles.disabledText]}>Limpiar</Text>
         </Pressable>
       ) : null}
     </View>
@@ -137,10 +140,10 @@ function NativePickerInput({
   if (Platform.OS === "ios") {
     return (
       <View style={styles.nativeRow}>
-        <View style={[styles.iosPicker, disabled && { opacity: 0.6 }]}>{picker}</View>
+        <View style={[styles.iosPicker, disabled && styles.disabled]}>{picker}</View>
         {!required && displayValue !== "Seleccionar fecha" && displayValue !== "Seleccionar hora" ? (
-          <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
-            <Text style={styles.clearText}>Limpiar</Text>
+          <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={[styles.clearButton, disabled && styles.disabled]}>
+            <Text style={[styles.clearText, disabled && styles.disabledText]}>Limpiar</Text>
           </Pressable>
         ) : null}
       </View>
@@ -149,12 +152,12 @@ function NativePickerInput({
 
   return (
     <View style={styles.nativeRow}>
-      <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={() => setShowAndroidPicker(true)} style={[styles.nativeButton, disabled && { opacity: 0.6 }]}>
-        <Text style={styles.nativeButtonText}>{displayValue}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={() => setShowAndroidPicker(true)} style={[styles.nativeButton, disabled && styles.disabled]}>
+        <Text style={[styles.nativeButtonText, disabled && styles.disabledText]}>{displayValue}</Text>
       </Pressable>
       {!required && displayValue !== "Seleccionar fecha" && displayValue !== "Seleccionar hora" ? (
-        <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={styles.clearButton}>
-          <Text style={styles.clearText}>Limpiar</Text>
+        <Pressable disabled={disabled} accessibilityRole="button" accessibilityLabel={clearLabel} onPress={onClear} style={[styles.clearButton, disabled && styles.disabled]}>
+          <Text style={[styles.clearText, disabled && styles.disabledText]}>Limpiar</Text>
         </Pressable>
       ) : null}
       {showAndroidPicker ? picker : null}
@@ -177,56 +180,13 @@ function formatHumanDate(value: string) {
 }
 
 const styles = StyleSheet.create({
-  clearButton: {
-    alignItems: "center",
-    alignSelf: "flex-start",
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 42,
-    paddingHorizontal: 12,
-  },
-  clearText: {
-    color: "#17363c",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  dateTimeGroup: {
-    gap: 10,
-  },
-  dateTimePart: {
-    gap: 6,
-  },
-  iosPicker: {
-    justifyContent: "center",
-    minHeight: 44,
-  },
-  nativeButton: {
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 46,
-    minWidth: 180,
-    paddingHorizontal: 12,
-  },
-  nativeButtonText: {
-    color: "#17363c",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  nativeRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    minHeight: 46,
-  },
-  subLabel: {
-    color: "#587078",
-    fontSize: 13,
-    fontWeight: "800",
-    textTransform: "uppercase",
-  },
+  clearButton: { ...controlFrame, alignItems: "center", alignSelf: "flex-start", borderColor: colors.controlBorder, backgroundColor: colors.surface, justifyContent: "center" },
+  clearText: { color: colors.onSecondary, ...typography.label },
+  dateTimeGroup: { gap: space.md }, dateTimePart: { gap: space.sm },
+  disabled: { backgroundColor: colors.disabled, borderColor: colors.disabledBorder }, disabledText: { color: colors.onDisabled },
+  iosPicker: { justifyContent: "center", minHeight: metrics.controlMinHeight },
+  nativeButton: { ...controlFrame, borderColor: colors.controlBorder, backgroundColor: colors.surface, justifyContent: "center", minWidth: 180 },
+  nativeButtonText: { color: colors.text, ...typography.control },
+  nativeRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: space.sm, minHeight: metrics.controlMinHeight },
+  subLabel: { color: colors.textSecondary, ...typography.meta, fontWeight: "600", textTransform: "uppercase" },
 });

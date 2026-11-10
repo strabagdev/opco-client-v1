@@ -1,5 +1,7 @@
+import { metrics, type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
 import { CompactSelect } from "@/components/compact-select";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   LayoutChangeEvent,
   Platform,
@@ -13,6 +15,10 @@ import {
 } from "react-native";
 
 import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { FieldFrame } from "../../components/field-frame";
+import { useFieldAccessibility } from "../../components/field-accessibility";
+import { FormActions } from "../../components/form-actions";
+import { panelReadRows } from "./panel-read-presentation";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID, PanelLocalReadError, PanelSnapshotMissingError } from "@/lib/offline-panels";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
@@ -455,6 +461,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
         {moduleLayoutPlan.modules.map((module) => (
           <View
             key={module.id}
+            testID={`panel-module-${module.id}`}
             style={[
               styles.module,
               moduleLayoutPlan.moduleStyles[module.id],
@@ -462,6 +469,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
           >
             <PanelModule
               module={module}
+              frameHeight={Number(moduleLayoutPlan.moduleStyles[module.id].height ?? moduleLayoutPlan.moduleStyles[module.id].minHeight) - 12}
               onNextPage={() => setPages((current) => ({ ...current, [module.datasetId]: (current[module.datasetId] ?? 1) + 1 }))}
               onPreviousPage={() => setPages((current) => ({ ...current, [module.datasetId]: Math.max(1, (current[module.datasetId] ?? 1) - 1) }))}
               onRetry={() => setRetryVersion((version) => version + 1)}
@@ -504,7 +512,7 @@ function PanelFilters({
   values: Record<string, string>;
 }) {
   return (
-    <View style={styles.filters}>
+    <View testID="panel-filters" style={styles.filters}>
       {metadataError ? <Text style={styles.stateText}>{metadataError}</Text> : null}
       {filters.map((filter) => {
         const field = fields[filter.id];
@@ -513,13 +521,10 @@ function PanelFilters({
         const target = getRelationTargetEntityTypeId(field);
         return <View key={filter.id} style={styles.filterControl}>
           {field.type === "BOOLEAN" ? (
-            <View style={styles.booleanFilter}>
-              <Text style={styles.filterLabel}>{filter.label || field.name}</Text>
-              <CompactSelect label={filter.label || field.name} value={value} required={filter.required}
-                options={[{ label: "Sí", value: "true" }, { label: "No", value: "false" }]}
-                onChange={next => onChange(filter.id, String(next))} />
-            </View>
+            <PanelBooleanFilter label={filter.label || field.name} value={value} required={filter.required}
+              onChange={next => onChange(filter.id, String(next))} />
           ) : <RecordFieldInput
+            presentation="form"
             field={{ ...field, required: filter.required ?? false }}
             onChange={(next) => onChange(filter.id, typeof next === "string" ? next : "")}
             onRelationSearch={target ? (search) => onRelationSearch(target, search) : undefined}
@@ -537,8 +542,68 @@ function PanelFilters({
   );
 }
 
+function PanelBooleanFilter({ label, value, required, onChange }: { label: string; value: string; required?: boolean; onChange(value: string): void }) {
+  const a11y = useFieldAccessibility(label, undefined, required);
+  return <FieldFrame label={label} labelId={a11y.labelId} errorId={a11y.errorId} required={required}>
+    <CompactSelect {...a11y.accessibility} label={label} value={value} required={required}
+      options={[{ label: "Sí", value: "true" }, { label: "No", value: "false" }]}
+      onChange={onChange} />
+  </FieldFrame>;
+}
+
+function PanelSearchField({ search, onSearch }: { search: string; onSearch(value: string): void }) {
+  const a11y = useFieldAccessibility("Buscar registros");
+  return <View style={tableStyles.search}>
+    <FieldFrame label="Buscar registros" labelId={a11y.labelId} errorId={a11y.errorId}>
+      <TextInput {...a11y.controlProps} autoCapitalize="none" clearButtonMode="while-editing"
+        onChangeText={onSearch} placeholder="Buscar registros" returnKeyType="search"
+        style={[stableTextInputStyle, tableStyles.searchInput]} value={search} />
+    </FieldFrame>
+  </View>;
+}
+
+function PanelTableHeading({ title, fromCache }: { title: string; fromCache: boolean }) {
+  const [width, setWidth] = useState(0);
+  return <View onLayout={event => setWidth(Math.floor(event.nativeEvent.layout.width))}
+    style={[styles.moduleHeader, tableStyles.moduleHeader]}>
+    <Text style={[styles.moduleTitle, width > 0 && width < 280 && tableStyles.narrowTitle]}>{title}</Text>
+    {fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
+  </View>;
+}
+
+function PanelTablePagination({ page, previousDisabled, nextDisabled, onPreviousPage, onNextPage }: {
+  page: number; previousDisabled: boolean; nextDisabled: boolean;
+  onPreviousPage(): void; onNextPage(): void;
+}) {
+  const [width, setWidth] = useState(0);
+  const compact = width > 0 && width < 340;
+  return <View testID="panel-table-pagination" onLayout={event => setWidth(Math.floor(event.nativeEvent.layout.width))}
+    style={[tableStyles.pagination, Platform.OS === "web" && ({ position: "sticky", bottom: 0 } as never)]}>
+    <FormActions>
+      <Pressable accessibilityRole="button" accessibilityLabel="Anterior" accessibilityState={{ disabled: previousDisabled }}
+        disabled={previousDisabled} onPress={onPreviousPage}
+        style={[tableStyles.pageButton, compact && tableStyles.compactPageButton, previousDisabled && styles.disabledButton]}>
+        <Text style={tableStyles.pageButtonText}>{compact ? "‹" : "Anterior"}</Text>
+      </Pressable>
+      <Text accessibilityLabel={`Página ${page}`} style={[styles.paginationText, tableStyles.pageText]}> {compact ? page : `Página ${page}`} </Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Siguiente" accessibilityState={{ disabled: nextDisabled }}
+        disabled={nextDisabled} onPress={onNextPage}
+        style={[tableStyles.pageButton, compact && tableStyles.compactPageButton, nextDisabled && styles.disabledButton]}>
+        <Text style={tableStyles.pageButtonText}>{compact ? "›" : "Siguiente"}</Text>
+      </Pressable>
+    </FormActions>
+  </View>;
+}
+
+function PanelModuleFrame({ isTable, isKpi, frameHeight, children }: { isTable: boolean; isKpi: boolean; frameHeight?: number; children: ReactNode }) {
+  return isTable ? <ScrollView testID="panel-table-viewport" nestedScrollEnabled showsVerticalScrollIndicator
+    style={[styles.moduleContent, tableStyles.moduleViewport, { height: frameHeight, maxHeight: frameHeight, flexBasis: "auto", flexGrow: 0 }]} contentContainerStyle={tableStyles.moduleFlow}>{children}</ScrollView>
+    : <View style={[styles.moduleContent, isKpi ? styles.kpiModuleContent : null]}>{children}</View>;
+}
+
 function PanelModule({
   currentQueryKey,
+  frameHeight,
   module,
   onNextPage,
   onPreviousPage,
@@ -549,6 +614,8 @@ function PanelModule({
   state,
 }: {
   currentQueryKey: string;
+  /** Existing configured module height minus its unchanged 6px outer padding per side. */
+  frameHeight?: number;
   module: PanelModuleConfig;
   onNextPage(): void;
   onPreviousPage(): void;
@@ -568,22 +635,16 @@ function PanelModule({
   const moduleTitle = module.title ?? module.id;
 
   return (
-    <View style={[styles.moduleContent, isKpi ? styles.kpiModuleContent : null]}>
-      <View style={[styles.moduleHeader, isKpi ? styles.kpiModuleHeader : null]}>
-        <Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>
-        {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
-      </View>
+    <PanelModuleFrame isTable={isTable} isKpi={isKpi} frameHeight={frameHeight}>
+      {isTable ? <PanelTableHeading title={moduleTitle} fromCache={Boolean(currentState?.fromCache)} /> : (
+        <View style={[styles.moduleHeader, isKpi ? styles.kpiModuleHeader : null]}>
+          <Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>
+          {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
+        </View>
+      )}
 
       {tableConfig?.searchable ? (
-        <TextInput
-          autoCapitalize="none"
-          clearButtonMode="while-editing"
-          onChangeText={onSearch}
-          placeholder="Buscar registros"
-          returnKeyType="search"
-          style={[stableTextInputStyle, styles.searchInput]}
-          value={search}
-        />
+        <PanelSearchField search={search} onSearch={onSearch} />
       ) : null}
 
       {!isTable && !isKpi ? (
@@ -618,23 +679,21 @@ function PanelModule({
         <PanelState message="No hay datos para mostrar." />
           ) : (
             <>
-          <PanelTable table={table} />
+          <PanelTable table={table} dataset={dataset} module={module} />
           {tableConfig?.paginated !== false ? (
-            <View style={styles.pagination}>
-              <Pressable accessibilityRole="button" disabled={page <= 1} onPress={onPreviousPage} style={[styles.actionButton, page <= 1 ? styles.disabledButton : null]}>
-                <Text style={styles.actionButtonText}>Anterior</Text>
-              </Pressable>
-              <Text style={styles.paginationText}>Página {dataset.pagination.page}</Text>
-              <Pressable accessibilityRole="button" disabled={!dataset.pagination.hasMore} onPress={onNextPage} style={[styles.actionButton, !dataset.pagination.hasMore ? styles.disabledButton : null]}>
-                <Text style={styles.actionButtonText}>Siguiente</Text>
-              </Pressable>
-            </View>
+            <PanelTablePagination
+              page={dataset.pagination.page}
+              previousDisabled={page <= 1}
+              nextDisabled={!dataset.pagination.hasMore}
+              onPreviousPage={onPreviousPage}
+              onNextPage={onNextPage}
+            />
           ) : null}
             </>
           )}
         </>
       )}
-    </View>
+    </PanelModuleFrame>
   );
 }
 
@@ -733,64 +792,34 @@ function PanelKpi({
   );
 }
 
-function PanelTable({ table }: { table: ReturnType<typeof buildPanelTableModel> & {} }) {
-  return (
-    <ScrollView
-      nestedScrollEnabled
-      showsVerticalScrollIndicator
-      style={styles.tableViewport}
-    >
-      <ScrollView
-        contentContainerStyle={styles.horizontalScrollContent}
-        horizontal
-        showsHorizontalScrollIndicator
-        style={styles.horizontalScroll}
-      >
-        <View style={[styles.table, { minWidth: table.minWidth }]}>
-          <View accessibilityRole="header" style={styles.tableHeaderRow}>
-            {table.columns.map((column) => (
-              <Text
-                accessibilityLabel={column.name}
-                key={column.fieldId}
-                numberOfLines={1}
-                style={[
-                  styles.tableCell,
-                  styles.tableHeaderText,
-                  { flexGrow: column.weight, minWidth: column.minWidth },
-                ]}
-              >
-                {column.name}
-              </Text>
-            ))}
-          </View>
-          {table.rows.map((row) => (
-            <View
-              accessibilityLabel={row.values.map((value, index) => `${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`).join(". ")}
-              key={row.id}
-              style={styles.tableRow}
-            >
-              {row.values.map((value, index) => (
-                <Text
-                  accessibilityLabel={`${table.columns[index]?.name ?? "Campo"}: ${value || "-"}`}
-                  key={`${row.id}-${table.columns[index]?.fieldId ?? index}`}
-                  numberOfLines={1}
-                  style={[
-                    styles.tableCell,
-                    {
-                      flexGrow: table.columns[index]?.weight ?? 1,
-                      minWidth: table.columns[index]?.minWidth ?? 144,
-                    },
-                  ]}
-                >
-                  {value || "-"}
-                </Text>
-              ))}
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-    </ScrollView>
-  );
+function PanelTable({ table, module, dataset }: { table: NonNullable<ReturnType<typeof buildPanelTableModel>>; module: PanelModuleConfig; dataset: NonNullable<DatasetState["panel"]>["datasets"][number] }) {
+  const [width, setWidth] = useState(0);
+  const compact = width < table.minWidth;
+  const rows = panelReadRows(module, dataset, table);
+  return <View testID="panel-table-content" style={tableStyles.table} onLayout={event => {
+    const next = Math.floor(event.nativeEvent.layout.width);
+    setWidth(current => current === next ? current : next);
+  }}>
+    <View accessibilityRole="header" style={[tableStyles.headerRow, compact && tableStyles.hidden]}>
+      {table.columns.map(column => <Text key={column.fieldId} style={[tableStyles.headerCell,
+        { flexGrow: column.weight, minWidth: column.minWidth }]}>{column.name}</Text>)}
+    </View>
+    {rows.map(row => <View key={row.id} style={[tableStyles.row, compact && tableStyles.compactRow]}>
+      {row.cells.map((values, index) => {
+        const column = table.columns[index];
+        const fullWidth = width < 600 || values.length > 1 || values.some(value => value.text.length > 120)
+          || dataset.schema.fields.find(field => field.id === column.fieldId)?.type === "TEXTAREA";
+        return <View key={column.fieldId} style={[tableStyles.cell, compact ? [tableStyles.compactCell,
+          { width: fullWidth ? "100%" : "50%", flexBasis: fullWidth ? "100%" : "50%" }] : { flexGrow: column.weight, minWidth: column.minWidth }]}>
+          <Text style={[tableStyles.cellLabel, !compact && tableStyles.hidden]}>{column.name}</Text>
+          {values.map((value, item) => <View key={item} style={tableStyles.valueGroup}>
+            <Text selectable accessibilityLabel={`${column.name}: ${value.text}`} style={[tableStyles.value, value.status !== "value" && tableStyles.unavailable]}>{value.text}</Text>
+            {value.detail ? <Text selectable style={tableStyles.trace}>{value.detail}</Text> : null}
+          </View>)}
+        </View>;
+      })}
+    </View>)}
+  </View>;
 }
 
 function PanelState({ message }: { message: string }) {
@@ -807,22 +836,23 @@ function configuredPageSize(appView: PanelAppView, panel: PanelResponse | null, 
   return configured && configured > 0 ? configured : defaultPageSizeForDataset(panel, datasetId);
 }
 
-const styles = StyleSheet.create({
+export function createPanelStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   actionButton: {
     alignItems: "center",
-    backgroundColor: "#111827",
+    backgroundColor: p.primary,
     borderRadius: 6,
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     justifyContent: "center",
     paddingHorizontal: 14,
   },
   actionButtonText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontSize: 14,
     fontWeight: "700",
   },
   cacheLabel: {
-    color: "#92400e",
+    color: p.warning,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -839,12 +869,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   filterControl: { flexBasis: 220, flexGrow: 1, minWidth: 200 },
-  filterLabel: { color: "#374151", fontSize: 14, fontWeight: "600" },
-  filterClear: { color: "#047857", fontSize: 13, paddingVertical: 6 },
-  filterRequired: { color: "#b45309", fontSize: 12 },
+  filterLabel: { color: p.textSecondary, fontSize: 14, fontWeight: "600" },
+  filterClear: { color: p.onSecondary, fontSize: 13, paddingVertical: 6 },
+  filterRequired: { color: p.warning, fontSize: 12 },
   booleanFilter: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  filterChoice: { borderColor: "#d1d5db", borderRadius: 4, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8 },
-  filterChoiceSelected: { backgroundColor: "#d1fae5", borderColor: "#047857" },
+  filterChoice: { borderColor: p.controlBorder, borderRadius: 4, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8 },
+  filterChoiceSelected: { backgroundColor: p.selection, borderColor: p.selectionBorder },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -874,7 +904,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   kpiMeta: {
-    color: "#6b7280",
+    color: p.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     textAlign: "center",
@@ -912,7 +942,7 @@ const styles = StyleSheet.create({
     minWidth: "100%",
   },
   kpiValue: {
-    color: "#111827",
+    color: p.text,
     flexShrink: 0,
     fontWeight: "800",
     textAlign: "center",
@@ -925,7 +955,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   moduleContent: {
-    borderColor: "#d1d5db",
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
@@ -938,7 +968,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   moduleTitle: {
-    color: "#111827",
+    color: p.text,
     flexShrink: 1,
     fontSize: 16,
     fontWeight: "700",
@@ -952,15 +982,15 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   paginationText: {
-    color: "#374151",
+    color: p.text,
     fontSize: 13,
   },
-  searchInput: {
+  searchInput: { color: p.text,
     marginBottom: 10,
   },
   stateBox: {
     alignItems: "center",
-    borderColor: "#e5e7eb",
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -969,25 +999,25 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   stateText: {
-    color: "#4b5563",
+    color: p.textSecondary,
     fontSize: 14,
     textAlign: "center",
   },
   subtitle: {
-    color: "#6b7280",
+    color: p.textSecondary,
     fontSize: 13,
   },
   table: {
-    borderColor: "#d1d5db",
+    borderColor: p.border,
     borderLeftWidth: 1,
     borderTopWidth: 1,
     width: "100%",
   },
   tableCell: {
     borderBottomWidth: 1,
-    borderColor: "#d1d5db",
+    borderColor: p.border,
     borderRightWidth: 1,
-    color: "#111827",
+    color: p.text,
     flexBasis: 0,
     flexShrink: 1,
     fontSize: 13,
@@ -996,7 +1026,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   tableHeaderRow: {
-    backgroundColor: "#f3f4f6",
+    backgroundColor: p.surfaceSubtle,
     flexDirection: "row",
   },
   tableHeaderText: {
@@ -1010,8 +1040,40 @@ const styles = StyleSheet.create({
     minHeight: 84,
   },
   title: {
-    color: "#111827",
+    color: p.text,
     fontSize: 24,
     fontWeight: "800",
   },
 });
+}
+const styles = createPanelStyles();
+
+export function createPanelTableStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  moduleViewport: { padding: 0, minHeight: 0, minWidth: 0, backgroundColor: p.surface },
+  moduleFlow: { padding: 12, gap: 12, flexGrow: 1, minWidth: 0 },
+  moduleHeader: { marginBottom: 0, gap: 6 },
+  narrowTitle: { fontSize: 14, lineHeight: 18 },
+  search: { maxWidth: 560, width: "100%", minWidth: 0 },
+  searchInput: { color: p.text,  backgroundColor: p.surface, borderColor: p.controlBorder, borderWidth: 1, borderRadius: 8, minHeight: 44, paddingHorizontal: 12, fontSize: 16, minWidth: 0 },
+  pageText: { alignSelf: "center" },
+  pagination: { backgroundColor: p.surface, borderTopWidth: 1, borderColor: p.border, paddingVertical: 6, zIndex: 1, minWidth: 0 },
+  pageButton: { minWidth: 112, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: p.controlBorder, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: p.surface },
+  compactPageButton: { minWidth: 44, paddingHorizontal: 8 },
+  pageButtonText: { color: p.primary, fontSize: 15, lineHeight: 22, fontWeight: "700" },
+  table: { width: "100%", minWidth: 0, borderWidth: 1, borderColor: p.border, borderRadius: 8, overflow: "hidden" },
+  headerRow: { flexDirection: "row", backgroundColor: p.surfaceSubtle },
+  headerCell: { flexBasis: 0, flexShrink: 1, padding: 10, color: p.textSecondary, fontSize: 13, fontWeight: "700" },
+  row: { flexDirection: "row", borderTopWidth: 1, borderColor: p.border, minWidth: 0 },
+  compactRow: { flexDirection: "row", flexWrap: "wrap", paddingVertical: 4 },
+  cell: { flexBasis: 0, flexShrink: 1, padding: 10, gap: 4, minWidth: 0 },
+  compactCell: { flexGrow: 0, flexShrink: 0, paddingVertical: 6 },
+  cellLabel: { color: p.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  valueGroup: { gap: 2, minWidth: 0 },
+  value: { color: p.text, fontSize: 14, lineHeight: 20, minWidth: 0 },
+  unavailable: { color: p.textSecondary },
+  trace: { color: p.textSecondary, fontSize: 12, lineHeight: 18 },
+  hidden: { display: "none" },
+});
+}
+const tableStyles = createPanelTableStyles();

@@ -1,3 +1,6 @@
+import { actionSurface } from "../../theme/operational-presentation";
+import { type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -226,7 +229,7 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
       {isLoading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error && !record ? (
-        <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>
+        <Pressable onPress={() => setRetryCount((count) => count + 1)} style={interaction => [styles.primaryButton, actionSurface(true, interaction, Boolean(false))]}>
           <Text style={styles.primaryText}>Reintentar</Text>
         </Pressable>
       ) : null}
@@ -261,11 +264,11 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
 
       {record?.syncStatus === "conflict" ? (
         <View style={styles.actions}>
-          <Pressable disabled={isResolving} onPress={useLocalVersion} style={styles.primaryButton}>
-            {isResolving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>Usar mi versión</Text>}
+          <Pressable disabled={isResolving} onPress={useLocalVersion} style={interaction => [styles.primaryButton, actionSurface(true, interaction, Boolean(isResolving))]}>
+            {isResolving ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={[styles.primaryText, Boolean(isResolving) && { color: colors.onDisabled }]}>Usar mi versión</Text>}
           </Pressable>
-          <Pressable disabled={isResolving} onPress={confirmUseRemoteVersion} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>Usar versión de Opco</Text>
+          <Pressable disabled={isResolving} onPress={confirmUseRemoteVersion} style={interaction => [styles.secondaryButton, actionSurface(false, interaction, Boolean(isResolving))]}>
+            <Text style={[styles.secondaryText, Boolean(isResolving) && { color: colors.onDisabled }]}>Usar versión de Opco</Text>
           </Pressable>
         </View>
       ) : null}
@@ -273,7 +276,8 @@ export function RecordConflictScreen({ appView, recordId }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+export function createRecordConflictStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   actions: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -285,15 +289,15 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   diffCard: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
     padding: 14,
   },
   diffLabel: {
-    color: "#17363c",
+    color: p.textSecondary,
     fontSize: 16,
     fontWeight: "800",
   },
@@ -301,45 +305,45 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   empty: {
-    color: "#587078",
+    color: p.text,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   header: {
     gap: 4,
   },
   kicker: {
-    color: "#587078",
+    color: p.text,
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   primaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   secondaryButton: {
     alignItems: "center",
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
@@ -347,16 +351,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   secondaryText: {
-    color: "#17363c",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   technicalText: {
-    color: "#587078",
+    color: p.text,
     fontSize: 12,
     lineHeight: 17,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 26,
     fontWeight: "800",
   },
@@ -372,13 +376,15 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   versionTitle: {
-    color: "#587078",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
     textTransform: "uppercase",
   },
   versionValue: {
-    color: "#17363c",
+    color: p.text,
     lineHeight: 20,
   },
 });
+}
+const styles = createRecordConflictStyles();

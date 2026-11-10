@@ -1,3 +1,10 @@
+import { actionSurface } from "../../../theme/operational-presentation";
+import { metrics, type ThemeColors } from "../../../theme/tokens";
+import { colors } from "../../../theme/paint";
+import { attendanceConfirmationRows, type ConfirmationRow } from "./attendance-confirmation";
+import { useFieldAccessibility } from "../../../components/field-accessibility";
+import { FormLayout, FormGrid } from "../../../components/form-layout";
+import { FieldFrame } from "../../../components/field-frame";
 import {captureWorkflowWriteCommand,workflowWriteMetadata,type WorkflowWriteContract} from "../../../lib/workflow-write-contract";
 import { useAttendanceContextRelations } from "./use-context-relations";
 import { RecordFieldInput } from "../../records/RecordFieldInput";
@@ -12,7 +19,7 @@ import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { usePathname, useLocalSearchParams } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -81,7 +88,6 @@ import {
   shouldRenderAttendanceInlineFeedback,
   shouldSearchAttendancePeople,
   shouldShowAttendanceStatusActions,
-  shouldShowAttendanceSubtitle,
   shiftLocalDate,
   splitStatusButtons,
 } from "@/renderers/workflows/attendance/attendance-workflow-logic";
@@ -228,7 +234,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const contextRelations = useAttendanceContextRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
     fields: contextFields, values: contextValues, selectedItem, online: isOnline, scope: resolutionScope });
   const contextRelationReadCount = Object.values(contextRelations.catalogs).filter(catalog => catalog.loading).length;
-  const screenTitle = "Registro de Asistencia";
+  const searchA11y = useFieldAccessibility("Buscar persona");
+  const observationA11y = useFieldAccessibility("Observación");
   const normalizedSearch = normalizeAttendanceSearch(searchText);
   const hasCompatibleDay = loadedDate === date;
   const attendanceDayScope = useMemo(() => ownerKey && selectedContractId ? {
@@ -245,7 +252,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     attendanceConfigurationRef.current = appView.config;
   }, [attendanceDayScope, appView.config]);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
-  const showSubtitle = shouldShowAttendanceSubtitle({ subtitle: appView.name, title: screenTitle });
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const lastStateUpdateSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
@@ -1446,11 +1452,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     <ScrollView testID={isDesktop ? "desktop-attendance" : "compact-attendance"} contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.icon}>
-          <AppIcon icon={appView.icon} size={26} color={isDesktop ? "#315DA8" : undefined} />
+          <AppIcon icon={appView.icon} size={26} color={colors.primary} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>{isDesktop ? appView.name : screenTitle}</Text>
-          {!isDesktop && showSubtitle ? <Text style={styles.meta}>{appView.name}</Text> : null}
+          <Text accessibilityRole="header" style={styles.title}>{appView.name}</Text>
           {!isDesktop ? <Text style={styles.meta}>{formatDisplayDate(date)}</Text> : null}
         </View>
       </View>
@@ -1458,11 +1463,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       <View testID="attendance-controls" style={styles.controlsGroup}>
       <View style={styles.dateSummary}>
       <View style={styles.dateBar}>
-        <Pressable onPress={() => changeDate(-1)} style={styles.dateButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Fecha anterior" onPress={() => changeDate(-1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Anterior</Text>
         </Pressable>
         <View style={{ maxWidth: 220, flexShrink: 1 }}><DateFieldInput label="Fecha de asistencia" required value={date} max={today} onChange={value => { clearPersonFlow(); setDate(value); }} /></View>
-        <Pressable accessibilityRole="button" accessibilityState={{ disabled: date >= today }} disabled={date >= today} onPress={() => changeDate(1)} style={[styles.dateButton, date >= today && styles.disabledButton]}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Fecha siguiente" accessibilityState={{ disabled: date >= today }} disabled={date >= today} onPress={() => changeDate(1)} style={[styles.dateButton, date >= today && styles.disabledButton]}>
           <Text style={styles.dateButtonText}>Siguiente</Text>
         </Pressable>
       </View>
@@ -1529,9 +1534,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      <View testID="attendance-search" style={styles.searchBlock}>
-        {isDesktop ? <Text style={styles.searchLabel}>Buscar persona</Text> : null}
+      <View testID="attendance-search" style={{ gap: 8, maxWidth: isDesktop ? 560 : "100%" }}>
+        <Text nativeID={searchA11y.labelId} style={styles.searchLabel}>Buscar persona</Text>
+        <View style={styles.searchBlock}>
         <TextInput
+          {...searchA11y.controlProps}
           autoCapitalize="words"
           onChangeText={value => changeSearchText(value)}
           placeholder="Buscar persona"
@@ -1541,6 +1548,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         {appView.config.codeSearch ? <CodeReader scopeKey={JSON.stringify([resolutionScope, appView.config.sourceEntityTypeId, appView.config.codeSearch.fieldId])}
           disabled={!cameraIsActive || !!selectedItem || !!conflict || isSaving || isSearching || !ownerKey || !selectedContractId}
           onRead={value => changeSearchText(value, appView.config.codeSearch!.fieldId)} /> : null}
+        </View>
       </View>
         {searchFieldId && normalizedSearch ? <Text>Búsqueda del lector en el campo configurado. Edita el texto para volver a la búsqueda manual global.</Text> : null}
 
@@ -1571,21 +1579,27 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           {supportsObservation ? (
             <View style={styles.observationBlock}>
               <Pressable
+                accessibilityRole="button" accessibilityState={{ expanded: observationExpanded }}
                 onPress={() => setObservationExpanded((current) => !current)}
                 style={styles.observationToggle}
               >
                 <Text style={styles.observationToggleText}>
-                  {observationExpanded ? "Ocultar observacion" : "Agregar observacion"}
+                  {observationExpanded ? "Ocultar observación" : observation ? "Editar observación" : "Agregar observación"}
                 </Text>
               </Pressable>
+              {!observationExpanded && observation ? <Text style={styles.statusMeta}>{observation}</Text> : null}
               {observationExpanded ? (
+                <View style={{ gap: 8 }}>
+                <Text nativeID={observationA11y.labelId} style={styles.searchLabel}>Observación</Text>
                 <TextInput
+                  {...observationA11y.controlProps}
                   multiline
                   onChangeText={value => { draftRevisionRef.current += 1; setObservation(value); }}
-                  placeholder="Observacion"
+                  placeholder="Observación"
                   style={styles.observationInput}
                   value={observation}
                 />
+                </View>
               ) : null}
             </View>
           ) : null}
@@ -1593,14 +1607,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           <View style={styles.formActions}>
           {defaultStatus ? (
             <Pressable
+              accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }}
               disabled={isSaving}
               onPress={() => void saveStatus(defaultStatus)}
               style={[styles.primaryStatusButton, isSaving && styles.disabledButton]}
             >
               {isSaving ? (
-                <ActivityIndicator color="#ffffff" />
+                <ActivityIndicator color={colors.onPrimary} />
               ) : (
-                <Text style={styles.primaryStatusText}>Registrar {defaultStatus.label}</Text>
+                <Text style={styles.primaryStatusText}>{selectedItem.attendance ? "Actualizar" : "Registrar"} {defaultStatus.label}</Text>
               )}
             </Pressable>
           ) : (
@@ -1611,6 +1626,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             <View style={styles.statusGrid}>
               {otherStatuses.map((status) => (
                 <Pressable
+                  accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }}
                   disabled={isSaving}
                   key={status.optionId}
                   onPress={() => void saveStatus(status)}
@@ -1628,6 +1644,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} /> : null}
 
       <ConflictModal
+        experienceName={appView.name}
+        date={date}
+        rows={conflict ? attendanceConfirmationRows({
+          config: appView.config, fields: contextFields, entry: conflict.confirmedEntry,
+          current: selectedItem?.attendance?.updatedAt === conflict.existing.updatedAt ? selectedItem.attendance : undefined,
+          currentExtras: conflict.remoteSnapshot?.extraValues,
+          currentStatus: conflict.existing.statusLabel, currentStatusOptionId: conflict.existing.statusOptionId, requestedStatus: conflict.requested.statusLabel,
+          relationLabel: (fieldId, id) => contextRelations.catalogs[fieldId]?.options.find(option => option.id === id)?.displayName,
+        }) : []}
         conflict={conflict}
         isSaving={isSaving}
         error={confirmationError}
@@ -1651,32 +1676,31 @@ function AttendanceContextSelectors({
   onChange(fieldId: string, optionId: string | null): void;
   values: Record<string, string | null>;
 }) {
-  const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
+  const labelPrefix = useId();
   if (fields.length === 0) {
     return null;
   }
 
   return (
-    <View style={styles.contextBlock}>
-      {fields.map((field) => (
-        <View key={field.id} style={styles.contextField}>
-          {field.type === "RELATION" ? <RecordFieldInput field={attendanceRelationField(field)} value={values[field.id] ?? ""}
+    <FormLayout>
+      <FormGrid appearance="plain" slots={fields.map((field) => ({
+        key: field.id,
+        content: field.type === "RELATION" ? <RecordFieldInput presentation="form" field={attendanceRelationField(field)} value={values[field.id] ?? ""}
             error={errors[field.id]} onChange={value => { if (typeof value === "string") onChange(field.id, value || null); }}
             relationTargetEntityTypeId={getRelationTargetEntityTypeId(attendanceRelationField(field))}
             relationOptions={relations.catalogs[field.id]?.options ?? []}
             relationOptionsError={relations.catalogs[field.id]?.error ?? (relations.catalogs[field.id]?.offline ? "Sin conexión: sólo catálogo guardado; disponibilidad no certificada." : null)}
             relationOptionsLoading={relations.catalogs[field.id]?.loading}
             onRelationSearch={search => relations.search(field.id, search)}
-            onRelationLoadMore={relations.catalogs[field.id]?.hasMore ? () => relations.more(field.id) : undefined} /> : <>
-          <Text style={styles.contextLabel}>{field.name}</Text>
-          <CompactSelect label={field.name} required={field.required} value={values[field.id] ?? ""}
+            onRelationLoadMore={relations.catalogs[field.id]?.hasMore ? () => relations.more(field.id) : undefined} /> : <FieldFrame
+              label={field.name} labelId={`${labelPrefix}-${field.id}-label`} required={field.required}
+              error={errors[field.id]} errorId={`${labelPrefix}-${field.id}-error`}>
+          <CompactSelect indicatorPlacement="end" labelledBy={`${labelPrefix}-${field.id}-label`} describedBy={errors[field.id] ? `${labelPrefix}-${field.id}-error` : undefined} invalid={Boolean(errors[field.id])} label={field.name} required={field.required} value={values[field.id] ?? ""}
             options={field.options.map(option => ({ value: option.optionId, label: option.label }))}
             onChange={value => onChange(field.id, String(value) || null)} />
-          {errors[field.id] ? <Text style={styles.error}>{errors[field.id]}</Text> : null}
-          </>}
-        </View>
-      ))}
-    </View>
+          </FieldFrame>,
+      }))} />
+    </FormLayout>
   );
 }
 
@@ -1701,12 +1725,16 @@ function LatestAttendanceList({ latest }: { latest: AttendanceLatestItem[] }) {
 }
 
 function ConflictModal({
+  experienceName, date, rows,
   conflict,
   isSaving,
   error,
   onCancel,
   onConfirm,
 }: {
+  experienceName: string;
+  date: string;
+  rows: ConfirmationRow[];
   conflict: ConflictState | null;
   isSaving: boolean;
   error: string | null;
@@ -1717,20 +1745,25 @@ function ConflictModal({
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
       <View style={styles.modalBackdrop}>
-        <View style={styles.modalPanel}>
-          <Text style={styles.modalTitle}>{conflict?.personName ?? "Persona"}</Text>
-          <Text style={styles.modalMessage}>Ya existe una asistencia distinta para esta fecha.</Text>
-          <View style={styles.conflictRows}>
-            <Text style={styles.conflictText}>Actual: {conflict?.existing.statusLabel ?? "Sin estado"}</Text>
-            <Text style={styles.conflictText}>Solicitado: {conflict?.requested.statusLabel ?? ""}</Text>
-          </View>
+        <View accessibilityViewIsModal style={[styles.modalPanel, { maxHeight: "90%" }]}>
+          <ScrollView contentContainerStyle={{ gap: 12 }}>
+          <Text accessibilityRole="header" style={styles.modalTitle}>Corregir registro existente</Text>
+          <Text style={styles.conflictText}>{experienceName}</Text>
+          <Text style={styles.conflictText}>{conflict?.personName ?? "Persona"} · {formatDisplayDate(date)}</Text>
+          <Text style={styles.modalMessage}>Se actualizará este registro; no se creará uno nuevo. Revisa los valores antes de confirmar.</Text>
+          {rows.map((row, index) => <View key={index} style={{ gap: 4 }}>
+            <Text style={styles.conflictText}>{row.label}{row.changed === true ? " · Se modificará" : row.changed === false ? " · Sin cambios" : ""}</Text>
+            <Text style={styles.modalMessage}>Actual: {row.current}</Text>
+            <Text style={styles.conflictText}>Solicitado: {row.requested}</Text>
+          </View>)}
+          </ScrollView>
           {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
           <View style={styles.modalActions}>
-            <Pressable disabled={isSaving} onPress={onCancel} style={styles.modalSecondaryButton}>
-              <Text style={styles.modalSecondaryText}>Cancelar</Text>
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: isSaving }} disabled={isSaving} onPress={onCancel} style={interaction => [styles.modalSecondaryButton, actionSurface(false, interaction, Boolean(isSaving))]}>
+              <Text style={[styles.modalSecondaryText, Boolean(isSaving) && { color: colors.onDisabled }]}>Cancelar</Text>
             </Pressable>
-            <Pressable disabled={isSaving} onPress={onConfirm} style={styles.modalPrimaryButton}>
-              <Text style={styles.modalPrimaryText}>Confirmar cambio</Text>
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }} disabled={isSaving} onPress={onConfirm} style={interaction => [styles.modalPrimaryButton, actionSurface(true, interaction, Boolean(isSaving))]}>
+              <Text style={[styles.modalPrimaryText, Boolean(isSaving) && { color: colors.onDisabled }]}>{isSaving ? "Confirmando…" : "Confirmar corrección"}</Text>
             </Pressable>
           </View>
         </View>
@@ -1787,15 +1820,16 @@ function formatLocalTime(value: string) {
   }).format(new Date(value));
 }
 
-const baseStyles = StyleSheet.create({
+export function createAttendanceBaseStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   controlsGroup: { gap: 14 },
   dateSummary: { gap: 14 },
   formActions: { gap: 14 },
   conflictRow: {},
-  searchLabel: { color: "#202B3A", fontSize: 14, fontWeight: "700" },
+  searchLabel: { color: p.textSecondary, fontSize: 14, fontWeight: "700" },
   checkInPanel: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 14,
@@ -1809,7 +1843,7 @@ const baseStyles = StyleSheet.create({
     minWidth: 132,
   },
   conflictText: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 15,
   },
   content: {
@@ -1818,8 +1852,8 @@ const baseStyles = StyleSheet.create({
     paddingBottom: 32,
   },
   contextBlock: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -1830,14 +1864,14 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   contextLabel: {
-    color: "#0f3036",
+    color: p.textSecondary,
     fontSize: 14,
     fontWeight: "800",
   },
   contextOption: {
     alignItems: "center",
-    backgroundColor: "#f8fbfb",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 36,
@@ -1846,14 +1880,14 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 7,
   },
   contextOptionSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
+    backgroundColor: p.primary,
+    borderColor: p.selectionBorder,
   },
   contextOptionSelectedText: {
-    color: "#ffffff",
+    color: p.onPrimary,
   },
   contextOptionText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontSize: 14,
     fontWeight: "800",
   },
@@ -1872,24 +1906,24 @@ const baseStyles = StyleSheet.create({
   },
   dateButton: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 8,
     flexShrink: 1,
-    minHeight: 42,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
     justifyContent: "center",
   },
   dateButtonText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   dateLabel: {
-    color: "#0f3036",
+    color: p.textSecondary,
     flexShrink: 1,
     fontWeight: "800",
   },
   diagnostic: {
-    color: "#587078",
+    color: p.textSecondary,
     fontFamily: "monospace",
     fontSize: 12,
     lineHeight: 16,
@@ -1898,11 +1932,11 @@ const baseStyles = StyleSheet.create({
     opacity: 0.55,
   },
   empty: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   header: {
@@ -1918,7 +1952,7 @@ const baseStyles = StyleSheet.create({
   },
   icon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 8,
     height: 42,
     justifyContent: "center",
@@ -1929,8 +1963,8 @@ const baseStyles = StyleSheet.create({
   },
   latestRow: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
@@ -1940,7 +1974,7 @@ const baseStyles = StyleSheet.create({
     padding: 12,
   },
   latestTime: {
-    color: "#587078",
+    color: p.textSecondary,
     flexShrink: 0,
     fontWeight: "700",
   },
@@ -1948,7 +1982,7 @@ const baseStyles = StyleSheet.create({
     gap: 10,
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
     marginTop: 2,
   },
   modalActions: {
@@ -1957,17 +1991,17 @@ const baseStyles = StyleSheet.create({
   },
   modalBackdrop: {
     alignItems: "center",
-    backgroundColor: "rgba(15, 48, 54, 0.45)",
+    backgroundColor: p.overlay,
     flex: 1,
     justifyContent: "center",
     padding: 20,
   },
   modalMessage: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   modalPanel: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     borderRadius: 8,
     gap: 16,
     maxWidth: 420,
@@ -1976,7 +2010,7 @@ const baseStyles = StyleSheet.create({
   },
   modalPrimaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     flex: 1,
     minHeight: 44,
@@ -1984,12 +2018,12 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   modalPrimaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   modalSecondaryButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.secondary,
     borderRadius: 8,
     flex: 1,
     minHeight: 44,
@@ -1997,11 +2031,11 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   modalSecondaryText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   modalTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 20,
     fontWeight: "800",
   },
@@ -2009,11 +2043,11 @@ const baseStyles = StyleSheet.create({
     gap: 8,
   },
   observationInput: {
-    backgroundColor: "#f8fbfb",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#0f3036",
+    color: p.text,
     fontSize: 16,
     minHeight: 72,
     padding: 10,
@@ -2025,31 +2059,31 @@ const baseStyles = StyleSheet.create({
     justifyContent: "center",
   },
   observationToggleText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   offline: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
+    backgroundColor: p.warningSurface,
+    borderColor: p.warningBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#9a3412",
+    color: p.warning,
     lineHeight: 20,
     padding: 10,
   },
   panelName: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 19,
     fontWeight: "800",
   },
   personName: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 16,
     fontWeight: "800",
   },
   personRow: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
@@ -2061,18 +2095,18 @@ const baseStyles = StyleSheet.create({
   },
   primaryStatusButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 48,
     paddingHorizontal: 16,
   },
   primaryStatusText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   searchBlock: {
@@ -2083,11 +2117,11 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   searchInput: {
-    backgroundColor: "#ffffff",
-    borderColor: "#b7cdd2",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#0f3036",
+    color: p.text,
     flex: 1,
     fontSize: 16,
     minHeight: 44,
@@ -2096,7 +2130,7 @@ const baseStyles = StyleSheet.create({
   },
   secondaryStatusButton: {
     alignItems: "center",
-    borderColor: "#b7cdd2",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     flexGrow: 1,
@@ -2106,35 +2140,35 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   secondaryStatusText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   smallPrimaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
-    minHeight: 36,
+    minHeight: metrics.controlMinHeight,
     justifyContent: "center",
     paddingHorizontal: 10,
   },
   smallPrimaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   smallSecondaryButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     borderRadius: 8,
-    minHeight: 36,
+    minHeight: metrics.controlMinHeight,
     justifyContent: "center",
     paddingHorizontal: 10,
   },
   smallSecondaryText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   sectionTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 16,
     fontWeight: "800",
   },
@@ -2145,16 +2179,16 @@ const baseStyles = StyleSheet.create({
     maxWidth: "100%",
   },
   statusMeta: {
-    color: "#587078",
+    color: p.textSecondary,
   },
   success: {
-    color: "#067647",
+    color: p.success,
     lineHeight: 20,
   },
   summaryBar: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surfaceSubtle,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
@@ -2162,47 +2196,53 @@ const baseStyles = StyleSheet.create({
     padding: 12,
   },
   summaryLabel: {
-    color: "#587078",
+    color: p.textSecondary,
     fontWeight: "700",
   },
   summaryValue: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 22,
     fontWeight: "800",
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 24,
     fontWeight: "800",
     flexShrink: 1,
   },
 });
+}
+const baseStyles = createAttendanceBaseStyles();
 
-const desktopStyles = StyleSheet.create({
-  ...desktopStyleColors(baseStyles),
-  content: { ...baseStyles.content, padding: 24 },
-  controlsGroup: { gap: 12, width: "100%", maxWidth: 800, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#DCE2EA", borderRadius: 8, padding: 16 },
+export function createAttendanceDesktopStyles(p: ThemeColors = colors) {
+  const base = createAttendanceBaseStyles(p);
+  return StyleSheet.create({
+  ...desktopStyleColors(base),
+  content: { ...base.content, padding: 24 },
+  controlsGroup: { gap: 12, width: "100%", maxWidth: 800, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, borderRadius: 8, padding: 16 },
   dateSummary: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 24 },
-  dateBar: { ...baseStyles.dateBar, gap: 36, justifyContent: "flex-start" },
-  summaryBar: { ...baseStyles.summaryBar, padding: 0, borderWidth: 0, gap: 12, flexShrink: 1 },
-  contextBlock: { ...baseStyles.contextBlock, padding: 0, borderWidth: 0 },
-  contextField: { ...baseStyles.contextField, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 16 },
-  contextLabel: { ...baseStyles.contextLabel, color: "#202B3A" },
-  checkInPanel: { ...baseStyles.checkInPanel, borderColor: "#DCE2EA", width: "100%", maxWidth: 640, padding: 20 },
-  searchBlock: { ...baseStyles.searchBlock, alignItems: "stretch", flexDirection: "column", gap: 8, width: "100%", maxWidth: 560 },
-  searchInput: { ...baseStyles.searchInput, borderColor: "#7B879A", color: "#202B3A" },
-  observationInput: { ...baseStyles.observationInput, backgroundColor: "#FFFFFF", color: "#202B3A", borderColor: "#7B879A" },
+  dateBar: { ...base.dateBar, gap: 36, justifyContent: "flex-start" },
+  summaryBar: { ...base.summaryBar, padding: 0, borderWidth: 0, gap: 12, flexShrink: 1 },
+  contextBlock: { ...base.contextBlock, padding: 0, borderWidth: 0 },
+  contextField: { ...base.contextField, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 16 },
+  contextLabel: { ...base.contextLabel, color: p.textSecondary },
+  checkInPanel: { ...base.checkInPanel, borderColor: p.border, width: "100%", maxWidth: 640, padding: 20 },
+  searchBlock: { ...base.searchBlock, alignItems: "stretch", flexDirection: "column", gap: 8, width: "100%", maxWidth: 560 },
+  searchInput: { ...base.searchInput, borderColor: p.controlBorder, color: p.text },
+  observationInput: { ...base.observationInput, backgroundColor: p.surface, color: p.text, borderColor: p.controlBorder },
   formActions: { flexDirection: "row", flexWrap: "wrap", gap: 10, alignItems: "flex-start" },
-  primaryStatusButton: { ...baseStyles.primaryStatusButton, backgroundColor: "#315DA8", minWidth: 200 },
-  secondaryStatusButton: { ...baseStyles.secondaryStatusButton, flexGrow: 0, minWidth: 150, borderColor: "#7B879A" },
-  statusGrid: { ...baseStyles.statusGrid, flexShrink: 1 },
-  personRow: { ...baseStyles.personRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: "#DCE2EA", backgroundColor: "transparent", minHeight: 56, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 12 },
-  latestRow: { ...baseStyles.latestRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: "#DCE2EA", backgroundColor: "transparent", minHeight: 56 },
-  personText: { ...baseStyles.personText, flexDirection: "row", alignItems: "center", gap: 16 },
-  personName: { ...baseStyles.personName, color: "#202B3A", flex: 1 },
-  statusMeta: { ...baseStyles.statusMeta, color: "#536174", width: 180, flexShrink: 0 },
-  list: { ...baseStyles.list, gap: 0 },
-  latestBlock: { ...baseStyles.latestBlock, width: "100%" },
+  primaryStatusButton: { ...base.primaryStatusButton, backgroundColor: p.primary, minWidth: 200 },
+  secondaryStatusButton: { ...base.secondaryStatusButton, flexGrow: 0, minWidth: 150, borderColor: p.controlBorder },
+  statusGrid: { ...base.statusGrid, flexShrink: 1 },
+  personRow: { ...base.personRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: p.border, backgroundColor: "transparent", minHeight: 56, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 12 },
+  latestRow: { ...base.latestRow, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: p.border, backgroundColor: "transparent", minHeight: 56 },
+  personText: { ...base.personText, flexDirection: "row", alignItems: "center", gap: 16 },
+  personName: { ...base.personName, color: p.text, flex: 1 },
+  statusMeta: { ...base.statusMeta, color: p.textSecondary, width: 180, flexShrink: 0 },
+  list: { ...base.list, gap: 0 },
+  latestBlock: { ...base.latestBlock, width: "100%" },
   conflictRow: { flexWrap: "wrap", alignItems: "flex-start" },
-  conflictActions: { ...baseStyles.conflictActions, flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start" },
+  conflictActions: { ...base.conflictActions, flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start" },
 });
+}
+const desktopStyles = createAttendanceDesktopStyles();

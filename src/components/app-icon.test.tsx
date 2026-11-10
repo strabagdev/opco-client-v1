@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AppIcon } from "./app-icon";
 
+vi.mock("react-native", async () => import("react-native-web"));
+
 vi.mock("lucide-react-native", () => {
   const createIcon = (name: string) => {
     function MockIcon() {

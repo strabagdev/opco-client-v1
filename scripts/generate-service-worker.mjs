@@ -1,3 +1,4 @@
+import { prepareThemeAssets } from "./generate-theme-assets.mjs";
 import { createHash } from "node:crypto";
 import { copyFile, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
@@ -36,6 +37,7 @@ async function main() {
   await copyFile(manifestSource, manifestTarget);
   await Promise.all(iconSources.map((icon) => copyFile(icon.source, icon.target)));
   await ensureManifestLink();
+  await writeFile(indexPath, await prepareThemeAssets(repoRoot, distRoot, await readFile(indexPath, "utf8")));
 
   const files = await listPrecacheFiles(distRoot);
   const hash = createHash("sha256");

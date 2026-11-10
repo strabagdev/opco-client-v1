@@ -22,12 +22,13 @@ function actualHandler(kind: string, name: string, context: Record<string, unkno
 describe.each(["attendance", "state-update"])("%s actual search input handler", kind => {
  it("one accepted read changes only the search, preserving textual data and never calling selection or a write", async () => {
   const context = Object.fromEntries(["setSearchText", "setSearchFieldId", "setSearchReadId", "setItems", "setIsSearching", "setSelectedItem", "setConflict", "setSuccessMessage", "setResolutionFeedback", "save", "selectPerson", "selectSubject", "confirmConflict"].map(key => [key, vi.fn()]));
-  Object.assign(context, { requestSequenceRef: { current: 0 }, normalizeAttendanceSearch: (value: string) => value.trim(), normalizeStateUpdateSearch: (value: string) => value.trim() });
+  Object.assign(context, { draftRevisionRef:{current:0}, setConfirmationError:vi.fn(), requestSequenceRef: { current: 0 }, normalizeAttendanceSearch: (value: string) => value.trim(), normalizeStateUpdateSearch: (value: string) => value.trim() });
   const handler = actualHandler(kind, "changeSearchText", context); const stop = vi.fn();
   const session = createCodeReaderSession({ requestCamera: async () => ({ getTracks: () => [{ stop }] }), attach: async () => {}, detach() {}, createDecoder: async () => ({ decode: async () => ["00.123.450-K"], close() {} }), capture: () => ({ width: 1, height: 1, data: new Uint8ClampedArray(4) }), schedule: vi.fn(), cancelScheduled() {}, onState() {}, onRead: value => handler(value, "stable-source-id") });
   await session.start(); await Promise.resolve();
   expect(context.setSearchText).toHaveBeenCalledExactlyOnceWith("00.123.450-K");
   expect(context.setSearchFieldId).toHaveBeenCalledExactlyOnceWith("stable-source-id");
+  if(kind === "attendance") { expect(context.draftRevisionRef).toEqual({current:1}); expect(context.setConfirmationError).toHaveBeenCalledExactlyOnceWith(null); }
   expect(context.setSearchReadId).toHaveBeenCalledOnce(); expect(stop).toHaveBeenCalledOnce();
   expect(context.setSelectedItem).toHaveBeenCalledExactlyOnceWith(null);
   for (const action of ["save", "selectPerson", "selectSubject", "confirmConflict"]) expect(context[action]).not.toHaveBeenCalled();

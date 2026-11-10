@@ -1,3 +1,7 @@
+import { actionSurface } from "../../src/theme/operational-presentation";
+import { type ThemeColors } from "../../src/theme/tokens";
+import { colors } from "../../src/theme/paint";
+import { useFieldAccessibility } from "@/components/field-accessibility";
 import { Redirect } from "expo-router";
 import { useState } from "react";
 import {
@@ -22,6 +26,8 @@ export default function LoginScreen() {
     signIn,
     status,
   } = useSession();
+  const emailA11y = useFieldAccessibility("Correo", undefined, true);
+  const passwordA11y = useFieldAccessibility("Contraseña", undefined, true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -71,56 +77,62 @@ export default function LoginScreen() {
           <View style={styles.form}>
             {pendingLoginSelection.organizations.map((option) => (
               <Pressable
+                accessibilityRole="button" accessibilityState={{ disabled: Boolean(selectedOrganization) }}
                 disabled={Boolean(selectedOrganization)}
                 key={option.selectionId}
                 onPress={() => {
                   void handleSelection(option.selectionId);
                 }}
-                style={({ pressed }) => [
+                style={interaction => [
                   styles.companyButton,
-                  (pressed || selectedOrganization === option.selectionId) && styles.buttonPressed,
+                  actionSurface(false, interaction, Boolean(selectedOrganization)),
                   pendingLoginSelection.preferredSelectionId === option.selectionId && styles.companyButtonPreferred,
                 ]}
               >
-                <Text style={styles.companyButtonText}>{option.organization.name}</Text>
+                <Text style={[styles.companyButtonText, Boolean(selectedOrganization) && { color: colors.onDisabled }]}>{option.organization.name}</Text>
               </Pressable>
             ))}
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
           </View>
         ) : (
           <View style={styles.form}>
+            <Text nativeID={emailA11y.labelId} style={styles.label}>Correo</Text>
             <TextInput
+              {...emailA11y.controlProps}
               autoCapitalize="none"
               autoComplete="email"
               editable={!isSubmitting}
               inputMode="email"
               onChangeText={setEmail}
-              placeholder="Email"
+              placeholder="nombre@ejemplo.cl"
               style={styles.input}
               value={email}
             />
+            <Text nativeID={passwordA11y.labelId} style={styles.label}>Contraseña</Text>
             <TextInput
+              {...passwordA11y.controlProps}
               autoCapitalize="none"
               editable={!isSubmitting}
               onChangeText={setPassword}
-              placeholder="Password"
+              placeholder="Contraseña"
               secureTextEntry
               style={styles.input}
               value={password}
             />
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 
             <Pressable
+              accessibilityRole="button" accessibilityState={{ disabled: isSubmitting || !email || !password, busy: isSubmitting }}
               disabled={isSubmitting || !email || !password}
               onPress={handleSubmit}
-              style={({ pressed }) => [
+              style={interaction => [
                 styles.button,
-                (pressed || isSubmitting) && styles.buttonPressed,
+                actionSurface(true, interaction, Boolean(isSubmitting || !email || !password)),
               ]}
             >
-              {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
+              {isSubmitting ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={[styles.buttonText, (isSubmitting || !email || !password) && { color: colors.onDisabled }]}>Ingresar</Text>}
             </Pressable>
           </View>
         )}
@@ -135,12 +147,14 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+export function createLoginStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  label: { color: p.textSecondary, fontSize: 15, fontWeight: "700" },
   runtimeInfo: { marginTop: 16 },
-  runtimeInfoText: { color: "#466068", fontSize: 12, lineHeight: 18 },
+  runtimeInfoText: { color: p.text, fontSize: 12, lineHeight: 18 },
   button: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     minHeight: 52,
     justifyContent: "center",
@@ -149,14 +163,14 @@ const styles = StyleSheet.create({
     opacity: 0.78,
   },
   buttonText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontSize: 16,
     fontWeight: "700",
   },
   companyButton: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#9fb8b8",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 52,
@@ -164,17 +178,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   companyButtonPreferred: {
-    borderColor: "#135d66",
+    borderColor: p.controlBorder,
     borderWidth: 2,
   },
   companyButtonText: {
-    color: "#0f3036",
+    color: p.onSecondary,
     fontSize: 16,
     fontWeight: "700",
     textAlign: "center",
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   form: {
@@ -182,8 +196,8 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
   input: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     fontSize: 16,
@@ -194,19 +208,21 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
     justifyContent: "center",
     padding: 24,
   },
   subtitle: {
-    color: "#466068",
+    color: p.textSecondary,
     fontSize: 16,
     marginTop: 6,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 34,
     fontWeight: "800",
   },
 });
+}
+const styles = createLoginStyles();

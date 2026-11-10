@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { expect, it, vi } from "vitest";
+import { captureWorkflowWriteCommand, workflowWriteMetadata } from "../../../lib/workflow-write-contract";
 import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, scheduleForStateUpdateEdit } from "../../../lib/state-update-schedule";
 import { compositeConfirmationKey } from "../../../lib/state-update-identity";
 
@@ -44,9 +45,10 @@ it("a revision change invalidates the shown confirmation without authorizing ano
 
 it("editing an unsent scheduled create uses its durable null base rather than the cache timestamp", async () => {
   const context = {
+    captureWorkflowWriteCommand, workflowWriteMetadata, writeContractRequirementRef:{current:{required:false}}, conflict:null,
     response: { stateFields: [], extraFields: [], historyMode: "update-current", uniqueness: "subject-date-fields", targetEntityType: { id: "target" } },
     selectedItem: { subject: { id: "subject", displayName: "Synthetic" }, current: { recordId: "local", updatedAt: "local-cache-time", localExpectedUpdatedAt: null, stateValues: [], schedule } },
-    selectedContractId: "contract", ownerKey: "owner", appView: { id: "view", name: "Synthetic" }, isSaving: false, contextReady: true,
+    selectedContractId: "contract", ownerKey: "owner", appView: { id: "view", name: "Synthetic", config: {} }, isSaving: false, contextReady: true,
     stateValues: {}, extraValues: {}, extraReadIssues: {}, compositeMode: true, isOnline: false, hasDate: true, date: "2026-10-25", identity: undefined,
     resolutionScope: "scope", resolutionScopeRef: { current: "scope" }, resolutionMountedRef: { current: true },
     scheduleForStateUpdateEdit, stateUpdateScheduleMetadata, buildEffectiveStateSnapshot: () => ({ stateValues: [], hasChanges: true }), validateFormFields: () => ({}), stateUpdateExtraMetadataErrors: () => ({}), buildStateUpdateExtraSubmit: () => ({}), compositeConfirmationKey,

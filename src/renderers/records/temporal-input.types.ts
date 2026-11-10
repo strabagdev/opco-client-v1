@@ -1,4 +1,6 @@
-export type TemporalFieldInputProps = {
+import type { FieldAccessibility } from "../../components/field-accessibility";
+
+export type TemporalFieldInputProps = FieldAccessibility & {
   onChange(value: string): void;
   required: boolean;
   value: string;

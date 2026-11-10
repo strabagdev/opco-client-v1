@@ -34,6 +34,19 @@ describe("shared compact selection", () => {
     expect(changeCompactSelection(["a"], "b", true, true)).toEqual(["a", "b"]);
     expect(changeCompactSelection(["a"], "b", false, true)).toBe("b");
   });
+  it("keeps the form indicator decorative and the complete multiple selection accessible", () => {
+    const onChange = vi.fn();
+    const html = renderToStaticMarkup(<CompactSelect indicatorPlacement="end" label="Etiquetas" multiple
+      value={["option-id", "missing"]} options={options} onChange={onChange} />);
+    expect(html).toContain('aria-label="Etiquetas: Turno A, Selección no disponible"');
+    expect(html).toMatch(/aria-hidden="true"[^>]*>▾</);
+    expect(html).toContain('aria-expanded="false"'); expect(html).toContain('aria-haspopup="dialog"');
+    expect(onChange).not.toHaveBeenCalled();
+    const single = renderToStaticMarkup(<CompactSelect indicatorPlacement="end" label="Turno" required
+      value="option-id" options={options} onChange={onChange} />);
+    expect(single).toContain("<select"); expect(single).toContain('value="option-id" selected=""');
+    expect(single).toContain('value="inactive" disabled=""'); expect(onChange).not.toHaveBeenCalled();
+  });
 });
 
 it("Space activates a multiple choice once, preserving required/disabled semantics; Enter stays delegated", () => {

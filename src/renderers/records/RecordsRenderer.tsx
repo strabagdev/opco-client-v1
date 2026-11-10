@@ -1,3 +1,7 @@
+import { recordStatusPaint } from "../../theme/operational-presentation";
+import { metrics, type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
+import { useFieldAccessibility } from "../../components/field-accessibility";
 import { Link } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -12,6 +16,9 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { FormLayout } from "../../components/form-layout";
+import { ReadFieldList } from "../../components/read-field-list";
+import { buildRecordReadFields } from "./record-read-presentation";
 import { buildAppViewProblemsHref, buildAppViewRecordHref, buildNewAppViewRecordHref } from "@/lib/app-views";
 import { resolvePreferredAppIcon } from "@/lib/app-icons";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
@@ -58,6 +65,7 @@ const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 350;
 
 export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView>) {
+  const searchA11y = useFieldAccessibility("Buscar registros");
   const sharedOpening = useExperienceOpeningSession();
   const entityTypeId = appView.config.entityTypeId;
   const { api, connectivityStatus, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
@@ -515,7 +523,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
-      <View style={styles.header}>
+      <FormLayout>
+      <View style={readStyles.heading}>
+      <View style={[styles.header, readStyles.titleGroup]}>
         <View style={styles.icon}>
           <AppIcon icon={resolvePreferredAppIcon(appView.icon, definition?.icon)} size={26} />
         </View>
@@ -526,6 +536,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           </Text>
           <SyncTelemetrySummary connectivityStatus={connectivityStatus} fallbackSyncedAt={visibleCoverage === "complete" ? syncedAt : null} telemetry={hasCompatibleRecords ? recordsSyncTelemetry : null} />
         </View>
+      </View>
+        <Link href={buildNewAppViewRecordHref(appView.id)} asChild>
+          <Pressable style={StyleSheet.flatten([styles.createButton, readStyles.createButton])}>
+            <Text style={styles.createText}>Crear</Text>
+          </Pressable>
+        </Link>
       </View>
 
       {hasSyncActivity ? (
@@ -548,8 +564,10 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         </View>
       ) : null}
 
-      <View style={styles.toolbar}>
+      <Text nativeID={searchA11y.labelId} style={styles.meta}>Buscar registros</Text>
+      <View style={[styles.toolbar, readStyles.search]}>
         <TextInput
+          {...searchA11y.controlProps}
           autoCapitalize="none"
           clearButtonMode="while-editing"
           onChangeText={setSearchText}
@@ -558,11 +576,6 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           style={styles.searchInput}
           value={searchText}
         />
-        <Link href={buildNewAppViewRecordHref(appView.id)} asChild>
-          <Pressable style={styles.createButton}>
-            <Text style={styles.createText}>Crear</Text>
-          </Pressable>
-        </Link>
       </View>
 
       {localCoverageNotice ? <Text accessibilityLiveRegion="polite" style={styles.meta}>{localCoverageNotice}</Text> : null}
@@ -580,7 +593,9 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
         onRetry={() => setRetryCount((count) => count + 1)}
         records={hasCompatibleRecords ? records : []}
         appViewId={appView.id}
+        definition={definition}
       />
+      </FormLayout>
     </ScrollView>
   );
 }
@@ -614,6 +629,7 @@ function RecordsListContent({
   onLoadMore,
   onRetry,
   records,
+  definition,
 }: {
   appViewId: string;
   canLoadMore: boolean;
@@ -628,6 +644,7 @@ function RecordsListContent({
   onLoadMore: () => void;
   onRetry: () => void;
   records: CachedEntityRecord[];
+  definition: EntityDefinition | null;
 }) {
   return (
     <>
@@ -647,33 +664,25 @@ function RecordsListContent({
       ) : null}
 
       <View style={styles.recordList}>
-        {items.map((item) => (
+        {items.map((item) => {
+          const record = records.find(record => record.id === item.id);
+          const fields = definition && record ? buildRecordReadFields(definition, record, "list") : [];
+          return (
           <Link href={buildAppViewRecordHref(appViewId, item.id)} key={item.id} asChild>
             <Pressable style={styles.recordCard}>
               <View style={styles.recordTitleRow}>
                 <Text style={styles.recordTitle}>{item.title}</Text>
                 <SyncBadge record={records.find((record) => record.id === item.id)} />
               </View>
-              {item.fields.length > 0 ? (
-                <View style={styles.recordFields}>
-                  {item.fields.map((field) => (
-                    <View key={field.key} style={styles.recordField}>
-                      <Text style={styles.recordLabel}>{field.label}</Text>
-                      <Text numberOfLines={1} style={styles.recordValue}>
-                        {field.value}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
+              {fields.length ? <ReadFieldList compact fields={fields} /> : null}
             </Pressable>
           </Link>
-        ))}
+        );})}
       </View>
 
       {canLoadMore ? (
-        <Pressable disabled={isLoadingMore || isRefreshing || isLoading} onPress={onLoadMore} style={styles.loadMoreButton}>
-          {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
+        <Pressable accessibilityRole="button" disabled={isLoadingMore || isRefreshing || isLoading} onPress={onLoadMore} style={styles.loadMoreButton}>
+          {isLoadingMore ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
         </Pressable>
       ) : null}
     </>
@@ -716,42 +725,45 @@ function SyncBadge({ record }: { record: CachedEntityRecord | undefined }) {
       styles.badge,
       record.syncStatus === "failed" && styles.badgeFailed,
       record.syncStatus === "conflict" && styles.badgeConflict,
+      { backgroundColor: recordStatusPaint(record.syncStatus).backgroundColor, borderColor: recordStatusPaint(record.syncStatus).borderColor },
     ]}>
       <Text style={[
         styles.badgeText,
         record.syncStatus === "failed" && styles.badgeFailedText,
         record.syncStatus === "conflict" && styles.badgeConflictText,
+        { color: recordStatusPaint(record.syncStatus).color },
       ]}>{label}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+export function createRecordsNoticeStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   badge: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.selection,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   badgeFailed: {
-    backgroundColor: "#fef3f2",
+    backgroundColor: p.dangerSurface,
   },
   badgeConflict: {
-    backgroundColor: "#fff7ed",
+    backgroundColor: p.conflictSurface,
   },
   badgeConflictText: {
-    color: "#9a3412",
+    color: p.conflict,
   },
   badgeFailedText: {
-    color: "#b42318",
+    color: p.danger,
   },
   badgeText: {
-    color: "#466068",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
   cacheMeta: {
-    color: "#9a3412",
+    color: p.warning,
     marginTop: 4,
   },
   content: {
@@ -761,22 +773,22 @@ const styles = StyleSheet.create({
   },
   createButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 46,
     paddingHorizontal: 18,
   },
   createText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   empty: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   header: {
@@ -789,7 +801,7 @@ const styles = StyleSheet.create({
   },
   icon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 8,
     height: 42,
     justifyContent: "center",
@@ -798,7 +810,7 @@ const styles = StyleSheet.create({
   loadMoreButton: {
     alignItems: "center",
     alignSelf: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 46,
@@ -806,24 +818,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   loadMoreText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   lastSyncText: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 13,
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
     marginTop: 3,
   },
   recordCard: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
-    gap: 10,
-    padding: 14,
+    gap: 8,
+    padding: 12,
   },
   recordField: {
     flexBasis: 180,
@@ -837,7 +849,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   recordLabel: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -846,7 +858,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   recordTitle: {
-    color: "#17363c",
+    color: p.text,
     flexShrink: 1,
     fontSize: 17,
     fontWeight: "800",
@@ -859,32 +871,32 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   recordValue: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 14,
   },
   retryButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   retryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   searchInput: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#17363c",
+    color: p.text,
     flex: 1,
     minHeight: 46,
     ...stableTextInputStyle,
@@ -893,8 +905,8 @@ const styles = StyleSheet.create({
   },
   syncBar: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
@@ -904,15 +916,15 @@ const styles = StyleSheet.create({
   },
   secondarySyncButton: {
     alignItems: "center",
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 38,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
   },
   secondarySyncButtonText: {
-    color: "#17363c",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   syncActions: {
@@ -922,28 +934,28 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   syncProblemText: {
-    color: "#9a3412",
+    color: p.warning,
     fontSize: 13,
     fontWeight: "700",
   },
   syncButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 38,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
   },
   syncButtonText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   syncText: {
-    color: "#17363c",
+    color: p.text,
     fontWeight: "800",
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 26,
     fontWeight: "800",
   },
@@ -954,3 +966,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
 });
+}
+const styles = createRecordsNoticeStyles();
+
+export function createRecordsReadStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  heading: { flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "flex-start" },
+  titleGroup: { flexBasis: 420, flexGrow: 1, flexShrink: 1, minWidth: 0 },
+  search: { maxWidth: 560, width: "100%", minWidth: 0 },
+  createButton: { backgroundColor: p.primary, minHeight: 44 },
+});
+}
+const readStyles = createRecordsReadStyles();

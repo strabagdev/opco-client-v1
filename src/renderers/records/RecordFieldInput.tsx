@@ -1,16 +1,23 @@
+import { FieldFrame } from "../../components/field-frame";
+import { metrics, radii, space, typography } from "../../theme/tokens";
+import { colors as palette } from "../../theme/paint";
+import { focusStyle } from "../../theme/paint";
+import { controlText, controlFrame } from "../../theme/control-presentation";
+import { useFieldAccessibility } from "../../components/field-accessibility";
 import { relationCardinalityIssue, relationKindIsAmbiguous } from "../../lib/relation-cardinality";
 import { decimalPlaces } from "../../lib/decimal-precision";
-import { useMemo, useState } from "react";
-import { Text, TextInput, Pressable, StyleSheet, View } from "react-native";
+import { useMemo, useState, type ReactNode } from "react";
+import { Text, TextInput, Pressable, StyleSheet, View, Platform } from "react-native";
 
-import { CompactSelect } from "../../components/compact-select";
-import { stableTextInputStyle } from "../../lib/visual-stability";
+import { CompactSelect, activateCompactCheckboxFromKeyboard } from "../../components/compact-select";
 import { EntityField } from "../../lib/opco-api";
 import { isFieldUnsupported, isRelationFieldMultiple, RecordRelationOption } from "../../lib/record-form";
 
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "./temporal-input";
 
 type FieldInputProps = {
+  /** Form grouping is opt-in; legacy composition remains the default. */
+  presentation?: "legacy" | "form";
   error?: string;
   field: EntityField;
   onBlur?(): void;
@@ -25,6 +32,7 @@ type FieldInputProps = {
 };
 
 export function RecordFieldInput({
+  presentation = "legacy",
   error,
   field,
   onBlur,
@@ -37,53 +45,55 @@ export function RecordFieldInput({
   relationTargetEntityTypeId = null,
   value,
 }: FieldInputProps) {
+  const a11y = useFieldAccessibility(field.name, error, field.required);
+  const [focused, setFocused] = useState(false);
   if (isFieldUnsupported(field)) {
-    return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.name}</Text>
+    return recordFieldFrame(presentation, field, a11y, undefined, (
+      <>
         <Text style={styles.unsupported}>Este tipo de campo todavia no se puede editar: {field.type}.</Text>
-      </View>
-    );
+      </>
+    ));
   }
 
   if (field.type === "BOOLEAN") {
     const selected = value === true;
 
-    return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.name}</Text>
+    return recordFieldFrame(presentation, field, a11y, error, (
+      <>
         <Pressable
+          {...a11y.controlProps} accessibilityRole="checkbox" accessibilityState={{ checked: selected }}
+          {...(Platform.OS === "web" ? { "aria-checked": selected, onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => activateCompactCheckboxFromKeyboard(event, false, () => onChange(!selected)) } : {})}
+          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           onPress={() => {
             onChange(!selected);
           }}
-          style={[styles.optionButton, selected && styles.optionButtonSelected]}
+          style={[styles.optionButton, selected && styles.optionButtonSelected, presentation === "form" && formStyles.boolean, focused && styles.focus]}
         >
-          <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{selected ? "Si" : "No"}</Text>
+          {presentation === "form" ? <View accessible={false} style={[formStyles.check, selected && formStyles.checked]}><Text accessible={false} style={formStyles.checkMark}>{selected ? "✓" : ""}</Text></View> : null}
+          <Text style={[styles.optionText, selected && styles.optionTextSelected, presentation === "form" && formStyles.booleanText]}>{selected ? "Sí" : "No"}</Text>
         </Pressable>
-        <FieldError error={error} />
-      </View>
-    );
+      </>
+    ));
   }
 
   if (field.type === "SELECT" || field.type === "MULTISELECT") {
     const selectedValues = Array.isArray(value) ? value : typeof value === "string" && value ? [value] : [];
     const isMultiple = field.type === "MULTISELECT";
 
-    return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.name}</Text>
-        <CompactSelect label={field.name} required={field.required} multiple={isMultiple}
+    return recordFieldFrame(presentation, field, a11y, error, (
+      <>
+        <CompactSelect {...a11y.accessibility} indicatorPlacement={presentation === "form" ? "end" : undefined} label={field.name} required={field.required} multiple={isMultiple}
           value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
           options={[...(field.options ?? [])].sort((a, b) => a.order - b.order).map(option => ({ value: option.value, label: option.label, disabled: option.active === false }))}
           onChange={onChange} />
-        <FieldError error={error} />
-      </View>
-    );
+      </>
+    ));
   }
 
   if (field.type === "RELATION") {
     return (
       <RelationFieldInput
+        presentation={presentation}
         error={error}
         field={field}
         onChange={onChange}
@@ -101,30 +111,27 @@ export function RecordFieldInput({
   const textValue = Array.isArray(value) ? value.join(", ") : typeof value === "boolean" ? "" : value ?? "";
 
   if (field.type === "DATE" || field.type === "TIME" || field.type === "DATETIME") {
-    return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.name}</Text>
+    return recordFieldFrame(presentation, field, a11y, error, (
+      <>
         {field.type === "DATE" ? (
-          <DateFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
+          <DateFieldInput {...a11y.accessibility} label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
         {field.type === "TIME" ? (
-          <TimeFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
+          <TimeFieldInput {...a11y.accessibility} label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
         {field.type === "DATETIME" ? (
-          <DateTimeFieldInput label={field.name} onChange={onChange} required={field.required} value={textValue} />
+          <DateTimeFieldInput {...a11y.accessibility} label={field.name} onChange={onChange} required={field.required} value={textValue} />
         ) : null}
-        <FieldError error={error} />
-      </View>
-    );
+      </>
+    ));
   }
 
   const multiline = field.type === "TEXTAREA";
 
-  return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.label}>{field.name}</Text>
+  return recordFieldFrame(presentation, field, a11y, error, (
+      <>
       <TextInput
-        accessibilityLabel={field.name}
+        {...a11y.controlProps}
         autoCapitalize="none"
         keyboardType={getKeyboardType(field.type)}
         multiline={multiline}
@@ -133,16 +140,17 @@ export function RecordFieldInput({
           onChange(nextValue);
         }}
         placeholder={getPlaceholder(field)}
-        style={[styles.input, multiline && styles.textarea]}
+        placeholderTextColor={palette.textQuiet}
+        style={[styles.input, multiline && styles.textarea, presentation === "form" && formStyles.input, !!error && styles.invalid]}
         value={textValue}
       />
       {field.type === "DECIMAL" && decimalPlaces(field.config) !== undefined ? <Text style={styles.help}>Máximo {decimalPlaces(field.config)} decimales; sin redondeo automático.</Text> : null}
-      <FieldError error={error} />
-    </View>
-  );
+      </>
+    ));
 }
 
 function RelationFieldInput({
+  presentation,
   error,
   field,
   onChange,
@@ -154,6 +162,7 @@ function RelationFieldInput({
   targetEntityTypeId,
   value,
 }: {
+  presentation: "legacy" | "form";
   error?: string;
   field: EntityField;
   onChange(value: string | boolean | string[]): void;
@@ -165,6 +174,7 @@ function RelationFieldInput({
   targetEntityTypeId: string | null;
   value: string | boolean | string[] | undefined;
 }) {
+  const a11y = useFieldAccessibility(field.name, error, field.required);
   const [search, setSearch] = useState("");
   const isMultiple = isRelationFieldMultiple(field);
   const cardinalityIssue = relationCardinalityIssue(field);
@@ -184,17 +194,19 @@ function RelationFieldInput({
     [normalizedSearch, options],
   );
 
-  return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.label}>{field.name}</Text>
+  return recordFieldFrame(presentation, field, a11y, error, (
+      <>
       {targetEntityTypeId ? (
         <>
+          {presentation === "form" ? <Text nativeID={`${a11y.labelId}-search`} style={formStyles.relationCaption}>Buscar opciones</Text> : null}
           <TextInput
             accessibilityLabel={`Buscar ${field.name}`}
+            {...(presentation === "form" ? { "aria-labelledby": `${a11y.labelId} ${a11y.labelId}-search` } : {})}
             autoCapitalize="none"
             onChangeText={(value) => { setSearch(value); onSearch?.(value); }}
             placeholder="Buscar en catalogo"
-            style={styles.input}
+            placeholderTextColor={palette.textQuiet}
+            style={[styles.input, presentation === "form" && formStyles.input, !!error && styles.invalid]}
             value={search}
           />
           {optionsLoading ? <Text style={styles.help}>Cargando catalogo...</Text> : null}
@@ -209,24 +221,36 @@ function RelationFieldInput({
           ) : null}
           {cardinalityIssue || blockedCardinality ? <Text accessibilityRole="alert" style={styles.fieldError}>{cardinalityIssue ?? "Este campo conserva varias relaciones y requiere revisión antes de guardar."}</Text> : null}
           {blockedCardinality && selectedValues.length > 1 ? <Text style={styles.help}>{selectedValues.map(id => options.find(option => option.id === id)?.displayName ?? "Selección no disponible").join(", ")}</Text> : null}
-          <CompactSelect label={field.name} required={field.required} multiple={isMultiple} disabled={blockedCardinality}
+          {presentation === "form" ? <Text nativeID={`${a11y.labelId}-selection`} style={formStyles.relationCaption}>Selección actual</Text> : null}
+          <CompactSelect {...a11y.accessibility} indicatorPlacement={presentation === "form" ? "end" : undefined}
+            labelledBy={presentation === "form" ? `${a11y.labelId} ${a11y.labelId}-selection` : a11y.accessibility.labelledBy}
+            label={field.name} required={field.required} multiple={isMultiple} disabled={blockedCardinality}
             value={isMultiple ? selectedValues : selectedValues[0] ?? ""}
             options={[...filteredOptions, ...options.filter(option => selectedValues.includes(option.id) && !filteredOptions.some(filtered => filtered.id === option.id))].map(option => ({ value: option.id, label: option.displayName }))}
             onChange={onChange} />
-          {onLoadMore ? <Pressable accessibilityRole="button" disabled={optionsLoading} onPress={onLoadMore} style={styles.clearButton}><Text>Más opciones</Text></Pressable> : null}
+          {onLoadMore ? <Pressable accessibilityRole="button" disabled={optionsLoading} onPress={onLoadMore} style={[styles.clearButton, optionsLoading && styles.disabled]}><Text style={[styles.clearButtonText, optionsLoading && styles.disabledText]}>Más opciones</Text></Pressable> : null}
         </>
       ) : (
         <Text style={styles.fieldError}>Este campo de relacion no tiene un catalogo configurado.</Text>
       )}
-      <FieldError error={error} />
-    </View>
-  );
+      </>
+    ));
+}
+
+/** Pure composition helper, never a component declared inside render. */
+function recordFieldFrame(presentation: "legacy" | "form", field: EntityField, a11y: ReturnType<typeof useFieldAccessibility>, error: string | undefined, children: ReactNode) {
+  if (presentation === "form") return <FieldFrame label={field.name} labelId={a11y.labelId} required={field.required} errorId={a11y.errorId} error={error}>{children}</FieldFrame>;
+  return <View style={styles.fieldGroup}>
+    <Text nativeID={a11y.labelId} style={styles.label}>{field.name}{field.required ? " (obligatorio)" : ""}</Text>
+    {children}
+    <FieldError id={a11y.errorId} error={error} />
+  </View>;
 }
 
 function selectedRelationCount(value: FieldInputProps["value"]) { return Array.isArray(value) ? value.length : value ? 1 : 0; }
 
-function FieldError({ error }: { error?: string }) {
-  return error ? <Text style={styles.fieldError}>{error}</Text> : null;
+function FieldError({ error, id }: { error?: string; id: string }) {
+  return error ? <Text nativeID={id} accessibilityRole="alert" style={styles.fieldError}>{error}</Text> : null;
 }
 
 function getKeyboardType(fieldType: EntityField["type"]) {
@@ -246,82 +270,30 @@ function getPlaceholder(field: EntityField) {
 }
 
 const styles = StyleSheet.create({
-  fieldError: {
-    color: "#b42318",
-    fontSize: 14,
-    lineHeight: 20,
-    minHeight: 20,
-  },
-  clearButton: {
-    alignSelf: "flex-start",
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  clearButtonText: {
-    color: "#17363c",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  fieldGroup: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-    padding: 14,
-  },
-  help: {
-    color: "#587078",
-    lineHeight: 20,
-  },
-  input: {
-    borderColor: "#c8d2d5",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#17363c",
-    ...stableTextInputStyle,
-    minHeight: 46,
-    paddingHorizontal: 12,
-  },
-  label: {
-    color: "#17363c",
-    fontSize: 15,
-    fontWeight: "800",
-  },
-  optionButton: {
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  optionButtonSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
-  },
-  optionList: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  optionText: {
-    color: "#17363c",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  optionTextSelected: {
-    color: "#ffffff",
-  },
-  textarea: {
-    minHeight: 110,
-    paddingTop: 12,
-    textAlignVertical: "top",
-  },
-  unsupported: {
-    color: "#587078",
-    lineHeight: 20,
-  },
+  focus: focusStyle,
+  invalid: { borderColor: palette.danger },
+  fieldError: { color: palette.danger, ...typography.table, minHeight: typography.table.lineHeight },
+  clearButton: { ...controlFrame, alignSelf: "flex-start", justifyContent: "center", borderColor: palette.controlBorder, backgroundColor: palette.surface, paddingVertical: space.sm },
+  clearButtonText: { color: palette.onSecondary, ...typography.label },
+  disabled: { backgroundColor: palette.disabled, borderColor: palette.disabledBorder }, disabledText: { color: palette.onDisabled },
+  fieldGroup: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radii.control, borderWidth: 1, gap: space.sm, padding: space.md },
+  help: { color: palette.textSecondary, ...typography.table },
+  input: { ...controlFrame, ...controlText, borderColor: palette.controlBorder, color: palette.text, backgroundColor: palette.surface },
+  label: { color: palette.text, ...typography.label },
+  optionButton: { ...controlFrame, borderColor: palette.controlBorder, backgroundColor: palette.surface, paddingVertical: space.sm },
+  optionButtonSelected: { backgroundColor: palette.primary, borderColor: palette.primary },
+  optionList: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
+  optionText: { color: palette.text, ...typography.control },
+  optionTextSelected: { color: palette.onPrimary },
+  textarea: { minHeight: 110, paddingTop: space.md, textAlignVertical: "top" },
+  unsupported: { color: palette.textSecondary, ...typography.table },
+});
+const formStyles = StyleSheet.create({
+  relationCaption: { color: palette.textSecondary, ...typography.meta, fontWeight: "600" },
+  input: { minWidth: 0, maxWidth: "100%" },
+  boolean: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: metrics.controlMinHeight, backgroundColor: palette.surface, borderColor: palette.controlBorder },
+  booleanText: { color: palette.text, fontWeight: "400" },
+  check: { width: metrics.iconNavigation, height: metrics.iconNavigation, borderRadius: radii.badge, borderWidth: 1, borderColor: palette.controlBorder, alignItems: "center", justifyContent: "center" },
+  checked: { backgroundColor: palette.primary, borderColor: palette.primary },
+  checkMark: { color: palette.onPrimary, ...typography.control },
 });

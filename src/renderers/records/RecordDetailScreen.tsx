@@ -1,3 +1,6 @@
+import { recordStatusPaint } from "../../theme/operational-presentation";
+import { type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { Link, router } from "expo-router";
@@ -6,7 +9,10 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { buildAppViewRecordConflictHref, buildEditAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
-import { getRecordDetailFields } from "@/lib/entity-record-display";
+import { FormLayout } from "../../components/form-layout";
+import { FormActions } from "../../components/form-actions";
+import { ReadFieldList } from "../../components/read-field-list";
+import { buildRecordReadFields } from "./record-read-presentation";
 import { CachedEntityRecord, loadRecordWithOfflineCache } from "@/lib/offline-records";
 import { EntityDefinition, RecordsAppView } from "@/lib/opco-api";
 import { getRecordSyncLabel } from "@/sync/records-sync";
@@ -36,7 +42,7 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
   const [retryCount, setRetryCount] = useState(0);
 
   const detailFields = useMemo(
-    () => (definition && record ? getRecordDetailFields(definition, record) : []),
+    () => (definition && record ? buildRecordReadFields(definition, record) : []),
     [definition, record],
   );
 
@@ -127,19 +133,10 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
-      <View style={styles.actions}>
-        <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
-          <Text style={styles.secondaryText}>Volver</Text>
-        </Pressable>
-        <Link href={buildEditAppViewRecordHref(appView.id, recordId)} asChild>
-          <Pressable style={styles.primaryButton}>
-            <Text style={styles.primaryText}>Editar</Text>
-          </Pressable>
-        </Link>
-      </View>
-
+      <FormLayout>
+      <View style={readStyles.heading}>
       {record ? (
-        <View style={styles.header}>
+        <View style={[styles.header, readStyles.titleGroup]}>
           <Text style={styles.kicker}>{appView.name}</Text>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{record.displayName || "Registro sin nombre"}</Text>
@@ -149,6 +146,17 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
           {record.syncErrorMessage ? <Text style={styles.error}>{record.syncErrorMessage}</Text> : null}
         </View>
       ) : null}
+      <FormActions>
+        <Pressable onPress={() => router.back()} style={[styles.secondaryButton, readStyles.backButton]}>
+          <Text style={[styles.secondaryText, readStyles.backText]}>Volver</Text>
+        </Pressable>
+        <Link href={buildEditAppViewRecordHref(appView.id, recordId)} asChild>
+          <Pressable style={StyleSheet.flatten([styles.primaryButton, readStyles.editButton])}>
+            <Text style={styles.primaryText}>Editar</Text>
+          </Pressable>
+        </Link>
+      </FormActions>
+      </View>
 
       {record?.syncStatus === "conflict" ? (
         <View style={styles.conflictBanner}>
@@ -176,17 +184,11 @@ export function RecordDetailScreen({ appView, recordId }: Props) {
       ) : null}
 
       {record && detailFields.length === 0 ? (
-        <Text style={styles.empty}>Este registro no tiene valores activos para mostrar.</Text>
+        <Text style={styles.empty}>Este registro no tiene campos activos para mostrar.</Text>
       ) : null}
 
-      <View style={styles.fieldList}>
-        {detailFields.map((field) => (
-          <View key={field.key} style={styles.fieldRow}>
-            <Text style={styles.fieldLabel}>{field.label}</Text>
-            <Text style={styles.fieldValue}>{field.value}</Text>
-          </View>
-        ))}
-      </View>
+      {detailFields.length ? <View style={readStyles.section}><ReadFieldList fields={detailFields} /></View> : null}
+      </FormLayout>
     </ScrollView>
   );
 }
@@ -203,17 +205,20 @@ function SyncBadge({ record }: { record: CachedEntityRecord }) {
       styles.badge,
       record.syncStatus === "failed" && styles.badgeFailed,
       record.syncStatus === "conflict" && styles.badgeConflict,
+      { backgroundColor: recordStatusPaint(record.syncStatus).backgroundColor, borderColor: recordStatusPaint(record.syncStatus).borderColor },
     ]}>
       <Text style={[
         styles.badgeText,
         record.syncStatus === "failed" && styles.badgeFailedText,
         record.syncStatus === "conflict" && styles.badgeConflictText,
+        { color: recordStatusPaint(record.syncStatus).color },
       ]}>{label}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+export function createRecordDetailNoticeStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   actions: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -221,25 +226,25 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignSelf: "flex-start",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.selection,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   badgeFailed: {
-    backgroundColor: "#fef3f2",
+    backgroundColor: p.dangerSurface,
   },
   badgeConflict: {
-    backgroundColor: "#fff7ed",
+    backgroundColor: p.conflictSurface,
   },
   badgeConflictText: {
-    color: "#9a3412",
+    color: p.conflict,
   },
   badgeFailedText: {
-    color: "#b42318",
+    color: p.danger,
   },
   badgeText: {
-    color: "#466068",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -249,28 +254,28 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   conflictBanner: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
+    backgroundColor: p.conflictSurface,
+    borderColor: p.conflictBorder,
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
     padding: 12,
   },
   conflictTitle: {
-    color: "#9a3412",
+    color: p.conflict,
     fontWeight: "800",
     lineHeight: 20,
   },
   empty: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   fieldLabel: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 12,
     fontWeight: "800",
     textTransform: "uppercase",
@@ -279,15 +284,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   fieldRow: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
     padding: 14,
   },
   fieldValue: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 16,
     lineHeight: 22,
   },
@@ -295,33 +300,33 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   kicker: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   primaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   secondaryButton: {
     alignItems: "center",
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
@@ -329,11 +334,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   secondaryText: {
-    color: "#17363c",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     flexShrink: 1,
     fontSize: 26,
     fontWeight: "800",
@@ -345,3 +350,17 @@ const styles = StyleSheet.create({
     gap: 10,
   },
 });
+}
+const styles = createRecordDetailNoticeStyles();
+
+export function createRecordDetailReadStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  heading: { flexDirection: "row", flexWrap: "wrap", gap: 16, alignItems: "flex-start" },
+  titleGroup: { flex: 1, minWidth: 220 },
+  section: { backgroundColor: p.surface, borderColor: p.border, borderWidth: 1, borderRadius: 10, padding: 16, minWidth: 0 },
+  editButton: { backgroundColor: p.primary, minHeight: 44 },
+  backButton: { backgroundColor: p.surface, borderColor: p.controlBorder, minHeight: 44 },
+  backText: { color: p.primary },
+});
+}
+const readStyles = createRecordDetailReadStyles();

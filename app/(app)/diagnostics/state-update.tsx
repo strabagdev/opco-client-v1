@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { useLocalSearchParams } from "expo-router";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -652,21 +653,21 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   attendancePanel: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d7d8",
+    backgroundColor: colors.surface,
+    borderColor: colors.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 12,
   },
   attendanceTitle: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 14,
     fontWeight: "900",
   },
   button: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     minHeight: 40,
     paddingHorizontal: 12,
@@ -676,7 +677,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   buttonText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontWeight: "800",
   },
   card: {
@@ -688,17 +689,17 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   cardGood: {
-    backgroundColor: "#f3faf7",
-    borderColor: "#9bd3bd",
+    backgroundColor: colors.successSurface,
+    borderColor: colors.successBorder,
   },
   cardLabel: {
-    color: "#466068",
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "800",
   },
   cardRisk: {
-    backgroundColor: "#fff5f5",
-    borderColor: "#f3a7a7",
+    backgroundColor: colors.dangerSurface,
+    borderColor: colors.dangerBorder,
   },
   cards: {
     flexDirection: "row",
@@ -706,36 +707,36 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardValue: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "900",
   },
   cardWarn: {
-    backgroundColor: "#fff9ed",
-    borderColor: "#f0c36d",
+    backgroundColor: colors.warningSurface,
+    borderColor: colors.warningBorder,
   },
   empty: {
-    color: "#466068",
+    color: colors.textSecondary,
     fontSize: 12,
   },
   error: {
-    color: "#b42318",
+    color: colors.danger,
     fontWeight: "700",
   },
   header: {
     gap: 8,
   },
   interpretation: {
-    color: "#2f4b53",
+    color: colors.textSecondary,
     fontWeight: "700",
   },
   label: {
-    color: "#466068",
+    color: colors.textSecondary,
     flex: 1,
     fontWeight: "700",
   },
   latestDiagnostic: {
-    borderColor: "#dce7e8",
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 4,
@@ -749,11 +750,11 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   loadingText: {
-    color: "#466068",
+    color: colors.textSecondary,
     fontWeight: "800",
   },
   operation: {
-    borderColor: "#dce7e8",
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
@@ -766,19 +767,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   operationTitle: {
-    color: "#0f3036",
+    color: colors.text,
     fontWeight: "900",
   },
   panel: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d7d8",
+    backgroundColor: colors.surface,
+    borderColor: colors.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
     padding: 12,
   },
   ready: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "900",
   },
@@ -797,8 +798,8 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     alignItems: "center",
-    backgroundColor: "#eef5f6",
-    borderColor: "#c8d7d8",
+    backgroundColor: colors.surfaceSubtle,
+    borderColor: colors.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 40,
@@ -806,24 +807,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   secondaryButtonText: {
-    color: "#135d66",
+    color: colors.primary,
     fontWeight: "800",
   },
   section: {
     gap: 8,
   },
   sectionTitle: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 13,
     fontWeight: "900",
   },
   title: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "900",
   },
   value: {
-    color: "#0f3036",
+    color: colors.text,
     flex: 1,
     fontFamily: "monospace",
     textAlign: "right",

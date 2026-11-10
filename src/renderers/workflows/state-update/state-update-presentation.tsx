@@ -1,10 +1,12 @@
+import { type ThemeColors } from "../../../theme/tokens";
+import { colors } from "../../../theme/paint";
 import {SubjectIdentity} from "../../../components/subject-identity";
 import {subjectPresentationView} from "../../../lib/subject-presentation-display";
 import type {PresentedSubject,SubjectPresentationDefinition} from "../../../lib/subject-presentation";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { APP_SHELL_WIDE_BREAKPOINT } from "../../../lib/app-shell-layout";
-import { desktopPalette as p } from "../../../lib/desktop-presentation";
+import { FormGrid } from "../../../components/form-layout";
 import type { StateUpdateLatestRow } from "./state-update-workflow-logic";
 
 export type StateUpdateReadRow = {
@@ -24,12 +26,7 @@ export function stateUpdateReadColumns(rows: StateUpdateReadRow[]) {
 
 /** Only layout state lives here. Children keep their keys, controlled values and handlers on resize. */
 export function StateUpdateFormGrid({ slots }: { slots: { key: string; full?: boolean; content: ReactNode }[] }) {
-  const desktop = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT;
-  const [width, setWidth] = useState(0);
-  const pair = desktop && width >= 640;
-  return <View style={[s.form, desktop && s.formWide]} onLayout={event => setWidth(Math.round(event.nativeEvent.layout.width))}>
-    {slots.map(slot => <View key={slot.key} style={{ minWidth: 0, width: pair && !slot.full ? (width - 16) / 2 : "100%" }}>{slot.content}</View>)}
-  </View>;
+  return <FormGrid appearance="plain" slots={slots.map(slot => ({ key: slot.key, fullWidth: slot.full, content: slot.content }))} />;
 }
 
 /** One reading projection. No data fetching, selection state or workflow policy. */
@@ -66,15 +63,24 @@ function ReadRow({ row, desktop, children }: { row: StateUpdateReadRow; desktop:
     style={[...style, desktop && hovered && s.hover, focused && s.focus]}>{children}</Pressable>;
 }
 
-const s = StyleSheet.create({
+export function createStateReadS(p: ThemeColors = colors) {
+  return StyleSheet.create({
   form: { gap: 12, minWidth: 0 }, formWide: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
   list: { gap: 10, minWidth: 0 }, listWide: { gap: 0 },
-  row: { backgroundColor: "#ffffff", borderColor: "#d7e4e7", borderRadius: 8, borderWidth: 1, padding: 14, gap: 3, minWidth: 0 },
+  row: { backgroundColor: p.surface, borderColor: p.border, borderRadius: 8, borderWidth: 1, padding: 14, gap: 3, minWidth: 0 },
   rowWide: { flexDirection: "row", alignItems: "flex-start", gap: 24, minHeight: 64, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: p.border, paddingVertical: 14, paddingHorizontal: 12, backgroundColor: "transparent" },
-  nameBlock: { gap: 3, minWidth: 0 }, name: { color: "#0f3036", fontSize: 16, fontWeight: "800" }, nameWide: { color: p.text },
+  nameBlock: { gap: 3, minWidth: 0 }, name: { color: p.text, fontSize: 16, fontWeight: "800" }, nameWide: { color: p.text },
   values: { gap: 3, minWidth: 0 }, valuesWide: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 16 },
-  caption: { color: p.muted, fontSize: 12, lineHeight: 17, marginBottom: 3 },
-  value: { color: "#587078", lineHeight: 20 }, valueWide: { color: p.text, lineHeight: 21 },
+  caption: { color: p.textSecondary, fontSize: 12, lineHeight: 17, marginBottom: 3 },
+  value: { color: p.textSecondary, lineHeight: 20 }, valueWide: { color: p.text, lineHeight: 21 },
   hover: { backgroundColor: p.selection },
   focus: Platform.OS === "web" ? { outlineColor: p.primary, outlineWidth: 3, outlineStyle: "solid", outlineOffset: -3 } : { borderColor: p.primary, borderWidth: 2 },
 });
+}
+const s = createStateReadS();
+
+
+/** Wording only: history/identity and the save command remain in the workflow. */
+export function stateUpdateSubmitLabel(historyMode: string | undefined, hasCurrent: boolean) {
+  return historyMode === "update-current" ? hasCurrent ? "Actualizar registro" : "Crear registro" : "Registrar cambio";
+}

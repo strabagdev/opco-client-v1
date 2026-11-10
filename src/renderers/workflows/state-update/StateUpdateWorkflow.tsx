@@ -1,3 +1,10 @@
+import { actionSurface } from "../../../theme/operational-presentation";
+import { metrics, type ThemeColors } from "../../../theme/tokens";
+import { colors } from "../../../theme/paint";
+import { useFieldAccessibility } from "../../../components/field-accessibility";
+import { FormLayout, FormGrid } from "../../../components/form-layout";
+import { FieldFrame } from "../../../components/field-frame";
+import { FormAction, FormActions } from "../../../components/form-actions";
 import {captureWorkflowWriteCommand,workflowWriteMetadata} from "../../../lib/workflow-write-contract";
 import {SubjectIdentity} from "../../../components/subject-identity";
 import { CodeSearchCacheError } from "../../../lib/workflow-code-search";
@@ -7,16 +14,17 @@ import { LocalReportCancellation } from "./local-report-cancellation";
 import { useExtraRelations } from "./use-extra-relations";
 import { relationValueLabels } from "@/lib/state-update-relations";
 import { buildStateUpdateExtraForm, buildStateUpdateExtraSubmit, stateUpdateExtraMetadataErrors, reviewStateUpdateMultipleSelection, unavailableStateUpdateExtraInput } from "@/lib/state-update-extras";
-import { CompactSelect } from "@/components/compact-select";
+import { CompactSelect, activateCompactCheckboxFromKeyboard } from "@/components/compact-select";
 import { DateFieldInput, DateTimeFieldInput, TimeFieldInput } from "@/renderers/records/temporal-input";
 import { compositeIdentityKey, selectCompositeIdentity, parseCompositeContextValues, compositeConfirmationKey, hasVerifiedCompositeAbsence } from "@/lib/state-update-identity";
-import { StateUpdateFormGrid, StateUpdateReadRows } from "./state-update-presentation";
+import { StateUpdateFormGrid, StateUpdateReadRows, stateUpdateSubmitLabel } from "./state-update-presentation";
+import { StateUpdateConflictValues } from "./state-update-conflict-values";
 import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
-import { desktopStyleColors, desktopPalette } from "@/lib/desktop-presentation";
+import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { useContextPreparation } from "./use-context-preparation";
 import { usePathname, useLocalSearchParams, useRouter } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -135,6 +143,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? (compositeMode ? "" : formatLocalDateInput(new Date())) });
   const date = dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value;
   const cameraIsActive = usePathname() === `/view/${appView.id}`;
+  const searchA11y = useFieldAccessibility("Buscar");
+  const contextLabelPrefix = useId();
   const [searchText, setSearchText] = useState("");
   const [searchFieldId, setSearchFieldId] = useState<string>();
   const [searchReadId, setSearchReadId] = useState(0);
@@ -233,7 +243,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
 
   const hasDate = Boolean(visibleResponse?.dateFieldId ?? appView.config.dateFieldId);
   const normalizedSearch = normalizeStateUpdateSearch(searchText);
-  const submitLabel = visibleResponse?.historyMode === "update-current" ? "Actualizar estado" : "Registrar cambio";
+  const submitLabel = stateUpdateSubmitLabel(visibleResponse?.historyMode, Boolean(selectedItem?.current));
   const latest = visibleResponse?.latest ?? [];
   const latestPagination = visibleResponse?.latestPagination;
   const unresolvedCount = visibleResponse
@@ -1250,15 +1260,15 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         [data-testid="state-update-workflow"] input:focus-visible,
         [data-testid="state-update-workflow"] textarea:focus-visible,
         [data-testid="state-update-workflow"] select:focus-visible,
-        [data-testid="state-update-workflow"] [role="button"]:focus-visible,
-        [data-testid="state-update-modal"] [role="button"]:focus-visible { outline: 3px solid #315DA8; outline-offset: 2px; }
-      }`}</style> : null}
+        [data-testid="state-update-workflow"] [role="button"]:focus-visible { outline: 3px solid ${colors.focus}; outline-offset: 2px; }
+      }
+      [data-testid="state-update-modal"] :focus-visible { outline: 3px solid ${colors.focus}; outline-offset: 2px; }`}</style> : null}
       <View style={styles.header}>
         <View style={styles.icon}>
           <AppIcon icon={appView.icon} size={26} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>{appView.name}</Text>
+          <Text accessibilityRole="header" style={styles.title}>{appView.name}</Text>
           <Text style={styles.meta}>{visibleResponse?.targetEntityType.name ?? "Workflow"}</Text>
         </View>
       </View>
@@ -1297,15 +1307,19 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         />
       ) : null}
 
-      {compositeMode ? <View style={styles.contextPanel}>
+      {compositeMode ? <FormLayout><View style={styles.contextPanel}>
         <Text style={styles.label}>Contexto del reporte</Text>
-        <View style={styles.contextFields}><View style={styles.contextDate}><Text style={styles.label}>Fecha operacional</Text><DateFieldInput label="Fecha operacional" required disabled={!!selectedItem || isSaving} value={date} onChange={setDate} /></View>
-        {response?.identityFields?.map(field => <View key={field.fieldId} style={styles.contextField}>
-          <Text style={styles.label}>{field.label}</Text>
-          <CompactSelect label={field.label} required disabled={!!selectedItem || isSaving} value={identityValues[field.fieldId] ?? ""}
+        <FormGrid appearance="plain" maxColumns={3} slots={[
+          { key: "context-date", content: <FieldFrame label="Fecha operacional" labelId={`${contextLabelPrefix}-date`} errorId={`${contextLabelPrefix}-date-error`} required>
+            <DateFieldInput labelledBy={`${contextLabelPrefix}-date`} label="Fecha operacional" required disabled={!!selectedItem || isSaving} value={date} onChange={setDate} />
+          </FieldFrame> },
+        ...(response?.identityFields ?? []).map(field => ({ key: field.fieldId, content: <FieldFrame
+          label={field.label} labelId={`${contextLabelPrefix}-${field.fieldId}`} errorId={`${contextLabelPrefix}-${field.fieldId}-error`} required>
+          <CompactSelect indicatorPlacement="end" labelledBy={`${contextLabelPrefix}-${field.fieldId}`} label={field.label} required disabled={!!selectedItem || isSaving} value={identityValues[field.fieldId] ?? ""}
             options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
             onChange={value => { const optionId = String(value); if(identityValues[field.fieldId]===optionId)return;requestSequenceRef.current++;setIdentityValues(v=>({...v,[field.fieldId]:optionId}));setItems([]);setConflict(null);setSuccessMessage(null); }} />
-        </View>)}</View>
+        </FieldFrame> })),
+        ]} />
         {visibleResponse?.schedulePolicy ? <Text accessibilityLiveRegion="polite">{selectedItem?.scheduleSelection?.scheduleApplication
           ? formatAppliedSchedule(selectedItem.scheduleSelection.scheduleApplication)
           : visibleResponse.scheduleResolution?.status==="resolved" ? `Horario para nuevas altas: ${formatAppliedSchedule(visibleResponse.scheduleResolution.application)}`
@@ -1319,10 +1333,12 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
           ? "Sin conexión. Contexto verificado disponible; el historial puede estar incompleto."
           : "Sin conexión. Disponibilidad del contexto no verificada por completo; sólo se muestran los datos guardados."}</Text> : null}
         {contextReady && isOnline && (contextPreparation.phase === "failed" || contextPreparation.phase === "partial") ? <Pressable accessibilityRole="button" disabled={isPreparingContext || !!selectedItem} onPress={()=>void contextPreparation.prepare()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Reintentar</Text></Pressable> : null}
-      </View> : null}
+      </View></FormLayout> : null}
       {!isOnline && normalizedSearch && !visibleResponse?.searchComparison ? <Text>La copia usa la comparación anterior; las reglas actuales necesitan verificarse con conexión.</Text> : null}
+      <Text nativeID={searchA11y.labelId} style={styles.label}>Buscar</Text>
       <View style={[styles.searchBlock, appView.config.codeSearch && { flexWrap: "wrap" }]}>
         <TextInput
+          {...searchA11y.controlProps}
           autoCapitalize="words"
           onChangeText={value => changeSearchText(value)}
           editable={contextReady}
@@ -1353,24 +1369,24 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       ) : null}
 
       {selectedItem && visibleResponse ? (
-        <View style={styles.editorPanel}>
+        <FormLayout><View style={styles.editorPanel}>
           <View style={styles.subjectText}>
             <SubjectIdentity subject={selectedItem.subject} config={appView.config.subjectPresentation} definition={visibleResponse.subjectPresentation} titleStyle={styles.panelName}/>
             <Text style={styles.statusMeta}>Actual: {formatCurrentState(visibleResponse, selectedItem) ?? "Sin estado"}</Text>
           </View>
 
           <StateUpdateFormGrid slots={[
-            ...(hasDate && !compositeMode ? [{ key: "report-date", content: <View style={styles.fieldGroup}>
-              <Text style={styles.label}>{visibleResponse.dateField?.name ?? "Campo de fecha"}</Text>
-              <DateFieldInput label={visibleResponse.dateField?.name ?? "Campo de fecha"} required value={date} onChange={setDate} />
-            </View> }] : []),
+            ...(hasDate && !compositeMode ? [{ key: "report-date", content: <FieldFrame
+              label={visibleResponse.dateField?.name ?? "Campo de fecha"} labelId={`${contextLabelPrefix}-editor-date`} errorId={`${contextLabelPrefix}-editor-date-error`} required>
+              <DateFieldInput labelledBy={`${contextLabelPrefix}-editor-date`} label={visibleResponse.dateField?.name ?? "Campo de fecha"} required value={date} onChange={setDate} />
+            </FieldFrame> }] : []),
             ...visibleResponse.stateFields.map(field => ({ key: `state:${field.fieldId}`, full: ["TEXT", "TEXTAREA"].includes(stateFieldType(field)), content:
               <StateFieldInput field={field} onChange={(value) => {
                 setStateValues((current) => ({ ...current, [field.fieldId]: value }));
                 setError(null);
               }} value={stateValues[field.fieldId]} /> })),
             ...visibleResponse.extraFields.map(field => ({ key: `extra:${field.id}`, full: ["TEXT", "TEXTAREA"].includes(field.type), content:
-              <RecordFieldInput error={extraErrors[field.key] ?? (["SELECT", "MULTISELECT"].includes(field.type) && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
+              <RecordFieldInput presentation="form" error={extraErrors[field.key] ?? (["SELECT", "MULTISELECT"].includes(field.type) && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
                 relationTargetEntityTypeId={getRelationTargetEntityTypeId(field)}
                 relationOptions={[...new Map([...relationValueLabels(selectedItem.current?.extraValues?.[field.id]), ...(relationCatalogs.catalogs[field.id]?.options ?? [])].map(option => [option.id, option])).values()]}
                 relationOptionsError={relationCatalogs.catalogs[field.id]?.error ?? (relationCatalogs.catalogs[field.id]?.offline ? "Sin conexión: sólo se muestran registros del catálogo guardados en este dispositivo; disponibilidad no certificada." : null)}
@@ -1381,22 +1397,19 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
                   : field.type === "MULTISELECT" && Array.isArray(extraValues[field.key]) ? (extraValues[field.key] as string[]).map(value => unresolvedExtraValues[field.key]?.includes(value) ? unavailableStateUpdateExtraInput(field, value) : value)
                   : extraValues[field.key]} /> })),
           ]} />
-          <View style={styles.formActions}>
-          <Pressable
+          <FormActions>
+          <FormAction label={submitLabel} busyLabel="Guardando" busy={isSaving}
             disabled={isSaving}
             onPress={() => void saveSelected()}
-            style={[styles.primaryButton, isSaving && styles.disabledButton]}
-          >
-            {isSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>{submitLabel}</Text>}
-          </Pressable>
+          />
           {ownerKey && selectedContractId && selectedItem.current ? <LocalReportCancellation store={definitionCache}
             scope={{ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, identity }}
             observedUpdatedAt={selectedItem.current.updatedAt} localRecordId={selectedItem.current.recordId} subjectRecordId={selectedItem.subject.id}
             onCancelled={() => { setSelectedItem(null); void loadWorkflow({ operation: "refresh" }); }} /> : null}
           {visibleResponse?.schedulePolicy && selectedItem.current?.localScheduleReviewRequired===true ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>void openScheduleReview()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Revisar horario rechazado</Text></Pressable> : null}
-          {compositeMode ? <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Volver a buscar</Text></Pressable> : null}
-          </View>
-        </View>
+          {compositeMode ? <FormAction label="Volver a buscar" variant="secondary" disabled={isSaving} onPress={()=>setConfirmContextExit(true)} /> : null}
+          </FormActions>
+        </View></FormLayout>
       ) : null}
 
       {!selectedItem ? (
@@ -1550,7 +1563,7 @@ function LatestList({
           onPress={onLoadMore}
           style={[styles.secondaryButton, isLoadingMore && styles.disabledButton]}
         >
-          {isLoadingMore ? <ActivityIndicator color="#135d66" /> : <Text style={styles.secondaryText}>Cargar más</Text>}
+          {isLoadingMore ? <ActivityIndicator color={colors.primary} /> : <Text style={styles.secondaryText}>Cargar más</Text>}
         </Pressable>
       ) : null}
     </View>
@@ -1568,46 +1581,46 @@ function StateFieldInput({
 }) {
   const styles = useStateUpdateStyles();
   const type = stateFieldType(field);
+  const a11y = useFieldAccessibility(field.label, undefined, field.required);
 
   if (type === "SELECT") {
     return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.label}</Text>
-        <CompactSelect label={field.label} required={field.required} value={typeof value === "string" ? value : ""}
+      <FieldFrame label={field.label} labelId={a11y.labelId} required={field.required} errorId={a11y.errorId}>
+        <CompactSelect {...a11y.accessibility} indicatorPlacement="end" label={field.label} required={field.required} value={typeof value === "string" ? value : ""}
           options={field.options.map(option => ({ value: option.optionId, label: option.label, disabled: option.active === false }))}
           onChange={value => onChange(String(value))} />
-      </View>
+      </FieldFrame>
     );
   }
 
   if (type === "DATE" || type === "TIME" || type === "DATETIME") {
     const Input = type === "DATE" ? DateFieldInput : type === "TIME" ? TimeFieldInput : DateTimeFieldInput;
-    return <View style={styles.fieldGroup}><Text style={styles.label}>{field.label}</Text>
-      <Input label={field.label} required={field.required} value={typeof value === "string" ? value : ""} onChange={onChange} />
-    </View>;
+    return <FieldFrame label={field.label} labelId={a11y.labelId} required={field.required} errorId={a11y.errorId}>
+      <Input {...a11y.accessibility} label={field.label} required={field.required} value={typeof value === "string" ? value : ""} onChange={onChange} />
+    </FieldFrame>;
   }
 
   if (type === "BOOLEAN") {
     const selected = value === true;
 
     return (
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{field.label}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${field.label}: ${selected ? "Si" : "No"}`}
+      <FieldFrame label={field.label} labelId={a11y.labelId} required={field.required} errorId={a11y.errorId}>
+        <Pressable {...a11y.controlProps} accessibilityRole="checkbox" accessibilityState={{ checked: selected }}
+          {...(Platform.OS === "web" ? { "aria-checked": selected, onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => activateCompactCheckboxFromKeyboard(event, false, () => onChange(!selected)) } : {})}
           onPress={() => onChange(!selected)}
-          style={[styles.optionButton, selected && styles.optionButtonSelected]}
+          style={[styles.optionButton, selected && styles.optionButtonSelected, stateFormStyles.boolean]}
         >
-          <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{selected ? "Si" : "No"}</Text>
+          <View accessible={false} style={[stateFormStyles.check, selected && stateFormStyles.checked]}><Text accessible={false} style={stateFormStyles.checkMark}>{selected ? "✓" : ""}</Text></View>
+          <Text style={[styles.optionText, selected && styles.optionTextSelected, stateFormStyles.booleanText]}>{selected ? "Sí" : "No"}</Text>
         </Pressable>
-      </View>
+      </FieldFrame>
     );
   }
 
   return (
-    <View style={styles.fieldGroup}>
-      <Text style={styles.label}>{field.label}</Text>
+    <FieldFrame label={field.label} labelId={a11y.labelId} required={field.required} errorId={a11y.errorId}>
       <TextInput
-        accessibilityLabel={field.label}
+        {...a11y.controlProps}
         autoCapitalize="none"
         keyboardType={type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default"}
         onChangeText={onChange}
@@ -1615,7 +1628,7 @@ function StateFieldInput({
         style={styles.input}
         value={typeof value === "string" ? value : ""}
       />
-    </View>
+    </FieldFrame>
   );
 }
 
@@ -1640,24 +1653,20 @@ function ConflictModal({
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={Boolean(conflict)}>
       <View testID="state-update-modal" style={styles.modalBackdrop}>
-        <View style={styles.modalPanel}>
-          <Text style={styles.modalTitle}>{conflict?.subjectName ?? "Registro"}</Text>
-          <Text style={styles.modalMessage}>Opco tiene un estado distinto para este registro.</Text>
+        <View accessibilityViewIsModal style={[styles.modalPanel, { maxWidth: 620 }]}>
+          <Text accessibilityRole="header" style={styles.modalTitle}>{conflict?.subjectName ?? "Registro"}</Text>
+          <Text style={styles.modalMessage}>Compara el registro del servidor con tu cambio local. Sólo se aplicará la corrección si la confirmas.</Text>
           <ScrollView style={styles.conflictScroll} contentContainerStyle={styles.conflictRows}>
-            {rows.map((row) => (
-              <View key={`${row.fieldType ?? "field"}:${row.fieldId}`} style={styles.conflictRow}>
-                <Text style={styles.conflictLabel}>{row.label}</Text>
-                <Text style={styles.conflictText}>Actual: {row.existing ?? "Sin estado"}</Text>
-                <Text style={styles.conflictText}>Solicitado: {row.requested ?? "Sin estado"}</Text>
-              </View>
-            ))}
+            <StateUpdateConflictValues rows={rows} fields={fields} extraFields={extraFields}
+              serverFormat={conflict?.existing.extraValuesFormat} localFormat={conflict?.requested.extraValuesFormat}
+              persisted={Boolean(conflict?.durableRecord)} />
           </ScrollView>
           <View style={styles.modalActions}>
-            <Pressable disabled={isSaving} onPress={onCancel} style={styles.modalSecondaryButton}>
-              <Text style={styles.modalSecondaryText}>Cancelar</Text>
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: isSaving }} disabled={isSaving} onPress={onCancel} style={interaction => [styles.modalSecondaryButton, actionSurface(false, interaction, Boolean(isSaving))]}>
+              <Text style={[styles.modalSecondaryText, Boolean(isSaving) && { color: colors.onDisabled }]}>Cancelar</Text>
             </Pressable>
-            <Pressable disabled={isSaving} onPress={onConfirm} style={styles.modalPrimaryButton}>
-              <Text style={styles.modalPrimaryText}>Confirmar cambio</Text>
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }} disabled={isSaving} onPress={onConfirm} style={interaction => [styles.modalPrimaryButton, actionSurface(true, interaction, Boolean(isSaving))]}>
+              <Text style={[styles.modalPrimaryText, Boolean(isSaving) && { color: colors.onDisabled }]}>Confirmar cambio</Text>
             </Pressable>
           </View>
         </View>
@@ -1691,13 +1700,8 @@ function DurableConflictList({
         return (
           <View key={record.localRecordId} style={styles.conflictListRow}>
             <Text style={styles.subjectName}>{record.subject.displayName}</Text>
-            {rows.map((row) => (
-              <View key={`${record.localRecordId}:${row.fieldType ?? "field"}:${row.fieldId}`}>
-                <Text style={styles.conflictLabel}>{row.label}</Text>
-                <Text style={styles.statusMeta}>En Opco: {row.existing ?? "Sin estado"}</Text>
-                <Text style={styles.statusMeta}>Tu cambio: {row.requested ?? "Sin estado"}</Text>
-              </View>
-            ))}
+            <StateUpdateConflictValues rows={rows} fields={fields} extraFields={extraFields}
+              serverFormat={record.conflictRemoteExtraValuesFormat} localFormat={record.extraValuesFormat} persisted />
             <View style={styles.conflictActions}>
               <Pressable accessibilityRole="button" disabled={isSaving} onPress={() => onUseLocal(record)} style={styles.smallPrimaryButton}>
                 <Text style={styles.smallPrimaryText}>Usar mi cambio</Text>
@@ -1713,7 +1717,8 @@ function DurableConflictList({
   );
 }
 
-const baseStyles = StyleSheet.create({
+export function createStateUpdateBaseStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   contextPanel: { gap: 12 },
   contextFields: { gap: 12 },
   contextDate: { gap: 8 },
@@ -1726,7 +1731,7 @@ const baseStyles = StyleSheet.create({
     gap: 8,
   },
   conflictLabel: {
-    color: "#0f3036",
+    color: p.conflict,
     fontWeight: "800",
   },
   conflictRow: {
@@ -1739,15 +1744,15 @@ const baseStyles = StyleSheet.create({
     gap: 10,
   },
   conflictListRow: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7a72f",
+    backgroundColor: p.conflictSurface,
+    borderColor: p.conflictBorder,
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 12,
   },
   conflictText: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 15,
   },
   content: {
@@ -1756,7 +1761,7 @@ const baseStyles = StyleSheet.create({
     paddingBottom: 32,
   },
   diagnostic: {
-    color: "#587078",
+    color: p.textSecondary,
     fontFamily: "monospace",
     fontSize: 12,
     lineHeight: 16,
@@ -1765,24 +1770,24 @@ const baseStyles = StyleSheet.create({
     opacity: 0.55,
   },
   editorPanel: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 14,
     padding: 14,
   },
   empty: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   fieldGroup: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
@@ -1801,14 +1806,14 @@ const baseStyles = StyleSheet.create({
   },
   icon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 8,
     height: 42,
     justifyContent: "center",
     width: 42,
   },
   label: {
-    color: "#17363c",
+    color: p.textSecondary,
     fontSize: 15,
     fontWeight: "800",
   },
@@ -1817,8 +1822,8 @@ const baseStyles = StyleSheet.create({
   },
   latestRow: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
@@ -1829,7 +1834,7 @@ const baseStyles = StyleSheet.create({
     gap: 10,
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
     marginTop: 2,
   },
   modalActions: {
@@ -1838,17 +1843,17 @@ const baseStyles = StyleSheet.create({
   },
   modalBackdrop: {
     alignItems: "center",
-    backgroundColor: "rgba(15, 48, 54, 0.45)",
+    backgroundColor: p.overlay,
     flex: 1,
     justifyContent: "center",
     padding: 20,
   },
   modalMessage: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   modalPanel: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     borderRadius: 8,
     gap: 16,
     maxWidth: 420,
@@ -1858,7 +1863,7 @@ const baseStyles = StyleSheet.create({
   },
   modalPrimaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     flex: 1,
     justifyContent: "center",
@@ -1866,12 +1871,12 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   modalPrimaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   modalSecondaryButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.secondary,
     borderRadius: 8,
     flex: 1,
     justifyContent: "center",
@@ -1879,33 +1884,33 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   modalSecondaryText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   modalTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 20,
     fontWeight: "800",
   },
   input: {
-    borderColor: "#c8d2d5",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#17363c",
+    color: p.text,
     ...stableTextInputStyle,
     minHeight: 46,
     paddingHorizontal: 12,
   },
   optionButton: {
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   optionButtonSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
+    backgroundColor: p.primary,
+    borderColor: p.selectionBorder,
   },
   optionList: {
     flexDirection: "row",
@@ -1913,38 +1918,38 @@ const baseStyles = StyleSheet.create({
     gap: 8,
   },
   optionText: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 16,
     fontWeight: "700",
   },
   optionTextSelected: {
-    color: "#ffffff",
+    color: p.onPrimary,
   },
   offline: {
-    color: "#5b4a00",
+    color: p.warning,
     fontWeight: "700",
     lineHeight: 20,
   },
   panelName: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 20,
     fontWeight: "800",
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     ...stableSubmitButtonStyle,
     paddingHorizontal: 16,
   },
   primaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontSize: 16,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   searchBlock: {
@@ -1953,11 +1958,11 @@ const baseStyles = StyleSheet.create({
     gap: 10,
   },
   searchInput: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#17363c",
+    color: p.text,
     flex: 1,
     ...stableTextInputStyle,
     minHeight: 46,
@@ -1965,8 +1970,8 @@ const baseStyles = StyleSheet.create({
   },
   secondaryButton: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#b8c7ca",
+    backgroundColor: p.secondary,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
@@ -1974,52 +1979,52 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   secondaryText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   smallPrimaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
   },
   smallPrimaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   smallSecondaryButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
-    borderColor: "#b8c7ca",
+    backgroundColor: p.canvas,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
   },
   smallSecondaryText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   sectionTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 17,
     fontWeight: "800",
   },
   statusMeta: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   subjectName: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 16,
     fontWeight: "800",
   },
   subjectRow: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     padding: 14,
@@ -2029,39 +2034,56 @@ const baseStyles = StyleSheet.create({
     gap: 3,
   },
   success: {
-    color: "#087443",
+    color: p.success,
     lineHeight: 20,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 24,
     fontWeight: "800",
   },
 });
+}
+const baseStyles = createStateUpdateBaseStyles();
 
 
-const desktopStyles = StyleSheet.create({
-  ...desktopStyleColors(baseStyles),
-  content: { ...baseStyles.content, padding: 24, gap: 20 },
-  headerText: { ...baseStyles.headerText, minWidth: 0 },
-  contextPanel: { gap: 12, maxWidth: 1000, width: "100%", backgroundColor: desktopPalette.surface, borderColor: desktopPalette.border, borderWidth: 1, borderRadius: 8, padding: 16 },
+export function createStateUpdateDesktopStyles(p: ThemeColors = colors) {
+  const base = createStateUpdateBaseStyles(p);
+  return StyleSheet.create({
+  ...desktopStyleColors(base),
+  content: { ...base.content, padding: 24, gap: 20 },
+  headerText: { ...base.headerText, minWidth: 0 },
+  contextPanel: { gap: 12, maxWidth: 1000, width: "100%", backgroundColor: p.surface, borderColor: p.border, borderWidth: 1, borderRadius: 8, padding: 16 },
   contextFields: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: 16 },
   contextDate: { gap: 8, flexBasis: 210, flexGrow: 0, flexShrink: 1, maxWidth: "100%", minWidth: 0 },
   contextField: { gap: 8, flexBasis: 200, flexGrow: 1, maxWidth: 280, minWidth: 0 },
-  searchBlock: { ...baseStyles.searchBlock, width: "100%", maxWidth: 560 },
-  searchInput: { ...baseStyles.searchInput, borderColor: desktopPalette.controlBorder, color: desktopPalette.text, minWidth: 0 },
-  editorPanel: { ...baseStyles.editorPanel, borderColor: desktopPalette.border, padding: 20, width: "100%", maxWidth: 900 },
+  searchBlock: { ...base.searchBlock, width: "100%", maxWidth: 560 },
+  searchInput: { ...base.searchInput, borderColor: p.controlBorder, color: p.text, minWidth: 0 },
+  editorPanel: { ...base.editorPanel, borderColor: p.border, padding: 20, width: "100%", maxWidth: 900 },
   fieldGroup: { gap: 8, minWidth: 0 },
   formActions: { flexDirection: "row", flexWrap: "wrap", gap: 12, alignItems: "flex-start" },
-  primaryButton: { ...baseStyles.primaryButton, backgroundColor: desktopPalette.primary, alignSelf: "flex-start", minWidth: 160 },
-  secondaryButton: { ...baseStyles.secondaryButton, borderColor: desktopPalette.controlBorder, alignSelf: "flex-start", paddingVertical: 10 },
-  input: { ...baseStyles.input, borderColor: desktopPalette.controlBorder, color: desktopPalette.text, minWidth: 0 },
+  primaryButton: { ...base.primaryButton, backgroundColor: p.primary, alignSelf: "flex-start", minWidth: 160 },
+  secondaryButton: { ...base.secondaryButton, borderColor: p.controlBorder, alignSelf: "flex-start", paddingVertical: 10 },
+  input: { ...base.input, borderColor: p.controlBorder, color: p.text, minWidth: 0 },
   list: { gap: 0 },
-  optionButton: { ...baseStyles.optionButton, alignSelf: "flex-start" },
-  modalPanel: { ...baseStyles.modalPanel, maxWidth: 620, maxHeight: "90%" },
-  modalActions: { ...baseStyles.modalActions, flexWrap: "wrap" },
-  conflictListRow: { ...baseStyles.conflictListRow, gap: 12 },
+  optionButton: { ...base.optionButton, alignSelf: "flex-start" },
+  modalPanel: { ...base.modalPanel, maxWidth: 620, maxHeight: "90%" },
+  modalActions: { ...base.modalActions, flexWrap: "wrap" },
+  conflictListRow: { ...base.conflictListRow, gap: 12 },
 });
+}
+const desktopStyles = createStateUpdateDesktopStyles();
 function useStateUpdateStyles() {
   return useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
 }
+
+export function createStateUpdateStateFormStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  boolean: { flexDirection: "row", alignItems: "center", alignSelf: "stretch", gap: 10, minHeight: 46, backgroundColor: p.surface, borderColor: p.controlBorder },
+  booleanText: { color: p.text, fontWeight: "400" },
+  check: { width: 22, height: 22, borderRadius: 4, borderWidth: 1, borderColor: p.controlBorder, alignItems: "center", justifyContent: "center" },
+  checked: { backgroundColor: p.primary, borderColor: p.primary },
+  checkMark: { color: p.onPrimary, fontSize: 17, lineHeight: 21 },
+});
+}
+const stateFormStyles = createStateUpdateStateFormStyles();

@@ -1,10 +1,12 @@
+import { type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
+import { FormActions, FormAction } from "@/components/form-actions";
+import { FormLayout, FormGrid } from "@/components/form-layout";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,7 +23,6 @@ import {
   UniqueValidationResult,
 } from "@/lib/offline-unique-validation";
 import { EntityDefinition, EntityRecordValue, RecordsAppView } from "@/lib/opco-api";
-import { stableSubmitButtonStyle } from "@/lib/visual-stability";
 import { reportWriteFeedback } from "@/lib/write-feedback";
 import {
   buildChangedSubmitValues,
@@ -78,7 +79,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     readMode: definition ? "refresh" : "initial", errorCode: error ? "RECORDS_FORM_FAILED" : null,
     result: error ? "error" : reading === 0 && !isSubmitting ? "success" : null,
   });
-  const title = mode === "create" ? `Crear en ${appView.name}` : `Editar ${record?.displayName ?? "registro"}`;
+  const operationLabel = mode === "create" ? "Crear registro" : `Editar ${record?.displayName ?? "registro"}`;
 
   useEffect(() => {
     latestValuesRef.current = values;
@@ -405,9 +406,10 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+      <FormLayout>
       <View style={styles.header}>
-        <Text style={styles.kicker}>{appView.name}</Text>
-        <Text style={styles.title}>{title}</Text>
+        <Text accessibilityRole="header" style={styles.title}>{appView.name}</Text>
+        <Text style={styles.kicker}>{operationLabel}</Text>
         {definition ? <Text style={styles.meta}>{definition.name}</Text> : null}
       </View>
 
@@ -415,15 +417,14 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {uniqueNotice ? <Text style={styles.notice}>{uniqueNotice}</Text> : null}
       {error && !definition ? (
-        <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>
-          <Text style={styles.primaryText}>Reintentar</Text>
-        </Pressable>
+        <FormAction label="Reintentar" onPress={() => setRetryCount((count) => count + 1)} />
       ) : null}
 
       {definition ? (
-        <View style={styles.form}>
-          {fields.map((field) => (
+        <FormGrid slots={fields.map((field) => ({
+          key: field.key, fullWidth: field.type === "TEXTAREA" || field.type === "DATETIME", content: (
             <RecordFieldInput
+              presentation="form"
               error={fieldErrors[field.key]}
               field={field}
               key={field.key}
@@ -440,28 +441,19 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
               }
               value={values[field.key]}
             />
-          ))}
+          )
+        }))}>
           {checkingUniqueFieldKey ? <Text style={styles.notice}>Comprobando valor unico...</Text> : null}
-        </View>
+        </FormGrid>
       ) : null}
 
       {definition ? (
-        <View style={styles.actions}>
-          <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>Volver</Text>
-          </Pressable>
-          <Pressable disabled={isSubmitting} onPress={handleSubmit} style={styles.primaryButton}>
-            {isSubmitting ? (
-              <View style={styles.buttonContent}>
-                <ActivityIndicator color="#ffffff" />
-                <Text style={styles.primaryText}>Guardando</Text>
-              </View>
-            ) : (
-              <Text style={styles.primaryText}>Guardar</Text>
-            )}
-          </Pressable>
-        </View>
+        <FormActions>
+          <FormAction label="Volver" variant="secondary" onPress={() => router.back()} />
+          <FormAction label="Guardar" busyLabel="Guardando" busy={isSubmitting} disabled={isSubmitting} onPress={handleSubmit} />
+        </FormActions>
       ) : null}
+      </FormLayout>
     </ScrollView>
   );
 }
@@ -520,79 +512,42 @@ function uniqueValidationNotice(result: Extract<UniqueValidationResult, { status
   return "No pudimos completar la comprobacion preventiva. El servidor validara al sincronizar.";
 }
 
-const styles = StyleSheet.create({
-  actions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  buttonContent: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
+export function createRecordFormStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   content: {
     gap: 16,
     padding: 20,
     paddingBottom: 36,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
-  },
-  form: {
-    gap: 12,
   },
   header: {
     gap: 4,
   },
   kicker: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
   },
   notice: {
-    color: "#6f5b00",
+    color: p.warning,
     lineHeight: 20,
   },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: "#135d66",
-    borderRadius: 8,
-    justifyContent: "center",
-    ...stableSubmitButtonStyle,
-    paddingHorizontal: 16,
-  },
-  primaryText: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "800",
-  },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
-  secondaryButton: {
-    alignItems: "center",
-    borderColor: "#b8c7ca",
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 44,
-    paddingHorizontal: 16,
-  },
-  secondaryText: {
-    color: "#17363c",
-    fontSize: 16,
-    fontWeight: "800",
-  },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 26,
     fontWeight: "800",
   },
 });
+}
+const styles = createRecordFormStyles();

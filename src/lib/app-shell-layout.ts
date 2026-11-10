@@ -7,10 +7,11 @@ export const HOME_DESKTOP_CARD_GAP = 16;
 
 export function getHomeGridLayout(viewportWidth: number, measuredContentWidth?: number) {
   const wide = viewportWidth >= APP_SHELL_WIDE_BREAKPOINT;
-  const columns = viewportWidth >= HOME_THREE_COLUMN_BREAKPOINT ? 3 : wide ? 2 : 1;
+  const desiredColumns = viewportWidth >= HOME_THREE_COLUMN_BREAKPOINT ? 3 : viewportWidth >= 700 ? 2 : 1;
   const padding = wide ? APP_SHELL_DESKTOP_GUTTER : APP_SHELL_HORIZONTAL_GUTTER;
-  const gap = wide ? HOME_DESKTOP_CARD_GAP : 10;
+  const gap = wide || desiredColumns > 1 ? HOME_DESKTOP_CARD_GAP : 10;
   const contentWidth = measuredContentWidth ?? Math.max(0, Math.min(viewportWidth, wide ? HOME_MAX_WIDTH : viewportWidth) - padding * 2);
+  const columns = Math.min(desiredColumns, Math.max(1, Math.floor((contentWidth + gap) / (260 + gap))));
   return { columns, padding, gap, cardWidth: Math.max(0, (contentWidth - gap * (columns - 1)) / columns) };
 }
 

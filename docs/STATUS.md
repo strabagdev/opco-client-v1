@@ -3655,3 +3655,166 @@ Core/editor y Client preparados localmente con kind canónico ONE/MANY; checkbox
 ### Restauración Attendance / ONE histórico — candidato local 06-11-2026
 
 Corrección incremental sobre relation-cardinality-fix: interpretación de arreglos unitarios por metadata, ID/etiqueta conservados y revisión explícita para valores incompatibles. No se regularizaron los diez campos ni se reescribió outbox; MANY, SELECT, guardas y comandos existentes conservados. Evidencia/parches combinados y límites: backups/attendance-relation-context-restoration/2026-11-06/REVIEW.md. Ver STATE_UPDATE, Restauración. Publicación/activación no autorizadas en esta ejecución; respaldo operativo actualizado pendiente. 402 exclusiones, pendientes ajenos y V11 preservados.
+
+### UX/UI integral — auditoría y propuesta, NO IMPLEMENTADA — 07-11-2026
+
+[Propuesta canónica UX/UI](UX_UI_REDESIGN.md): inventario de rutas/renderers/controles, hallazgos estáticos con referencias al código, navegación teléfono/tablet/desktop, tokens claro/oscuro, reutilización, bocetos y plan por lotes. Primera mejora recomendada: títulos configurados, etiquetas/semántica y contenido de confirmación; después shell, campos y consultas adaptables. No se modifican reglas, handlers, API, almacenamiento ni preparación. Sin aplicación/navegador, pruebas, build ni producción; accesibilidad y dispositivos quedan por validar. Se preservan los pendientes y cierres anteriores; V11 no se reabre.
+
+
+### UX/UI — etapa 1 implementada localmente, SIN PUBLICAR — 08-11-2026
+
+Títulos por AppView, etiquetas y errores asociados, booleanos accesibles, foco y confirmación Attendance que explica observación/contextos además del estado. Handlers de negocio comparados sin cambios; sin Core/API/esquema/SQLite/outbox/sincronización/configuración. [Alcance y límites canónicos](UX_UI_REDESIGN.md#etapa-1--claridad-y-accesibilidad-implementación-local-08-11-2026); revisión, checks, inventario/parche y capturas: backups/ux-ui-stage1/2026-11-08/. Navegador Chromium real con datos/API sintéticos, no Safari/iPhone físico ni validación productiva. Errores de lint global y arneses históricos contrastados con HEAD quedan identificados, sin ocultarlos como PASS. Cabecera/navegación/tema global pertenecen a etapas posteriores. 402 exclusiones, pendientes ajenos, Core e índices preservados; sin commit/push/deploy. V11 pausado.
+
+## UX/UI etapa 2 — navegación/organización local — 08-11-2026
+
+Continuación separable de Etapa 1 (23 archivos/82 hunks), sin publicar. Cabecera común compacta, contexto y título AppView, menú existente con navegación/cuenta/contexto/Diagnóstico; categorías móviles y grid tablet. Indicador neutral cuando no hay actividad, con envío/error/conflicto legibles a partir de señales existentes; RECORDS conserva además sus controles locales. Sin cambios en Core, API, renderers, preparación, guardados, persistencia o motor de sync.
+
+Inventario/parche, checks y comparaciones reales en `backups/ux-ui-stage2/2026-11-08/REVIEW.md`; documentación de alcance en UX_UI_REDESIGN y DESKTOP_INTERFACE. Regresiones focalizadas, typecheck, lint afectado, export web y diff-check; lint global conserva sus dos errores previos de Buffer en un arnés ajeno. Chrome Linux 390/768/1024/1440 con API sintética y OPFS; reapertura offline conserva un pendiente íntegro y su identidad, ACK simulado único. Los ensayos y limitaciones permanecen documentados, sin atribuir cambios de red a resize sin evidencia. Safari físico/native/lectores de pantalla y revisión humana del diseño pendientes.
+
+402 exclusiones, demás pendientes y respaldo Etapa 1 conservados. Sin producción, commit, push o deploy; V11 pausado. Recomendación para continuar: revisar capturas y abordar primitivas/formularios en lote independiente; no autoriza publicación ni cambios de negocio.
+
+### UX/UI — revisión visual y preparación de Etapa 3 — 08-11-2026
+
+Inspeccionadas las 52 capturas de Etapa 2 y las 19 de Etapa 1 (71/71), con hashes de respaldo verificados. [Evaluación y plan canónicos](UX_UI_REDESIGN.md#revision-visual-etapa3): mejoras de orientación/confirmación acreditadas visualmente; persisten tarjetas por campo, contexto Attendance fragmentado, BOOLEAN con aspecto de acción, duplicación de conflicto y búsqueda/paginación PANEL poco claras. El alto del módulo PANEL tiene origen configurado y no se propone ignorarlo. REPORT/MATRIX y filtros extensos sólo tienen evidencia estática en esta revisión.
+
+Recomendado un único siguiente lote 3A: presentación optativa de campos/grilla/acciones en RecordFormScreen, preservando defaults de otros consumidores; después workflows, lectura y consultas por separado. **Etapa 3 NO IMPLEMENTADA**, requiere autorización. Sin código funcional, nuevas pruebas/build/navegador, Core, API, almacenamiento, configuración o publicación. Etapas 1/2, respaldos, 402 exclusiones y demás pendientes preservados; V11 pausado.
+
+### UX/UI Etapa 3A — formulario RECORDS local, sin publicar — 08-11-2026
+
+FormLayout/FormGrid, FieldFrame y acciones compartidas, adoptados sólo por RecordFormScreen mediante variante optativa RecordFieldInput; default legacy conserva los demás consumidores. Una sección, grilla útil en tablet/desktop, checkbox reconocible y acciones agrupadas. Handlers/efectos/atributos controlados idénticos por AST, valores canónicos antes/después iguales; sin API/Core/esquema/SQLite/outbox/sync ni configuración productiva.
+
+212/212 focalizadas; consumidores 37/39 con dos asserts de shell heredados de la base local, reproducidos aislados. Typecheck/lint afectado/build/diff-check PASS; lint global conserva los dos Buffer previos y seis warnings. Chromium153 a390/768/1024/1440 y límites responsive, sin pérdida de nodos/valores/foco al resize. OPFS real, cierre/reapertura offline, formulario restaurado y ACK simulado único. Primer ensayo de huella fallido y límites expresos en el [alcance canónico](UX_UI_REDESIGN.md#etapa-3a-formularios), sin ocultarlo ni atribuir causa única. Informe/inventario/parche/capturas en `backups/ux-ui-stage3a/2026-11-08/`. Etapas1/2, 402 exclusiones y pendientes conservados; Safari físico/native/accesibilidad completa pendientes. Sin commit/push/deploy; 3B requiere lote separado. V11 pausado.
+
+#### Remate visual dentro de 3A — 08-11-2026, local sin publicar
+
+RELATION form distingue Buscar opciones/Selección actual y MULTISELECT alinea flecha a la derecha; default legacy intacto. 242/242 afectadas, typecheck/lint afectado/build/diff-check PASS. Capturas comparables 390/768/1024/1440, pie móvil completo y detalle estabilizado; OPFS real con reapertura/payload conservado, API/ACK sintéticos. Primer control de orden de etiquetas MANY fallido conservado, sin pérdida del payload. Detalle no migrado aún muestra IDs, sin cambios en este lote. [Alcance y límites](UX_UI_REDESIGN.md#ajustes-finales-de-3a--relation-e-indicadores-08-11-2026); inventario/parches 3A combinado y delta en backups/ux-ui-stage3a-final-adjustments/2026-11-08/. Core, etapas1/2, respaldo 3A original, 402 exclusiones y pendientes preservados. Safari/native/lectores de pantalla pendientes; sin 3B, commit/push/deploy ni producción.
+
+### UX/UI Etapa3B — contextos Attendance locales, SIN PUBLICAR — 08-11-2026
+
+Grilla/frames3A en contexto antes del buscador; SELECT/RELATION ONE, búsqueda/selección claras, columnas por ancho y sin tarjetas individuales. FormGrid plain optativo, default RECORDS intacto. Handlers/efectos/36props de negocio idénticos; cámara/fecha/identidad/confirmación sin cambios. [Alcance canónico](UX_UI_REDESIGN.md#etapa-3b-attendance); respaldo/parche/inventario incremental en backups/ux-ui-stage3b/2026-11-08/.
+
+Navegador Chromium/OPFS390/768/1024/1440, A/B, contextos consecutivos/cambio/edición, cancelar/confirmar, payload íntegro tras cierre/reapertura offline y ACK simulado único. Misma huella de comandos antes/después; teclado/resize sin escrituras o pérdida de estado. API remota sintética, no Core real ni cobertura completa del día. Ampliada196/218:22fallos coincidentes con control HEAD histórico, sin nuevos; contextos4/4 y servicios4/4 PASS, typecheck/build/diff-check PASS; lint afectado0errores/1warning previo. Safari/native/lector de pantalla/cámara pendientes; MANY y adopción STATE_UPDATE fuera del lote. Core, etapas1/2/3A, 402 exclusiones y pendientes preservados; sin commit/push/deploy ni producción. V11 pausado.
+
+
+### UX/UI Etapa3C — STATE_UPDATE local, SIN PUBLICAR — 08-11-2026
+
+Revisión previa de18 capturas3B sin bloqueo visual importante en el fixture. Contexto/editor STATE_UPDATE usan grilla/frames/acciones3A; extras form y BOOLEAN reconocible, sin tarjetas por campo. Mismos valores/handlers/118sentencias de negocio, optionId de estados y valores canónicos de extras; Core/API/SQLite/OPFS/outbox/namespace intactos. [Alcance canónico](UX_UI_REDESIGN.md#etapa-3c-state-update); lote incremental reconstruible y capturas en backups/ux-ui-stage3c/2026-11-08/.
+
+Chrome153/OPFS real a390/768/1024/1440: simple/compuesto/append sin fecha, crear/corregir/cancelar, dos pendientes tras cierre/reapertura offline y exactamente dos ACK sintéticos al reconectar; huellas de comandos antes/después iguales. Resize/teclado conservan estado y no añaden lecturas.62/62 controles PASS; ampliada222/229 conserva siete RED preexistentes de HEAD archivado. Typecheck/lint afectado/build/diff-check PASS. API/epoch2/index/sw/lector local verificados. Modal de conflicto RELATION aún muestra IDs/JSON previos; Safari/native/Core real/lector de pantalla pendientes, sin cobertura universal. Etapas1/2/3A/3B,402 exclusiones, Core y demás pendientes conservados. Sin commit/push/deploy ni producción. Próxima adopción requiere lote separado; V11 pausado.
+
+
+### Revisión3C + conflictos STATE_UPDATE — local SIN PUBLICAR, 08-11-2026
+
+42capturas3C inspeccionadas (28previas por hash+14completadas), hallazgos documentados antes del código. Modal/lista durable usan proyección visual de servidor/cambio local propuesto, labels RELATIONONE/MANY y SELECT, ausentes explícitos y trazas secundarias, sin JSON principal. Nota única y columnas en tablet; comparadores/118sentencias/61props controladas y todos los handlers intactos. [Alcance](UX_UI_REDESIGN.md#state-update-conflictos-legibles); respaldo separado backups/ux-ui-conflict-presentation/2026-11-08/.
+
+21/21presentación final; dos regresiones reales RED→GREEN. Ampliada145/147 conserva dos caracterizaciones schema-v10 fallidas también en base3C aislada; siete RED de3C siguen documentados, no se reejecutaron. Typecheck/lint afectado/build/diff-check PASS. Chromium153/OPFS real, transporte sintético: crear/actualizar/corregir/cancelar, teclado, cuatro anchos, conflicto tras replay y reapertura offline con payload/clientRequestId/base/versiones intactos. Servidor es la versión recibida; catálogo cargado puede ser parcial. Safari/Core real/accesibilidad física pendientes. Core, etapas1–3C,402exclusiones y ajenos preservados; sin producción, commit/push/deploy, almacenamiento/sync ni tablas/filtros. V11 pausado.
+
+
+### UX/UI3D — diagnóstico de lectura, SIN IMPLEMENTACIÓN — 08-11-2026
+
+[Diagnóstico y plan canónicos](UX_UI_REDESIGN.md#etapa-3d-diagnostico).14capturas archivadas inspeccionadas (PANEL/RECORDS/detalle en4anchos + reapertura/reconexión); fuentes principales contrastadas con código actual. Acreditados: detalle con tarjetas/IDs MANY, buscador PANEL poco reconocible y paginación alejada por altura configurada. Truncamiento/tablas anchas REPORT/MATRIX son riesgos estáticos pendientes de fixture extenso, no validación visual nueva. Vacío de colección0 no se clasifica como fallo.
+
+Único siguiente lote propuesto3D.1: RECORDS/lista/detalle, con primitivas visuales optativas; luego3D.2 REPORT/PANEL/filtros y3D.3 MATRIX por separado. No cambiar formatter global: MATRIX usa texto formateado para Sets/resúmenes/orden. Conservar Cargar más25 de RECORDS, pagina/dataset de PANEL y ausencia de paginación REPORT; layout PANEL y snapshots exactos intactos. Etiquetas sólo desde fuentes autorizadas disponibles, sin descarga/N+1 ni falsa cobertura. Implementación aún no autorizada en este encargo.
+
+Sólo docs/UX_UI_REDESIGN.md y STATUS, prefijos previos conservados; sin código, pruebas/build/navegador nuevos ni producción. Diff-check y verificación por hashes; checks funcionales figuran como aceptación futura. Respaldo documental en backups/ux-ui-stage3d-review/2026-11-08/. Core, etapas1–3C/conflictos,402exclusiones y pendientes preservados; sin commit/push/deploy. V11 pausado.
+
+
+## UX/UI 3D.1 RECORDS — local, sin publicar — 08-11-2026
+
+Lista con valores completos y buscador máximo560; detalle agrupado máximo960, lectura móvil apilada/dos columnas cuando cabe. Reutiliza FormLayout/FormGrid/FormActions; ReadFieldList y proyección RECORDS distinguen vacío/no disponible y etiquetas SELECT/RELATION de trazas secundarias. Sin nuevas descargas de etiquetas ni cambios en API, negocio o almacenamiento.
+
+176/176 focalizadas, typecheck/lint afectado/build/diff-check; renderer Chrome153/OPFS antes/después390/768/1024/1440, edición/teclado/resize, cierre/reapertura offline y PATCH/ACK sintético equivalente. Regresión propia de estilos Link corregida y archivada; controles del arnés y fallos históricos ajenos explícitos. Safari físico/native/Core real pendientes. [Alcance y límites canónicos](UX_UI_REDESIGN.md#etapa-3d1-records), inventario/parche y capturas en backups/ux-ui-stage3d1/2026-11-08/. Etapas previas,402exclusiones, Core y pendientes conservados. Revisar3D.1 antes de3D.2 REPORT/PANEL; MATRIX sigue separado. V11 pausado.
+
+
+### Revisión visual3D.1 y plan3D.2 — 08-11-2026, sin implementación
+
+42/42capturas3D.1 inspeccionadas directamente, más4PANEL archivadas; hashes originales verificados. Detalle agrupado apto; lista necesita remate menor de cabecera390 (Crear estrecha metadatos) y espaciado/densidad sin volver a truncar. No bloqueo de acceso demostrado. Aviso rojo offline coexistente con copia local es previo y queda separado. No se aplican ajustes ni se modifica el respaldo3D.1.
+
+[Hallazgos y plan canónicos](UX_UI_REDESIGN.md#revision-3d1-plan-3d2): primero PANEL TABLE/filtros y revisión; después REPORT TABLE/current, sin MATRIX/KPI. Pie próximo al resultado dentro del tamaño configurado, controles existentes estables, proyección aditiva sin cambiar formatter/MATRIX ni SELECT de consultas; BOOLEAN conserva vacío/true/false. No nuevas consultas/snapshots/preparación. Evidencia REPORT/filtros extensos pendiente de implementación autorizada. Sólo2documentos, sin pruebas/build/navegador nuevos; diff-check y preservación por hashes. Core, fuentes3D.1/etapas anteriores,402exclusiones y ajenos intactos. Respaldo documental: backups/ux-ui-stage3d1-review/2026-11-08/. Sin commit/push/deploy ni producción; V11 pausado.
+
+
+### Cierre visual3D.1 RECORDS — local, 08-11-2026
+
+Cabecera compacta envuelve Crear sin estrechar metadatos; lista reduce espacios sin elipsis ni pérdida de campos y Cargar más usa azul/rol button, manteniendo46px/estados/handler. Detalle y estilos Link flatten conservados. [Evidencia/mediciones y límites](UX_UI_REDESIGN.md#cierre-visual-3d1):176/176 afectadas, typecheck/lint/build/diff-check PASS; Chromium153/OPFS4anchos, teclado, reapertura offline y PATCH sintético equivalente. Dos controles fallidos del arnés extra archivados; no nuevos fallos funcionales acreditados. Safari físico/Core real pendientes; aviso offline previo separado.
+
+Delta y combinado3D.1 en backups/ux-ui-stage3d1-final/2026-11-08/. Etapas previas, revisión/plan3D.2, Core,402exclusiones y ajenos preservados. Sin producción/publicación ni implementación3D.2. V11 pausado.
+
+
+## UX/UI3D.2A PANEL TABLE — local, sin publicar, 09-11-2026
+
+Filtros compartidos sin tarjetas, buscador etiquetado, tabla adaptable por ancho interior con textos/relaciones completos y pie junto a resultados. Mismos queries/dataset/page; módulos acotados por su tamaño configurado con scroll interior. KPI/REPORT/MATRIX intactos.159 afectadas PASS,60 repetidas sobre contenido final; typecheck/lint/build/diff-check PASS. Chromium153/OPFS antes/después en 4 anchos:23 consultas idénticas, resize0 solicitudes, reapertura offline13 snapshots iguales/0 API PANEL/integridadOK. API sintética; Safari físico y lector de pantalla pendientes. No preparación automática nueva; paginación vacía conserva límite previo.
+
+[Alcance canónico, evidencia y límites](UX_UI_REDESIGN.md#etapa-3d2a-panel-table); inventario/parche/capturas en backups/ux-ui-stage3d2a/2026-11-09/. Etapas previas/Core/402 exclusiones/ajenos preservados; delta sobre baseline local archivada, sin stage de archivos completos.3D.2B requiere su propio lote. Sin commit/push/deploy/producción; V11 pausado.
+
+
+### Revisión visual 3D.2A y preparación 3D.2B — 09-11-2026, sólo documentación
+
+56/56 capturas PANEL inspeccionadas directamente; hashes originales verificados. Mejoran filtros, búsqueda y lectura completa; permanecen pérdida de densidad con nueve campos apilados, pie oculto durante scroll largo y controles apilados en módulos mínimos. Recomendado remate visual PANEL antes de consolidarlo, separado de REPORT; no bloqueo de acceso a datos demostrado. Filtros RELATION poblados y etiquetas no disponibles necesitan evidencia visual complementaria.
+
+[Hallazgos y propuesta canónicos](UX_UI_REDESIGN.md#revision-3d2a-plan-3d2b): primer lote 3D.2B sólo REPORT TABLE, período/acciones existentes, geometría compartida, texto completo y proyección visual por field.key/metadata por ID; no nuevo buscador o paginación. No tocar formatter/modelos/MATRIX/consolidación ni loader/snapshots. CURRENT_STATUS/LATEST_BY_RELATION quedan como incremento posterior explícito. Sin nuevas pruebas, builds, navegador ni implementación. Código/etapas previas/Core/402 exclusiones/ajenos preservados; respaldo documental ux-ui-stage3d2a-review/2026-11-09/. Sin producción/commit/push/deploy; V11 pausado.
+
+
+### Cierre PANEL3D.2A — local, 09-11-2026
+
+Fila apilada distribuye campos breves en dos columnas cuando caben; pie sticky web accesible durante scroll y botones compactos44px en módulos estrechos. Misma grilla/scroll/queries.110/110 afectadas, typecheck/lint/build/diff-check PASS; Chrome153/OPFS,23consultas idénticas,13snapshots iguales tras reapertura offline y0API PANEL. Capturas RELATION con búsqueda/selección y etiquetas ausentes. [Alcance/límites](UX_UI_REDESIGN.md#cierre-panel-3d2a); respaldo ux-ui-stage3d2a-final/2026-11-09/. Sin bloqueo local para REPORT TABLE. Core/402exclusiones/ajenos preservados; Safari físico/native pendientes, API sintética. Sin producción/publicación; V11 pausado.
+
+
+### REPORT TABLE3D.2B — local, 09-11-2026
+
+Período/Actualizar agrupados, tabla adaptada por ancho interior y proyección de labels SELECT/RELATION por field.key, sin cambiar modelo/formatter. Sin búsqueda ni paginación nuevas.23sentencias previas al render y CurrentStatus/Matrix/PeriodControl/DateInput/estilos legacy idénticos.33/33afectadas y12/12finales, typecheck/lint/build/diff-check PASS. Chrome153/OPFS:16consultas/resultados idénticos,10snapshots iguales tras reapertura offline, integridadOK; API sintética,0escrituras. [Alcance y límites](UX_UI_REDESIGN.md#etapa-3d2b-report-table); respaldo ux-ui-stage3d2b/2026-11-09/. Control previo de bloqueo OPFS tras navegación dura base documentado sin causa atribuida; navegación SPA y cierre/reapertura reales pasan. Core/402exclusiones/ajenos y PANEL final preservados. Sin producción/publicación; V11 pausado. MATRIX3D.3 requiere diagnóstico y autorización propios.
+
+
+### UX/UI 3D.3 MATRIX — local, sin publicar — 09-11-2026
+
+Diagnóstico visual previo y lote independiente: matriz con viewport web 2D, primera columna/cabecera fijas, textos completos y foco/teclado. Conserva todas las celdas, Sets, frecuencias de resumen y formato original; sin sumas nuevas ni cambios en TABLE/otros modos. Más ancho y altura para etiquetas/resúmenes extensos son costes explícitos. [Alcance, evidencia y límites](UX_UI_REDESIGN.md#etapa-3d3-matrix); inventario/parche/capturas en backups/ux-ui-stage3d3/2026-11-09/.
+
+27/27 afectadas, 6/6 finales; typecheck/lint/build/diff-check PASS. Chrome153/OPFS real a 390/768/1024/1440, teclado/rueda/resize; 3 consultas visuales y 13 del recorrido idénticas con sus respuestas, celdas iguales. Ocho snapshots tras cierre/reapertura offline, huella igual e integridad OK; pendientes vacíos/0 escrituras, sin nueva cobertura de sincronización. Loader remoto primero/fallback y snapshots exactos intactos. API sintética; Safari físico/native/tacto/lector de pantalla/Core real pendientes. Solapamiento propio de resumen móvil corregido; selector de ruta oculta corregido sólo en arnés, sin atribuirlo al motor. Etapas previas, Core, 402 exclusiones/ajenos preservados. Sin producción/commit/push/deploy; V11 pausado.
+
+
+### Identidad visual y temas — propuesta, SIN APLICACIÓN — 09-11-2026
+
+54capturas MATRIX revisadas en9láminas, más originales representativas de otras etapas. Persisten familias turquesa/azul/negro, superficies y pintura de controles separadas. [Propuesta canónica](UX_UI_REDESIGN.md#identidad-visual-temas-propuesta): paletas light/dark explícitas, tokens semánticos y escalas, adopción por primitivas/shell/renderers, oscuro global sólo al completar superficies. Preferencia sistema propuesta, fallback claro, sin nueva preferencia persistida ni cambio de motores.
+
+Galería estática y tokens en design/proposals/visual-identity-2026-11-09/:12capturas Chromium4anchos,98pares de contraste PASS, foco/hover/pressed y resize sólo del ejemplo, sin red. No tema aplicado, pruebas de workflows/offline nuevas ni builds/suites. Safari/native/lector de pantalla y cierre OPFS del futuro tema pendientes de implementación aprobada. Código/Core/etapasprevias/402exclusiones/ajenos intactos; diff-check y preservación por hashes. Respaldo ux-ui-visual-identity-proposal/2026-11-09/. Sin producción/commit/push/deploy;V11 pausado.
+
+
+### Identidad visual — fase1 local, SIN PUBLICAR — 09-11-2026
+
+Tokens tipados light/dark aprobados y tema claro fijo; sin proveedor/listener de sistema, almacenamiento o activación oscura. FormLayout/Grid,FieldFrame,FormActions,CompactSelect,RecordFieldInput,temporales web/native,foco y carga usan tokens semánticos. Mismos handlers/controlados, IDs/valores y validadores; componentes legacy no migrados mantienen sus estilos. [Alcance y límites](UX_UI_REDESIGN.md#identidad-visual-fase1); respaldo visual-tokens-phase1/2026-11-09/.
+
+110/110 focalizadas,16/16 finales,98pares contraste; typecheck/lint/build/diff-check PASS. Chrome153/OPFS a4anchos, SELECT/RELATIONONE/MANY/BOOLEAN/temporales, teclado y preferencia oscura con controles aún claros. Resize0requests y nodos/valores/foco conservados. Un pendiente RECORDS sintético sobrevive cierre/reapertura offline con identidad/payload idénticos e integridadOK;1ACK simulado único al reconectar.101atributos/effects/handlers intactos por AST. API sintética; no Core real ni nueva cobertura universal de workflows/Safari/native/lector de pantalla.
+
+Grupo inicial109/110 con un fallo a5033ms, causa no cerrada; controles aislados base/candidatoPASS y grupo1worker finalPASS, sin subirtimeout. No se declara defecto preexistente ni resuelto. Ajuste de altura propio de MULTISELECT y helper faltante del arnés separados del motor. Oscuro global/badges/shell pendientes de siguientes fases. Etapasanteriores,402exclusiones/Core/ajenos intactos; sin producción/commit/push/deploy;V11pausado.
+
+## Identidad visual Fase 2 — local, sin publicar — 2026-11-09
+
+Navegación/cabeceras/menús, diálogos y estados adoptan tokens aprobados, preservando handlers y runtime. Claro activo; oscuro sólo fábricas y muestras aisladas. [Contrato y límites](UX_UI_REDESIGN.md#identidad-visual-fase2). Entrega reconstruible independiente: backups/visual-tokens-phase2/2026-11-09/. No preparar diffs completos: los archivos contienen etapas UX anteriores.
+
+259/265 pruebas focalizadas: seis fallos del arnés de handlers STATE_UPDATE iguales en control previo (no corregidos). Typecheck/lint afectado/build/diff-check PASS; lint global mantiene dos errores Buffer ajenos. Chromium153/CDP cuatro anchos, navegación/menús, confirmación/cancelación y conflictos; OPFS real y cierre/reapertura offline con intención/identidad/versiones conservadas, ACK sintético. Claro/oscuro: muestras aisladas, 26 pares adicionales >=4.5:1; no app oscura completa. Fallo5033ms de Fase1 no reproducido en controles pareados con timeout original; causa histórica desconocida. Intentos y límites del arnés conservados en el informe. Safari/native/tacto físico/lector de pantalla pendientes; sin validación productiva. Core, las 402 exclusiones, pendientes e índices Git intactos fuera del incremento. Sin producción, commit, push o deploy; V11 pausado.
+
+## Identidad visual Fase 3 — local, sin publicar — 2026-11-09
+
+[Contrato y límites](UX_UI_REDESIGN.md#identidad-visual-fase3). Revisadas las108 capturas de Fase2; ninguna regresión nueva demostrada requiere parche allí. Incremento Fase3 independiente para RECORDS, Attendance, STATE_UPDATE, PANEL, REPORT TABLE y MATRIX; reutiliza lectura/formularios compartidos y paleta aprobada. Claro activo; oscuro sólo fábricas/muestras, sin habilitación global.
+
+440/446 focalizadas (seis fallos preexistentes iguales); control final de contraste/foco4/4, con tres casos solapados y uno nuevo. Typecheck/lint afectado/build/diff-check PASS; un warning Attendance anterior. Chromium153/CDP cuatro anchos; SELECT/RELATION, texto completo, scroll y ejes fijos. Consultas/respuestas REPORT y MATRIX idénticas antes/después; PANEL conserva marcos y13 snapshots. OPFS y cierre/reapertura reales con pendiente/conflicto/versiones conservados; ACK/API sintéticos, sin aceptación Core/productiva. 56 pares reales de pintura >=4.5:1. 201 atributos controlados/hooks y57 funciones sin pintura idénticos. Safari/native/cámara/lector de pantalla y app oscura completa no acreditados. Intentos iniciales del arnés y colisiones de PNG documentados; no defectos productivos inferidos. Entrega: backups/visual-tokens-phase3/2026-11-09/. Preservadas las402 exclusiones, Core, Fases1/2 y pendientes fuera del incremento. No commit/push/deploy; V11 pausado.
+
+## Integración de temas y revisión visual final — 10-11-2026, LOCAL
+
+Ver [UX_UI_REDESIGN: integración final](UX_UI_REDESIGN.md#integracion-temas-final). Selector web Automático/Claro/Oscuro y preferencia local fuera de SQLite; bootstrap/precache local antes de React. Corrección CSS de foco STATE_UPDATE separada del lote de integración. Revisión de263 capturas Fase3 y56 capturas finales claro/oscuro en cuatro anchos. Reapertura real Chrome/OPFS conserva preferencia y conflicto/intención; API sintética.16/16 finales de temas, typecheck/lint afectado/build PASS; seis fallos focalizados preexistentes y lint global ajeno permanecen explícitos. Comparación con código HEAD publicado es local, no verificación productiva; parte de la evidencia temporal inicial no se conserva. Informe/inventarios/parches: backups/visual-theme-integration/2026-11-10/. GO para preparar revisión de publicación; no publicado. Safari/native/pickers físicos y validación humana del rediseño pendientes. Core,402exclusiones y demás lotes conservados; V11 pausado. Sin commit/push/deploy.
+
+## Cierre integral UX/UI — 10-11-2026, SIN PUBLICAR
+
+[Conclusión y límites](UX_UI_REDESIGN.md#cierre-integral-publicacion): NO LISTO para publicar. Referencia pública descargada y vinculada por hashes a ecbf18a;88 capturas equivalentes/22 hojas inspeccionadas, seis renderers, cuatro anchos,62 claves de respuesta iguales y0escrituras. API real Core publicado+PostgreSQL16 aislado: seis lecturas200, JWT/401, cancelar/corregir misma fila, contexto SELECT/RELATION, pendiente OPFS frío/ACK real y conflicto remoto explícito. No producción ni Next desplegado; refresh de bootstrap sintético. Dos ajustes de arnés separados: dependencia importada omitida (seis fallos anteriores) y mock web de AppIcon (suite no compilada que el conteo anterior omitía).453/453 y0suites fallidas; typecheck/lint afectado PASS; build idéntico reutilizado.17 lotes auditados, consolidación sobre HEAD sin incluir la documentación histórica ajena; pruebas experimentales excluidas preservadas. Informe/inventario:backups/ux-ui-integral-close/2026-11-10/. Safari/native/lector de pantalla/cámara físicos pendientes; lint global ajeno permanece explícito. Core/402exclusiones/pendientes intactos; sin commit/push/deploy/configuración;V11 pausado.
+
+
+Gate final UX integral: la suite global del candidato aislado falla1699/1738,39casos/19suites en12archivos.30casos también fallan enHEAD;7casos SQLite adicionales sin causa acreditada. Nuevas brechas:2asserts de cabecera antigua, mock Platform incompleto y JSON de paleta omitido del paquete. Inventario91/399 provisional/no publicable.453focalizadas PASS no sustituyen este gate. Se detiene el cierre sin modificar runtime/Core/SQLite. [Detalle y siguiente lote acotado](UX_UI_REDESIGN.md#cierre-integral-publicacion).
+
+
+## Resolución de bloqueos UX/UI — 10-11-2026, LOCAL, SIN PUBLICAR
+
+[Conclusión vigente](UX_UI_REDESIGN.md#resolucion-bloqueos-ux-20261110): GO técnico local para consolidar Client web; no aprobación multiplataforma ni autorización de publicación. Los39fallos originales se reprodujeron y clasificaron individualmente;37de arnés/fixture/entorno y2aserciones obsoletas. Se repararon2brechas adicionales de mock/JSON. Sin cambios de runtime: controles seriales pareados43/47sin timeouts y157/157de los arneses corregidos sobre HEAD; candidato nuevo1749/1749,0suites fallidas. Typecheck/lint global(0errores/7warnings)/build limpio/diff-check PASS. Chromium153/CDP/OPFS real y API sintética: confirmaciones, pendiente/conflicto frío, idempotencia y temas light/dark/auto;27capturas. Safari/iPhone/native/lector de pantalla real pendientes en matriz específica. Inventario/parches y evidencia:backups/ux-ui-blockers-resolution/2026-11-10/. No Core/producción/API/motores de persistencia/sync, commit/push/deploy.402exclusiones/ajenos y respaldos anteriores preservados. V11 pausado.
+
+
+## Candidato único UX/UI — consolidación local, 10-11-2026
+
+[Handoff](UX_UI_REDESIGN.md#consolidacion-candidato-ux-20261110):101archivos/418hunks de Client, baseecbf18a1061c1eab2a31e028bfedb7e20da3c557, sin cambios funcionales adicionales. Reconstrucción,17referencias históricas y hashes verificados; preparación Git mediante índice/objetos alternativos, sin modificar el índice habitual ni crear commit. Resultados nuevos de suite1749/typecheck/lint/build limpio y Chromium/OPFS/temas, inventario definitivo, árbol, rollback y plan de API real en backups/ux-ui-consolidated-candidate/2026-11-10/. No asumir validación física ni aceptación Core a partir de transporte sintético. Core/402exclusiones/pendientes y respaldos preservados; sin producción/commit/push/deploy. V11 pausado.

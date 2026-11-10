@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { mkdtempSync, rmSync } from "node:fs";
 import { formatStateValueLabel, resolveStateUpdateOfflineHistoryState } from "../renderers/workflows/state-update/state-update-workflow-logic";
+import { comparisonFingerprint } from "./search-comparison";
 import { createOpcoApi } from "./opco-api";
 import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +87,7 @@ for line in sys.stdin:
 
 const scope = { ownerKey: "audit-owner", contractId: "audit-contract", appViewId: "audit-view", targetEntityTypeId: "audit-events", date: "2026-10-07", dateFieldId: "event-date", historyMode: "append" as const, uniqueness: "subject" as const };
 const subjects = Array.from({length:130}, (_, n) => ({id: "subject-"+String(n).padStart(3,"0"), displayName: "TOLVA "+String(n).padStart(3,"0")+" sintética"}));
-const view = {id:scope.appViewId,name:"Versionado",slug:"versions",icon:null,sortOrder:0,type:"WORKFLOW",config:{workflowKey:"state-update",dateFieldId:scope.dateFieldId}};
+const view = {id:scope.appViewId,name:"Versionado",slug:"versions",icon:null,sortOrder:0,type:"WORKFLOW",config:{workflowKey:"state-update",dateFieldId:scope.dateFieldId,sourceEntityTypeId:"audit-subjects"}};
 let harness: ReturnType<typeof sqliteHarness>, store: ReturnType<typeof getLocalDatabase>, directory: string;
 beforeEach(async()=>{__resetLocalDatabaseForTests();directory=mkdtempSync("/tmp/opco-prewarm-current-");harness=sqliteHarness(directory+"/cache.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();await store.getSelectedContractId();});
 afterEach(()=>{harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});});
@@ -99,7 +100,7 @@ function fixture(dateValue="2026-08-13T00:00:00.000Z") {
   const url=new URL(String(input)),search=url.searchParams.get("search")??"",page=Number(url.searchParams.get("page")??1),pageSize=Number(url.searchParams.get("pageSize")??20);const subjectRecordId=url.searchParams.get("subjectRecordId");workflowQueries.push({search,page,subjectRecordId,pageSize});
   const selected=subjectRecordId?subjects.filter(s=>s.id===subjectRecordId):search?subjects.filter(s=>s.displayName.toLowerCase().includes(search.toLowerCase())).slice(0,20):[];
   const matches=search?events.filter(e=>selected.some(s=>s.id===e.subject.id)):events;
-  return new Response(JSON.stringify({ok:true,data:{appView:view,date:scope.date,dateFieldId:scope.dateFieldId,historyMode:"append",uniqueness:{mode:"subject"},sourceEntityType:{id:"audit-subjects",name:"Procedimientos"},targetEntityType:{id:scope.targetEntityTypeId,name:"Versionado"},subjectFieldId:"subject",stateFields,extraFields:[],subjects:selected.map(s=>{const winner=events.find(e=>e.subject.id===s.id);return {subject:s,current:winner?{...winner,extraValues:{}}:null}}),latest:{items:matches.slice((page-1)*pageSize,page*pageSize),pagination:{page,pageSize,total:matches.length,hasMore:page*pageSize<matches.length}}}}),{status:200});
+  return new Response(JSON.stringify({ok:true,data:{appView:view,date:scope.date,dateFieldId:scope.dateFieldId,historyMode:"append",uniqueness:{mode:"subject"},sourceEntityType:{id:"audit-subjects",name:"Procedimientos"},searchComparison:{version:1,sourceEntityTypeId:"audit-subjects",fields:[],fingerprint:comparisonFingerprint("audit-subjects",[]),applied:{mode:subjectRecordId?"record":search?"global":"definition"}},targetEntityType:{id:scope.targetEntityTypeId,name:"Versionado"},subjectFieldId:"subject",stateFields,extraFields:[],subjects:selected.map(s=>{const winner=events.find(e=>e.subject.id===s.id);return {subject:s,current:winner?{...winner,extraValues:{}}:null}}),latest:{items:matches.slice((page-1)*pageSize,page*pageSize),pagination:{page,pageSize,total:matches.length,hasMore:page*pageSize<matches.length}}}}),{status:200});
  }});
  const api={...adapter,getEntityDefinition:async()=>({entity:{id:"audit-subjects",name:"Procedimientos",slug:"procedures",active:true,icon:null,fields:[]}}),getEntityRecords:async(_token:string,_contract:string,_entity:string,q:{page:number;pageSize:number})=>{sourcePages.push(q.page);return {records:subjects.slice((q.page-1)*q.pageSize,q.page*q.pageSize).map(s=>({...s,updatedAt:"2026-10-04T08:00:00.000Z",values:{}})),pagination:{page:q.page,pageSize:q.pageSize,total:subjects.length,totalPages:Math.ceil(subjects.length/q.pageSize)}}}};
  return {api,adapter,workflowQueries,sourcePages};

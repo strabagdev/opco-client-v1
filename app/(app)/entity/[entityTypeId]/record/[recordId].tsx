@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -110,15 +111,15 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   empty: {
-    color: "#587078",
+    color: colors.textSecondary,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: colors.danger,
     lineHeight: 20,
   },
   fieldLabel: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "800",
     textTransform: "uppercase",
@@ -127,15 +128,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   fieldRow: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
     padding: 14,
   },
   fieldValue: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 16,
     lineHeight: 22,
   },
@@ -143,27 +144,27 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   meta: {
-    color: "#587078",
+    color: colors.textSecondary,
   },
   retryButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   retryText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: colors.canvas,
     flex: 1,
   },
   title: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 26,
     fontWeight: "800",
   },

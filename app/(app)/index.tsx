@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { watchAttendanceLocalDay } from "@/lib/attendance-local-day";
 import { CompactSelect } from "@/components/compact-select";
 import { usePublishDesktopCatalog } from "@/components/desktop-navigation";
@@ -66,7 +67,8 @@ export default function HomeScreen() {
   useEffect(() => {
     if (hasCompatibleViews) publishCatalog(JSON.stringify([ownerKey, selectedContractId]), views);
   }, [hasCompatibleViews, ownerKey, selectedContractId, views, publishCatalog]);
-  const selectedCategory = isWideLayout ? desktopNavigation(hasCompatibleViews ? views : [], "/", category).selectedCategory : null;
+  const selectedCategory = desktopNavigation(hasCompatibleViews ? views : [], "/", category).selectedCategory;
+  const isGridLayout = gridLayout.columns > 1;
   const [today, setToday] = useState(() => formatLocalDateInput(new Date()));
   useEffect(() => {
     const clock = watchAttendanceLocalDay(setToday);
@@ -325,7 +327,7 @@ export default function HomeScreen() {
   );
 
   const experiencesSection = (
-    <View style={[styles.section, isWideLayout ? styles.sectionWide : null]}>
+    <View style={[styles.section, isGridLayout ? styles.sectionWide : null]}>
       {context && isLoadingViews && !hasCompatibleViews ? <ReadLoadingState mode="initial" /> : null}
       {isOfflineViews && hasCompatibleViews ? <Text style={styles.offlineText}>Experiencias guardadas en este dispositivo.</Text> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
@@ -335,15 +337,15 @@ export default function HomeScreen() {
         <Text style={styles.empty}>No tienes experiencias asignadas para este contrato.</Text>
       ) : null}
       {(hasCompatibleViews ? experienceSections.filter(section => !selectedCategory || section.id === selectedCategory) : []).map((section) => (
-        <View key={section.id} style={[styles.experienceGroup, isWideLayout && { width: "100%" }, isWideLayout && !selectedCategory && section.cards.length === 1 && gridContentWidth ? { width: (gridContentWidth - 24) / 2 } : null]}>
+        <View key={section.id} style={[styles.experienceGroup, isGridLayout && { width: "100%" }, isGridLayout && !selectedCategory && section.cards.length === 1 && gridContentWidth ? { width: (gridContentWidth - 24) / 2 } : null]}>
           {!isWideLayout || !selectedCategory ? <Text style={[styles.sectionTitle, isWideLayout ? styles.sectionTitleWide : null]}>{section.title}</Text> : null}
-          <View style={[styles.viewList, isWideLayout ? styles.viewListWide : null]}>
+          <View style={[styles.viewList, isGridLayout ? styles.viewListWide : null]}>
             {section.cards.map(({ appView, availabilityLabel, href, metadata }) => {
               return (
                 <Link href={href} key={appView.id} asChild>
-                  <Pressable style={StyleSheet.flatten([styles.viewButton, isWideLayout ? { width: section.cards.length === 1 && !selectedCategory ? "100%" : gridLayout.cardWidth } : null])}>
+                  <Pressable style={StyleSheet.flatten([styles.viewButton, isGridLayout ? { width: section.cards.length === 1 && !selectedCategory ? "100%" : gridLayout.cardWidth } : null])}>
                     <View style={styles.viewIcon}>
-                      <AppIcon icon={appView.icon} size={22} color={isWideLayout ? "#315DA8" : undefined} />
+                      <AppIcon icon={appView.icon} size={22} color={isWideLayout ? colors.primary : undefined} />
                     </View>
                     <View style={styles.viewText}>
                       <Text style={styles.viewName}>{appView.name}</Text>
@@ -373,7 +375,7 @@ export default function HomeScreen() {
     >
       <View style={styles.bodyStack} onLayout={(event) => setGridContentWidth(event.nativeEvent.layout.width)}>
         {isWideLayout ? <Text style={styles.desktopTitle}>{experienceSections.find(section => section.id === selectedCategory)?.title ?? "Inicio"}</Text> : null}
-        <View style={[styles.contextPanel, isWideLayout && context && context.contracts.length > 0 ? { display: "none" } : null]}>
+        <View style={[styles.contextPanel, context && selectedContract && context.contracts.length > 0 ? { display: "none" } : null]}>
           {operationalContextSection}
         </View>
         <View style={isWideLayout ? styles.experiencesColumnWide : null}>{experiencesSection}</View>
@@ -383,7 +385,7 @@ export default function HomeScreen() {
 }
 
 const baseStyles = StyleSheet.create({
-  desktopTitle: { fontSize: 26, fontWeight: "800", color: "#202B3A" },
+  desktopTitle: { fontSize: 26, fontWeight: "800", color: colors.text },
   content: {
     gap: 18,
     padding: APP_SHELL_HORIZONTAL_GUTTER,
@@ -399,8 +401,8 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: APP_SHELL_DESKTOP_GUTTER,
   },
   contractButton: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    backgroundColor: colors.surface,
+    borderColor: colors.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     gap: 4,
@@ -411,8 +413,8 @@ const baseStyles = StyleSheet.create({
     flexGrow: 1,
   },
   contractButtonSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   contractList: {
     gap: 10,
@@ -422,26 +424,26 @@ const baseStyles = StyleSheet.create({
     flexWrap: "wrap",
   },
   contractName: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "700",
   },
   contractNameSelected: {
-    color: "#ffffff",
+    color: colors.onPrimary,
   },
   contractRole: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 13,
   },
   contractRoleSelected: {
-    color: "#dceff1",
+    color: colors.selection,
   },
   empty: {
-    color: "#587078",
+    color: colors.textSecondary,
     lineHeight: 21,
   },
   availabilityText: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 12,
   },
   bodyStack: {
@@ -449,8 +451,8 @@ const baseStyles = StyleSheet.create({
   },
   viewButton: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
@@ -460,7 +462,7 @@ const baseStyles = StyleSheet.create({
   },
   viewIcon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: colors.selection,
     borderRadius: 8,
     height: 38,
     justifyContent: "center",
@@ -476,7 +478,7 @@ const baseStyles = StyleSheet.create({
     gap: HOME_DESKTOP_CARD_GAP,
   },
   viewName: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "700",
   },
@@ -486,7 +488,7 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   error: {
-    color: "#b42318",
+    color: colors.danger,
     lineHeight: 20,
   },
   experienceGroup: {
@@ -510,48 +512,48 @@ const baseStyles = StyleSheet.create({
     gap: 16,
   },
   contextPanelWide: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d7e4e7",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     padding: 14,
   },
   label: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
   },
   meta: {
-    color: "#587078",
+    color: colors.textSecondary,
     marginTop: 3,
   },
-  offlineText: { color: "#587078", fontSize: 13 },
+  offlineText: { color: colors.textSecondary, fontSize: 13 },
   retryButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
-  retryText: { color: "#ffffff", fontWeight: "800" },
+  retryText: { color: colors.onPrimary, fontWeight: "800" },
   operationalContext: {
     gap: 12,
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: colors.canvas,
     flex: 1,
   },
   section: {
     gap: 16,
   },
   sectionWide: {
-    gap: 20,
+    gap: 20, flexDirection: "row", flexWrap: "wrap",
   },
   sectionTitle: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 13,
     fontWeight: "800",
     textTransform: "uppercase",
@@ -561,20 +563,20 @@ const baseStyles = StyleSheet.create({
   },
   typeBadge: {
     alignSelf: "flex-start",
-    backgroundColor: "#edf6f6",
-    borderColor: "#cfe1e3",
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   typeBadgeText: {
-    color: "#2f5e66",
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "800",
   },
   value: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 17,
     fontWeight: "700",
   },
@@ -591,7 +593,7 @@ function formatLocalDateInput(date: Date) {
 const desktopStyles = StyleSheet.create({
   ...desktopStyleColors(baseStyles),
   sectionWide: { ...baseStyles.sectionWide, flexDirection: "row", flexWrap: "wrap", gap: 24 },
-  sectionTitleWide: { color: "#202B3A", fontWeight: "800", fontSize: 18, textTransform: "none" },
+  sectionTitleWide: { color: colors.text, fontWeight: "800", fontSize: 18, textTransform: "none" },
   typeBadge: { ...baseStyles.typeBadge, backgroundColor: "transparent", borderWidth: 0, paddingHorizontal: 0, paddingVertical: 0 },
-  typeBadgeText: { ...baseStyles.typeBadgeText, color: "#536174", fontWeight: "400" },
+  typeBadgeText: { ...baseStyles.typeBadgeText, color: colors.textSecondary, fontWeight: "400" },
 });

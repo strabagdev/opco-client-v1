@@ -51,7 +51,9 @@ describe("read loading indicator integration", () => {
       expect(source).toContain("ReadLoadingState");
       expect(source).not.toContain("<ActivityIndicator />");
     }
-    expect(readFileSync("src/renderers/records/RecordFormScreen.tsx", "utf8")).toContain('<ActivityIndicator color="#ffffff" />');
+    const form = readFileSync("src/renderers/records/RecordFormScreen.tsx", "utf8");
+    expect(form).toContain('busy={isSubmitting} disabled={isSubmitting} onPress={handleSubmit}');
+    expect(form).toContain('busyLabel="Guardando"');
     for (const file of ["record/new.tsx", "record/[recordId].tsx", "record/[recordId]/edit.tsx", "problems.tsx"]) {
       const source = readFileSync(`app/(app)/view/[appViewId]/${file}`, "utf8");
       expect(source).toContain("useExperienceBootstrapActivity");

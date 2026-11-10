@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { useExperienceBootstrapActivity } from "@/renderers/use-experience-activity";
 import { useLocalSearchParams } from "expo-router";
@@ -44,24 +45,24 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   error: {
-    color: "#b42318",
+    color: colors.danger,
     lineHeight: 20,
   },
   retryButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   retryText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: colors.canvas,
     flex: 1,
   },
 });

@@ -1,3 +1,6 @@
+import { actionSurface } from "../../theme/operational-presentation";
+import { metrics, type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { Link } from "expo-router";
@@ -280,7 +283,7 @@ export function RecordProblemsScreen({ appView }: Props) {
       {isLoading && !(records.length > 0) ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {error ? (
-        <Pressable onPress={() => setRetryCount((count) => count + 1)} style={styles.primaryButton}>
+        <Pressable onPress={() => setRetryCount((count) => count + 1)} style={interaction => [styles.primaryButton, actionSurface(true, interaction, Boolean(false))]}>
           <Text style={styles.primaryText}>Reintentar</Text>
         </Pressable>
       ) : null}
@@ -319,7 +322,7 @@ export function RecordProblemsScreen({ appView }: Props) {
                 <View style={styles.cardActions}>
                   {actionState.canResolve ? (
                     <Link href={buildEditAppViewRecordHref(appView.id, record.id)} asChild>
-                      <Pressable accessibilityRole="button" style={styles.primaryButton}>
+                      <Pressable accessibilityRole="button" style={interaction => [styles.primaryButton, actionSurface(true, interaction, Boolean(false))]}>
                         <Text {...noTranslateProps} style={styles.primaryText}>Resolver error</Text>
                       </Pressable>
                     </Link>
@@ -432,38 +435,39 @@ function Badge({ record }: { record: CachedEntityRecord }) {
   );
 }
 
-const styles = StyleSheet.create({
+export function createRecordProblemsStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   badge: {
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   badgeConflict: {
-    backgroundColor: "#fff7ed",
+    backgroundColor: p.conflictSurface,
   },
   badgeConflictText: {
-    color: "#9a3412",
+    color: p.conflict,
   },
   badgeFailed: {
-    backgroundColor: "#fef3f2",
+    backgroundColor: p.dangerSurface,
   },
   badgeFailedText: {
-    color: "#b42318",
+    color: p.danger,
   },
   badgeText: {
     fontSize: 12,
     fontWeight: "800",
   },
   card: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: p.surface,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 14,
   },
   cardTitle: {
-    color: "#17363c",
+    color: p.text,
     flexShrink: 1,
     fontSize: 17,
     fontWeight: "800",
@@ -482,31 +486,31 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   empty: {
-    color: "#587078",
+    color: p.text,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     lineHeight: 20,
   },
   dangerButton: {
     alignItems: "center",
-    borderColor: "#fecaca",
+    borderColor: p.dangerBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
   },
   dangerText: {
-    color: "#b42318",
+    color: p.danger,
     fontWeight: "800",
   },
   header: {
     gap: 4,
   },
   kicker: {
-    color: "#587078",
+    color: p.text,
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -515,45 +519,45 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   meta: {
-    color: "#587078",
+    color: p.textSecondary,
     lineHeight: 20,
   },
   metaStrong: {
-    color: "#17363c",
+    color: p.textSecondary,
     fontWeight: "800",
     lineHeight: 20,
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   primaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   secondaryButton: {
     alignItems: "center",
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
   },
   secondaryText: {
-    color: "#17363c",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 26,
     fontWeight: "800",
   },
@@ -565,7 +569,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   warning: {
-    color: "#9a3412",
+    color: p.warning,
     lineHeight: 20,
   },
 });
+}
+const styles = createRecordProblemsStyles();

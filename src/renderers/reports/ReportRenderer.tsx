@@ -1,6 +1,9 @@
+import { type ThemeColors } from "../../theme/tokens";
+import { colors } from "../../theme/paint";
 import { DateFieldInput, MonthFieldInput } from "@/renderers/records/temporal-input";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,6 +12,8 @@ import {
   View,
 } from "react-native";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
+import { FormAction, FormActions } from "../../components/form-actions";
+import { reportReadRows } from "./report-read-presentation";
 
 import { ReportAppView, ReportResponse } from "@/lib/opco-api";
 import { loadReportWithOfflineCache } from "@/lib/offline-reports";
@@ -153,6 +158,9 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
             <Text style={styles.filterButtonText}>Actualizar</Text>
           </Pressable>
         </View>
+      ) : appView.config.presentationMode === "TABLE" ? (
+        <ReportTableControls allowChange={timeFilter.allowChange} onChange={setPeriod} period={period}
+          onRefresh={() => setRefreshCount((count) => count + 1)} />
       ) : (
         <View style={styles.filters}>
           <PeriodControl
@@ -182,13 +190,14 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         <View style={styles.stateBox}><Text style={styles.stateText}>Este reporte necesita configuración.</Text></View>
       ) : (
         <>
+          {visibleReport.config.presentationMode === "TABLE" && isLoading ? <Text accessibilityLiveRegion="polite" style={tableStyles.refreshText}>Actualizando reporte…</Text> : null}
           {error ? <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View> : null}
           {visibleReport.records.length === 0 ? (
             <View style={styles.stateBox}><Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text></View>
           ) : isCurrentStatusReport(visibleReport.config) && currentStatus ? (
             <CurrentStatusReport model={currentStatus} />
           ) : visibleReport.config.presentationMode === "TABLE" && table ? (
-            <ReportTable table={table} />
+            <ReportTable table={table} report={visibleReport} />
           ) : matrix ? (
             <ReportMatrix matrix={matrix} />
           ) : null}
@@ -302,61 +311,90 @@ function DateInput({
   );
 }
 
-function ReportTable({ table }: { table: NonNullable<ReturnType<typeof buildReportTableModel>> }) {
-  return (
-    <ScrollView horizontal style={styles.horizontalScroll}>
-      <View style={styles.table}>
-        <View style={styles.row}>
-          {table.columns.map((column) => (
-            <Text key={column.id} style={[styles.cell, styles.headerCell]}>{column.name}</Text>
-          ))}
-        </View>
-        {table.rows.map((row) => (
-          <View key={row.id} style={styles.row}>
-            {row.values.map((value, index) => (
-              <Text key={`${row.id}-${index}`} style={styles.cell}>{value || "-"}</Text>
-            ))}
-          </View>
-        ))}
-      </View>
-    </ScrollView>
-  );
+function ReportTableControls({ allowChange, onChange, period, onRefresh }: {
+  allowChange: boolean; onChange(value: ReportPeriodState): void; period: ReportPeriodState; onRefresh(): void;
+}) {
+  return <View testID="report-table-controls" style={tableStyles.controls}>
+    <View style={[tableStyles.period, (period.mode === "MONTH" || !allowChange) && tableStyles.naturalPeriod]}><PeriodControl allowChange={allowChange} onChange={onChange} period={period} /></View>
+    <FormActions><FormAction label="Actualizar" onPress={onRefresh} disabled={!allowChange} /></FormActions>
+  </View>;
+}
+
+function ReportTable({ table, report }: { table: NonNullable<ReturnType<typeof buildReportTableModel>>; report: ReportResponse }) {
+  const [width, setWidth] = useState(0);
+  const compact = width < table.columns.length * 160;
+  const rows = reportReadRows(report, table);
+  return <View testID="report-table-content" style={tableStyles.table} onLayout={event => {
+    const next = Math.floor(event.nativeEvent.layout.width);
+    setWidth(current => current === next ? current : next);
+  }}>
+    <View accessibilityRole="header" style={[tableStyles.headerRow, compact && tableStyles.hidden]}>
+      {table.columns.map(column => <Text key={column.id} style={tableStyles.headerCell}>{column.name}</Text>)}
+    </View>
+    {rows.map(row => <View key={row.id} style={[tableStyles.row, compact && tableStyles.compactRow]}>
+      {row.cells.map((values, index) => {
+        const column = table.columns[index];
+        const fullWidth = width < 600 || column.type === "TEXTAREA" || values.length > 1 || values.some(value => value.text.length > 120);
+        return <View key={column.id} style={[tableStyles.cell, compact && [tableStyles.compactCell,
+          { width: fullWidth ? "100%" : "50%", flexBasis: fullWidth ? "100%" : "50%" }]]}>
+          <Text style={[tableStyles.cellLabel, !compact && tableStyles.hidden]}>{column.name}</Text>
+          {values.map((value, item) => <View key={item} style={tableStyles.valueGroup}>
+            <Text selectable accessibilityLabel={`${column.name}: ${value.text}`} style={[tableStyles.value, value.status !== "value" && tableStyles.unavailable]}>{value.text}</Text>
+            {value.detail ? <Text selectable style={tableStyles.trace}>{value.detail}</Text> : null}
+          </View>)}
+        </View>;
+      })}
+    </View>)}
+  </View>;
 }
 
 function ReportMatrix({ matrix }: { matrix: NonNullable<ReturnType<typeof buildReportMatrixModel>> }) {
-  return (
-    <ScrollView horizontal style={styles.horizontalScroll}>
-      <View style={styles.table}>
-        <View style={styles.row}>
-          <Text style={[styles.cell, styles.stickyCell, styles.headerCell]}>Fila</Text>
-          {matrix.columns.map((column) => (
-            <Text key={column.key} style={[styles.cell, styles.compactCell, styles.headerCell]}>{column.label}</Text>
-          ))}
-          {matrix.rows.some((row) => row.summary !== null) ? (
-            <Text style={[styles.cell, styles.headerCell]}>Resumen</Text>
-          ) : null}
+  const [width, setWidth] = useState(0);
+  const [focused, setFocused] = useState(false);
+  const labelWidth = width > 0 && width < 600 ? 144 : 220;
+  const columnWidths = matrix.columns.map(column => column.label.length > 12 ? 160 : 72);
+  const hasSummary = matrix.rows.some(row => row.summary !== null);
+  // Leave room for the pinned row label, borders and a vertical scrollbar in a narrow viewport.
+  const summaryWidth = width > 0 ? Math.max(100, Math.min(220, width - labelWidth - 32)) : 220;
+  const gridWidth = labelWidth + columnWidths.reduce((sum, value) => sum + value, 0) + (hasSummary ? summaryWidth : 0) + 2;
+  const webSticky = Platform.OS === "web";
+  return <View style={matrixStyles.section}>
+    {width > 0 && gridWidth > width ? <Text style={matrixStyles.hint}>Desplázate dentro de la matriz para consultar todas las filas y columnas.</Text> : null}
+    <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator showsVerticalScrollIndicator
+      testID="report-matrix-viewport" accessibilityLabel="Matriz del reporte" tabIndex={0}
+      onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      onLayout={event => { const next = Math.floor(event.nativeEvent.layout.width); setWidth(current => current === next ? current : next); }}
+      style={[matrixStyles.viewport, webSticky && ({ maxHeight: "min(68vh, 720px)", overflowY: "auto" } as never),
+        webSticky && focused && ({ outline: `3px solid ${colors.focus}`, outlineOffset: 2 } as never)]}>
+      <View testID="report-matrix-table" style={[matrixStyles.table, { width: gridWidth }]}>
+        <View accessibilityRole="header" style={[matrixStyles.headerRow, webSticky && ({ position: "sticky", top: 0, zIndex: 2 } as never)]}>
+          <Text style={[matrixStyles.cell, matrixStyles.rowLabel, matrixStyles.headerCell, { width: labelWidth },
+            webSticky && ({ position: "sticky", left: 0, zIndex: 3 } as never)]}>Fila</Text>
+          {matrix.columns.map((column, index) => <Text key={column.key}
+            style={[matrixStyles.cell, matrixStyles.valueCell, matrixStyles.headerCell, { width: columnWidths[index] }]}>{column.label}</Text>)}
+          {hasSummary ? <Text style={[matrixStyles.cell, matrixStyles.summary, matrixStyles.headerCell, { width: summaryWidth }]}>Resumen</Text> : null}
         </View>
-        {matrix.rows.map((row) => (
-          <View key={row.id} style={styles.row}>
-            <Text style={[styles.cell, styles.stickyCell]}>{row.label}</Text>
-            {matrix.columns.map((column) => (
-              <Text key={`${row.id}-${column.key}`} style={[styles.cell, styles.compactCell]}>
-                {row.values[column.key] || "-"}
-              </Text>
-            ))}
-            {row.summary !== null ? <Text style={styles.cell}>{row.summary}</Text> : null}
-          </View>
-        ))}
+        {matrix.rows.map((row, rowIndex) => <View key={row.id} style={[matrixStyles.row, rowIndex % 2 === 1 && matrixStyles.alternateRow]}>
+          <Text style={[matrixStyles.cell, matrixStyles.rowLabel, { width: labelWidth }, rowIndex % 2 === 1 && matrixStyles.alternateRow,
+            webSticky && ({ position: "sticky", left: 0, zIndex: 1 } as never)]}>{row.label}</Text>
+          {matrix.columns.map((column, index) => <Text key={`${row.id}-${column.key}`} selectable
+            accessibilityLabel={`${row.label}, ${column.label}: ${row.values[column.key] || "-"}`}
+            style={[matrixStyles.cell, matrixStyles.valueCell, { width: columnWidths[index] }, !row.values[column.key] && matrixStyles.emptyCell]}>
+            {row.values[column.key] || "-"}
+          </Text>)}
+          {row.summary !== null ? <Text selectable style={[matrixStyles.cell, matrixStyles.summary, { width: summaryWidth }]}>{row.summary}</Text> : null}
+        </View>)}
       </View>
     </ScrollView>
-  );
+  </View>;
 }
 
-const styles = StyleSheet.create({
+export function createReportStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   cell: {
-    borderBottomColor: "#e5e7eb",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
-    color: "#111827",
+    color: p.text,
     fontSize: 14,
     minHeight: 44,
     paddingHorizontal: 12,
@@ -379,14 +417,14 @@ const styles = StyleSheet.create({
   filterButton: {
     alignItems: "center",
     alignSelf: "flex-end",
-    backgroundColor: "#111827",
+    backgroundColor: p.primary,
     borderRadius: 8,
     minHeight: 44,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   filterButtonText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontSize: 14,
     fontWeight: "600",
   },
@@ -403,7 +441,7 @@ const styles = StyleSheet.create({
     minWidth: 220,
   },
   fixedRangeText: {
-    color: "#111827",
+    color: p.text,
     fontSize: 16,
     minHeight: 44,
     paddingVertical: 12,
@@ -412,8 +450,8 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerCell: {
-    backgroundColor: "#f9fafb",
-    color: "#374151",
+    backgroundColor: p.surfaceSubtle,
+    color: p.text,
     fontWeight: "700",
   },
   horizontalScroll: {
@@ -423,24 +461,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   searchInput: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d1d5db",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#111827",
+    color: p.text,
     flex: 1,
     minHeight: 44,
     minWidth: 180,
     paddingHorizontal: 12,
   },
   inputLabel: {
-    color: "#4b5563",
+    color: p.textSecondary,
     fontSize: 13,
     fontWeight: "600",
   },
   monthButton: {
     alignItems: "center",
-    borderColor: "#d1d5db",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     height: 44,
@@ -448,7 +486,7 @@ const styles = StyleSheet.create({
     width: 44,
   },
   monthButtonText: {
-    color: "#111827",
+    color: p.text,
     fontSize: 24,
     lineHeight: 28,
   },
@@ -459,7 +497,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   monthLabel: {
-    color: "#111827",
+    color: p.textSecondary,
     fontSize: 16,
     fontWeight: "600",
     minWidth: 148,
@@ -470,24 +508,24 @@ const styles = StyleSheet.create({
   },
   stateBox: {
     alignItems: "center",
-    borderColor: "#e5e7eb",
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 20,
   },
   stateText: {
-    color: "#4b5563",
+    color: p.textSecondary,
     fontSize: 14,
     textAlign: "center",
   },
   stickyCell: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     fontWeight: "600",
     width: 180,
   },
   statusCell: {
-    color: "#111827",
+    color: p.text,
     fontSize: 14,
     minHeight: 44,
     paddingHorizontal: 12,
@@ -503,37 +541,84 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   statusHeaderText: {
-    color: "#4b5563",
+    color: p.textSecondary,
     fontSize: 12,
     fontWeight: "800",
     textTransform: "uppercase",
   },
   statusRow: {
     alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderBottomColor: "#e5e7eb",
+    backgroundColor: p.surface,
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
     flexDirection: "row",
   },
   statusTable: {
-    borderColor: "#e5e7eb",
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     overflow: "hidden",
   },
   subtitle: {
-    color: "#6b7280",
+    color: p.textSecondary,
     fontSize: 14,
   },
   table: {
-    borderColor: "#e5e7eb",
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     overflow: "hidden",
   },
   title: {
-    color: "#111827",
+    color: p.text,
     fontSize: 24,
     fontWeight: "700",
   },
 });
+}
+const styles = createReportStyles();
+
+
+export function createReportTableStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  controls: { flexDirection: "row", flexWrap: "wrap", gap: 12, alignItems: "flex-end", minWidth: 0 },
+  period: { flexDirection: "row", flexWrap: "wrap", flexGrow: 1, flexBasis: 280, maxWidth: 620, gap: 12, minWidth: 0 },
+  naturalPeriod: { flexGrow: 0, flexBasis: "auto" },
+  refreshText: { color: p.textSecondary, fontSize: 13, lineHeight: 18 },
+  table: { width: "100%", minWidth: 0, borderWidth: 1, borderColor: p.border, borderRadius: 8, overflow: "hidden", backgroundColor: p.surface },
+  headerRow: { flexDirection: "row", backgroundColor: p.surfaceSubtle },
+  headerCell: { flexBasis: 0, flexGrow: 1, flexShrink: 1, minWidth: 160, padding: 10, color: p.textSecondary, fontSize: 13, fontWeight: "700" },
+  row: { flexDirection: "row", borderTopWidth: 1, borderColor: p.border, minWidth: 0 },
+  compactRow: { flexWrap: "wrap", paddingVertical: 4 },
+  cell: { flexBasis: 0, flexGrow: 1, flexShrink: 1, padding: 10, gap: 4, minWidth: 160 },
+  compactCell: { flexGrow: 0, flexShrink: 0, minWidth: 0, paddingVertical: 6 },
+  cellLabel: { color: p.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  valueGroup: { gap: 2, minWidth: 0 },
+  value: { color: p.text, fontSize: 14, lineHeight: 20, minWidth: 0 },
+  unavailable: { color: p.textSecondary },
+  trace: { color: p.textSecondary, fontSize: 12, lineHeight: 18 },
+  hidden: { display: "none" },
+});
+}
+const tableStyles = createReportTableStyles();
+
+
+export function createReportMatrixStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  section: { gap: 8, minWidth: 0 },
+  hint: { color: p.textSecondary, fontSize: 13, lineHeight: 18 },
+  viewport: { maxWidth: "100%", minWidth: 0, borderWidth: 1, borderColor: p.border, borderRadius: 8, backgroundColor: p.surface },
+  table: { minWidth: 0, backgroundColor: p.surface },
+  headerRow: { flexDirection: "row", backgroundColor: p.surfaceSubtle },
+  row: { flexDirection: "row", backgroundColor: p.surface },
+  alternateRow: { backgroundColor: p.surfaceAlternate },
+  cell: { flexShrink: 0, minHeight: 44, paddingHorizontal: 10, paddingVertical: 10, fontSize: 14, lineHeight: 20, color: p.text,
+    borderBottomWidth: 1, borderRightWidth: 1, borderColor: p.border },
+  headerCell: { backgroundColor: p.surfaceSubtle, color: p.text, fontWeight: "700" },
+  rowLabel: { backgroundColor: p.surface, fontWeight: "600" },
+  valueCell: { textAlign: "center", fontVariant: ["tabular-nums"] },
+  summary: { width: 220, backgroundColor: p.surfaceSubtle, fontWeight: "600" },
+  emptyCell: { color: p.textSecondary },
+});
+}
+const matrixStyles = createReportMatrixStyles();

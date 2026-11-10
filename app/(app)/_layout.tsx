@@ -1,10 +1,16 @@
+import { actionSurface, operationalPaint } from "../../src/theme/operational-presentation";
+import { metrics, type ThemeColors } from "../../src/theme/tokens";
+import { colors } from "../../src/theme/paint";
+import { AppShellHeader } from "@/components/app-shell-header";
+import { AppNavigationMenu } from "@/components/app-navigation-menu";
+import { shellStatusPresentation } from "@/lib/shell-status-presentation";
 import { offlinePreparationFailureRows } from "@/lib/offline-preparation-diagnostic";
 import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { LOCAL_DATABASE_NAME, subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
-import { Redirect, Stack, usePathname, useRouter } from "expo-router";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, WifiOff, X } from "lucide-react-native";
+import { Redirect, Stack, useGlobalSearchParams, usePathname, useRouter } from "expo-router";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, Menu, WifiOff, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getHomeNavigationEvents, homeNavigationCachePresent, homeNavigationRows, subscribeHomeNavigationEvents } from "@/lib/home-navigation-diagnostics";
 import { getPanelReadEvents, panelReadRows, subscribePanelReadEvents } from "@/lib/panel-read-diagnostics";
@@ -86,6 +92,7 @@ export default function AppLayout() {
   } = useSession();
   const router = useRouter();
   const pathname = usePathname();
+  const { category } = useGlobalSearchParams<{ category?: string }>();
   const { height, width } = useWindowDimensions();
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isSyncErrorModalOpen, setIsSyncErrorModalOpen] = useState(false);
@@ -100,7 +107,6 @@ export default function AppLayout() {
   const navigationEvents = useSyncExternalStore(subscribeHomeNavigationEvents, getHomeNavigationEvents, getHomeNavigationEvents);
   const writeFeedbackSnapshot = useWriteFeedbackSnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
-  const isHome = pathname === "/";
   const isWideLayout = width >= APP_SHELL_WIDE_BREAKPOINT;
   const styles = isWideLayout ? desktopStyles : baseStyles;
   const visibleAppViewId = appViewIdFromPathname(pathname);
@@ -153,6 +159,8 @@ export default function AppLayout() {
   const isStateUpdateActivityActive = hasStateUpdateSummary
     ? isActiveStateUpdateActivity(stateUpdateCurrentActivity)
     : isPendingWorkSyncing || isOperationalCoreReadinessChecking;
+  // Presentation only: RECORDS already reports its durable sending state in this scope.
+  const isAnyPendingWorkSyncing = (isPendingWorkSyncing && isStateUpdateActivityActive) || recordsSyncSummary.syncingCount > 0;
   const appShellFeedbackInput = {
     connectivityStatus,
     experienceActivity,
@@ -162,7 +170,7 @@ export default function AppLayout() {
     isAuthSessionRestoring,
     isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking: isOperationalCoreReadinessChecking && isStateUpdateActivityActive,
-    isPendingWorkSyncing: isPendingWorkSyncing && isStateUpdateActivityActive,
+    isPendingWorkSyncing: isAnyPendingWorkSyncing,
     localStorageRecoveryNotice,
     offlineReadiness: offlineReadiness.offlineReadiness,
     offlinePreparationProgress: offlinePreparationDiagnostics?.appViews ?? null,
@@ -178,6 +186,10 @@ export default function AppLayout() {
   } satisfies AppShellFeedbackInput;
   const shellStatusIndicator = resolveAppShellStatusIndicator(appShellFeedbackInput);
   const preparationProgress = shellStatusIndicator.preparationProgress;
+  const statusPresentation = shellStatusPresentation(shellStatusIndicator, {
+    conflicts: syncConflictCount, hasSyncError, hasReadError: Boolean(experienceActivity?.errorCode),
+    storageRecovery: Boolean(localStorageRecoveryNotice),
+  });
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const lastActivity = stateUpdateReconnectDiagnostics.lastStateUpdateActivity;
   const lastPreflight = stateUpdateReconnectDiagnostics.lastReconnectPreflight;
@@ -212,7 +224,7 @@ export default function AppLayout() {
     readIssue: visibleErrorKind === "read",
     session: { restoring: isAuthSessionRestoring, status },
     sync: {
-      active: isPendingWorkSyncing && isStateUpdateActivityActive,
+      active: isAnyPendingWorkSyncing,
       completedAt: lastSync?.completedAt ?? null,
       lastSuccessAt: lastSuccessfulSyncAt,
       result: lastSync?.result ?? null,
@@ -226,7 +238,7 @@ export default function AppLayout() {
     isAuthSessionRestoring,
     isOfflinePreparationRunning,
     isOperationalCoreReadinessChecking,
-    isPendingWorkSyncing,
+    isAnyPendingWorkSyncing,
     isStateUpdateActivityActive,
     lastActivity,
     lastPreflight,
@@ -375,20 +387,25 @@ export default function AppLayout() {
   const canRetryFirstPendingSyncError = Boolean(
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );
+  const statusTone = preparationProgress?.state === "incomplete" ? "warning" : statusPresentation.neutral ? "neutral"
+    : shellStatusIndicator.state === "error" ? (syncConflictCount > 0 && !hasSyncError && !experienceActivity?.errorCode && !localStorageRecoveryNotice ? "conflict" : "danger")
+    : shellStatusIndicator.state === "working" ? "info" : shellStatusIndicator.state === "pending" ? "warning" : shellStatusIndicator.state === "offline" ? "neutral"
+    : writeFeedback?.kind === "local-saved" ? "info" : "success";
+  const statusPaint = operationalPaint(statusTone);
   const statusIndicator = (
-    <Pressable accessibilityRole="button" accessibilityLabel="Ver problemas de sincronización" onPress={() => { setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync"); setIsDiagnosticsOpen(true); }} style={styles.statusIndicator}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Estado y diagnóstico: ${statusPresentation.label}. ${shellStatusIndicator.accessibilityLabel}`} onPress={() => { setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync"); setIsDiagnosticsOpen(true); }} style={[styles.statusIndicator, { minHeight: 44, alignItems: "flex-start", maxWidth: "100%" }]}>
       <View
-        accessibilityLabel={"Estado " + shellStatusIndicator.label + ". " + shellStatusIndicator.accessibilityLabel}
+        accessibilityLabel={"Estado " + statusPresentation.label + ". " + shellStatusIndicator.accessibilityLabel}
         accessible
         accessibilityLiveRegion="polite"
-        style={styles.statusIndicatorSummary}
+        style={[styles.statusIndicatorSummary, { minWidth: 0, flexWrap: "wrap", justifyContent: "flex-start" }]}
       >
         <Animated.View style={shellStatusIndicator.state === "working" && !reducedMotion ? { opacity: statusPulseOpacity } : null}>
           {preparationProgress?.state === "incomplete"
-            ? <AlertCircle color="#b7791f" size={17} />
-            : statusIndicatorIcon(shellStatusIndicator.state)}
+            ? <AlertCircle color={colors.warning} size={17} />
+            : statusPresentation.neutral ? <CircleDashed color={colors.textSecondary} size={17} /> : statusIndicatorIcon(shellStatusIndicator.state, statusPaint.color)}
         </Animated.View>
-        <Text style={styles.statusLabel}>{shellStatusIndicator.label}</Text>
+        <Text style={[styles.statusLabel, { flexShrink: 1, textAlign: "left", color: statusPaint.color }]}>{statusPresentation.label}</Text>
       </View>
       {preparationProgress ? (
         <View
@@ -422,15 +439,14 @@ export default function AppLayout() {
   );
   const userMenuButton = (
     <Pressable
-      accessibilityLabel="Menu de usuario"
+      accessibilityLabel="Abrir menú de navegación y cuenta"
+      accessibilityState={{ expanded: isUserMenuOpen }}
       accessibilityRole="button"
       onPress={() => setIsUserMenuOpen(true)}
-      style={[styles.userButton, !isWideLayout ? styles.userButtonCompact : null]}
+      style={[styles.userButton, { minHeight: 44, minWidth: 44, justifyContent: "center", flexShrink: 0 }]}
     >
-      <View style={styles.userAvatar}>
-        <Text style={styles.userAvatarText}>{userInitials}</Text>
-      </View>
-      <Text style={[styles.userButtonText, !isWideLayout ? styles.userButtonTextCompact : null]}>{userDisplayName}</Text>
+      <Menu color={colors.primary} size={22} />
+      {isWideLayout ? <Text numberOfLines={1} style={styles.userButtonText}>{userDisplayName}</Text> : null}
     </Pressable>
   );
 
@@ -460,39 +476,14 @@ export default function AppLayout() {
     <View style={styles.shell}>
       <DesktopSidebar visible={isWideLayout} width={getDesktopSidebarWidth(width)} />
       <View style={styles.mainArea}>
-      <View testID={isWideLayout ? "desktop-header" : "compact-header"} style={[styles.header, isWideLayout ? styles.headerWide : styles.headerCompact]}>
-        <View style={styles.headerMainRow}>
-          <View style={styles.headerIdentity}>
-          {!isHome ? (
-            <Pressable accessibilityRole="button" onPress={goBack} style={styles.backButton}>
-              <Text style={styles.backText}>←</Text>
-            </Pressable>
-          ) : null}
-          <View style={[styles.titleBlock, isWideLayout && { display: "none" }]}>
-            <View style={styles.titleRow}>
-              <Text numberOfLines={1} style={[styles.title, isWideLayout ? null : styles.titleCompact]}>Opco Client</Text>
-            </View>
-          </View>
-          </View>
-          {isWideLayout ? <View style={styles.headerStatusZone}>{statusIndicator}</View> : null}
-          <View style={styles.headerActions}>
-          <Pressable
-            accessibilityLabel={GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel}
-            accessibilityRole="button"
-            onPress={() => setIsDiagnosticsOpen(true)}
-            style={styles.diagnosticsIconButton}
-          >
-            <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} color={isWideLayout ? "#315DA8" : undefined} />
-          </Pressable>
-          {isWideLayout ? userMenuButton : null}
-          </View>
-        </View>
-        {!isWideLayout ? <View style={styles.headerUserRow}>{userMenuButton}</View> : null}
-        {!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null}
-      </View>
+      <AppShellHeader pathname={pathname} width={width} wide={isWideLayout}
+        contractName={context?.contracts.find(contract => contract.id === selectedContractId)?.name}
+        category={category}
+        fallbackTitle={experienceActivity?.appViewId === visibleAppViewId ? experienceActivity.appViewTitle : null}
+        status={statusIndicator} menu={userMenuButton} onBack={goBack} />
 
       <View style={styles.content}>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.canvas } }} />
       </View>
       </View>
 
@@ -517,7 +508,7 @@ export default function AppLayout() {
                 accessibilityLabel="Cerrar diagnostico"
                 accessibilityRole="button"
                 onPress={() => setIsDiagnosticsOpen(false)}
-                style={styles.modalCloseButton}
+                style={interaction => [styles.modalCloseButton, actionSurface(false, interaction, Boolean(false))]}
               >
                 <Text style={styles.modalCloseText}>Cerrar</Text>
               </Pressable>
@@ -558,12 +549,12 @@ export default function AppLayout() {
                   <Text style={styles.diagnosticsTitle}>Problemas de sincronización</Text>
                   <Text>{attentionError ?? (attentionProblems === null ? "Leyendo cambios locales…" : attentionProblems.length === 0 ? shellStatusIndicator.state === "error" ? "No hay cambios locales por revisar. Consulta Sincronización para ver el aviso activo." : "No hay cambios locales por revisar." : attentionProblems.length === 1 ? "1 cambio local" : `${attentionProblems.length} cambios locales`)}</Text>
                   {attentionProblems?.map(problem => (
-                    <View key={problem.key} style={{ gap: 8, padding: 12, borderWidth: 1, borderColor: "#d0d5dd", borderRadius: 8 }}>
+                    <View key={problem.key} style={{ gap: 8, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8 }}>
                       <Text style={styles.diagnosticsSectionTitle}>{problem.experience ?? "Experiencia no disponible"}</Text>
                       <Text>{problem.recordName ?? "Registro no identificado"}{problem.date ? ` · ${problem.date.split("-").reverse().join("-")}` : " · Fecha no disponible"}</Text>
                       <Text>{problem.state === "conflict" ? "En conflicto" : problem.state === "failed" ? "Fallido" : "Pendiente"}</Text>
                       <Text>{syncAttentionReason(problem)}</Text>
-                      {problem.href ? <Pressable accessibilityRole="button" onPress={() => { setIsDiagnosticsOpen(false); router.push(problem.href as never); }} style={styles.secondaryModalButton}>
+                      {problem.href ? <Pressable accessibilityRole="button" onPress={() => { setIsDiagnosticsOpen(false); router.push(problem.href as never); }} style={interaction => [styles.secondaryModalButton, actionSurface(false, interaction, Boolean(false))]}>
                         <Text>{problem.state === "conflict" ? "Revisar conflicto" : "Revisar cambio"}</Text>
                       </Pressable> : <Text>Faltan metadatos para abrir la experiencia. Los detalles están en Diagnóstico.</Text>}
                     </View>
@@ -630,7 +621,7 @@ export default function AppLayout() {
                 accessibilityLabel="Cerrar detalle de error de sincronizacion"
                 accessibilityRole="button"
                 onPress={() => setIsSyncErrorModalOpen(false)}
-                style={styles.modalCloseButton}
+                style={interaction => [styles.modalCloseButton, actionSurface(false, interaction, Boolean(false))]}
               >
                 <Text style={styles.modalCloseText}>Cerrar</Text>
               </Pressable>
@@ -666,7 +657,7 @@ export default function AppLayout() {
                   setSelectedDiagnosticsTab(shouldShowRecordsSyncErrorDetail ? "records" : "state-update");
                   setIsSyncErrorModalOpen(false);
                 }}
-                style={styles.secondaryModalButton}
+                style={interaction => [styles.secondaryModalButton, actionSurface(false, interaction, Boolean(false))]}
               >
                 <Text style={styles.secondaryModalButtonText}>Abrir diagnostico</Text>
               </Pressable>
@@ -696,8 +687,8 @@ export default function AppLayout() {
         transparent
         visible={isUserMenuOpen}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.userMenuPanel, isWideLayout ? styles.userMenuPanelWide : styles.userMenuPanelCompact]}>
+        <View style={[styles.modalBackdrop, width < 600 ? { justifyContent: "flex-end", padding: 12 } : { justifyContent: "flex-start", alignItems: "flex-end", paddingTop: 16 }]}>
+          <View accessibilityViewIsModal style={[styles.userMenuPanel, isWideLayout ? styles.userMenuPanelWide : styles.userMenuPanelCompact]}>
             <View style={styles.userMenuHeader}>
               <View style={styles.userMenuIdentity}>
                 <View style={styles.userAvatarLarge}>
@@ -712,12 +703,20 @@ export default function AppLayout() {
                 accessibilityLabel="Cerrar menu de usuario"
                 accessibilityRole="button"
                 onPress={() => setIsUserMenuOpen(false)}
-                style={styles.userMenuCloseButton}
+                style={interaction => [styles.userMenuCloseButton, actionSurface(false, interaction, Boolean(false))]}
               >
-                <X color="#587078" size={18} strokeWidth={2.2} />
+                <X color={colors.textSecondary} size={18} strokeWidth={2.2} />
               </Pressable>
             </View>
-            <View style={styles.userMenuBody} />
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 20, paddingVertical: 4 }} keyboardShouldPersistTaps="handled">
+              <AppNavigationMenu showNavigation={!isWideLayout} onNavigate={() => setIsUserMenuOpen(false)} />
+              <Pressable accessibilityRole="button" accessibilityLabel={GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel}
+                onPress={() => { setIsUserMenuOpen(false); setIsDiagnosticsOpen(true); }}
+                style={[styles.secondaryModalButton, { minHeight: 44, flexDirection: "row", gap: 8 }]}>
+                <AppIcon icon={GLOBAL_DIAGNOSTICS_BUTTON.icon} size={18} color={colors.primary} />
+                <Text style={styles.secondaryModalButtonText}>Diagnóstico detallado</Text>
+              </Pressable>
+            </ScrollView>
             <View style={styles.userMenuFooter}>
               <Pressable
                 accessibilityLabel="Cerrar sesion"
@@ -726,9 +725,9 @@ export default function AppLayout() {
                   setIsUserMenuOpen(false);
                   void signOut();
                 }}
-                style={styles.logoutButton}
+                style={interaction => [styles.logoutButton, actionSurface(false, interaction, Boolean(false))]}
               >
-                <LogOut color="#9f3412" size={16} strokeWidth={2.2} />
+                <LogOut color={colors.danger} size={16} strokeWidth={2.2} />
                 <Text style={styles.logoutText}>Cerrar sesion</Text>
               </Pressable>
             </View>
@@ -829,7 +828,7 @@ function SyncStatusDiagnosticsPanel({
           <Text style={styles.diagnosticsTitle}>Sincronización</Text>
           <Text style={styles.syncDiagnosticsReason}>{diagnostics.reason}</Text>
         </View>
-        <Pressable accessibilityRole="button" onPress={handleCopy} style={styles.secondaryModalButton}>
+        <Pressable accessibilityRole="button" onPress={handleCopy} style={interaction => [styles.secondaryModalButton, actionSurface(false, interaction, Boolean(false))]}>
           <Text style={styles.secondaryModalButtonText}>
             {copyState === "success" ? "Copiado" : copyState === "error" ? "No se pudo copiar" : "Copiar diagnóstico de sincronización"}
           </Text>
@@ -907,18 +906,18 @@ function syncStateLabel(state: ReturnType<typeof buildSyncStatusDiagnostics>["in
 }
 
 function syncStateIcon(state: SyncChecklistState) {
-  if (state === "Correcto") return <CheckCircle2 color="#13795b" size={18} />;
-  if (state === "En curso") return <Clock3 color="#b7791f" size={18} />;
-  if (state === "Error") return <AlertCircle color="#b42318" size={18} />;
-  return <CircleDashed color="#64757b" size={18} />;
+  if (state === "Correcto") return <CheckCircle2 color={colors.success} size={18} />;
+  if (state === "En curso") return <Clock3 color={colors.info} size={18} />;
+  if (state === "Error") return <AlertCircle color={colors.danger} size={18} />;
+  return <CircleDashed color={colors.textSecondary} size={18} />;
 }
 
-function statusIndicatorIcon(state: ReturnType<typeof resolveAppShellStatusIndicator>["state"]) {
-  if (state === "online") return <CheckCircle2 color="#13795b" size={17} />;
-  if (state === "working") return <Clock3 color="#b7791f" size={17} />;
-  if (state === "offline") return <WifiOff color="#64757b" size={17} />;
-  if (state === "error") return <AlertCircle color="#b42318" size={17} />;
-  return <CircleDashed color="#b7791f" size={17} />;
+function statusIndicatorIcon(state: ReturnType<typeof resolveAppShellStatusIndicator>["state"], color: string) {
+  if (state === "online") return <CheckCircle2 color={color} size={17} />;
+  if (state === "working") return <Clock3 color={color} size={17} />;
+  if (state === "offline") return <WifiOff color={color} size={17} />;
+  if (state === "error") return <AlertCircle color={color} size={17} />;
+  return <CircleDashed color={color} size={17} />;
 }
 
 function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMeasurement[] }) {
@@ -947,7 +946,7 @@ function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMea
           <Text style={styles.diagnosticsTitle}>Rendimiento de experiencias</Text>
           <Text style={styles.diagnosticsNotice}>El detalle indica si cada medición comenzó en la ruta o en el renderer.</Text>
         </View>
-        <Pressable accessibilityRole="button" onPress={handleCopy} style={styles.secondaryModalButton}>
+        <Pressable accessibilityRole="button" onPress={handleCopy} style={interaction => [styles.secondaryModalButton, actionSurface(false, interaction, Boolean(false))]}>
           <Text style={styles.secondaryModalButtonText}>
             {copyState === "success" ? "Copiado" : copyState === "error" ? "No se pudo copiar" : "Copiar diagnóstico de rendimiento"}
           </Text>
@@ -1187,7 +1186,7 @@ function DiagnosticDisclosureRow({
           onPress={() => setExpanded((value) => !value)}
           style={styles.disclosureToggle}
         >
-          <View style={styles.disclosureIndicator}>{expanded ? <ChevronDown color="#135d66" size={18} /> : <ChevronRight color="#135d66" size={18} />}</View>
+          <View style={styles.disclosureIndicator}>{expanded ? <ChevronDown color={colors.primary} size={18} /> : <ChevronRight color={colors.primary} size={18} />}</View>
           {icon ? <View style={styles.syncChecklistIcon}>{icon}</View> : null}
           <Text style={styles.disclosurePrimary}>{primary}</Text>
           <Text style={styles.disclosureSecondary}>{secondary}</Text>
@@ -1270,12 +1269,13 @@ function getUserInitials(value: string | null | undefined) {
   return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
-const baseStyles = StyleSheet.create({
+export function createShellBaseStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   backButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#ffffff",
-    borderColor: "#b8c7ca",
+    backgroundColor: p.surface,
+    borderColor: p.controlBorder,
     borderRadius: 24,
     borderWidth: 1,
     height: 48,
@@ -1283,7 +1283,7 @@ const baseStyles = StyleSheet.create({
     width: 48,
   },
   backText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontSize: 24,
     fontWeight: "800",
     lineHeight: 26,
@@ -1297,12 +1297,12 @@ const baseStyles = StyleSheet.create({
     flex: 1,
   },
   diagnostics: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     gap: 6,
   },
   diagnosticsIconButton: {
     alignItems: "center",
-    borderColor: "#b8c7ca",
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     height: 40,
@@ -1310,7 +1310,7 @@ const baseStyles = StyleSheet.create({
     width: 40,
   },
   diagnosticsLabel: {
-    color: "#587078",
+    color: p.textSecondary,
     flex: 1,
     fontSize: 12,
     fontWeight: "700",
@@ -1331,7 +1331,7 @@ const baseStyles = StyleSheet.create({
     padding: 0,
   },
   diagnosticsNavigation: {
-    borderBottomColor: "#d9e3e5",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
     flexShrink: 0,
     paddingHorizontal: 16,
@@ -1346,18 +1346,18 @@ const baseStyles = StyleSheet.create({
     minHeight: 0,
   },
   diagnosticsNotice: {
-    color: "#587078",
+    color: p.textSecondary,
     fontSize: 12,
     lineHeight: 17,
   },
   diagnosticsTab: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
-    borderColor: "#c8d2d5",
+    backgroundColor: p.secondary,
+    borderColor: p.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 38,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
   },
   diagnosticsTabList: {
@@ -1367,28 +1367,28 @@ const baseStyles = StyleSheet.create({
     paddingRight: 2,
   },
   diagnosticsTabSelected: {
-    backgroundColor: "#135d66",
-    borderColor: "#135d66",
+    backgroundColor: p.primary,
+    borderColor: p.selectionBorder,
   },
   diagnosticsTabs: {
     flexGrow: 0,
     flexShrink: 0,
   },
   diagnosticsTabText: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
   diagnosticsTabTextSelected: {
-    color: "#ffffff",
+    color: p.onPrimary,
   },
   diagnosticsTitle: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 14,
     fontWeight: "800",
   },
   diagnosticsSection: {
-    borderColor: "#d9e3e5",
+    borderColor: p.border,
     borderTopWidth: 1,
     gap: 8,
     marginTop: 10,
@@ -1402,7 +1402,7 @@ const baseStyles = StyleSheet.create({
     justifyContent: "space-between",
   },
   diagnosticsSectionTitle: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -1410,7 +1410,7 @@ const baseStyles = StyleSheet.create({
     gap: 6,
   },
   diagnosticsValue: {
-    color: "#17363c",
+    color: p.text,
     flex: 1,
     fontSize: 12,
     minWidth: 0,
@@ -1471,38 +1471,38 @@ const baseStyles = StyleSheet.create({
   logoutButton: {
     alignItems: "center",
     alignSelf: "flex-end",
-    backgroundColor: "#ffffff",
-    borderColor: "#d8e2e4",
+    backgroundColor: p.dangerSurface,
+    borderColor: p.dangerBorder,
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
     gap: 8,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   logoutText: {
-    color: "#9f3412",
+    color: p.danger,
     fontWeight: "800",
   },
   modalBackdrop: {
     alignItems: "center",
-    backgroundColor: "rgba(15, 48, 54, 0.45)",
+    backgroundColor: p.overlay,
     flex: 1,
     justifyContent: "center",
     padding: 16,
   },
   modalCloseButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.secondary,
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 12,
   },
   modalCloseText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   modalHeader: {
@@ -1512,7 +1512,7 @@ const baseStyles = StyleSheet.create({
     justifyContent: "space-between",
   },
   modalPanel: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     borderRadius: 8,
     gap: 14,
     maxHeight: "86%",
@@ -1529,24 +1529,24 @@ const baseStyles = StyleSheet.create({
     flexShrink: 1,
   },
   modalTitle: {
-    color: "#17363c",
+    color: p.text,
     flex: 1,
     fontSize: 18,
     fontWeight: "800",
   },
   primaryModalButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
   },
   primaryModalButtonDisabled: {
     opacity: 0.55,
   },
   primaryModalButtonText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   disclosureAction: {
@@ -1564,7 +1564,7 @@ const baseStyles = StyleSheet.create({
     width: 20,
   },
   disclosurePrimary: {
-    color: "#17363c",
+    color: p.text,
     flexGrow: 1,
     flexShrink: 1,
     fontSize: 13,
@@ -1572,11 +1572,11 @@ const baseStyles = StyleSheet.create({
     minWidth: 120,
   },
   disclosureRow: {
-    borderBottomColor: "#d9e3e5",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
   },
   disclosureSecondary: {
-    color: "#425d64",
+    color: p.textSecondary,
     flexShrink: 1,
     fontSize: 12,
     fontWeight: "700",
@@ -1604,20 +1604,20 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 6,
   },
   performanceEntry: {
-    borderBottomColor: "#d9e3e5",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
     gap: 6,
     paddingVertical: 12,
   },
   performanceEntryTitle: {
-    color: "#17363c",
+    color: p.text,
     flex: 1,
     fontSize: 13,
     fontWeight: "800",
     minWidth: 180,
   },
   performanceResult: {
-    color: "#425d64",
+    color: p.textSecondary,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -1628,19 +1628,19 @@ const baseStyles = StyleSheet.create({
   },
   secondaryModalButton: {
     alignItems: "center",
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.secondary,
     borderRadius: 8,
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     paddingHorizontal: 14,
   },
   secondaryModalButtonText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "800",
   },
   mainArea: { flex: 1, minWidth: 0 },
   shell: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.canvas,
     flex: 1,
     overflow: "hidden",
   },
@@ -1650,21 +1650,21 @@ const baseStyles = StyleSheet.create({
     width: "100%",
   },
   offlinePreparationProgressFill: {
-    backgroundColor: "#13795b",
+    backgroundColor: p.warningSurface,
     borderRadius: 2,
     height: 3,
   },
   offlinePreparationProgressFillIncomplete: {
-    backgroundColor: "#b7791f",
+    backgroundColor: p.warningSurface,
   },
   offlinePreparationProgressText: {
-    color: "#425d64",
+    color: p.warning,
     fontSize: 10,
     lineHeight: 13,
     textAlign: "center",
   },
   offlinePreparationProgressTrack: {
-    backgroundColor: "#d9e3e5",
+    backgroundColor: p.warningSurface,
     borderRadius: 2,
     flexDirection: "row",
     height: 3,
@@ -1687,7 +1687,7 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   statusLabel: {
-    color: "#425d64",
+    color: p.textSecondary,
     flexShrink: 1,
     fontSize: 12,
     fontWeight: "700",
@@ -1695,12 +1695,12 @@ const baseStyles = StyleSheet.create({
     textAlign: "center",
   },
   syncActivitiesText: {
-    color: "#425d64",
+    color: p.text,
     fontSize: 12,
     lineHeight: 18,
   },
   syncChecklist: {
-    borderColor: "#d9e3e5",
+    borderColor: p.border,
     borderTopWidth: 1,
   },
   syncChecklistContent: {
@@ -1709,7 +1709,7 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   syncChecklistDetail: {
-    color: "#425d64",
+    color: p.textSecondary,
     fontSize: 12,
     lineHeight: 17,
   },
@@ -1725,31 +1725,31 @@ const baseStyles = StyleSheet.create({
     width: 22,
   },
   syncChecklistLabel: {
-    color: "#17363c",
+    color: p.textSecondary,
     flexGrow: 1,
     fontSize: 13,
     fontWeight: "800",
   },
   syncChecklistMeta: {
-    color: "#6b7f85",
+    color: p.textSecondary,
     fontSize: 11,
     lineHeight: 16,
   },
   syncChecklistRow: {
     alignItems: "flex-start",
-    borderBottomColor: "#e5ecee",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
     flexDirection: "row",
     gap: 8,
     paddingVertical: 9,
   },
   syncChecklistState: {
-    color: "#425d64",
+    color: p.text,
     fontSize: 12,
     fontWeight: "700",
   },
   syncDiagnostics: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     gap: 12,
   },
   syncDiagnosticsHeader: {
@@ -1760,7 +1760,7 @@ const baseStyles = StyleSheet.create({
     justifyContent: "space-between",
   },
   syncDiagnosticsReason: {
-    color: "#425d64",
+    color: p.text,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -1770,27 +1770,27 @@ const baseStyles = StyleSheet.create({
     minWidth: 220,
   },
   syncHistoryAt: {
-    color: "#6b7f85",
+    color: p.textSecondary,
     fontSize: 11,
   },
   syncHistoryNotice: {
-    color: "#6b7f85",
+    color: p.textSecondary,
     fontSize: 11,
     lineHeight: 16,
   },
   syncHistoryProcess: {
-    color: "#17363c",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
   syncHistoryRow: {
-    borderBottomColor: "#e5ecee",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
     gap: 3,
     paddingVertical: 8,
   },
   syncHistoryTransition: {
-    color: "#425d64",
+    color: p.text,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -1800,8 +1800,8 @@ const baseStyles = StyleSheet.create({
     gap: 8,
   },
   syncSummaryValue: {
-    backgroundColor: "#f4f7f7",
-    borderColor: "#d9e3e5",
+    backgroundColor: p.surfaceSubtle,
+    borderColor: p.border,
     borderRadius: 6,
     borderWidth: 1,
     flexBasis: 180,
@@ -1811,7 +1811,7 @@ const baseStyles = StyleSheet.create({
     padding: 9,
   },
   syncErrorFooter: {
-    borderColor: "#d8e2e4",
+    borderColor: p.dangerBorder,
     borderTopWidth: 1,
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1820,20 +1820,20 @@ const baseStyles = StyleSheet.create({
     paddingTop: 12,
   },
   syncErrorMessage: {
-    color: "#17363c",
+    color: p.danger,
     fontSize: 14,
     lineHeight: 20,
   },
   syncErrorMessageBox: {
-    backgroundColor: "#fff7f7",
-    borderColor: "#f1b8b8",
+    backgroundColor: p.dangerSurface,
+    borderColor: p.dangerBorder,
     borderRadius: 8,
     borderWidth: 1,
     marginBottom: 12,
     padding: 12,
   },
   syncErrorSubtitle: {
-    color: "#587078",
+    color: p.danger,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -1843,7 +1843,7 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 26,
     fontWeight: "800",
   },
@@ -1863,7 +1863,7 @@ const baseStyles = StyleSheet.create({
   },
   userAvatar: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 16,
     height: 32,
     justifyContent: "center",
@@ -1872,18 +1872,18 @@ const baseStyles = StyleSheet.create({
   },
   userAvatarLarge: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: p.selection,
     borderRadius: 24,
     height: 48,
     justifyContent: "center",
     width: 48,
   },
   userAvatarLargeText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontWeight: "900",
   },
   userAvatarText: {
-    color: "#135d66",
+    color: p.onSecondary,
     fontSize: 12,
     fontWeight: "900",
   },
@@ -1892,13 +1892,13 @@ const baseStyles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     maxWidth: 220,
-    minHeight: 40,
+    minHeight: metrics.controlMinHeight,
     minWidth: 0,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   userButtonText: {
-    color: "#17363c",
+    color: p.onSecondary,
     flexShrink: 1,
     fontWeight: "800",
     lineHeight: 18,
@@ -1918,18 +1918,18 @@ const baseStyles = StyleSheet.create({
   userMenuCloseButton: {
     alignItems: "center",
     borderRadius: 8,
-    height: 36,
+    height: 44,
     justifyContent: "center",
-    width: 36,
+    width: 44,
   },
   userMenuEmail: {
-    color: "#587078",
+    color: p.text,
     flexShrink: 1,
     marginTop: 2,
   },
   userMenuFooter: {
     alignItems: "flex-end",
-    borderTopColor: "#e1e8ea",
+    borderTopColor: p.border,
     borderTopWidth: 1,
     paddingTop: 14,
   },
@@ -1947,13 +1947,13 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
   userMenuName: {
-    color: "#17363c",
+    color: p.text,
     flexShrink: 1,
     fontSize: 18,
     fontWeight: "800",
   },
   userMenuPanel: {
-    backgroundColor: "#ffffff",
+    backgroundColor: p.surface,
     borderRadius: 8,
     gap: 14,
     maxHeight: "86%",
@@ -1971,11 +1971,17 @@ const baseStyles = StyleSheet.create({
     minWidth: 0,
   },
 });
+}
+const baseStyles = createShellBaseStyles();
 
 const styles = baseStyles;
-const desktopStyles = StyleSheet.create({
-  ...desktopStyleColors(baseStyles),
-  shell: { ...baseStyles.shell, flexDirection: "row" },
-  headerIdentity: { ...baseStyles.headerIdentity, flex: 0, minWidth: 48 },
-  headerWide: { ...baseStyles.headerWide, minHeight: 72, backgroundColor: "#F4F6F8" },
+export function createShellDesktopStyles(p: ThemeColors = colors) {
+  const base = createShellBaseStyles(p);
+  return StyleSheet.create({
+  ...desktopStyleColors(base),
+  shell: { ...base.shell, flexDirection: "row" },
+  headerIdentity: { ...base.headerIdentity, flex: 0, minWidth: 48 },
+  headerWide: { ...base.headerWide, minHeight: 72, backgroundColor: p.surface },
 });
+}
+const desktopStyles = createShellDesktopStyles();

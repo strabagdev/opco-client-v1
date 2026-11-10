@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { StateUpdateFormGrid, StateUpdateReadRows, stateUpdateReadColumns, type StateUpdateReadRow } from "./state-update-presentation";
+import { StateUpdateFormGrid, StateUpdateReadRows, stateUpdateReadColumns, stateUpdateSubmitLabel, type StateUpdateReadRow } from "./state-update-presentation";
 
 const viewport = vi.hoisted(() => ({ width: 1440, height: 900, scale: 1, fontScale: 1 }));
 vi.mock("react-native", async () => ({ ...await import("react-native-web"), useWindowDimensions: () => viewport }));
@@ -46,5 +46,15 @@ describe("STATE_UPDATE reading and form presentation", () => {
     ]} />);
     expect(html).toContain('value="2026-10-24"'); expect(html).toContain('value="stable-id"');
     expect(html).toContain("Borrador conservado"); expect(html).toContain('required=""');
+  });
+});
+
+
+describe("record operation wording", () => {
+  it("distinguishes a new current record from updating one without reinterpreting append", () => {
+    expect(stateUpdateSubmitLabel("update-current", false)).toBe("Crear registro");
+    expect(stateUpdateSubmitLabel("update-current", true)).toBe("Actualizar registro");
+    expect(stateUpdateSubmitLabel("append", false)).toBe("Registrar cambio");
+    expect(stateUpdateSubmitLabel("append", true)).toBe("Registrar cambio");
   });
 });

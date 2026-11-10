@@ -1,3 +1,6 @@
+import { actionSurface } from "../theme/operational-presentation";
+import { metrics, type ThemeColors } from "../theme/tokens";
+import { colors } from "../theme/paint";
 import {useOfflinePreparationRecovery} from "./use-offline-preparation-recovery";
 import { copyStateUpdateDiagnosticsWithCoverage } from "./state-update-coverage-copy";
 import { recordHomeNavigationTransport } from "@/lib/home-navigation-diagnostics";
@@ -872,13 +875,13 @@ function LocalStorageRecoveryScreen({
         {showDiagnostics ? (
           <LocalStorageDiagnostics summary={summary} summaryError={summaryError} />
         ) : null}
-        <Pressable disabled={isRetrying || isResetting} onPress={retry} style={storageStyles.primaryButton}>
-          {isRetrying ? <ActivityIndicator color="#ffffff" /> : <Text style={storageStyles.primaryText}>Reintentar</Text>}
+        <Pressable disabled={isRetrying || isResetting} onPress={retry} style={interaction => [storageStyles.primaryButton, actionSurface(true, interaction, Boolean(isRetrying || isResetting))]}>
+          {isRetrying ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={[storageStyles.primaryText, Boolean(isRetrying || isResetting) && { color: colors.onDisabled }]}>Reintentar</Text>}
         </Pressable>
         {guidance.canRequestDestructiveReset ? (
           <Pressable disabled={isRetrying || isResetting} onPress={requestReset} style={storageStyles.dangerButton}>
             {isResetting ? (
-              <ActivityIndicator color="#b42318" />
+              <ActivityIndicator color={colors.danger} />
             ) : (
               <Text style={storageStyles.dangerText}>Restablecer datos locales</Text>
             )}
@@ -1234,19 +1237,19 @@ export function StateUpdateDiagnosticsPanel({
             <Pressable
               disabled={!canCopy}
               onPress={handleCopyStateUpdate}
-              style={[diagnosticsPanelStyles.button, !canCopy ? diagnosticsPanelStyles.buttonDisabled : null]}
+              style={interaction => [[diagnosticsPanelStyles.button, !canCopy ? diagnosticsPanelStyles.buttonDisabled : null], actionSurface(false, interaction, Boolean(!canCopy))]}
             >
-              <Text style={diagnosticsPanelStyles.buttonText}>{copyButtonText}</Text>
+              <Text style={[diagnosticsPanelStyles.buttonText, Boolean(!canCopy) && { color: colors.onDisabled }]}>{copyButtonText}</Text>
             </Pressable>
-            <Pressable onPress={onRefresh} style={diagnosticsPanelStyles.button}>
+            <Pressable onPress={onRefresh} style={interaction => [diagnosticsPanelStyles.button, actionSurface(false, interaction, Boolean(false))]}>
               <Text style={diagnosticsPanelStyles.buttonText}>Refrescar</Text>
             </Pressable>
-            <Pressable disabled={isSyncing} onPress={onSyncNow} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
-              <Text style={diagnosticsPanelStyles.buttonText}>{isSyncing ? "Sincronizando" : "Intentar sincronizar ahora"}</Text>
+            <Pressable disabled={isSyncing} onPress={onSyncNow} style={interaction => [[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null], actionSurface(false, interaction, Boolean(isSyncing))]}>
+              <Text style={[diagnosticsPanelStyles.buttonText, Boolean(isSyncing) && { color: colors.onDisabled }]}>{isSyncing ? "Sincronizando" : "Intentar sincronizar ahora"}</Text>
             </Pressable>
             {onRetryFailed && (summary?.failed ?? 0) > 0 ? (
-              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(null)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
-                <Text style={diagnosticsPanelStyles.buttonText}>Reintentar errores</Text>
+              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(null)} style={interaction => [[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null], actionSurface(false, interaction, Boolean(isSyncing))]}>
+                <Text style={[diagnosticsPanelStyles.buttonText, Boolean(isSyncing) && { color: colors.onDisabled }]}>Reintentar errores</Text>
               </Pressable>
             ) : null}
           </View>
@@ -1273,8 +1276,8 @@ export function StateUpdateDiagnosticsPanel({
         ) : diagnostics.operations.length ? diagnostics.operations.map((operation, index) => (
           <StateUpdateDisclosureRow
             action={onRetryFailed && operationSections[index]?.retryable && operationSections[index]?.retryToken ? (
-              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operationSections[index]?.retryToken ?? null)} style={[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null]}>
-                <Text style={diagnosticsPanelStyles.buttonText}>Reintentar</Text>
+              <Pressable disabled={isSyncing} onPress={() => onRetryFailed(operationSections[index]?.retryToken ?? null)} style={interaction => [[diagnosticsPanelStyles.button, isSyncing ? diagnosticsPanelStyles.buttonDisabled : null], actionSurface(false, interaction, Boolean(isSyncing))]}>
+                <Text style={[diagnosticsPanelStyles.buttonText, Boolean(isSyncing) && { color: colors.onDisabled }]}>Reintentar</Text>
               </Pressable>
             ) : null}
             key={operationSections[index]?.key ?? `${operation.clientRequestId}:${index}`}
@@ -1337,7 +1340,7 @@ function StateUpdateDisclosureRow({
           onPress={() => setExpanded((value) => !value)}
           style={diagnosticsPanelStyles.operationToggle}
         >
-          {expanded ? <ChevronDown color="#135d66" size={17} /> : <ChevronRight color="#135d66" size={17} />}
+          {expanded ? <ChevronDown color={colors.primary} size={17} /> : <ChevronRight color={colors.primary} size={17} />}
           <Text selectable style={diagnosticsPanelStyles.operationTitle}>{primary}</Text>
           <Text selectable style={diagnosticsPanelStyles.operationSecondary}>{secondary}</Text>
         </Pressable>
@@ -1430,14 +1433,19 @@ function LocalStorageDiagnostics({
   );
 }
 
-const diagnosticsPanelStyles = StyleSheet.create({
+export function createSessionNoticeDiagnosticsPanelStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   actions: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
   },
   button: {
-    backgroundColor: "#135d66",
+    minHeight: metrics.controlMinHeight,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: p.controlBorder,
+    backgroundColor: p.secondary,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -1446,17 +1454,17 @@ const diagnosticsPanelStyles = StyleSheet.create({
     opacity: 0.55,
   },
   buttonText: {
-    color: "#ffffff",
+    color: p.onSecondary,
     fontSize: 12,
     fontWeight: "800",
   },
   empty: {
-    color: "#466068",
+    color: p.text,
     fontSize: 12,
   },
   embeddedShell: {
-    backgroundColor: "#ffffff",
-    borderColor: "#9fb8b8",
+    backgroundColor: p.canvas,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
@@ -1465,7 +1473,7 @@ const diagnosticsPanelStyles = StyleSheet.create({
     gap: 0,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -1473,12 +1481,12 @@ const diagnosticsPanelStyles = StyleSheet.create({
     gap: 8,
   },
   label: {
-    color: "#466068",
+    color: p.textSecondary,
     fontSize: 11,
     fontWeight: "800",
   },
   operation: {
-    borderBottomColor: "#d0dede",
+    borderBottomColor: p.border,
     borderBottomWidth: 1,
   },
   operationDetail: {
@@ -1486,7 +1494,7 @@ const diagnosticsPanelStyles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   operationSecondary: {
-    color: "#466068",
+    color: p.textSecondary,
     flexShrink: 1,
     fontSize: 11,
   },
@@ -1508,7 +1516,7 @@ const diagnosticsPanelStyles = StyleSheet.create({
     paddingVertical: 6,
   },
   operationTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -1524,14 +1532,14 @@ const diagnosticsPanelStyles = StyleSheet.create({
     maxHeight: 520,
   },
   sectionTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 12,
     fontWeight: "800",
     marginTop: 6,
   },
   shell: {
-    backgroundColor: "#ffffff",
-    borderColor: "#9fb8b8",
+    backgroundColor: p.canvas,
+    borderColor: p.border,
     borderRadius: 8,
     borderWidth: 1,
     bottom: 12,
@@ -1543,27 +1551,30 @@ const diagnosticsPanelStyles = StyleSheet.create({
     zIndex: 50,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 14,
     fontWeight: "900",
   },
   value: {
-    color: "#0f3036",
+    color: p.text,
     flexShrink: 1,
     fontFamily: Platform.OS === "web" ? "monospace" : undefined,
     fontSize: 11,
     textAlign: "right",
   },
 });
+}
+const diagnosticsPanelStyles = createSessionNoticeDiagnosticsPanelStyles();
 
-const storageStyles = StyleSheet.create({
+export function createSessionNoticeStorageStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
   body: {
-    color: "#466068",
+    color: p.text,
     lineHeight: 22,
   },
   dangerButton: {
     alignItems: "center",
-    borderColor: "#fda29b",
+    borderColor: p.dangerBorder,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
@@ -1571,17 +1582,17 @@ const storageStyles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   dangerText: {
-    color: "#b42318",
+    color: p.danger,
     fontWeight: "800",
   },
   diagnostics: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: p.surface,
     borderRadius: 8,
     gap: 6,
     padding: 12,
   },
   diagnosticsLabel: {
-    color: "#466068",
+    color: p.textSecondary,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -1589,16 +1600,16 @@ const storageStyles = StyleSheet.create({
     gap: 4,
   },
   diagnosticsTitle: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 13,
     fontWeight: "800",
   },
   diagnosticsValue: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 12,
   },
   error: {
-    color: "#b42318",
+    color: p.danger,
     fontWeight: "700",
   },
   panel: {
@@ -1608,14 +1619,14 @@ const storageStyles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: p.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 48,
     paddingHorizontal: 16,
   },
   primaryText: {
-    color: "#ffffff",
+    color: p.onPrimary,
     fontWeight: "800",
   },
   screen: {
@@ -1624,9 +1635,11 @@ const storageStyles = StyleSheet.create({
     padding: 24,
   },
   title: {
-    color: "#0f3036",
+    color: p.text,
     fontSize: 22,
     fontWeight: "800",
     lineHeight: 28,
   },
 });
+}
+const storageStyles = createSessionNoticeStorageStyles();

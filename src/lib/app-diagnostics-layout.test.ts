@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   getDiagnosticsModalHeight,
@@ -21,24 +22,39 @@ describe("diagnostics modal layout", () => {
     expect(stateUpdateSource).toContain("accessibilityState={{ expanded }}");
     expect(stateUpdateSource).toContain("{action}");
   });
-  it("opens problems from the status indicator and keeps progress and diagnostics access", () => {
-    const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
-
-    expect(source).toContain('accessibilityLabel="Ver problemas de sincronización"');
-    expect(source).toContain('setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync")');
-    expect(source).toContain("style={styles.statusIndicator}");
-    expect(source).toContain('accessibilityRole="progressbar"');
-    expect(source).toContain("accessibilityValue={{");
-    expect(source).toContain("styles.offlinePreparationProgressTrack");
-    expect(source).toContain('preparationProgress?.state === "incomplete"');
-    expect(source).not.toContain('accessibilityHint="Abre el diagnóstico de sincronización"');
-    expect(source).not.toContain("diagnosticTabForStatusIndicator");
-    expect(source).toContain("GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel");
-    expect(source).toContain("onPress={() => setIsDiagnosticsOpen(true)}");
-    expect(source).toContain("styles.headerStatusZone");
-    expect(source).toContain("styles.headerStatusRow");
-    expect(source).toContain("const statusIndicator = (");
-    expect(source).not.toContain("cacheBannerMessage");
+  it.each(["error", "working", "pending", "offline", "idle"])("opens the correct diagnostics tab from the real %s status action", state => {
+    const text = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
+    const source = ts.createSourceFile("layout.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let indicator: ts.VariableDeclaration | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(source) === "statusIndicator") indicator = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    let action: ts.JsxAttribute | undefined, label: ts.JsxAttribute | undefined;
+    const props = (node: ts.Node) => {
+      if (ts.isJsxOpeningElement(node) && node.tagName.getText(source) === "Pressable") {
+        action = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(source) === "onPress") as ts.JsxAttribute;
+        label = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(source) === "accessibilityLabel") as ts.JsxAttribute;
+      }
+      ts.forEachChild(node, props);
+    };
+    expect(indicator?.initializer).toBeDefined(); props(indicator!.initializer!);
+    const expression = (action!.initializer as ts.JsxExpression).expression!.getText(source);
+    const js = ts.transpileModule("const press = " + expression, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const select = vi.fn(), open = vi.fn();
+    new Function("shellStatusIndicator", "setSelectedDiagnosticsTab", "setIsDiagnosticsOpen", js + ";press();")({ state }, select, open);
+    expect(select).toHaveBeenCalledExactlyOnceWith(state === "error" ? "problems" : "sync");
+    expect(open).toHaveBeenCalledExactlyOnceWith(true);
+    // Keep both the current user-facing status and the detailed accessible status.
+    expect(label?.initializer?.getText(source)).toContain("statusPresentation.label");
+    expect(label?.initializer?.getText(source)).toContain("shellStatusIndicator.accessibilityLabel");
+    expect(text).toContain('accessibilityRole="progressbar"');
+    expect(text).toContain("accessibilityValue={{");
+    expect(text).toContain("styles.offlinePreparationProgressTrack");
+    expect(text).toContain('preparationProgress?.state === "incomplete"');
+    expect(text).toContain("GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel");
+    expect(text).not.toContain("cacheBannerMessage");
   });
   it.each([
     { layout: "compact", width: 390 },
@@ -48,24 +64,18 @@ describe("diagnostics modal layout", () => {
   ])("uses the $layout header arrangement at $width px", ({ layout, width }) => {
     expect(width >= APP_SHELL_WIDE_BREAKPOINT).toBe(layout === "wide");
   });
-  it("keeps equal wide zones and separates the three compact header rows", () => {
-    const source = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
-
-    expect(source).toContain("styles.headerIdentity");
-    expect(source).toContain("styles.headerStatusZone");
-    expect(source).toContain("styles.headerActions");
-    expect(source).toMatch(/headerIdentity:[\s\S]{0,180}flex: 1/);
-    expect(source).toMatch(/headerStatusZone:[\s\S]{0,180}flex: 1/);
-    expect(source).toMatch(/headerActions:[\s\S]{0,180}flex: 1/);
-    expect(source).toContain("{isWideLayout ? userMenuButton : null}");
-    expect(source).toContain("!isWideLayout ? <View style={styles.headerUserRow}>{userMenuButton}</View> : null");
-    expect(source).toContain("!isWideLayout ? <View style={styles.headerStatusRow}>{statusIndicator}</View> : null");
-    expect(source).toMatch(/headerUserRow:[\s\S]{0,180}justifyContent: "center"[\s\S]{0,100}width: "100%"/);
-    expect(source).toMatch(/headerStatusRow:[\s\S]{0,180}justifyContent: "center"[\s\S]{0,80}width: "100%"/);
-    expect(source).toContain("styles.userButtonTextCompact");
-    expect(source).not.toMatch(/userDisplayName[^\n]*numberOfLines/);
-    expect(source).toMatch(/statusLabel:[\s\S]{0,180}flexShrink: 1/);
-    expect(source).toMatch(/userButtonText:[\s\S]{0,180}flexShrink: 1/);
+  it("wires one responsive header to the existing status, account menu and back handler", () => {
+    const text = require("fs").readFileSync("app/(app)/_layout.tsx", "utf8");
+    const source = ts.createSourceFile("layout.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const headers: ts.JsxSelfClosingElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "AppShellHeader") headers.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(source); expect(headers).toHaveLength(1);
+    const attributes = Object.fromEntries(headers[0].attributes.properties.filter(ts.isJsxAttribute).map(p => [p.name.getText(source), p.initializer?.getText(source)]));
+    expect(attributes).toMatchObject({ status: "{statusIndicator}", menu: "{userMenuButton}", onBack: "{goBack}", width: "{width}", wide: "{isWideLayout}" });
+    // Responsive component rendering at all four widths is covered by app-shell-navigation.test.tsx.
   });
   it("replaces generic RECORDS save/cache banners without removing contextual recovery UI", () => {
     const listSource = require("fs").readFileSync("src/renderers/records/RecordsRenderer.tsx", "utf8");

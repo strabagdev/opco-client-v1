@@ -1,3 +1,4 @@
+import { colors } from "../theme/paint";
 import { ComponentProps, createElement } from "react";
 
 import { FALLBACK_APP_ICON, getAppIconComponent } from "../lib/app-icons";
@@ -11,7 +12,7 @@ type AppIconProps = {
 } & Pick<ComponentProps<typeof FALLBACK_APP_ICON>, "style" | "testID">;
 
 export function AppIcon({
-  color = "#135d66",
+  color = colors.primary,
   fallback = "generic",
   icon,
   size = 24,

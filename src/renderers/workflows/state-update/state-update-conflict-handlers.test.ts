@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { stateUpdateResolutionFeedback } from "./state-update-workflow-logic";
+import { workflowWriteMetadata } from "../../../lib/workflow-write-contract";
 
 // Execute the actual renderer handlers without a DOM/native renderer. Persistence is covered separately.
 const sourcePath = process.env.STATE_UPDATE_CONFLICT_HANDLER_SOURCE ?? `${process.cwd()}/src/renderers/workflows/state-update/StateUpdateWorkflow.tsx`;
@@ -22,6 +23,7 @@ const selected = { localRecordId: "selected-append", conflictIdentity: "selected
   stateValues: [{ fieldId: "state", optionId: "local", label: "Local" }], extraValues: { note: "Seleccionado" }, conflictRemoteUpdatedAt: "remote-version" };
 function fixture(outcome = "confirmed") {
   return {
+    workflowWriteMetadata,
     ownerKey: "local:user", selectedContractId: "contract", appView: { id: "view", name: "Fixture" },
     response: { historyMode: "append", uniqueness: "none", stateFields: [], targetEntityType: { id: "target" } },
     date: "2026-10-03", identity: undefined, hasDate: true, isSaving: false, isOnline: true,

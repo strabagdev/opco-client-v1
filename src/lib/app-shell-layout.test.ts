@@ -4,7 +4,8 @@ import { getHomeGridLayout } from "./app-shell-layout";
 describe("Home responsive grid", () => {
   it.each([
     [390, 1, 20, 10, 350],
-    [899, 1, 20, 10, 859],
+    [768, 2, 20, 16, 356],
+    [899, 2, 20, 16, 421.5],
     [900, 2, 24, 16, 418],
     [1024, 2, 24, 16, 480],
     [1199, 2, 24, 16, 567.5],
@@ -12,6 +13,10 @@ describe("Home responsive grid", () => {
     [1440, 3, 24, 16, 400],
   ])("at %d preserves column widths and breakpoint boundaries", (width, columns, padding, gap, cardWidth) => {
     expect(getHomeGridLayout(width)).toEqual({ columns, padding, gap, cardWidth });
+  });
+
+  it("keeps a single column when a tablet content area cannot fit two useful cards", () => {
+    expect(getHomeGridLayout(1024, 300)).toEqual({ columns: 1, padding: 24, gap: 16, cardWidth: 300 });
   });
 
   it("uses measured content width, including scrollbar space, without stretching the last row", () => {

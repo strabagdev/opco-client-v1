@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { Link, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -200,7 +201,7 @@ export default function EntityRecordsScreen() {
 
       {canLoadMore ? (
         <Pressable disabled={isLoadingMore} onPress={loadMoreRecords} style={styles.loadMoreButton}>
-          {isLoadingMore ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
+          {isLoadingMore ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.loadMoreText}>Cargar mas</Text>}
         </Pressable>
       ) : null}
     </ScrollView>
@@ -209,18 +210,18 @@ export default function EntityRecordsScreen() {
 
 const styles = StyleSheet.create({
   cacheBanner: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
+    backgroundColor: colors.warningSurface,
+    borderColor: colors.warningBorder,
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
   },
   cacheMeta: {
-    color: "#9a3412",
+    color: colors.warning,
     marginTop: 4,
   },
   cacheText: {
-    color: "#9a3412",
+    color: colors.warning,
     fontWeight: "700",
   },
   content: {
@@ -229,11 +230,11 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   empty: {
-    color: "#587078",
+    color: colors.textSecondary,
     lineHeight: 21,
   },
   error: {
-    color: "#b42318",
+    color: colors.danger,
     lineHeight: 20,
   },
   header: {
@@ -246,7 +247,7 @@ const styles = StyleSheet.create({
   },
   icon: {
     alignItems: "center",
-    backgroundColor: "#e4f1f2",
+    backgroundColor: colors.selection,
     borderRadius: 8,
     height: 42,
     justifyContent: "center",
@@ -255,7 +256,7 @@ const styles = StyleSheet.create({
   loadMoreButton: {
     alignItems: "center",
     alignSelf: "center",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 46,
@@ -263,16 +264,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   loadMoreText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontWeight: "800",
   },
   meta: {
-    color: "#587078",
+    color: colors.textSecondary,
     marginTop: 3,
   },
   recordCard: {
-    backgroundColor: "#ffffff",
-    borderColor: "#d4dddf",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -290,7 +291,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   recordLabel: {
-    color: "#587078",
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -299,43 +300,43 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   recordTitle: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 17,
     fontWeight: "800",
   },
   recordValue: {
-    color: "#17363c",
+    color: colors.text,
     fontSize: 14,
   },
   retryButton: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: "#135d66",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: "center",
     minHeight: 44,
     paddingHorizontal: 16,
   },
   retryText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontWeight: "800",
   },
   screen: {
-    backgroundColor: "#eef4f4",
+    backgroundColor: colors.canvas,
     flex: 1,
   },
   searchInput: {
-    backgroundColor: "#ffffff",
-    borderColor: "#c8d2d5",
+    backgroundColor: colors.surface,
+    borderColor: colors.controlBorder,
     borderRadius: 8,
     borderWidth: 1,
-    color: "#17363c",
+    color: colors.text,
     ...stableTextInputStyle,
     minHeight: 46,
     paddingHorizontal: 14,
   },
   title: {
-    color: "#0f3036",
+    color: colors.text,
     fontSize: 26,
     fontWeight: "800",
   },

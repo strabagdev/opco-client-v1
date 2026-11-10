@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
+import { workflowWriteMetadata } from "../../../lib/workflow-write-contract";
 import { stateUpdateResolutionFeedback } from "../state-update/state-update-workflow-logic";
 
 // Execute the actual renderer handlers without a DOM/native renderer. Persistence is covered separately.
@@ -22,6 +23,7 @@ const selected = { localRecordId: "selected-attendance", conflictIdentity: "sele
   statusOptionId: "local", contextValues: {}, observation: null, conflictRemoteUpdatedAt: "remote-version" };
 function fixture(outcome = "confirmed") {
   return {
+    workflowWriteMetadata,
     ownerKey: "local:user", selectedContractId: "contract", appView: { id: "view", name: "Fixture", config: { targetEntityTypeId: "target", statusFieldId: "state" } },
     date: "2026-10-03", isSaving: false, isOnline: true, statuses: [], contextFields: [],
     requestSequenceRef: { current: 0 }, resolutionInFlightRef: { current: false }, resolutionMountedRef: { current: true },
@@ -41,6 +43,7 @@ describe("Attendance selected conflict feedback", () => {
   it.each(["failed", "pending", "conflict", "superseded"])("another operation succeeding cannot confirm selected %s intent", async (outcome) => {
     const context = fixture(outcome);
     await handler("handleUseLocalConflictChange", context)(selected);
+    expect(context.recordVisibleError).not.toHaveBeenCalled();
     expect(context.reportWriteFeedback.mock.calls.some(([feedback]) => feedback.kind === "server-confirmed")).toBe(false);
     expect(context.setResolutionFeedback).toHaveBeenLastCalledWith(expect.objectContaining({ outcome }));
     expect(context.definitionCache.getStateUpdateResolutionOutcome).toHaveBeenCalledWith({

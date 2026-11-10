@@ -1,3 +1,4 @@
+import { colors } from "@/theme/paint";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
 import type { StateUpdateOfflineStore, StateUpdateScope } from "@/lib/state-update-offline";
@@ -27,14 +28,14 @@ export function LocalReportCancellation({ store, scope, localRecordId, subjectRe
     finally { if (currentKey.current === key) setBusy(null); }
   }
   return <>
-    <Pressable accessibilityRole="button" onPress={() => setConfirm(key)}><Text style={{ color: "#b42318", padding: 12 }}>Eliminar alta sólo local</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={() => setConfirm(key)}><Text style={{ color: colors.danger, padding: 12 }}>Eliminar alta sólo local</Text></Pressable>
     <Modal visible={confirm === key} transparent onRequestClose={() => busy !== key && setConfirm(null)}>
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0008", padding: 20 }}>
-        <View style={{ backgroundColor: "white", padding: 24, gap: 16, maxWidth: 480 }}>
-          <Text>¿Eliminar este reporte que nunca se ha enviado? Se elimina únicamente esta alta local. No se modifica Opco.</Text>
-          {error?.key === key ? <Text accessibilityRole="alert">{error.message}</Text> : null}
-          <Pressable accessibilityRole="button" disabled={busy === key} onPress={() => setConfirm(null)}><Text style={{ padding: 12 }}>Cancelar</Text></Pressable>
-          <Pressable accessibilityRole="button" disabled={busy === key} onPress={() => void remove()}><Text style={{ padding: 12, color: "#b42318" }}>Eliminar alta local</Text></Pressable>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.overlay, padding: 20 }}>
+        <View style={{ backgroundColor: colors.surface, padding: 24, gap: 16, maxWidth: 480 }}>
+          <Text style={{ color: colors.text }}>¿Eliminar este reporte que nunca se ha enviado? Se elimina únicamente esta alta local. No se modifica Opco.</Text>
+          {error?.key === key ? <Text accessibilityRole="alert" style={{ color: colors.danger }}>{error.message}</Text> : null}
+          <Pressable accessibilityRole="button" disabled={busy === key} onPress={() => setConfirm(null)}><Text style={{ padding: 12, color: colors.primary }}>Cancelar</Text></Pressable>
+          <Pressable accessibilityRole="button" disabled={busy === key} onPress={() => void remove()}><Text style={{ padding: 12, color: colors.danger }}>Eliminar alta local</Text></Pressable>
         </View>
       </View>
     </Modal>

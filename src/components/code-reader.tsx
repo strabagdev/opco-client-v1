@@ -1,3 +1,6 @@
+import { actionSurface } from "../theme/operational-presentation";
+import { type ThemeColors } from "../theme/tokens";
+import { colors } from "../theme/paint";
 import { useLayoutEffect, useRef, useState } from "react";
 import { Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { createCodeReaderSession } from "../lib/code-reader";
@@ -80,8 +83,8 @@ export function CodeReader({ disabled = false, scopeKey, onRead }: CodeReaderPro
       accessibilityState={{ disabled: disabled || Platform.OS !== "web" }} disabled={disabled || Platform.OS !== "web"}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       onPress={() => { setMessage(undefined); setOpenedScope(effectiveScope); }}
-      style={[styles.button, focused && styles.focus, (disabled || Platform.OS !== "web") && styles.disabled]}>
-      <Text style={styles.buttonText}>Escanear código</Text>
+      style={interaction => [[styles.button, focused && styles.focus, (disabled || Platform.OS !== "web") && styles.disabled], actionSurface(false, interaction, Boolean(disabled || Platform.OS !== "web"))]}>
+      <Text style={[styles.buttonText, Boolean(disabled || Platform.OS !== "web") && { color: colors.onDisabled }]}>Escanear código</Text>
     </Pressable>
     {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
     <Modal visible={open && !disabled} transparent animationType="none" onRequestClose={close}>
@@ -89,18 +92,21 @@ export function CodeReader({ disabled = false, scopeKey, onRead }: CodeReaderPro
         <View accessibilityViewIsModal style={styles.dialog}>
           <Text accessibilityRole="header" style={styles.heading}>Leer código</Text>
           <Text style={styles.text}>Enfoca un solo código. La lectura sólo completará la búsqueda; no seleccionará ni guardará un registro.</Text>
-          {Platform.OS === "web" ? <video ref={video} aria-label="Vista de la cámara" playsInline muted autoPlay style={{ width: "100%", maxHeight: "45vh", background: "#18263A", objectFit: "contain" }} /> : null}
+          {Platform.OS === "web" ? <video ref={video} aria-label="Vista de la cámara" playsInline muted autoPlay style={{ width: "100%", maxHeight: "45vh", background: colors.nav, objectFit: "contain" }} /> : null}
           <Text accessibilityLiveRegion="polite" style={styles.text}>{state === "opening" ? "Iniciando cámara y lector…" : "Buscando un código…"}</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Cancelar lectura" onFocus={() => setCancelFocused(true)} onBlur={() => setCancelFocused(false)} onPress={close} style={[styles.button, cancelFocused && styles.focus]}><Text style={styles.buttonText}>Cancelar</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Cancelar lectura" onFocus={() => setCancelFocused(true)} onBlur={() => setCancelFocused(false)} onPress={close} style={interaction => [[styles.button, cancelFocused && styles.focus], actionSurface(false, interaction, Boolean(false))]}><Text style={styles.buttonText}>Cancelar</Text></Pressable>
         </View>
       </View>
     </Modal>
   </View>;
 }
-const styles = StyleSheet.create({
-  wrapper: { gap: 8, minWidth: 0, maxWidth: "100%", flexShrink: 1 }, button: { borderWidth: 1, borderColor: "#8795A8", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, minHeight: 44, alignSelf: "flex-start", justifyContent: "center", backgroundColor: "#FFFFFF" },
-  buttonText: { color: "#315DA8", fontSize: 16, fontWeight: "600" }, focus: { outlineColor: "#315DA8", outlineWidth: 3, outlineOffset: 2 }, disabled: { opacity: 0.5 },
-  backdrop: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20, backgroundColor: "rgba(24,38,58,0.5)" },
-  dialog: { maxWidth: 560, width: "100%", gap: 14, padding: 20, borderRadius: 12, backgroundColor: "#FFFFFF" },
-  heading: { fontSize: 20, fontWeight: "700", color: "#202B3A" }, text: { fontSize: 16, color: "#202B3A" }, message: { fontSize: 15, color: "#7A4200" },
+export function createCodeReaderStyles(p: ThemeColors = colors) {
+  return StyleSheet.create({
+  wrapper: { gap: 8, minWidth: 0, maxWidth: "100%", flexShrink: 1 }, button: { borderWidth: 1, borderColor: p.controlBorder, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, minHeight: 44, alignSelf: "flex-start", justifyContent: "center", backgroundColor: p.surface },
+  buttonText: { color: p.onSecondary, fontSize: 16, fontWeight: "600" }, focus: { outlineColor: p.focus, outlineWidth: 3, outlineOffset: 2 }, disabled: { opacity: 0.5 },
+  backdrop: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20, backgroundColor: p.overlay },
+  dialog: { maxWidth: 560, width: "100%", gap: 14, padding: 20, borderRadius: 12, backgroundColor: p.surface },
+  heading: { fontSize: 20, fontWeight: "700", color: p.text }, text: { fontSize: 16, color: p.text }, message: { fontSize: 15, color: p.warning },
 });
+}
+const styles = createCodeReaderStyles();

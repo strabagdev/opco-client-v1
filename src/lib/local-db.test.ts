@@ -2190,7 +2190,8 @@ describe("local database singleton", () => {
   });
 
   it("returns an empty cached STATE_UPDATE latest page", async () => {
-    db.getFirstAsync.mockResolvedValue({ total: 0 });
+    // No prepared definition or metadata exists. A COUNT row is not a metadata row.
+    db.getFirstAsync.mockResolvedValue(null);
     db.getAllAsync.mockResolvedValue([]);
     const store = getLocalDatabase();
 

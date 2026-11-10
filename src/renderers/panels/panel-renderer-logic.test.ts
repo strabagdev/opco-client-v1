@@ -655,31 +655,8 @@ describe("panel TABLE renderer structure", () => {
   const { readFileSync } = require("fs");
   const source = readFileSync("src/renderers/panels/PanelRenderer.tsx", "utf8");
 
-  it("renders PANEL tables at full width with internal horizontal overflow", () => {
-    expect(source).toContain("horizontal");
-    expect(source).toContain("maxWidth: \"100%\"");
-    expect(source).toContain("minWidth: \"100%\"");
-    expect(source).toContain("width: \"100%\"");
-    expect(source).not.toContain("width: 160");
-  });
-
-  it("keeps TABLE rows in a bounded accessible vertical viewport", () => {
-    const tableViewportStart = source.indexOf("tableViewport: {");
-    const tableViewportEnd = source.indexOf("title: {", tableViewportStart);
-    const tableViewportStyle = source.slice(tableViewportStart, tableViewportEnd);
-
-    expect(source).toContain("nestedScrollEnabled");
-    expect(source).toContain("showsVerticalScrollIndicator");
-    expect(source).toContain("style={styles.tableViewport}");
-    expect(tableViewportStyle).toContain("flex: 1");
-    expect(tableViewportStyle).toContain("minHeight: 84");
-  });
-
-  it("keeps pagination attached to the table with disabled previous and next states", () => {
-    expect(source.indexOf("<PanelTable table={table} />")).toBeLessThan(source.indexOf("styles.pagination"));
-    expect(source).toContain("disabled={page <= 1}");
-    expect(source).toContain("disabled={!dataset.pagination.hasMore}");
-  });
+  // TABLE layout/controls are exercised through the real components in panel-read-presentation.test.tsx
+  // and the bounded-module Chromium fixture; source-string CSS assertions did not verify those contracts.
 
   it("renders KPI modules from server metrics with loading, error, and offline states", () => {
     expect(source).toContain("buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults)");

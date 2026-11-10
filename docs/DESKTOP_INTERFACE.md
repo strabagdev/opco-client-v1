@@ -323,3 +323,75 @@ Capturas/exports/perfiles no forman parte del diff publicable. El lote consta de
 helper, prueba y **sólo esta sección** más la sección propia de STATUS; el resto del texto pendiente
 permanece excluido. Sin cierre técnico completo ni autorización de publicación. V11 sigue pausado;
 incidentes históricos de preparación, timeouts/EPIPE, SQLite/OPFS y auditoría general siguen abiertos.
+
+## UX/UI etapa 2 local — shell/Inicio — 08-11-2026
+
+El delta de navegación sobre Etapa 1 reutiliza el sidebar desde 900 px y sus anchos 224/264, catálogo autorizado y Stack estable. Cabecera común con ubicación AppView, volver, estado y menú; contexto de contrato en compacto/sidebar. El menú existente reúne categorías sólo cuando no está visible el sidebar, contexto/cuenta y Diagnóstico. Categorías de Inicio ahora filtran también en móvil/tablet; no son permisos nuevos. Inicio adapta a dos columnas desde 700 px sólo si el ancho medido admite tarjetas de 260 px; tres desde 1200 si caben. Breakpoints de renderers permanecen intactos.
+
+Controles de menú de 44 px, cierre Escape/foco y contenido desplazable; teclado/mouse disponibles también en ancho compacto y touch CDP probado. No se infiere tipo de dispositivo por ancho ni se acredita un dispositivo físico. Datos y acciones de formularios/consultas permanecen en los renderers actuales. Estado principal y acceso a Diagnóstico consolidan la presentación; los contadores y el envío provienen de mecanismos existentes, incluido `syncingCount` RECORDS, sin cambiar el motor. Cobertura/frescura y guardado local/ACK siguen separados.
+
+Antes/después y controles 390/768/1024/1440 en `backups/ux-ui-stage2/2026-11-08/`; API sintética, Chrome/OPFS reales. Resize conserva borrador/contexto y Stack; las lecturas concurrentes de un ensayo ampliado se registran sin atribuirles causalidad, con control aislado antes/después y trazas finales. Sin publicación ni rediseño de tablas; Safari físico, native y lectores de pantalla pendientes. V11 sigue pausado.
+
+## UX/UI Etapa 3A local — formulario RECORDS — 08-11-2026
+
+RecordFormScreen adopta FormLayout/FormGrid y campos/acciones compartidos: máximo 960 px, dos columnas desde 600 px de ancho interior real y filas completas para TEXTAREA/DATETIME. Móvil conserva una columna y desplazamiento natural, sin footer superpuesto. Las claves y el árbol no cambian al redimensionar. `RecordFieldInput.presentation=form` es optativa; default legacy para el resto, sin migrar Attendance/STATE_UPDATE/PANEL. Tokens y checkbox nuevos sólo en esa variante.
+
+Capturas/recorrido real Chromium153/OPFS con API sintética, antes/después a390/768/1024/1440, nodos/valores/foco conservados también en320 y límites899/900/1199/1200. Reapertura offline y ACK simulado, con límites y primer ensayo de huella documentados en UX_UI_REDESIGN y `backups/ux-ui-stage3a/2026-11-08/`. Sin nueva acreditación de dispositivos físicos/native/lector de pantalla ni modificación del shell, consultas, búsqueda, almacenamiento o sincronización.
+
+### Formulario RECORDS 3A — remate visual local, 08-11-2026
+
+Variante form: RELATION separa Buscar opciones y Selección actual (ONE/MANY); el indicador múltiple se alinea al extremo derecho como el SELECT nativo. Default legacy de otros renderers intacto. Capturas antes/después 390/768/1024/1440 y pie móvil 390×844 muestran controles, etiquetas y acciones completas; las imágenes de contenido completo amplían altura y se distinguen de un viewport móvil. Se conservan grilla, anchos, scroll, servicios y comandos. Detalle estabilizado usa su presentación previa, incluidos IDs RELATION; no se migra en 3A. Evidencia sintética con Chrome/OPFS, límites y lote combinado en UX_UI_REDESIGN y backups/ux-ui-stage3a-final-adjustments/2026-11-08/. Sin 3B ni publicación.
+
+### Attendance: contextos 3B locales — 08-11-2026
+
+Se conserva el bloque desktop existente (máximo800), fecha/resumen y orden funcional. Su contexto usa FormGrid plain sin tarjeta anidada: SELECT/RELATION ONE en dos columnas si caben; móvil apilado sin tarjeta individual, con Buscar opciones/Selección actual de3A. Los IDs, required/errores, handlers, catálogo/páginas y memoria por experiencia no cambian. Default section de FormGrid preserva RECORDS. Comparaciones Chromium390/768/1024/1440, teclado, corrección y OPFS en UX_UI_REDESIGN#etapa-3b-attendance y backups/ux-ui-stage3b/2026-11-08/. API/ACK sintéticos; no Safari físico ni soporte MANY nuevo. Implementación local separable, sin publicar.
+
+
+### UX/UI 3C — formulario STATE_UPDATE, local 08-11-2026
+
+Reutiliza los componentes3A: editor máximo960, grilla interior600→dos columnas; contexto compuesto puede usar tres desde820 interiores y envolver; móvil apilado. FieldFrame elimina tarjetas por campo, conserva etiquetas/foco/required; extras form distinguen búsqueda y selección RELATION, acciones agrupadas al pie. Default compartido de otros consumidores intacto. Resultado/últimas actualizaciones y modal de conflicto conservan su presentación existente.
+
+Comparaciones reales antes/después en Chromium153 a390/768/1024/1440, con API sintética y OPFS real. Resize y límites899/900/1199/1200 mantienen nodos/foco/valores y cero lecturas nuevas; Tab/Shift+Tab/Espacio y pie móvil390×844 inspeccionados. Dos pendientes conservados tras cerrar/reabrir offline; ACK simulado, sin acreditación Core/Safari físico. Contexto bloqueado no acumula dos opacidades. IDs/JSON previos en conflicto RELATION siguen pendientes, documentados. [Alcance/evidencia y checks](UX_UI_REDESIGN.md#etapa-3c-state-update); inventario/parche en backups/ux-ui-stage3c/2026-11-08/. Sin cambios de negocio ni publicación.
+
+
+### STATE_UPDATE — conflicto por versiones, local 08-11-2026
+
+Mismo contenido semántico con columnas servidor/cambio local propuesto y wrap intrínseco a235px por lado. Sólo el modal de conflicto usa máximo620 en tablet/desktop, móvil apilado y scroll interno con botones existentes accesibles. Una nota contextual, separadores y labels SELECT/RELATION; ausentes explícitos y trazas técnicas secundarias. Sin cambios de valores ni handlers. Comparaciones renderer real Chrome153 a390/768/1024/1440 y OPFS offline, API sintética; Safari físico/lector de pantalla pendientes. [Alcance canónico](UX_UI_REDESIGN.md#state-update-conflictos-legibles), capturas e inventario en backups/ux-ui-conflict-presentation/2026-11-08/. No migración de tablas/filtros ni publicación.
+
+
+### RECORDS — UX/UI 3D.1 local, 08-11-2026
+
+Lista/detalle usan máximo960 y buscador máximo560. Lista presenta campos configurados en wrap sin elipsis; detalle una sección con FormGrid plain, dos columnas desde600 interiores y móvil apilado; texto largo/MANY pueden ocupar fila completa. Crear junto al título; Volver/Editar junto al encabezado conservan sus rutas. ReadFieldList muestra valores completos, vacío/no disponible y IDs sólo secundarios cuando falta etiqueta. No nuevas consultas de relaciones ni modificaciones de REPORT/PANEL/MATRIX.
+
+Capturas antes/después y lectura real390/768/1024/1440 inspeccionadas; texto extenso aumenta el desplazamiento vertical, sin overflow de página. Teclado/resize conservan estado; OPFS frío y ACK con transporte sintético. [Evidencia/límites y checks](UX_UI_REDESIGN.md#etapa-3d1-records); backups/ux-ui-stage3d1/2026-11-08/. Sin publicación, Safari físico pendiente.
+
+
+#### Remate visual RECORDS3D.1 — local, 08-11-2026
+
+Cabecera envuelve por ancho interior, con base de texto420 que cede espacio o ocupa una fila; Crear se coloca debajo en390 y junto al título en768/1024/1440, sin otra instancia ni hooks de resize. Listado compact mantiene tipografía/texto completo y reduce sólo gaps/padding; el detalle sigue igual. Cargar más azul, minHeight46 y estados originales. En fixture, fila extensa851→767 móvil y481→433 tablet/1024; cabecera móvil127→148 al separar acción, sin afirmar ahorro de altura de cabecera. Sin overflow de página.
+
+Capturas/teclado y cierre/reapertura Chrome153/OPFS con transporte sintético; [alcance/checks/límites](UX_UI_REDESIGN.md#cierre-visual-3d1), backups/ux-ui-stage3d1-final/2026-11-08/. No cambio de API/runtime/storage ni REPORT/PANEL/MATRIX;3D.2 permanece planificación separada. Sin publicar.
+
+
+### PANEL TABLE — UX/UI3D.2A local, 09-11-2026
+
+Filtros wrap con FieldFrame/RecordFieldInput form; BOOLEAN conserva selector ternario. Buscador etiquetado máximo 560, sin límite global de formulario para el dashboard. Cada tabla mide su módulo: columnas alineadas si caben, etiqueta/valor ordenado si no, sin omitir columnas ni cortar textos. Pie después de resultados; espacio sobrante después del pie. Un scroll interior conserva la altura calculada incluso en móvil/mínimo 300; cabecera/buscador/pie también se desplazan, sin pie fijo. KPI/grilla y dimensiones configuradas intactos.
+
+Chromium153 real a 390/768/1024/1440 y límites responsive; mismos nodos/foco/valores al resize. OPFS frío con API sintética. [Comparación, checks y límites](UX_UI_REDESIGN.md#etapa-3d2a-panel-table); capturas en backups/ux-ui-stage3d2a/2026-11-09/. Sin REPORT TABLE/MATRIX, cambios de consulta/cache ni publicación.
+
+
+#### Remate PANEL3D.2A — local, 09-11-2026
+
+Filas etiqueta/valor con dos columnas de campos breves desde600px interiores; texto extenso y MANY conservan ancho completo. Pie sticky web dentro del scroll actual, natural tras resultados cortos; bajo340px usa chevrones con nombres accesibles completos y44px, sin apilar tres filas. Título estrecho14px, completo. Grilla/alto y scroll intactos. [Capturas, mediciones y límites](UX_UI_REDESIGN.md#cierre-panel-3d2a); respaldo ux-ui-stage3d2a-final/2026-11-09/. Chromium/OPFS real, API sintética; Safari físico/native pendientes.
+
+
+### REPORT TABLE3D.2B — local, 09-11-2026
+
+Controles RANGE agrupados hasta620; MONTH/fijo con ancho natural y Actualizar próximo, sin cambiar eventos/disabled. Tabla con columnas alineadas si caben; de otro modo campos ordenados y dos columnas breves desde600px interiores, textos largos/MANY completos. Scroll natural de página, sin viewport de módulo o paginación nuevos. SELECT/RELATION mediante proyección TABLE; formato de fecha/INTERNAL_VALUE y demás modos conservados. [Capturas y evidencia](UX_UI_REDESIGN.md#etapa-3d2b-report-table); respaldo ux-ui-stage3d2b/2026-11-09/. Chrome153/OPFS real, API sintética, Safari físico/native pendientes. Sin publicación.
+
+
+### MATRIX 3D.3 — local, 09-11-2026
+
+Matriz bidimensional conservada, con viewport web máximo min(68vh,720px), encabezados/primera columna fijos y foco visible. Columnas cortas 72/extensas 160; nombres 144 en contenedor estrecho/220 en el resto y resumen limitado al espacio legible restante. Sin tarjetas, columnas omitidas ni truncamiento irreversible. Más desplazamiento horizontal/altura de fila para información completa son costes explícitos. Scroll convencional native, sin garantía sticky física.
+
+[Diagnóstico, comparaciones y límites](UX_UI_REDESIGN.md#etapa-3d3-matrix); backups/ux-ui-stage3d3/2026-11-09/. Chromium153/Linux a cuatro anchos, teclado/rueda reales y OPFS frío; transporte sintético, modelos/consultas/celdas/snapshots idénticos. Sin Safari físico/native/lector de pantalla ni nuevas capacidades offline. TABLE, PANEL y etapas previas intactos; sin publicación.

@@ -1,3 +1,5 @@
+import { colors } from "@/theme/paint";
+import { KeyboardFocusStyles } from "@/components/keyboard-focus";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
@@ -12,8 +14,9 @@ export default function RootLayout() {
 
   return (
     <SessionProvider>
+      <KeyboardFocusStyles />
       <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.canvas } }} />
     </SessionProvider>
   );
 }
