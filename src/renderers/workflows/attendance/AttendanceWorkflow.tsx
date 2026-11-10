@@ -112,7 +112,7 @@ import { reportWriteFeedback } from "@/lib/write-feedback";
 type ConflictState = Extract<AttendanceBatchResult, { result: "CONFLICT" }> & {
   personName: string;
   confirmationScope?: string;
-  confirmationRequestId?: number;
+  confirmationAttemptId?: number;
   confirmedEntry?: AttendanceBatchEntry;
   confirmationDraftKey?: string;
   confirmationRevision?: number;
@@ -188,6 +188,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const draftRevisionRef = useRef(0);
+  const confirmationSequenceRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const onlineAttemptsRef = useRef(new Map<string, { clientRequestId: string; uncertain: boolean }>());
   const [localConflicts, setLocalConflicts] = useState<CachedAttendanceRecord[]>([]);
@@ -206,6 +207,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [isSaving, setIsSaving] = useState(false);
   const [resolutionFeedback, setResolutionFeedback] = useState<(ReturnType<typeof stateUpdateResolutionFeedback> & { scope: string }) | null>(null);
   const resolutionScope = JSON.stringify([ownerKey, selectedContractId, appView.id, appView.config.targetEntityTypeId, date, attendanceConfigurationKey(appView.config)]);
+  const confirmationBasis = attendanceAttemptKey(resolutionScope, {
+    personRecordId: selectedItem?.person.id ?? null,
+    recordId: selectedItem?.attendance?.recordId ?? null,
+    updatedAt: selectedItem?.attendance?.updatedAt ?? null,
+    writeContract: writeContract ?? null,
+    writePolicyConfigured,
+  });
+  const confirmationBasisRef = useRef(confirmationBasis);
   const resolutionScopeRef = useRef(resolutionScope);
   const resolutionInFlightRef = useRef(false);
   const resolutionMountedRef = useRef(false);
@@ -225,6 +234,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     resolutionMountedRef.current = true;
     return () => { resolutionMountedRef.current = false; };
   }, []);
+  useLayoutEffect(() => {
+    if (confirmationBasisRef.current !== confirmationBasis) {
+      confirmationSequenceRef.current += 1;
+      confirmationBasisRef.current = confirmationBasis;
+    }
+  }, [confirmationBasis]);
   const requestSequenceRef = useRef(0);
   const loadingRequestRef = useRef<number | null>(null);
   const searchingRequestRef = useRef<number | null>(null);
@@ -1045,7 +1060,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function saveStatus(status: AttendanceStatusOption) {
-    if (!selectedContractId || !selectedItem || isSaving) {
+    if (!selectedContractId || !selectedItem || isSaving || saveInFlightRef.current) {
       return;
     }
 
@@ -1067,28 +1082,33 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     };
     const existing = selectedItem.attendance;
     const revision = draftRevisionRef.current;
+    const confirmationAttemptId = ++confirmationSequenceRef.current;
+    const confirmationScope = resolutionScope;
+    const isConfirmationCurrent = () => resolutionMountedRef.current &&
+      confirmationAttemptId === confirmationSequenceRef.current &&
+      confirmationScope === resolutionScopeRef.current && revision === draftRevisionRef.current;
     if (!isOnline && ownerKey && existing) {
-      const requestId = ++requestSequenceRef.current;
-      const confirmationScope = resolutionScope;
+      // Retire older subject GETs, without making later reads own this confirmation.
+      requestSequenceRef.current += 1;
       let cached;
       try {
         cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, appViewId: appView.id, date,
           entityTypeId: appView.config.targetEntityTypeId, recordId: existing.recordId });
       } catch (nextError) {
-        if (requestId === requestSequenceRef.current && confirmationScope === resolutionScopeRef.current) {
+        if (isConfirmationCurrent()) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible comprobar la asistencia local.");
           recordVisibleError({ error: nextError, operation: "save" });
         }
         return;
       }
-      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current || revision !== draftRevisionRef.current) return;
+      if (!isConfirmationCurrent()) return;
       const operation = cached?.serverId && cached.syncStatus === "pending_update"
         ? (await definitionCache.listPendingStateUpdateOperations(ownerKey)).map((item) => ({ ...item, payload: item.payload as OfflineStateUpdatePayload })).find((item) =>
             item.localRecordId === cached.localId && item.serverRecordId === cached.serverId &&
             item.contractId === selectedContractId && item.entityTypeId === appView.config.targetEntityTypeId &&
             item.payload.appViewId === appView.id && item.payload.subjectRecordId === entry.personRecordId && item.payload.date === date)
         : undefined;
-      if (!resolutionMountedRef.current || requestId !== requestSequenceRef.current || confirmationScope !== resolutionScopeRef.current || revision !== draftRevisionRef.current) return;
+      if (!isConfirmationCurrent()) return;
       const confirmedPending = operation?.payload.overwrite === true && operation.payload.expectedUpdatedAt;
       const sameConfirmedIntent = confirmedPending && stateUpdateIntentsEqual(operation.payload, {
         ...operation.payload,
@@ -1107,7 +1127,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setConflict({ result: "CONFLICT", personRecordId: entry.personRecordId,
           personName: selectedItem.person.displayName, existing: { ...existing, updatedAt: confirmedPending ? operation!.payload.expectedUpdatedAt! : existing.updatedAt },
           requested: { statusOptionId: status.optionId, statusLabel: status.label },
-          confirmationScope, confirmationRequestId: requestId, confirmedEntry: copyAttendanceEntry(entry),
+          confirmationScope, confirmationAttemptId, confirmedEntry: copyAttendanceEntry(entry),
           confirmationDraftKey: attendanceCommandKey(confirmationScope, appView.config, contextFields, entry), confirmationRevision: revision });
         setConfirmationError(null);
         return;
@@ -1121,7 +1141,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     const captured = conflict.confirmedEntry;
     if (!captured || !selectedItem || !conflict.confirmationScope || !conflict.confirmationDraftKey ||
         !resolutionMountedRef.current || conflict.confirmationScope !== resolutionScopeRef.current ||
-        conflict.confirmationRequestId !== requestSequenceRef.current ||
+        conflict.confirmationAttemptId !== confirmationSequenceRef.current ||
         conflict.confirmationRevision !== draftRevisionRef.current || captured.personRecordId !== selectedItem.person.id) {
       setConflict(null);
       setConfirmationError(null);
@@ -1152,7 +1172,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     const requestedScope = resolutionScope;
     const revision = draftRevisionRef.current;
-    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === requestedScope && draftRevisionRef.current === revision;
+    const confirmationAttemptId = confirmationSequenceRef.current;
+    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === requestedScope &&
+      draftRevisionRef.current === revision && confirmationSequenceRef.current === confirmationAttemptId;
     const capturedEntry = copyAttendanceEntry(entry);
     let wireEntry: ReturnType<typeof attendanceEntryToStateUpdateEntry>;
     try { wireEntry = attendanceEntryToStateUpdateEntry(capturedEntry, appView.config, contextFields); }
@@ -1241,7 +1263,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setConflict({ ...blockingResult, personName: selectedItem.person.displayName,
           requested: { statusOptionId: capturedEntry.statusOptionId, statusLabel: requestedStatus?.label ?? blockingResult.requested.statusLabel },
           remoteSnapshot: remoteConflict?.existing,
-          confirmedEntry: capturedEntry, confirmationScope: requestedScope, confirmationRequestId: requestSequenceRef.current,
+          confirmedEntry: capturedEntry, confirmationScope: requestedScope, confirmationAttemptId,
           confirmationDraftKey: attendanceCommandKey(requestedScope, appView.config, contextFields, capturedEntry), confirmationRevision: revision });
         setConfirmationError(entry.overwrite ? "La asistencia cambió en Opco. Revisa la versión actual antes de confirmar nuevamente." : null);
         return;
@@ -1276,6 +1298,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   function cancelConflict() {
+    confirmationSequenceRef.current += 1;
     setConfirmationError(null);
     setConflict(null);
     setError(null);

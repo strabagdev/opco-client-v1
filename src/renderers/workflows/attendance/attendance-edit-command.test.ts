@@ -18,7 +18,7 @@ function fixture(){
  appView:{id:'view',name:'Local',config},selectedContractId:'contract',ownerKey:'owner',token:'synthetic',date:'2026-10-28',isOnline:true,isSaving:false,
  selectedItem:{person:{id:'person',displayName:'Synthetic'},attendance:{recordId:'remote',statusOptionId:'present',statusLabel:'Primario',updatedAt:base,observation:'Original',contextValues:{shift:'a'}}},
  contextFields:fields,contextValues:{shift:'a'},supportsObservation:true,observation:'Edited',statuses,
- resolutionScope:'scope',resolutionScopeRef:{current:'scope'},resolutionMountedRef:{current:true},requestSequenceRef:{current:1},draftRevisionRef:{current:1},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},
+ resolutionScope:'scope',resolutionScopeRef:{current:'scope'},resolutionMountedRef:{current:true},confirmationSequenceRef:{current:1},requestSequenceRef:{current:1},draftRevisionRef:{current:1},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},
  setConflict:vi.fn(),setContextErrors:vi.fn(),setContextValues:vi.fn(),setConfirmationError:vi.fn(),setObservation:vi.fn(),setObservationExpanded:vi.fn(),setSelectedItem:vi.fn(),setResolutionFeedback:vi.fn(),setIsSaving:vi.fn(),setError:vi.fn(),setRefreshError:vi.fn(),setSuccessMessage:vi.fn(),recordVisibleError:vi.fn(),clearVisibleError:vi.fn(),clearPersonFlow:vi.fn(),applyAttendanceResponse:vi.fn(),
  refreshLocalDayState:vi.fn(),refreshRecordsSyncSummary:vi.fn(),loadDay:vi.fn(),reportWriteFeedback:vi.fn(),createClientRequestId:vi.fn(()=> 'request-'+crypto.randomUUID()),
  stateUpdateResultToAttendanceResult:(r:unknown)=>actual('stateUpdateResultToAttendanceResult',{getAttendanceStatusLabel})(r,config.statusFieldId,statuses),
@@ -26,7 +26,7 @@ function fixture(){
  api:{getAttendanceWorkflow:vi.fn(),saveStateUpdateWorkflow:vi.fn()},definitionCache:{saveStateUpdateLocally:vi.fn(),getCachedRecord:vi.fn(),listPendingStateUpdateOperations:vi.fn(async()=>[])} };
  return c;
 }
-function bind(c:ReturnType<typeof fixture>,entry={personRecordId:'person',statusOptionId:'present',observation:'Edited',contextValues:{shift:'a'}}){return{personRecordId:'person',personName:'Synthetic',result:'CONFLICT',existing:{recordId:'remote',updatedAt:base,statusOptionId:'present',statusLabel:'Primario'},requested:{statusOptionId:entry.statusOptionId,statusLabel:'Primario'},confirmedEntry:copyAttendanceEntry(entry),confirmationScope:c.resolutionScope,confirmationRequestId:c.requestSequenceRef.current,confirmationRevision:c.draftRevisionRef.current,confirmationDraftKey:attendanceCommandKey(c.resolutionScope,config,fields,entry)};}
+function bind(c:ReturnType<typeof fixture>,entry={personRecordId:'person',statusOptionId:'present',observation:'Edited',contextValues:{shift:'a'}}){return{personRecordId:'person',personName:'Synthetic',result:'CONFLICT',existing:{recordId:'remote',updatedAt:base,statusOptionId:'present',statusLabel:'Primario'},requested:{statusOptionId:entry.statusOptionId,statusLabel:'Primario'},confirmedEntry:copyAttendanceEntry(entry),confirmationScope:c.resolutionScope,confirmationAttemptId:c.confirmationSequenceRef.current,confirmationRevision:c.draftRevisionRef.current,confirmationDraftKey:attendanceCommandKey(c.resolutionScope,config,fields,entry)};}
 
 describe('complete requested commands, archived observation regression',()=>{
  it.each(['note','status','both'])('keeps all states/extras for %s differences through the real API adapter',async(kind)=>{
