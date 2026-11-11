@@ -31,11 +31,10 @@ describe("diagnostics modal layout", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    let action: ts.JsxAttribute | undefined, label: ts.JsxAttribute | undefined;
+    let action: ts.JsxAttribute | undefined;
     const props = (node: ts.Node) => {
-      if (ts.isJsxOpeningElement(node) && node.tagName.getText(source) === "Pressable") {
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "ShellOperationalStatusIndicator") {
         action = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(source) === "onPress") as ts.JsxAttribute;
-        label = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(source) === "accessibilityLabel") as ts.JsxAttribute;
       }
       ts.forEachChild(node, props);
     };
@@ -46,13 +45,9 @@ describe("diagnostics modal layout", () => {
     new Function("shellStatusIndicator", "setSelectedDiagnosticsTab", "setIsDiagnosticsOpen", js + ";press();")({ state }, select, open);
     expect(select).toHaveBeenCalledExactlyOnceWith(state === "error" ? "problems" : "sync");
     expect(open).toHaveBeenCalledExactlyOnceWith(true);
-    // Keep both the current user-facing status and the detailed accessible status.
-    expect(label?.initializer?.getText(source)).toContain("statusPresentation.label");
-    expect(label?.initializer?.getText(source)).toContain("shellStatusIndicator.accessibilityLabel");
-    expect(text).toContain('accessibilityRole="progressbar"');
-    expect(text).toContain("accessibilityValue={{");
-    expect(text).toContain("styles.offlinePreparationProgressTrack");
-    expect(text).toContain('preparationProgress?.state === "incomplete"');
+    // The shared component's DOM tests cover both independent accessible states and progress.
+    // Here keep the real shell handler's five routing cases and its existing diagnostic action.
+    expect(action?.initializer).toBeDefined();
     expect(text).toContain("GLOBAL_DIAGNOSTICS_BUTTON.accessibilityLabel");
     expect(text).not.toContain("cacheBannerMessage");
   });

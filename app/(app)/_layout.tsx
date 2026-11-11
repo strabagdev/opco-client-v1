@@ -1,20 +1,21 @@
-import { actionSurface, operationalPaint } from "../../src/theme/operational-presentation";
+import { actionSurface } from "../../src/theme/operational-presentation";
 import { metrics, type ThemeColors } from "../../src/theme/tokens";
 import { colors } from "../../src/theme/paint";
 import { AppShellHeader } from "@/components/app-shell-header";
 import { AppNavigationMenu } from "@/components/app-navigation-menu";
-import { shellStatusPresentation } from "@/lib/shell-status-presentation";
+import { coreConnectionSince, resolveShellOperationalStatus } from "@/lib/shell-status-presentation";
+import { ShellOperationalStatusIndicator } from "@/components/shell-operational-status";
 import { offlinePreparationFailureRows } from "@/lib/offline-preparation-diagnostic";
 import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { LOCAL_DATABASE_NAME, subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
 import { syncAttentionReason, type SyncAttentionProblem } from "@/lib/sync-attention";
 import { Redirect, Stack, useGlobalSearchParams, usePathname, useRouter } from "expo-router";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, Menu, WifiOff, X } from "lucide-react-native";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, LogOut, Menu, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getHomeNavigationEvents, homeNavigationCachePresent, homeNavigationRows, subscribeHomeNavigationEvents } from "@/lib/home-navigation-diagnostics";
 import { getPanelReadEvents, panelReadRows, subscribePanelReadEvents } from "@/lib/panel-read-diagnostics";
-import { ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { AppIcon } from "@/components/app-icon";
 import { isActiveStateUpdateActivity, resolveStateUpdateCurrentActivity } from "@/diagnostics/state-update-route-logic";
@@ -28,7 +29,6 @@ import {
 } from "@/lib/app-shell-feedback";
 import type { OfflinePreparationDiagnostics } from "@/lib/app-view-prewarm";
 import type { SQLiteCoordinatorDiagnostics } from "@/lib/local-db";
-import { useReducedMotion } from "@/components/read-loading-indicator";
 import { useExperienceActivitySnapshot } from "@/renderers/use-experience-activity";
 import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getDesktopSidebarWidth } from "@/lib/app-shell-layout";
 import { formatRecordsOpeningPerformanceCopy, getOpeningPrimaryTimingLabel, type RecordsOpeningMeasurement } from "@/lib/records-opening-history";
@@ -99,11 +99,20 @@ export default function AppLayout() {
   const [selectedDiagnosticsTab, setSelectedDiagnosticsTab] = useState<DiagnosticTabId>("sync");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [toast, setToast] = useState<ReturnType<typeof resolveAppShellSuccessToast>>(null);
-  const [statusPulseOpacity] = useState(() => new Animated.Value(1));
+  const connectionScope = JSON.stringify([ownerKey, selectedContractId]);
+  const [connectionObservation, setConnectionObservation] = useState(() => ({ scope: connectionScope, status: connectivityStatus, since: new Date().toISOString() }));
+  useEffect(() => {
+    let active = true;
+    const since = new Date().toISOString();
+    void Promise.resolve().then(() => {
+      if (active) setConnectionObservation(current => current.scope === connectionScope && current.status === connectivityStatus
+        ? current : { scope: connectionScope, status: connectivityStatus, since });
+    });
+    return () => { active = false; };
+  }, [connectionScope, connectivityStatus]);
   const [syncStatusHistory, setSyncStatusHistory] = useState<SyncStatusHistory>({ events: [], scopeKey: null });
   const recordsOpeningHistory = useRecordsOpeningHistory();
   const experienceActivity = useExperienceActivitySnapshot();
-  const reducedMotion = useReducedMotion();
   const navigationEvents = useSyncExternalStore(subscribeHomeNavigationEvents, getHomeNavigationEvents, getHomeNavigationEvents);
   const writeFeedbackSnapshot = useWriteFeedbackSnapshot();
   const lastToastSyncKeyRef = useRef<string | null>(null);
@@ -186,13 +195,17 @@ export default function AppLayout() {
   } satisfies AppShellFeedbackInput;
   const shellStatusIndicator = resolveAppShellStatusIndicator(appShellFeedbackInput);
   const preparationProgress = shellStatusIndicator.preparationProgress;
-  const statusPresentation = shellStatusPresentation(shellStatusIndicator, {
-    conflicts: syncConflictCount, hasSyncError, hasReadError: Boolean(experienceActivity?.errorCode),
-    storageRecovery: Boolean(localStorageRecoveryNotice),
-  });
   const lastSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
   const lastActivity = stateUpdateReconnectDiagnostics.lastStateUpdateActivity;
   const lastPreflight = stateUpdateReconnectDiagnostics.lastReconnectPreflight;
+  const operationalStatus = resolveShellOperationalStatus({
+    ...appShellFeedbackInput,
+    isOperationalCoreReadinessChecking,
+    connectionSince: connectionObservation.scope === connectionScope && connectionObservation.status === connectivityStatus
+      ? coreConnectionSince(stateUpdateReconnectDiagnostics, connectionObservation.since) : null,
+    requestHistory: stateUpdateReconnectDiagnostics.requestHistory ?? [],
+    pendingKnown: attentionProblems !== null && !attentionError,
+  });
   const lastSuccessfulSyncAt = lastSync && (lastSync.result === "success" || lastSync.result === "reconciled_success")
     ? lastSync.completedAt
     : null;
@@ -271,38 +284,6 @@ export default function AppLayout() {
 
     return () => clearTimeout(timeout);
   }, [lastPreflight?.syncRunId, lastSync?.syncRunId, ownerKey, selectedContractId, syncStatusDiagnostics]);
-
-  useEffect(() => {
-    if (shellStatusIndicator.state !== "working" || reducedMotion) {
-      statusPulseOpacity.stopAnimation();
-      statusPulseOpacity.setValue(1);
-      return;
-    }
-
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(statusPulseOpacity, {
-          duration: 900,
-          easing: Easing.inOut(Easing.ease),
-          toValue: 0.45,
-          useNativeDriver: true,
-        }),
-        Animated.timing(statusPulseOpacity, {
-          duration: 900,
-          easing: Easing.inOut(Easing.ease),
-          toValue: 1,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-
-    animation.start();
-
-    return () => {
-      animation.stop();
-      statusPulseOpacity.setValue(1);
-    };
-  }, [reducedMotion, shellStatusIndicator.state, statusPulseOpacity]);
 
   useEffect(() => {
     if (!lastSync?.completedAt) {
@@ -387,55 +368,12 @@ export default function AppLayout() {
   const canRetryFirstPendingSyncError = Boolean(
     firstPendingSyncError?.manualRetryable && firstPendingSyncError.manualRetryToken,
   );
-  const statusTone = preparationProgress?.state === "incomplete" ? "warning" : statusPresentation.neutral ? "neutral"
-    : shellStatusIndicator.state === "error" ? (syncConflictCount > 0 && !hasSyncError && !experienceActivity?.errorCode && !localStorageRecoveryNotice ? "conflict" : "danger")
-    : shellStatusIndicator.state === "working" ? "info" : shellStatusIndicator.state === "pending" ? "warning" : shellStatusIndicator.state === "offline" ? "neutral"
-    : writeFeedback?.kind === "local-saved" ? "info" : "success";
-  const statusPaint = operationalPaint(statusTone);
   const statusIndicator = (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Estado y diagnóstico: ${statusPresentation.label}. ${shellStatusIndicator.accessibilityLabel}`} onPress={() => { setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync"); setIsDiagnosticsOpen(true); }} style={[styles.statusIndicator, { minHeight: 44, alignItems: "flex-start", maxWidth: "100%" }]}>
-      <View
-        accessibilityLabel={"Estado " + statusPresentation.label + ". " + shellStatusIndicator.accessibilityLabel}
-        accessible
-        accessibilityLiveRegion="polite"
-        style={[styles.statusIndicatorSummary, { minWidth: 0, flexWrap: "wrap", justifyContent: "flex-start" }]}
-      >
-        <Animated.View style={shellStatusIndicator.state === "working" && !reducedMotion ? { opacity: statusPulseOpacity } : null}>
-          {preparationProgress?.state === "incomplete"
-            ? <AlertCircle color={colors.warning} size={17} />
-            : statusPresentation.neutral ? <CircleDashed color={colors.textSecondary} size={17} /> : statusIndicatorIcon(shellStatusIndicator.state, statusPaint.color)}
-        </Animated.View>
-        <Text style={[styles.statusLabel, { flexShrink: 1, textAlign: "left", color: statusPaint.color }]}>{statusPresentation.label}</Text>
-      </View>
-      {preparationProgress ? (
-        <View
-          accessibilityLabel={preparationProgress.processed + " de " + preparationProgress.total + " AppViews procesadas"}
-          accessibilityRole="progressbar"
-          accessibilityValue={{
-            max: preparationProgress.total,
-            min: 0,
-            now: preparationProgress.processed,
-            text: preparationProgress.processed + " de " + preparationProgress.total + " AppViews procesadas",
-          }}
-          accessible
-          style={styles.offlinePreparationProgress}
-        >
-          <View style={styles.offlinePreparationProgressTrack}>
-            <View
-              style={[
-                styles.offlinePreparationProgressFill,
-                preparationProgress.state === "active" ? null : styles.offlinePreparationProgressFillIncomplete,
-                { flex: preparationProgress.processed },
-              ]}
-            />
-            <View style={{ flex: preparationProgress.total - preparationProgress.processed }} />
-          </View>
-          <Text style={styles.offlinePreparationProgressText}>
-            {preparationProgress.processed + "/" + preparationProgress.total + " procesadas"}
-          </Text>
-        </View>
-      ) : null}
-    </Pressable>
+    <ShellOperationalStatusIndicator
+      model={operationalStatus}
+      progress={preparationProgress}
+      onPress={() => { setSelectedDiagnosticsTab(shellStatusIndicator.state === "error" ? "problems" : "sync"); setIsDiagnosticsOpen(true); }}
+    />
   );
   const userMenuButton = (
     <Pressable
@@ -910,14 +848,6 @@ function syncStateIcon(state: SyncChecklistState) {
   if (state === "En curso") return <Clock3 color={colors.info} size={18} />;
   if (state === "Error") return <AlertCircle color={colors.danger} size={18} />;
   return <CircleDashed color={colors.textSecondary} size={18} />;
-}
-
-function statusIndicatorIcon(state: ReturnType<typeof resolveAppShellStatusIndicator>["state"], color: string) {
-  if (state === "online") return <CheckCircle2 color={color} size={17} />;
-  if (state === "working") return <Clock3 color={color} size={17} />;
-  if (state === "offline") return <WifiOff color={color} size={17} />;
-  if (state === "error") return <AlertCircle color={color} size={17} />;
-  return <CircleDashed color={color} size={17} />;
 }
 
 function RecordsPerformanceDiagnostics({ history }: { history: RecordsOpeningMeasurement[] }) {
