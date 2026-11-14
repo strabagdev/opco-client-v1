@@ -76,7 +76,7 @@ function fixture(advertise=true,count=217){
  const currentSubjects=subjects.slice(0,count);
  const requests:{ids:string[];individual:string|null}[]=[];let unavailable:string|undefined,omit:string|undefined,incompatible=false,revision="R1";
  const adapter=createOpcoApi({apiUrl:"https://synthetic.invalid",fetcher:async input=>{
-  const url=new URL(String(input)),ids=url.searchParams.getAll("subjectRecordIds"),individual=url.searchParams.get("subjectRecordId");requests.push({ids,individual});
+  const url=new URL(String(input));if(url.pathname.endsWith("/offline/manifest"))return Response.json({ok:false,error:{code:"REVISION_MANIFEST_UNSUPPORTED",message:"Legacy Core fixture"}},{status:404});const ids=url.searchParams.getAll("subjectRecordIds"),individual=url.searchParams.get("subjectRecordId");requests.push({ids,individual});
   const batch=ids.length>0&&!incompatible,selected=ids.length?currentSubjects.filter(s=>ids.includes(s.id)&&s.id!==unavailable&&s.id!==omit):currentSubjects.filter(s=>s.id===individual);
   const current=(id:string)=>id===subjects[215].id||id===subjects[216].id?null:{recordId:"event-"+id,updatedAt:"2026-10-29T10:00:00.000Z",states:{revision,date:"2026-10-29"}};
   return new Response(JSON.stringify({ok:true,data:{appView:view,date:scope.date,dateFieldId:"date",subjectFieldId:"subject",workflow:{historyMode:"append",uniqueness:{mode:"subject"}},subjectEntityType:{id:scope.sourceEntityTypeId,name:"Synthetic source"},targetEntityType:{id:scope.targetEntityTypeId,name:"Synthetic target"},stateFields:[{fieldId:"revision",label:"Revision",type:"TEXT",required:false,options:[]},{fieldId:"date",label:"Date",type:"DATE",required:false,options:[]}],extraFields:[],

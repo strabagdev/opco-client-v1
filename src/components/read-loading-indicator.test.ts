@@ -18,9 +18,11 @@ describe("read loading indicator integration", () => {
     expect(indicator).toContain("Esperando datos…");
     expect(indicator).toContain("AccessibilityInfo.isReduceMotionEnabled()");
     expect(indicator).toContain('"reduceMotionChanged"');
-    expect(shell).toContain('accessibilityLiveRegion="polite"');
-    expect(shell).toContain('shellStatusIndicator.state !== "working" || reducedMotion');
-    expect(shell).toContain("animation.stop()");
+    const status = readFileSync("src/components/shell-operational-status.tsx", "utf8");
+    expect(shell).toContain("<ShellOperationalStatusIndicator");
+    expect(status).toContain('accessibilityLiveRegion="polite"');
+    expect(status).not.toContain("Animated");
+    expect(status).not.toContain("setInterval");
   });
 
   it("keeps a static per-module state for PANEL and action spinners for writes/pagination", () => {

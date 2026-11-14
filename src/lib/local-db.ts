@@ -1,3 +1,4 @@
+import { createRevisionReceiptStorage, type RevisionReceiptStore } from "./revision-receipt-storage";
 import { relationKind } from "./relation-cardinality";
 import {pinnedWorkflowWriteMetadata,workflowWriteMetadata,WorkflowWriteReviewError} from "./workflow-write-contract";
 import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
@@ -183,7 +184,7 @@ type LocalDatabaseGlobal = typeof globalThis & {
   [GLOBAL_DATABASE_STATE_KEY]?: LocalDatabaseGlobalState;
 };
 
-export type LocalDatabase = AppNavigationCache &
+export type LocalDatabase = RevisionReceiptStore & AppNavigationCache &
   AppViewDefinitionCache &
   EntityDefinitionCache &
   OfflineRecordStore &
@@ -210,7 +211,7 @@ export type LocalDatabase = AppNavigationCache &
   setSelectedContractId(contractId: string | null, ownerKey?: string | null): Promise<void>;
   getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics;
   upsertPanelSnapshot(input: PanelSnapshotScope & { panel: PanelResponse; definition?: PanelAppView; syncedAt?: string; assertActive?: () => void }): Promise<void>;
-  upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }): Promise<void>;
+  upsertReportSnapshot(input: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string; assertActive?: () => void }): Promise<void>;
 } & RecordsOpeningHistoryStore;
 
 const recordsOpeningHistoryWriteQueues = new Map<string, Promise<void>>();
@@ -249,6 +250,7 @@ export type CachedPanelSnapshot = {
 
 export function getLocalDatabase(): LocalDatabase {
   return {
+    ...createRevisionReceiptStorage(getDatabase,{panel:panelSnapshotQueryKey,report:reportSnapshotQueryKey,attendanceDay:attendanceDaySnapshotHydrationKey,stateSnapshot:stateUpdateSnapshotCoverageKey,stateCurrent:stateUpdateCurrentCoverageKey}),
     clearNavigationCache,
     clearRecordsOpeningHistory,
     clearOrphanedFailedRecordNotice,
@@ -1276,6 +1278,7 @@ async function getAppViews(ownerKey: string, contractId: string): Promise<Cached
 
 async function upsertReportSnapshot({
   appViewId,
+  assertActive,
   contractId,
   from,
   ownerKey,
@@ -1283,10 +1286,12 @@ async function upsertReportSnapshot({
   search,
   syncedAt = new Date().toISOString(),
   to,
-}: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string }) {
+}: ReportSnapshotScope & { report: ReportResponse; syncedAt?: string; assertActive?: () => void }) {
   const db = await getDatabase();
 
-  await db.runAsync(
+  await db.withTransactionAsync(async transaction => {
+  assertActive?.();
+  await transaction.runAsync(
     `
       INSERT INTO report_snapshots (owner_key, contract_id, app_view_id, query_key, report_json, synced_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -1300,6 +1305,9 @@ async function upsertReportSnapshot({
     JSON.stringify(report),
     syncedAt,
   );
+
+  assertActive?.();
+  }, "transaction:report-snapshot");
 
   notifyLocalDatabaseCacheChangeListeners();
 }

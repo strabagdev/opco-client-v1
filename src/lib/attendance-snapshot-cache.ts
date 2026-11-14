@@ -1,3 +1,4 @@
+import {completeAttendanceDay,assertVerifiedAttendanceDayScope} from "./attendance-day-pages";
 import { attendanceStateFields } from "./attendance-offline";
 import { attendanceResponseToStateUpdateItems, isAttendanceRemoteSnapshotComplete } from "../renderers/workflows/attendance/attendance-workflow-logic";
 import { AttendanceResponse, AttendanceWorkflowConfig, OpcoApi } from "./opco-api";
@@ -18,18 +19,21 @@ export type CacheAttendanceRemoteSnapshotInput = {
 // After an ACK only the day's attendance changed. Its complete DTO can be persisted
 // independently of an unrelated refresh of the already prepared people list.
 export async function refreshAttendanceDaySnapshot(input: Omit<CacheAttendanceRemoteSnapshotInput, "response" | "snapshotComplete"> & {
-  api: Pick<OpcoApi, "getAttendanceWorkflow">;
+  api: Pick<OpcoApi, "getAttendanceWorkflow"> & Partial<Pick<OpcoApi,"getRevisionRead">>;
   date: string;
   token: string;
   isCurrent(): boolean;
 }) {
-  const response = await input.api.getAttendanceWorkflow(input.token, input.contractId, input.appViewId, { date: input.date });
+  const seed = await input.api.getAttendanceWorkflow(input.token, input.contractId, input.appViewId, { date: input.date });
+  if (!input.isCurrent()) return null;
+  const {response} = await completeAttendanceDay({seed,ownerKey:input.ownerKey,contractId:input.contractId,appViewId:input.appViewId,isCurrent:input.isCurrent,
+    ...(input.api.getRevisionRead ? {readPage:(resource,expected)=>input.api.getRevisionRead!(input.token,input.contractId,resource,expected,{diagnosticOperation:"DAY_LOAD"})} : {})});
   if (!input.isCurrent()) return null;
   if (response.date !== input.date) throw new Error("Opco devolvio asistencia para una fecha diferente.");
   let hydration = await cacheAttendanceRemoteSnapshot({ ...input, response });
   const completeDay = isAttendanceRemoteSnapshotComplete(response);
   if (completeDay && !hydration.complete && input.config.observationFieldId) {
-    // latest omits Observation. Fetch current via the existing person endpoint, not
+    // Older Core latest omits bound Observation. Fetch current via the existing person endpoint, not
     // from an ACK or an old version. Serial reads are bounded by the day limit (10).
     const items = [...response.items];
     for (const personId of new Set(response.latest.map(event => event.person.id))) {
@@ -46,7 +50,8 @@ export async function refreshAttendanceDaySnapshot(input: Omit<CacheAttendanceRe
   if (completeDay && !hydration.complete) {
     throw new Error("No se pudo verificar el contenido completo de asistencia para este dia.");
   }
-  return { response, hydration };
+  // The renderer keeps its original bounded response; only persistence uses the full day.
+  return { response: seed, hydration };
 }
 
 export async function cacheAttendanceRemoteSnapshot({
@@ -58,6 +63,7 @@ export async function cacheAttendanceRemoteSnapshot({
   snapshotComplete,
   store,
 }: CacheAttendanceRemoteSnapshotInput) {
+  assertVerifiedAttendanceDayScope(response,{ownerKey,contractId,appViewId});
   const complete = snapshotComplete ?? isAttendanceRemoteSnapshotComplete(response);
   const refreshedAt = new Date().toISOString();
   const targetEntityTypeId = response.targetEntityType.id;

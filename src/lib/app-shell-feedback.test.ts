@@ -24,6 +24,12 @@ const baseInput: AppShellFeedbackInput = {
   offlineReadiness: "ready",
   pendingCount: 0,
 };
+it("shows checking without a stale preparation progress bar",()=>{
+ const check=resolveAppShellStatusIndicator({...baseInput,isOfflinePreparationChecking:true,offlinePreparationStatus:"completed",offlinePreparationProgress:{completed:13,failed:0,total:13}});
+ expect(check.label).toBe("Comprobando uso offline…");expect(check.preparationProgress).toBeUndefined();expect(check.state).toBe("working");
+ const preparing=resolveAppShellStatusIndicator({...baseInput,isOfflinePreparationRunning:true,offlinePreparationProgress:{completed:1,failed:0,total:2}});
+ expect(preparing.label).toBe("Preparando uso offline…");expect(preparing.preparationProgress).toBeDefined();
+});
 
 function resolvePreviousStatusIndicator(input: AppShellFeedbackInput) {
   if (input.localStorageRecoveryNotice || input.hasError || input.hasConflict) {

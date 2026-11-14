@@ -38,6 +38,7 @@ export type AppShellFeedbackInput = {
   hasReadConnectivityIssue?: boolean;
   isAuthSessionRestoring: boolean;
   isOfflinePreparationRunning: boolean;
+  isOfflinePreparationChecking?: boolean;
   offlinePreparationProgress?: { completed: number; failed: number; total: number } | null;
   offlinePreparationStatus?: "idle" | "running" | "completed" | "failed" | null;
   offlinePreparationHomeListFailed?: boolean;
@@ -186,6 +187,7 @@ function resolveAppShellStatusBase({
   isOperationalCoreReadinessChecking,
   isPendingWorkSyncing,
   localStorageRecoveryNotice,
+  isOfflinePreparationChecking = false,
   offlinePreparationProgress = null,
   offlinePreparationHomeListFailed = false,
   offlinePreparationDiagnosticWriteFailed = false,
@@ -267,6 +269,14 @@ function resolveAppShellStatusBase({
       accessibilityLabel: "Preparando uso sin conexion",
       label: "Preparando uso offline…",
       preparationProgress: resolvePreparationProgress(offlinePreparationProgress, "active"),
+      state: "working",
+    };
+  }
+
+  if (isOfflinePreparationChecking) {
+    return {
+      accessibilityLabel: "Comprobando disponibilidad offline; no se están descargando datos",
+      label: "Comprobando uso offline…",
       state: "working",
     };
   }

@@ -1,3 +1,5 @@
+import type { RevisionReceiptStore } from "./revision-receipt-storage";
+import { createConsultationRevisionRead } from "./consultation-revision-read";
 import { LocalDatabase, PanelSnapshotScope } from "./local-db";
 import { OpcoApi, OpcoNetworkError, PanelQuery, PanelResponse, PanelAppView } from "./opco-api";
 import { PanelDefinitionError, reconcilePanelDefinition } from "./panel-definition";
@@ -66,11 +68,12 @@ export async function loadPanelDatasetWithOfflineCache({
   ownerKey: string;
   query: PanelQuery & { page: number; pageSize: number };
   snapshotDatasetId?: string;
-  store: Pick<LocalDatabase, "getPanelSnapshot" | "upsertPanelSnapshot">;
+  store: Pick<LocalDatabase, "getPanelSnapshot" | "upsertPanelSnapshot"> & Partial<RevisionReceiptStore>;
   token: string;
 }): Promise<LoadPanelDatasetResult> {
   const scope = panelSnapshotScope({ appViewId, configRevision, contractId, ownerKey, query, snapshotDatasetId });
-  const assertActive = () => assertPanelReadActive(isActive);
+  let revision:Awaited<ReturnType<typeof createConsultationRevisionRead>>|undefined;
+  const assertActive = () => { assertPanelReadActive(isActive); revision?.assertActive(); };
   const diagnostic = beginPanelRead(scope);
   const failureCode = (error: unknown) => error instanceof PanelReadCancelledError ? "PANEL_READ_CANCELLED"
     : error instanceof PanelDefinitionError ? error.code : "PANEL_READ_FAILED";
@@ -116,7 +119,9 @@ export async function loadPanelDatasetWithOfflineCache({
 
   try {
     recordPanelRead(diagnostic, "request", "started");
-    const panel = await api.getPanel(token, contractId, appViewId, query, { diagnosticRequestId: diagnostic.readId });
+    revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"panel",query,snapshotDatasetId,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
+    const readApi=revision.api;
+    const panel = await readApi.getPanel!(token, contractId, appViewId, query, { diagnosticRequestId: diagnostic.readId });
     assertActive();
     recordPanelRead(diagnostic, "response", "received", panel.configRevision);
     if (appView && panel.appView.id !== appViewId) throw new PanelDefinitionError("PANEL_DEFINITION_UNAVAILABLE");
@@ -126,7 +131,7 @@ export async function loadPanelDatasetWithOfflineCache({
     if (appView) {
       recordPanelRead(diagnostic, "definition", "started", panel.configRevision);
       try {
-        definition = await reconcilePanelDefinition({ api, appView, revision: panel.configRevision, token, contractId, assertActive });
+        definition = await reconcilePanelDefinition({ api:readApi, appView, revision: panel.configRevision, token, contractId, assertActive });
         recordPanelRead(diagnostic, "definition", appView.configRevision === panel.configRevision ? "matched" : "reconciled", panel.configRevision);
       } catch (error) {
         assertActive();
@@ -143,6 +148,8 @@ export async function loadPanelDatasetWithOfflineCache({
     }
 
     if (definitionError) throw definitionError;
+    await revision.finish();
+    assertActive();
     return { fromCache: false, offline: false, panel, syncedAt, ...(definition ? { definition } : {}) };
   } catch (error) {
     recordPanelRead(diagnostic, "request", isActive && !isActive() ? "cancelled" : "failed", undefined, failureCode(error));

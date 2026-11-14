@@ -24,7 +24,7 @@ import {
   resolveLatestStateUpdateRunSummary,
   resolveStateUpdateCurrentActivity,
 } from "@/diagnostics/state-update-route-logic";
-import { buildOwnerKey, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
+import { appViewsAuthorizationScope, buildOwnerKey, loadAppViewsWithCache, type AppViewsReadEvent } from "@/lib/app-navigation-cache";
 import {
   getOfflinePreparationExecution,
   OfflinePreparationDiagnostics,
@@ -109,6 +109,7 @@ type SessionContextValue = {
   isAuthSessionRestoring: boolean;
   isOperationalCoreReadinessChecking: boolean;
   isOfflinePreparationRunning: boolean;
+  isOfflinePreparationChecking: boolean;
   isPendingWorkSyncing: boolean;
   me: MeResponse | null;
   offlinePreparationDiagnostics: OfflinePreparationDiagnostics | null;
@@ -119,6 +120,7 @@ type SessionContextValue = {
   localDatabaseStorageState: LocalDatabaseStorageState;
   localStorageRecoveryNotice: string | null;
   recordsReconnectRefreshKey: number;
+  recordsReconnectReadEvent: AppViewsReadEvent | null;
   recordsSyncSummary: RecordsSyncSummary;
   recordOfflinePreparationDiagnostics(diagnostics: OfflinePreparationDiagnostics): void;
   recordStateUpdateSyncRun(input: {
@@ -179,7 +181,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [pendingRecordsCount, setPendingRecordsCount] = useState(0);
   const [offlinePreparationDiagnostics, setOfflinePreparationDiagnostics] = useState<OfflinePreparationDiagnostics | null>(null);
   const [activeOfflinePreparationRuns, setActiveOfflinePreparationRuns] = useState<Set<string>>(() => new Set());
-  const [recordsReconnectRefreshKey, setRecordsReconnectRefreshKey] = useState(0);
+  const [isOfflinePreparationChecking, setOfflinePreparationChecking] = useState(false);
+  const [recordsRefresh, setRecordsRefresh] = useState<{ key: number; event: AppViewsReadEvent | null }>({ key: 0, event: null });
+  const { key: recordsReconnectRefreshKey, event: recordsReconnectReadEvent } = recordsRefresh;
+  const setRecordsReconnectRefreshKey = useCallback((updater: (key: number) => number, event?: AppViewsReadEvent) => {
+    setRecordsRefresh(previous => ({ key: updater(previous.key), event: event ?? null }));
+  }, []);
   const [stateUpdateReconnectRefreshKey, setStateUpdateReconnectRefreshKey] = useState(0);
   const [recordsSyncSummary, setRecordsSyncSummary] = useState<RecordsSyncSummary>(emptyRecordsSyncSummary);
   const [recordsFailedOperations, setRecordsFailedOperations] = useState<RecordsFailedOperationDiagnostics[]>([]);
@@ -192,6 +199,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
   useEffect(() => { preparationSession.current = {ownerKey,contractId:selectedContractIdState,token}; }, [ownerKey,selectedContractIdState,token]);
   const clearOfflinePreparationRuntime = useCallback(() => {
     setActiveOfflinePreparationRuns(new Set());
+    setOfflinePreparationChecking(false);
+    setRecordsRefresh(previous => ({ ...previous, event: null }));
   }, []);
   const api = useMemo(
     () =>
@@ -206,6 +215,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setToken(null);
           setMe(null);
           setContext(null);
+          setSelectedContractIdState(null);
           setStatus("anonymous");
         },
         onSessionRefreshed(tokens) {
@@ -305,7 +315,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     const execution = getOfflinePreparationExecution({store:definitionCache,ownerKey:scope.ownerKey,contractId:scope.contractId,token:scope.token});
     if (execution.diagnostics?.runId !== diagnostics.runId) return;
     setOfflinePreparationDiagnostics(execution.diagnostics);
-    setActiveOfflinePreparationRuns(new Set(execution.active ? [diagnostics.runId ?? "preparation"] : []));
+    setActiveOfflinePreparationRuns(new Set(execution.phase === "preparing" ? [diagnostics.runId ?? "preparation"] : []));
+    setOfflinePreparationChecking(execution.phase === "checking");
   }, [definitionCache]);
 
   const {
@@ -409,7 +420,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     },
     onChange: execution => {
       setOfflinePreparationDiagnostics(execution.diagnostics);
-      setActiveOfflinePreparationRuns(new Set(execution.active ? [execution.diagnostics?.runId ?? "preparation"] : []));
+      setActiveOfflinePreparationRuns(new Set(execution.phase === "preparing" ? [execution.diagnostics?.runId ?? "preparation"] : []));
+      setOfflinePreparationChecking(execution.phase === "checking");
     },
   });
 
@@ -512,23 +524,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
     void refreshCount();
   }, [refreshPendingRecordsCount]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadPersistedContractId() {
-      const persistedContractId = await readPersistedContractId(definitionCache, ownerKey);
-
-      if (isMounted) {
-        setSelectedContractIdState(persistedContractId);
-      }
-    }
-
-    void loadPersistedContractId();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [definitionCache, ownerKey]);
 
   async function signIn(email: string, password: string) {
     const preferredOrganizationId = await tokenStorage.getPreferredOrganizationId();
@@ -677,6 +672,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
             store: definitionCache,
             token,
             trigger: "contract-selection",
+            authorizationScope: appViewsAuthorizationScope(me, context),
           });
         }
       } catch {
@@ -696,6 +692,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         diagnosticsStateUpdate,
         isAuthSessionRestoring,
         isOfflinePreparationRunning,
+        isOfflinePreparationChecking,
         isOperationalCoreReadinessChecking,
         isPendingWorkSyncing,
         me,
@@ -707,6 +704,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         localDatabaseStorageState,
         localStorageRecoveryNotice,
         recordsReconnectRefreshKey,
+        recordsReconnectReadEvent,
         recordsSyncSummary,
         recordOfflinePreparationDiagnostics,
         recordStateUpdateSyncRun,

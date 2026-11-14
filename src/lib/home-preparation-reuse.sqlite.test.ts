@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
 import { loadAppViewsWithCache } from "./app-navigation-cache";
-import { invalidateHomePreparation, prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
+import { invalidateHomePreparation, prewarmAssignedAppViewsOnce, subscribeOfflinePreparationExecution, type OfflinePreparationExecution } from "./app-view-prewarm";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import type { AppView, StateUpdateResponse, EntityDefinition } from "./opco-api";
 const sqlite = vi.hoisted(() => ({ openDatabaseAsync: vi.fn() }));
@@ -244,4 +244,52 @@ it("the existing reconnect controller refreshes once with zero writes and shares
   expect((await store.searchStateUpdateSubjects({...scope,search:"Synthetic 000"}))[0].current?.stateValues.find(v=>v.fieldId==="revision")?.value).toBe("R2");
   expect(shouldRevalidateAssignedPreparation("foreground/resume",false)).toBe(true);
   expect(shouldRevalidateAssignedPreparation("unknown-to-online",false)).toBe(false);
+});
+
+
+it("shares a full source catalog per run and refreshes it again after remote changes, preserving pending conflict on reopen",async()=>{
+ const f=fixture();await runHome(f);expect(f.requests.source).toBe(1);const pending=await protectIntent(),before=await pending();
+ f.setRevision("R2");invalidateHomePreparation({store,ownerKey,contractId,token});
+ const next=await measure(f,()=>runHome(f,{trigger:"foreground/resume",invalidationKey:"source-next-event",reuseCompleted:false}));
+ expect(next.requests.source).toBe(1);expect(next.requests.current).toBe(3);expect(next.requests.attendance).toBe(currentMonthDays()*1);
+ expect(next.requests.writes).toBe(0);expect(await pending()).toEqual(before);
+ await reopen();expect(await pending()).toEqual(before);expect((await store.getStateUpdateCurrentCoverage(scope))?.status).toBe("complete");
+ expect((await store.searchStateUpdateSubjects({...scope,search:"Synthetic 000"}))[0].current?.stateValues.find(v=>v.fieldId==="revision")?.value).toBe("R2");
+ expect(await db.getFirstAsync("PRAGMA integrity_check")).toEqual({integrity_check:"ok"});metric("dedup-source-reopen",{next,pendingIntact:true,integrity:"ok"});
+});
+function currentMonthDays(){const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,0).getDate();}
+it("does not share full catalogs from different source entities",async()=>{
+ const f=fixture(),attendance=f.api.getAttendanceWorkflow,definition=f.api.getEntityDefinition;
+ f.api.getAttendanceWorkflow=async(...args:Parameters<typeof attendance>)=>({...await attendance(...args),sourceEntityType:{id:"different-source",name:"Other synthetic source"}});
+ f.api.getEntityDefinition=async(...args:Parameters<typeof definition>)=>{const r=await definition(...args);return{entity:{...r.entity,id:argumentsEntity(args)}};};
+ await runHome(f);expect(f.requests.source).toBe(2);
+});
+function argumentsEntity(args:unknown[]){return String(args[2]??scope.sourceEntityTypeId);}
+it("reports checking only while reusing complete preparation without a new run",async()=>{
+ const f=fixture();await runHome(f);const prior=(await store.getOfflinePreparationDiagnostics(ownerKey))?.runId;
+ const states:OfflinePreparationExecution[]=[];const stop=subscribeOfflinePreparationExecution({store,ownerKey,contractId,token,onChange:s=>states.push(s)});
+ const result=await measure(f,()=>runHome(f));stop();
+ expect(result.requests.source).toBe(0);expect(result.requests.current).toBe(0);expect(result.requests.attendance).toBe(0);
+ expect(states.some(s=>s.active&&s.phase==="checking")).toBe(true);expect(states.some(s=>s.phase==="preparing")).toBe(false);
+ expect((await store.getOfflinePreparationDiagnostics(ownerKey))?.runId).toBe(prior);
+});
+it("isolates a changed authorization context even with the same user, contract and token",async()=>{
+ const f=fixture();await runHome(f,{authorizationScope:"role-admin"});const before=f.requests.source;
+ await runHome(f,{authorizationScope:"role-member"});expect(f.requests.source-before).toBe(1);
+ const after=f.requests.source;await runHome(f,{authorizationScope:"role-member"});expect(f.requests.source).toBe(after);
+});
+it("keeps one shared flight and one fresh source load in a trailing invalidation pass",async()=>{
+ const f=fixture(),held=f.holdFirst();const states:OfflinePreparationExecution[]=[];
+ const stop=subscribeOfflinePreparationExecution({store,ownerKey,contractId,token,onChange:s=>states.push(s)});
+ const first=runHome(f);await held.entered;const joined=runHome(f);f.setRevision("R2");invalidateHomePreparation({store,ownerKey,contractId,token});
+ const again=runHome(f,{trigger:"reconnect",invalidationKey:"shared-source-invalidation",reuseCompleted:false});held.release();await Promise.all([first,joined,again]);stop();
+ expect(f.requests.source).toBe(2);expect(f.requests.current).toBe(6);expect(states.some(s=>s.phase==="preparing")).toBe(true);expect(states.at(-1)?.phase).toBe("idle");
+});
+it("does not certify current coverage after a shared source failure and keeps the prior records and conflict",async()=>{
+ const f=fixture();await runHome(f);const pending=await protectIntent(),before=await pending(),fetch=f.api.getEntityRecords;
+ f.api.getEntityRecords=async()=>{throw new Error("synthetic source failure");};invalidateHomePreparation({store,ownerKey,contractId,token});
+ await runHome(f,{trigger:"reconnect",invalidationKey:"failed-source",reuseCompleted:false});
+ expect((await store.getStateUpdateCurrentCoverage(scope))?.status).toBe("partial");expect(await pending()).toEqual(before);
+ f.api.getEntityRecords=fetch;await runHome(f,{trigger:"reconnect",invalidationKey:"recovered-source",reuseCompleted:false});
+ expect((await store.getStateUpdateCurrentCoverage(scope))?.status).toBe("complete");expect(await pending()).toEqual(before);
 });

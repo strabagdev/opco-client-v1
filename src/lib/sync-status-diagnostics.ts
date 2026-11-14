@@ -41,6 +41,7 @@ export type SyncStatusDiagnosticsInput = {
   offlinePreparation: {
     diagnostics?: OfflinePreparationDiagnostics | null;
     activeInCurrentRuntime: boolean;
+    checkingInCurrentRuntime?: boolean;
     completedAt: string | null;
     startedAt: string | null;
     status: "idle" | "running" | "completed" | "failed" | null;
@@ -83,6 +84,7 @@ export function buildSyncStatusDiagnostics(input: SyncStatusDiagnosticsInput): S
     input.sync.active ? "Envío de cambios" : null,
     input.experience.activeRuns.length > 0 ? `Actualización de ${input.experience.appViewTitle ?? "experiencia"}` : null,
     input.offlinePreparation.activeInCurrentRuntime ? "Preparación offline" : null,
+    input.offlinePreparation.checkingInCurrentRuntime ? "Comprobación offline" : null,
   ].filter((value): value is string => Boolean(value));
 
   return {
@@ -261,6 +263,7 @@ function syncState(input: SyncStatusDiagnosticsInput): SyncChecklistState {
 }
 
 function offlinePreparationState(input: SyncStatusDiagnosticsInput): SyncChecklistState {
+  if (input.offlinePreparation.checkingInCurrentRuntime) return "En curso";
   if (input.offlinePreparation.activeInCurrentRuntime) return "En curso";
   if (input.offlinePreparation.status === "failed") return "Error";
   if (input.offlinePreparation.status === "completed") return "Correcto";
@@ -296,6 +299,7 @@ function indicatorReason(input: SyncStatusDiagnosticsInput) {
   if (input.readiness.active) return "Comprobación activa de disponibilidad de Operational Core.";
   if (input.session.restoring) return "Restauración activa de sesión.";
   if (input.experience.activeRuns.length > 0) return `Actualización activa de ${input.experience.appViewTitle ?? "la experiencia visible"}.`;
+  if (input.offlinePreparation.checkingInCurrentRuntime) return "Comprobando disponibilidad offline; no se están descargando datos ni enviando cambios.";
   if (input.offlinePreparation.status === "failed") return "La última preparación offline quedó incompleta; el detalle permanece disponible en Diagnóstico.";
   if (input.offlinePreparation.status === "running") return input.offlinePreparation.activeInCurrentRuntime
     ? "Preparación offline activa; no representa envío de cambios."
@@ -325,6 +329,7 @@ function syncDetail(result: string | null) {
 }
 
 function offlinePreparationDetail(input: SyncStatusDiagnosticsInput) {
+  if (input.offlinePreparation.checkingInCurrentRuntime) return "Comprobación local de cobertura; no descarga datos ni envía cambios.";
   if (input.offlinePreparation.activeInCurrentRuntime) return "Precarga GET/SQLite activa; no envía cambios.";
   if (input.offlinePreparation.status === "running") return "Estado running persistido sin actividad confirmada en este runtime.";
   if (!input.offlinePreparation.status) return "Sin información.";

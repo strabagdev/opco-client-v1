@@ -16,6 +16,7 @@ import { FormAction, FormActions } from "../../components/form-actions";
 import { reportReadRows } from "./report-read-presentation";
 
 import { ReportAppView, ReportResponse } from "@/lib/opco-api";
+import { revisionCanonical } from "@/lib/revision-receipts";
 import { loadReportWithOfflineCache } from "@/lib/offline-reports";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { AppViewRendererProps } from "@/renderers/types";
@@ -38,7 +39,9 @@ import {
 } from "./report-time-filter";
 
 export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>) {
-  const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, token } = useSession();
+  const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
+  const definitionKey=revisionCanonical(appView);
+  const knownOffline=connectivityStatus==="offline"||status==="offline";
   const timeFilter = useMemo(() => normalizeReportTimeFilter(appView.config), [appView.config]);
   const [period, setPeriod] = useState<ReportPeriodState>(() => initialReportPeriod(appView.config));
   const range = useMemo(() => reportPeriodToRange(period), [period]);
@@ -88,6 +91,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       try {
         const result = await loadReportWithOfflineCache({
           api,
+          appView:JSON.parse(definitionKey),knownOffline,isActive:()=>isMounted,
           appViewId: appView.id,
           contractId: selectedContractId,
           ownerKey,
@@ -117,7 +121,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, definitionCache, ownerKey, refreshCount, reportQuery, reportQueryKey, selectedContractId, token]);
+  }, [api, appView.id, definitionKey, knownOffline, definitionCache, ownerKey, refreshCount, reportQuery, reportQueryKey, selectedContractId, token]);
 
   const table = useMemo(() => visibleReport ? buildReportTableModel(visibleReport) : null, [visibleReport]);
   const matrix = useMemo(() => visibleReport ? buildReportMatrixModel(visibleReport) : null, [visibleReport]);

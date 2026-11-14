@@ -242,3 +242,36 @@ describe("Attendance post-sync day recovery", () => {
     expect(store.markAttendanceDaySnapshotHydrated).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Attendance latest observation coverage", () => {
+  const item={attendanceRecordId:"event",person:{id:"person",displayName:"Synthetic"},statusLabel:"Present",statusOptionId:"present_option",updatedAt:"2026-08-31T12:00:00Z"};
+  const scope={appViewId:"view_attendance",contractId:"contract_1",ownerKey:"org_1:user_1",config:{statusFieldId:"status_field",observationFieldId:"note-id"}};
+  function storage(){return {markAttendanceDaySnapshotHydrated:vi.fn(async()=>undefined),upsertStateUpdateSnapshot:vi.fn(async(input:{latest?:{extraValues?:Record<string,unknown>}[]})=>({staleSyncedRemoved:0,persistedRemoteEventCount:input.latest?.length??0,contentVerified:input.latest?.every(e=>Object.hasOwn(e.extraValues??{},"note-id"))??true}))};}
+  it.each(["Note ñ\nSecond line", "", null])("hydrates a bound latest observation, retaining the exact value %j",async observation=>{
+    const store=storage(),response=attendanceResponse({items:[],latest:[{...item,observation}],summary:{totalRegistered:1},observationProjection:{version:1,fieldId:"note-id"}});
+    const result=await cacheAttendanceRemoteSnapshot({...scope,response,store});expect(result.complete).toBe(true);expect(store.upsertStateUpdateSnapshot.mock.calls[0][0].latest?.[0].extraValues).toEqual({"note-id":observation});expect(store.markAttendanceDaySnapshotHydrated).toHaveBeenCalledTimes(1);
+  });
+  it("accredits a real empty day with the configured field, without inventing a value",async()=>{
+    const store=storage(),response=attendanceResponse({items:[],latest:[],summary:{totalRegistered:0},observationProjection:{version:1,fieldId:"note-id"}});
+    expect((await cacheAttendanceRemoteSnapshot({...scope,response,store})).complete).toBe(true);expect(store.markAttendanceDaySnapshotHydrated).toHaveBeenCalledTimes(1);expect(store.upsertStateUpdateSnapshot.mock.calls[0][0].latest).toEqual([]);
+  });
+  it("needs no per-person request for a complete versioned day",async()=>{
+    const store=storage(),day=attendanceResponse({items:[],latest:[{...item,observation:"Exact note"}],summary:{totalRegistered:1},observationProjection:{version:1,fieldId:"note-id"}}),api={getAttendanceWorkflow:vi.fn(async()=>day)};
+    expect((await refreshAttendanceDaySnapshot({...scope,date:day.date,token:"synthetic-token",api,store,isCurrent:()=>true}))?.hydration.complete).toBe(true);expect(api.getAttendanceWorkflow).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    {observation:"old-server-extra"},
+    {observation:"wrong-field",projection:{version:1,fieldId:"another-id"}},
+    {observation:"future",projection:{version:2,fieldId:"note-id"}},
+    {observation:undefined,projection:{version:1,fieldId:"note-id"}},
+  ])("does not turn missing, incompatible or unbound metadata into an empty observation: %j",async value=>{
+    const store=storage(),response=attendanceResponse({items:[],latest:[{...item,observation:value.observation}],summary:{totalRegistered:1},...(value.projection?{observationProjection:value.projection as never}:{})});
+    expect((await cacheAttendanceRemoteSnapshot({...scope,response,store})).complete).toBe(false);expect(store.markAttendanceDaySnapshotHydrated).not.toHaveBeenCalled();expect(store.upsertStateUpdateSnapshot.mock.calls[0][0].latest?.[0].extraValues).toBeUndefined();
+  });
+  it("does not infer an observation when no field is configured",async()=>{
+    const store={markAttendanceDaySnapshotHydrated:vi.fn(),upsertStateUpdateSnapshot:vi.fn(async()=>({staleSyncedRemoved:0,contentVerified:true}))};
+    await cacheAttendanceRemoteSnapshot({...scope,config:{statusFieldId:"status_field"},response:attendanceResponse({items:[],latest:[{...item,observation:"Not configured"}],summary:{totalRegistered:1},observationProjection:{version:1,fieldId:"note-id"}}),store});
+    expect(store.upsertStateUpdateSnapshot).toHaveBeenCalledWith(expect.objectContaining({latest:[expect.objectContaining({extraValues:undefined})]}));
+  });
+});

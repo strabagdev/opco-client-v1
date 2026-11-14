@@ -84,6 +84,39 @@ type ViewsReadFlight = {
   snapshot?: CachedAppViewsSnapshot;
 };
 const viewsReadFlights = new WeakMap<object, WeakMap<object, Map<string, ViewsReadFlight>>>();
+const latestViewsReads = new WeakMap<object, Map<string, ViewsReadFlight>>();
+
+declare const readEventBrand: unique symbol;
+/** Opaque, memory-only handoff for consumers of one validated lifecycle event. */
+export type AppViewsReadEvent = { readonly [readEventBrand]: true };
+type ViewsReadScope = {
+  api: Pick<OpcoApi, "getAppViews">;
+  cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">;
+  ownerKey: string; contractId: string; token: string; authorizationScope: string | null;
+};
+const viewsReadEvents = new WeakMap<AppViewsReadEvent, ViewsReadScope & { invalidationKey: string; flight?: ViewsReadFlight }>();
+
+export function appViewsAuthorizationScope(me: MeResponse | null, context: ContextResponse | null): string | null {
+  if (!me || !context) return null;
+  return JSON.stringify([me.app.id, me.user.id, context], (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+}
+
+export function createAppViewsReadEvent(input: ViewsReadScope & { invalidationKey: string }): AppViewsReadEvent {
+  const event = Object.freeze({}) as AppViewsReadEvent;
+  viewsReadEvents.set(event, { ...input });
+  return event;
+}
+
+function readForEvent(event: AppViewsReadEvent | null | undefined, input: ViewsReadScope): ViewsReadFlight | null {
+  const state = event && viewsReadEvents.get(event);
+  if (!state || !input.authorizationScope || state.authorizationScope !== input.authorizationScope ||
+    state.api !== input.api || state.cache !== input.cache || state.ownerKey !== input.ownerKey ||
+    state.contractId !== input.contractId || state.token !== input.token) return null;
+  if (state.flight && latestViewsReads.get(input.cache)?.get(JSON.stringify([input.ownerKey, input.contractId])) !== state.flight) return null;
+  // Retain a completed read only through this event handle, never as a time-based cache.
+  return state.flight ??= acquireViewsRead(input.api, input.cache, input.ownerKey, input.contractId, input.token, state.invalidationKey);
+}
 
 /** Share only in-flight reads. A reconnect uses its own generation; completed reads are never memoized. */
 function acquireViewsRead(api: Pick<OpcoApi, "getAppViews">, cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">,
@@ -110,6 +143,9 @@ function acquireViewsRead(api: Pick<OpcoApi, "getAppViews">, cache: Pick<AppNavi
   catch (error) { remote = Promise.reject(error); }
   const flight: ViewsReadFlight = { scope, cached, remote };
   flights.set(key, flight);
+  let latest = latestViewsReads.get(cache);
+  if (!latest) { latest = new Map(); latestViewsReads.set(cache, latest); }
+  latest.set(JSON.stringify([ownerKey, contractId]), flight);
   const release = () => { if (scopeFlights.get(key) === flight) scopeFlights.delete(key); };
   void flight.remote.then(release, release);
   return flight;
@@ -127,12 +163,16 @@ export async function loadAppViewsWithCache({
   token,
   ownerKey,
   invalidationKey,
+  readEvent,
+  authorizationScope = null,
 }: {
   api: Pick<OpcoApi, "getAppViews">;
   cache: Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">;
   contractId: string;
   now?: () => Date;
   invalidationKey?: string;
+  readEvent?: AppViewsReadEvent | null;
+  authorizationScope?: string | null;
   onCached?: (snapshot: CachedAppViewsSnapshot) => void;
   onCacheRead?: (result: AppViewsCacheRead) => void;
   onCacheWrite?: (result: AppViewsCacheWrite) => void;
@@ -140,9 +180,11 @@ export async function loadAppViewsWithCache({
   ownerKey: string;
   token: string;
 }): Promise<AppViewsResult> {
-  const flight = acquireViewsRead(api, cache, ownerKey, contractId, token, invalidationKey);
+  const flight = readForEvent(readEvent, { api, cache, ownerKey, contractId, token, authorizationScope }) ??
+    acquireViewsRead(api, cache, ownerKey, contractId, token, invalidationKey);
   const scope = flight.scope;
-  let remoteSettled = false;
+  // A validated handoff must not briefly republish its earlier cached assignment list.
+  let remoteSettled = Boolean(flight.snapshot);
   const cachedPromise = flight.cached.then(result => {
     if (!remoteSettled && isCurrent()) {
       notify(onCacheRead, result);

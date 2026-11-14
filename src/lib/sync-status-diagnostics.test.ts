@@ -26,6 +26,13 @@ const baseInput: SyncStatusDiagnosticsInput = {
   writeFeedback: null,
 };
 
+it("describes local checking without claiming active GET preparation or an interrupted run",()=>{
+ const result=buildSyncStatusDiagnostics({...baseInput,indicator:{state:"working",label:"Comprobando uso offline…",accessibilityLabel:"Comprobando"},offlinePreparation:{activeInCurrentRuntime:false,checkingInCurrentRuntime:true,status:"completed",startedAt:null,completedAt:null}});
+ expect(result.reason).toBe("Comprobando disponibilidad offline; no se están descargando datos ni enviando cambios.");
+ const preparation=result.checklist.find(item=>item.id==="offline-preparation");
+ expect(preparation?.state).toBe("En curso");expect(preparation?.detail).toBe("Comprobación local de cobertura; no descarga datos ni envía cambios.");
+});
+
 describe("sync status diagnostics", () => {
   it("copies the same persisted preparation failure detail with its runId and no payload", () => {
     const preparation = {

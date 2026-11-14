@@ -80,16 +80,16 @@ afterEach(async()=>{vi.useRealTimers();await db.closeAsync();__resetLocalDatabas
 
 function fixture(hold=true){
  const views=Array.from({length:13},(_,i)=>({id:"diagnostic-view-"+i,name:"Synthetic experience "+i,slug:"diagnostic-"+i,type:"RECORDS",icon:null,sortOrder:i,config:{entityTypeId:"diagnostic-entity-"+i}} as AppView));
- const bodies=new Map<number,ReadableStreamDefaultController<Uint8Array>>();const requests:string[]=[];const diagnostics:unknown[]=[];let stopped=!hold,failViews=false;
+ const bodies=new Map<number,ReadableStreamDefaultController<Uint8Array>>();const requests:string[]=[];const revisionRequests:string[]=[];const diagnostics:unknown[]=[];let stopped=!hold,failViews=false;
  const entity=(n:number)=>({id:"diagnostic-entity-"+n,name:"Synthetic source "+n,slug:"source-"+n,active:true,icon:null,fields:[]});
- const api=createOpcoApi({apiUrl:"https://synthetic.invalid",timeoutMs:1000,onRequestDiagnostics:d=>{diagnostics.push(d);},fetcher:async(input)=>{const path=new URL(String(input)).pathname;requests.push(path);if(path.endsWith("/views"))return Response.json(failViews?{ok:false,error:{code:"SYNTHETIC_FAILURE",message:"Controlled failure"}}:{ok:true,data:{views}},{status:failViews?500:200});const n=Number(path.split("diagnostic-entity-")[1]);if(!Number.isInteger(n))throw Error("Unexpected request");if(n<11||stopped)return Response.json({ok:true,data:{entity:entity(n)}});return new Response(new ReadableStream<Uint8Array>({start(c){bodies.set(n,c);c.enqueue(new TextEncoder().encode('{"ok":true,"data":'));}}),{status:200});}});
+ const api=createOpcoApi({apiUrl:"https://synthetic.invalid",timeoutMs:1000,onRequestDiagnostics:d=>{diagnostics.push(d);},fetcher:async(input)=>{const path=new URL(String(input)).pathname;if(path.endsWith("/offline/manifest")){revisionRequests.push(path);return Response.json({ok:false,error:{code:"REVISION_MANIFEST_UNSUPPORTED",message:"Legacy Core fixture"}},{status:404});}requests.push(path);if(path.endsWith("/views"))return Response.json(failViews?{ok:false,error:{code:"SYNTHETIC_FAILURE",message:"Controlled failure"}}:{ok:true,data:{views}},{status:failViews?500:200});const n=Number(path.split("diagnostic-entity-")[1]);if(!Number.isInteger(n))throw Error("Unexpected request");if(n<11||stopped)return Response.json({ok:true,data:{entity:entity(n)}});return new Response(new ReadableStream<Uint8Array>({start(c){bodies.set(n,c);c.enqueue(new TextEncoder().encode('{"ok":true,"data":'));}}),{status:200});}});
  const finish=()=>{stopped=true;for(const[n,c]of bodies){c.enqueue(new TextEncoder().encode(JSON.stringify({entity:entity(n)})+"}"));c.close();}bodies.clear();};
  const start=(overrides={})=>prewarmAssignedAppViewsOnce({api,appViews:views,ownerKey,contractId,store,token,trigger:"home",...overrides});
- return{views,api,requests,diagnostics,finish,start,failViews:()=>{failViews=true;}};
+ return{views,api,requests,revisionRequests,diagnostics,finish,start,failViews:()=>{failViews=true;}};
 }
 const wait=async(check:()=>boolean)=>{await vi.waitFor(()=>expect(check()).toBe(true),{timeout:2000,interval:2});};
 const scope=()=>({store,ownerKey,contractId,token});
-const watch=()=>{let state:OfflinePreparationExecution={active:false,diagnostics:null};const stop=subscribeOfflinePreparationExecution({...scope(),onChange:value=>{state=value;}});return{state:()=>state,stop};};
+const watch=()=>{let state:OfflinePreparationExecution={active:false,phase:"idle",diagnostics:null};const stop=subscribeOfflinePreparationExecution({...scope(),onChange:value=>{state=value;}});return{state:()=>state,stop};};
 const orphan=():OfflinePreparationDiagnostics=>({status:"running",runId:"prewarm-100-1",scopeKey:offlinePreparationScopeKey(ownerKey,contractId),prewarmStartedAt:"2026-10-30T10:00:00.000Z",prewarmCompletedAt:null,prewarmDurationMs:null,trigger:"home",slow:false,slowestStages:[],lastAppView:null,failedAppViews:[],homeList:{status:"persisted",count:13,syncedAt:"2026-10-30T10:00:00.000Z",errorCode:null,requestId:null},appViews:{completed:11,failed:0,running:2,total:13}});
 async function seedOrphan(){await store.setOfflinePreparationDiagnostics(ownerKey,orphan());}
 const reconcile=(f:ReturnType<typeof fixture>,extra={})=>reconcileOfflinePreparation({...scope(),api:f.api,online:true,isCurrent:()=>true,beforeRecovery:async()=>true,...extra});
@@ -125,7 +125,7 @@ it("offline reads never download; going online while hydration is pending preser
  await seedOrphan();const f=fixture(false);await reconcile(f,{online:false});expect(f.requests).toHaveLength(0);const read=store.getOfflinePreparationRunReceipt.bind(store);let resolve!:()=>void;const held=new Promise<void>(r=>{resolve=r;});vi.spyOn(store,"getOfflinePreparationRunReceipt").mockImplementationOnce(async(...args)=>{await held;return read(...args);});const offline=reconcile(f,{online:false});const online=reconcile(f);resolve();await Promise.all([offline,online]);expect(f.requests).toHaveLength(14);
 });
 it("scope change during preflight prevents old downloads and cannot publish into another user's scope",async()=>{
- await seedOrphan();const f=fixture(false);let current=true,release!:()=>void;const preflight=new Promise<void>(r=>{release=r;});const before=vi.fn(async()=>{await preflight;return true;});const flight=reconcile(f,{isCurrent:()=>current,beforeRecovery:before});await wait(()=>before.mock.calls.length===1);current=false;release();await flight;expect(f.requests).toHaveLength(0);expect(getOfflinePreparationExecution({...scope(),ownerKey:"another-owner"})).toEqual({active:false,diagnostics:null});expect(await store.getOfflinePreparationRunReceipt("another-owner",contractId)).toBeNull();expect(await store.listPendingStateUpdateOperations(ownerKey)).toEqual([]);
+ await seedOrphan();const f=fixture(false);let current=true,release!:()=>void;const preflight=new Promise<void>(r=>{release=r;});const before=vi.fn(async()=>{await preflight;return true;});const flight=reconcile(f,{isCurrent:()=>current,beforeRecovery:before});await wait(()=>before.mock.calls.length===1);current=false;release();await flight;expect(f.requests).toHaveLength(0);expect(getOfflinePreparationExecution({...scope(),ownerKey:"another-owner"})).toEqual({active:false,phase:"idle",diagnostics:null});expect(await store.getOfflinePreparationRunReceipt("another-owner",contractId)).toBeNull();expect(await store.listPendingStateUpdateOperations(ownerKey)).toEqual([]);
 });
 it("an unpersistable recovery claim fails explicitly before any GET",async()=>{
  await seedOrphan();const f=fixture(false);vi.spyOn(store,"setOfflinePreparationRunReceipt").mockRejectedValue(Error("synthetic receipt failure"));await reconcile(f);expect(f.requests).toHaveLength(0);expect((await store.getOfflinePreparationDiagnostics(ownerKey))?.status).toBe("failed");
@@ -133,11 +133,11 @@ it("an unpersistable recovery claim fails explicitly before any GET",async()=>{
 
 
 it("a new session token waits for the prior writer and never receives its diagnostics",async()=>{
- const f=fixture(),flight=f.start();await wait(()=>f.requests.length===13);let state:OfflinePreparationExecution|undefined;const stop=subscribeOfflinePreparationExecution({...scope(),token:"new-session",onChange:d=>{state=d;}});expect(state).toEqual({active:true,diagnostics:null});
+ const f=fixture(),flight=f.start();await wait(()=>f.requests.length===13);let state:OfflinePreparationExecution|undefined;const stop=subscribeOfflinePreparationExecution({...scope(),token:"new-session",onChange:d=>{state=d;}});expect(state).toEqual({active:true,phase:"checking",diagnostics:null});
  expect(f.start({token:"new-session"})).toBe(flight);f.finish();await flight;expect(f.requests).toHaveLength(26);expect(state).toMatchObject({active:false,diagnostics:{status:"completed"}});stop();
 });
 it("normal Home reentry after completion still prepares every assigned experience",async()=>{
- const f=fixture(false);await f.start();const first=(await store.getOfflinePreparationDiagnostics(ownerKey))!.runId;await f.start();expect(f.requests).toHaveLength(26);expect((await store.getOfflinePreparationDiagnostics(ownerKey))!.runId).not.toBe(first);
+ const f=fixture(false);await f.start();const first=(await store.getOfflinePreparationDiagnostics(ownerKey))!.runId;await f.start();expect(f.requests).toHaveLength(26);expect(f.revisionRequests).toHaveLength(2);expect((await store.getOfflinePreparationDiagnostics(ownerKey))!.runId).not.toBe(first);
 });
 it("a stale receipt cannot hide a newer legacy run and no absent registry is inferred from a listener alone",async()=>{
  const f=fixture(false);await f.start();const legacy={...orphan(),runId:"prewarm-9999999999999-2",prewarmStartedAt:"2286-11-20T17:46:39.999Z"};await store.setOfflinePreparationDiagnostics(ownerKey,legacy);await reconcile(f);expect(f.requests).toHaveLength(27);expect((await store.getOfflinePreparationDiagnostics(ownerKey))?.recoveryOf).toBe(legacy.runId);
@@ -161,7 +161,7 @@ it("a late /views response after scope change cannot cache assignments or start 
   expect(await store.getAppViews(ownerKey, contractId)).toBeNull();
   expect(await store.getAppViews("new-owner", "new-contract")).toBeNull();
   expect(getOfflinePreparationExecution({ ...scope(), ownerKey: "new-owner", contractId: "new-contract" }))
-    .toEqual({ active: false, diagnostics: null });
+    .toEqual({ active: false, phase: "idle", diagnostics: null });
 });
 
 it("reads a legacy running diagnostic and preserves a claimed recovery across repeated SQLite reopens", async () => {

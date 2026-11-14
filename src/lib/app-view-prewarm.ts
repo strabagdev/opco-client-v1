@@ -1,3 +1,5 @@
+import {completeAttendanceDay} from "./attendance-day-pages";
+import { createPreparationRevisionRun, type PreparationRevisionApi } from "./preparation-revision-receipts";
 import { homePreparationDay, homePreparationProof, preparationSignature } from "./home-preparation-policy";
 import {preparedPresentationAvailable} from "./subject-presentation-cache";
 import {
@@ -15,7 +17,7 @@ import {
   OpcoNetworkError,
   StateUpdateResponse,
 } from "./opco-api";
-import { OfflineRecordStore, refreshEntityRecordsCache } from "./offline-records";
+import { OfflineRecordStore, refreshEntityRecordsCache, type RecordsRefreshDiagnostics } from "./offline-records";
 import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
 import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendance-snapshot-cache";
@@ -44,6 +46,8 @@ export type OfflinePreparationTrigger =
 type PrewarmStageKey = "definitionLoad" | "sourceRecordsFetch" | "sqliteWrite" | "snapshot";
 type EntityDefinitionResponse = Awaited<ReturnType<OpcoApi["getEntityDefinition"]>>;
 type EntityDefinitionLoader = (entityTypeId: string) => Promise<EntityDefinitionResponse>;
+type SourceRecordsLoad = { result: Awaited<ReturnType<typeof refreshEntityRecordsCache>>; diagnostics?: RecordsRefreshDiagnostics };
+type SourceRecordsLoader = (entityTypeId: string) => Promise<SourceRecordsLoad>;
 
 export type OfflinePreparationStageTelemetry = {
   completedAt: string | null;
@@ -116,6 +120,7 @@ export type AppViewPrewarmStore = AppViewDefinitionCache & Pick<AppNavigationCac
   Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 type AssignedPrewarmInput = Parameters<typeof prewarmAssignedAppViews>[0] & {
+  authorizationScope?: string | null;
   /** A real reconnect/invalidation event, not a render or a cached complete marker. */
   invalidationKey?: string;
   /** Home navigation only: reuse locally verified work from this document/session/day. */
@@ -126,7 +131,11 @@ export type OfflinePreparationRunReceipt = {
   diagnostics: OfflinePreparationDiagnostics;
   recoveryAttemptOf?: string;
 };
-export type OfflinePreparationExecution = { active: boolean; diagnostics: OfflinePreparationDiagnostics | null };
+export type OfflinePreparationExecution = {
+  active: boolean;
+  phase: "idle" | "checking" | "preparing";
+  diagnostics: OfflinePreparationDiagnostics | null;
+};
 type Listener = (state: OfflinePreparationExecution) => void;
 type AssignedFlight = {
   signature: string;
@@ -146,7 +155,8 @@ type AssignedScope = {
   reconciliationOnline?: boolean;
   recovering?: boolean;
   reuseEpoch?: number;
-  prepared?: Map<string, { token: string; day: string; epoch: number; proof: string }>;
+  phase?: OfflinePreparationExecution["phase"];
+  prepared?: Map<string, { token: string; authorizationScope: string | null; day: string; epoch: number; proof: string }>;
 };
 // The existing coordinator owns work across API recreation; never infer liveness from UI observers.
 const assignedFlights = new WeakMap<object, Map<string, AssignedScope>>();
@@ -160,7 +170,8 @@ function assignedScope(store: AppViewPrewarmStore, ownerKey: string, contractId:
   return scope;
 }
 function execution(scope: AssignedScope, token: string): OfflinePreparationExecution {
-  return { active: Boolean(scope.flight || scope.recovering),
+  const active = Boolean(scope.flight || scope.recovering);
+  return { active, phase: !active ? "idle" : scope.token === token && scope.phase === "preparing" ? "preparing" : "checking",
     diagnostics: scope.token === token ? scope.latest ?? null : null };
 }
 function notifyExecution(scope: AssignedScope) {
@@ -185,7 +196,7 @@ export function invalidateHomePreparation(input: { store: AppViewPrewarmStore; o
 
 export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promise<void> {
   const scope = assignedScope(params.store, params.ownerKey, params.contractId);
-  const signature = preparationSignature([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id)), scope.reuseEpoch ?? 0]);
+  const signature = preparationSignature([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id)), scope.reuseEpoch ?? 0, params.authorizationScope ?? null]);
   const previous = scope.flight;
   if (previous) {
     if (params.onTelemetry) previous.observers.set(params.onTelemetry, params.token);
@@ -206,17 +217,18 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
   const flight: AssignedFlight = { signature, next: params, current: params,
     seenInvalidations: new Set(params.invalidationKey ? [params.invalidationKey] : []),
     observers: new Map(params.onTelemetry ? [[params.onTelemetry, params.token]] : []), promise: Promise.resolve() };
-  scope.flight = flight; scope.token = params.token;
+  scope.flight = flight; scope.token = params.token; scope.phase = "checking";
   flight.promise = Promise.resolve().then(async () => {
     try {
       while (flight.next) {
-        const next = flight.next; flight.next = null; flight.current = next; scope.token = next.token;
+        const next = flight.next; flight.next = null; flight.current = next; scope.token = next.token; scope.phase = "checking";
+        notifyExecution(scope);
         const day = formatLocalDateInput(new Date()), epoch = scope.reuseEpoch ?? 0;
         const work: AppView[] = [];
         scope.prepared ??= new Map();
         for (const view of next.appViews) {
           const known = scope.prepared.get(view.id);
-          const proof = next.reuseCompleted && !next.invalidationKey && known?.token === next.token && known.day === homePreparationDay(view, day) && known.epoch === epoch
+          const proof = next.reuseCompleted && !next.invalidationKey && known?.token === next.token && known.authorizationScope === (next.authorizationScope ?? null) && known.day === homePreparationDay(view, day) && known.epoch === epoch
             ? await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day) : null;
           if (!proof || proof !== known?.proof) work.push(view);
         }
@@ -235,6 +247,8 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
         for (const view of work) scope.prepared.delete(view.id);
         scope.latest = undefined; notifyExecution(scope);
         const preparedIds = new Set<string>();
+        scope.phase = work.length > 0 ? "preparing" : "checking";
+        notifyExecution(scope);
         await prewarmAssignedAppViews({ ...next, onAppViewPrepared: id => { preparedIds.add(id); }, prepareAppViewIds: next.reuseCompleted ? work.map(view => view.id) : undefined, onTelemetry: async diagnostics => {
           scope.latest = diagnostics; scope.token = next.token; notifyExecution(scope);
           for (const [observer, token] of flight.observers) if (token === next.token) {
@@ -245,12 +259,12 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
         // an invalidation during any await makes this output ineligible for a later Home navigation.
         for (const view of work.filter(view => preparedIds.has(view.id))) {
           const proof = await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day);
-          if (proof) scope.prepared.set(view.id, { token: next.token, day: homePreparationDay(view, day), epoch, proof });
+          if (proof) scope.prepared.set(view.id, { token: next.token, authorizationScope: next.authorizationScope ?? null, day: homePreparationDay(view, day), epoch, proof });
           else scope.prepared.delete(view.id);
         }
       }
     } finally {
-      if (scope.flight === flight) scope.flight = undefined;
+      if (scope.flight === flight) { scope.flight = undefined; scope.phase = "idle"; }
       notifyExecution(scope);
     }
   });
@@ -418,7 +432,7 @@ export async function prewarmAssignedAppViews({
   prepareAppViewIds?: string[];
   recoveryOf?: string;
   homeListWrite?: Promise<AppViewsCacheWrite>;
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
+  api: PreparationRevisionApi;
   appViews: AppView[];
   contractId: string;
   onTelemetry?: (diagnostics: OfflinePreparationDiagnostics) => Promise<void> | void;
@@ -431,10 +445,26 @@ export async function prewarmAssignedAppViews({
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const runId = createOfflinePreparationRunId(startedMs);
+  const ordinaryApi=api;
+  const revision = await createPreparationRevisionRun({api, store, token, ownerKey, contractId, appViews, runId, signal});
+  api = revision.api; store = revision.store;
   const workViews = prepareAppViewIds ? appViews.filter(view => prepareAppViewIds.includes(view.id)) : appViews;
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
   let homeList: NonNullable<OfflinePreparationDiagnostics["homeList"]> = { status: "pending", count: appViews.length, syncedAt: null, errorCode: null, requestId: null };
   const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
+  // This map belongs to one run: API, store, owner, contract, token and unfiltered
+  // full-collection coverage are fixed. Never share across runs or generations.
+  const sourceRecordsLoads = new Map<string, Promise<SourceRecordsLoad>>();
+  const loadSourceRecords: SourceRecordsLoader = entityTypeId => {
+    const existing = sourceRecordsLoads.get(entityTypeId);
+    if (existing) return existing;
+    let diagnostics: RecordsRefreshDiagnostics | undefined;
+    const request = refreshEntityRecordsCache({ api, contractId, entityTypeId, ownerKey, store, token,
+      onDiagnostics: value => { diagnostics = value; } }).then(result => ({ result, diagnostics }));
+    sourceRecordsLoads.set(entityTypeId, request);
+    void request.catch(() => { if (sourceRecordsLoads.get(entityTypeId) === request) sourceRecordsLoads.delete(entityTypeId); });
+    return request;
+  };
   const loadEntityDefinition: EntityDefinitionLoader = (entityTypeId) => {
     const existing = entityDefinitionLoads.get(entityTypeId);
 
@@ -499,14 +529,18 @@ export async function prewarmAssignedAppViews({
         store,
       });
 
-      let nextTelemetry: OfflinePreparationAppViewTelemetry;
+      let nextTelemetry: OfflinePreparationAppViewTelemetry;let skippedByReuse=false;
 
       try {
-        nextTelemetry = await prewarmOneAppView({
+        skippedByReuse=await revision.tryReuseAttendance(appView);
+        nextTelemetry = skippedByReuse
+          ? completeAppViewTelemetry(initial,Date.parse(initial.appViewStartedAt),"skipped")
+          : await prewarmOneAppView({
           api,
           appView,
           contractId,
           loadEntityDefinition,
+          loadSourceRecords,
           signal,
           ownerKey,
           store,
@@ -516,8 +550,9 @@ export async function prewarmAssignedAppViews({
         nextTelemetry = completeAppViewTelemetry(initial, Date.parse(initial.appViewStartedAt), "failed", error);
       }
 
+      revision.viewResult(appView.id, nextTelemetry.result);
       appViewTelemetry.set(appView.id, nextTelemetry);
-      if (nextTelemetry.result !== "failed") onAppViewPrepared?.(appView.id);
+      if (nextTelemetry.result !== "failed"&&!skippedByReuse) onAppViewPrepared?.(appView.id);
       await recordOfflinePreparationTelemetry({
         diagnostics: buildOfflinePreparationDiagnostics({
           homeList,
@@ -538,6 +573,7 @@ export async function prewarmAssignedAppViews({
       });
     });
 
+    await revision.prepareCatalogs();
     await recordOfflinePreparationTelemetry({
       diagnostics: buildOfflinePreparationDiagnostics({
         homeList,
@@ -580,6 +616,13 @@ export async function prewarmAssignedAppViews({
       store,
     });
   }
+  const withdrawn=await revision.finish();
+  for(const id of revision.validatedReuseIds())onAppViewPrepared?.(id);
+  if(withdrawn.length&&!signal?.aborted){
+    // Exactly one ordinary pass, only affected views; this child cannot reuse or recurse again.
+    await prewarmAssignedAppViews({api:{...ordinaryApi,selectiveReuseEnabled:false},appViews,contractId,
+      onTelemetry,ownerKey,store,token,signal,trigger,recoveryOf,prepareAppViewIds:withdrawn,onAppViewPrepared});
+  }
 }
 
 async function prewarmOneAppView({
@@ -588,14 +631,16 @@ async function prewarmOneAppView({
   appView,
   contractId,
   loadEntityDefinition,
+  loadSourceRecords,
   ownerKey,
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
+  api: PreparationRevisionApi;
   appView: AppView;
   contractId: string;
   loadEntityDefinition: EntityDefinitionLoader;
+  loadSourceRecords: SourceRecordsLoader;
   signal?: AbortSignal;
   ownerKey: string;
   store: AppViewPrewarmStore;
@@ -638,9 +683,9 @@ async function prewarmOneAppView({
       const today = formatLocalDateInput(new Date());
       const monthDates = currentMonthDateKeys(new Date());
       const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
-        const workflow = await api.getAttendanceWorkflow(token, contractId, appView.id, {
-          date: today,
-        });
+        const seed = await api.getAttendanceWorkflow(token, contractId, appView.id, {date:today});
+        const {response:workflow} = await completeAttendanceDay({seed,ownerKey,contractId,appViewId:appView.id,isCurrent:()=>!signal?.aborted,
+          ...(api.getRevisionRead ? {readPage:(resource,expected)=>api.getRevisionRead!(token,contractId,resource,expected,{diagnosticOperation:"DAY_LOAD"})} : {})});
         const definition = await loadEntityDefinition(workflow.sourceEntityType.id);
 
         return { response: workflow, sourceDefinition: definition };
@@ -649,14 +694,7 @@ async function prewarmOneAppView({
       await measurePrewarmStage(telemetry, "sqliteWrite", () =>
         store.upsertEntityDefinition(contractId, response.sourceEntityType.id, sourceDefinition.entity, lastPreparedAt),
       );
-      const sourceRecords = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => refreshEntityRecordsCache({
-        api,
-        contractId,
-        entityTypeId: response.sourceEntityType.id,
-        ownerKey,
-        store,
-        token,
-      }));
+      const { result: sourceRecords } = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => loadSourceRecords(response.sourceEntityType.id));
       telemetry.sourceRecordsFetch = {
         ...telemetry.sourceRecordsFetch!,
         sourceRecordsCount: sourceRecords.pagination.total,
@@ -709,6 +747,7 @@ async function prewarmOneAppView({
       );
       await measurePrewarmStage(telemetry, "snapshot", () =>
         cacheAttendanceMonthSnapshots({
+          signal,
           api,
           appView,
           attendanceConfig,
@@ -754,20 +793,10 @@ async function prewarmOneAppView({
         status: "partial", sourceComplete: false, totalSubjects: 0, subjects: {},
         requestCount: 0, durationMs: 0, refreshedAt: lastPreparedAt,
       } });
-      let sourceRemoteTotal: number | undefined;
-      let sourceFetched = 0;
-      const sourceRecords = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => refreshEntityRecordsCache({
-        api,
-        contractId,
-        entityTypeId: response.sourceEntityType.id,
-        ownerKey,
-        store,
-        onDiagnostics: (diagnostics) => {
-          sourceRemoteTotal = diagnostics.remoteTotal ?? undefined;
-          sourceFetched = diagnostics.recordsFetched;
-        },
-        token,
-      }));
+      const sourceLoad = await measurePrewarmStage(telemetry, "sourceRecordsFetch", () => loadSourceRecords(response.sourceEntityType.id));
+      const sourceRecords = sourceLoad.result;
+      const sourceRemoteTotal = sourceLoad.diagnostics?.remoteTotal ?? undefined;
+      const sourceFetched = sourceLoad.diagnostics?.recordsFetched ?? 0;
       telemetry.sourceRecordsFetch = {
         ...telemetry.sourceRecordsFetch!,
         sourceRecordsCount: sourceRecords.pagination.total,
@@ -1352,8 +1381,10 @@ async function cacheAttendanceMonthSnapshots({
   response,
   store,
   token,
+  signal,
 }: {
-  api: Pick<OpcoApi, "getAttendanceWorkflow">;
+  signal?: AbortSignal;
+  api: Pick<OpcoApi, "getAttendanceWorkflow"> & Partial<Pick<OpcoApi,"getRevisionRead">>;
   appView: AppView;
   attendanceConfig: AttendanceWorkflowConfig;
   contractId: string;
@@ -1365,6 +1396,7 @@ async function cacheAttendanceMonthSnapshots({
   trigger?: OfflinePreparationTrigger;
 }) {
   try {
+    if(signal?.aborted)return;
     await cacheAttendanceRemoteSnapshot({
       appViewId: appView.id,
       config: attendanceConfig,
@@ -1381,7 +1413,10 @@ async function cacheAttendanceMonthSnapshots({
 
   await runWithConcurrency(remainingDates, ATTENDANCE_MONTH_PREWARM_CONCURRENCY, async (date) => {
     try {
-      const attendanceResponse = await api.getAttendanceWorkflow(token, contractId, appView.id, { date });
+      const seed = await api.getAttendanceWorkflow(token, contractId, appView.id, { date });
+      const {response:attendanceResponse} = await completeAttendanceDay({seed,ownerKey,contractId,appViewId:appView.id,isCurrent:()=>!signal?.aborted,
+        ...(api.getRevisionRead ? {readPage:(resource,expected)=>api.getRevisionRead!(token,contractId,resource,expected,{diagnosticOperation:"DAY_LOAD"})} : {})});
+      if(signal?.aborted)return;
 
       await cacheAttendanceRemoteSnapshot({
         appViewId: appView.id,

@@ -1,3 +1,4 @@
+import {isVerifiedAttendanceDay} from "../../../lib/attendance-day-pages";
 import { readAttendanceContextValue } from "../../../lib/attendance-context-values";
 import {workflowWriteMetadata} from "../../../lib/workflow-write-contract";
 import { getRelationTargetEntityTypeId, isRelationFieldMultiple } from "../../../lib/record-form";
@@ -202,8 +203,8 @@ export function hasSuccessfulAttendanceResult(results: AttendanceBatchResult[]) 
   ));
 }
 
-export function isAttendanceRemoteSnapshotComplete(response: Pick<AttendanceResponse, "latest" | "summary">, latestLimit = ATTENDANCE_LATEST_LIMIT) {
-  return response.summary.totalRegistered <= latestLimit && response.latest.length === response.summary.totalRegistered;
+export function isAttendanceRemoteSnapshotComplete(response: Pick<AttendanceResponse, "latest" | "summary" | "daySnapshot">, latestLimit = ATTENDANCE_LATEST_LIMIT) {
+  return response.latest.length === response.summary.totalRegistered && (isVerifiedAttendanceDay(response) || (!response.daySnapshot && response.summary.totalRegistered <= latestLimit));
 }
 
 export function mergeAttendanceLatestWithLocalOverlay(
@@ -221,6 +222,16 @@ export function mergeAttendanceLatestWithLocalOverlay(
   }
 
   return [...visibleBySubject.values()];
+}
+
+/** Missing and unsupported projections are not an explicit empty field. */
+export function attendanceLatestObservationIsBound(
+  item: AttendanceLatestItem,
+  projection: AttendanceResponse["observationProjection"],
+  configuredFieldId?: string,
+): item is AttendanceLatestItem & {observation: string | null} {
+  return Boolean(configuredFieldId && projection?.version === 1 && projection.fieldId === configuredFieldId &&
+    Object.prototype.hasOwnProperty.call(item, "observation") && (item.observation === null || typeof item.observation === "string"));
 }
 
 export function attendanceResponseToStateUpdateItems(
@@ -257,9 +268,12 @@ export function attendanceResponseToStateUpdateItems(
   }
 
   for (const item of response.latest) {
+    const contextExtras = attendanceLatestExtraValues(item.contextValues, response.contextFields ?? []);
+    const extraValues = attendanceLatestObservationIsBound(item, response.observationProjection, config.observationFieldId)
+      ? {...contextExtras, [config.observationFieldId!]: item.observation} : contextExtras;
     items.set(item.person.id, {
       current: {
-        extraValues: attendanceLatestExtraValues(item.contextValues, response.contextFields ?? []),
+        extraValues,
         recordId: item.attendanceRecordId,
         stateValues: [{
           fieldId: config.statusFieldId,

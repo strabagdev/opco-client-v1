@@ -52,7 +52,8 @@ export function resolveShellOperationalStatus(input: AppShellFeedbackInput & {
       : input.offlinePreparationDiagnosticWriteFailed ? "Diagnóstico de preparación sin guardar"
         : input.offlinePreparationRecoveryFailed ? "No se pudo recuperar la preparación offline"
           : input.isOfflinePreparationRunning ? "Preparando uso offline"
-            : input.offlinePreparationStatus === "failed" ? "Preparación offline incompleta"
+            : input.isOfflinePreparationChecking ? "Comprobando uso offline"
+              : input.offlinePreparationStatus === "failed" ? "Preparación offline incompleta"
               : input.offlinePreparationStatus === "running" ? "Preparación offline interrumpida"
                 : input.writeFeedback?.kind === "local-saved" ? "Guardado en este dispositivo"
                   : (input.experienceActivity?.activeRuns.length ?? 0) > 0

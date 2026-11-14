@@ -1,3 +1,5 @@
+import { revisionCanonical } from "@/lib/revision-receipts";
+import { createRecordsRevisionRead } from "@/lib/records-revision-read";
 import { recordStatusPaint } from "../../theme/operational-presentation";
 import { metrics, type ThemeColors } from "../../theme/tokens";
 import { colors } from "../../theme/paint";
@@ -68,6 +70,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
   const searchA11y = useFieldAccessibility("Buscar registros");
   const sharedOpening = useExperienceOpeningSession();
   const entityTypeId = appView.config.entityTypeId;
+  const recordsDefinitionKey = revisionCanonical(appView);
   const { api, connectivityStatus, definitionCache, ownerKey, recordsReconnectRefreshKey, recordsSyncSummary, refreshRecordsSyncSummary, selectedContractId, status, syncPendingRecords, token } =
     useSession();
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
@@ -336,10 +339,12 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           },
           refreshRemote: async () => {
             const onNetworkFallback = (error: unknown) => { if (isActive()) remoteFallbackError = error; };
+            const revision = await createRecordsRevisionRead({api,store:definitionCache,token,ownerKey,contractId:selectedContractId,appView:JSON.parse(recordsDefinitionKey),isCurrent:isActive});
+            const readApi=revision.api;
             const [definitionResult, recordsResult] = await Promise.all([
               getEntityDefinitionWithCache({
                 api: { getEntityDefinition: async (...args) => {
-                  try { const value = await api.getEntityDefinition(...args); assertRecordsReadActive(isActive); return value; }
+                  try { const value = await readApi.getEntityDefinition(...args); assertRecordsReadActive(isActive); return value; }
                   catch (error) { onNetworkFallback(error); throw error; }
                 } },
                 cache: { getEntityDefinition: definitionCache.getEntityDefinition,
@@ -350,7 +355,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
               }),
               debouncedSearch
                 ? loadRecordsWithOfflineCache({
-                    api,
+                    api:readApi,
                     contractId: selectedContractId,
                     entityTypeId,
                     ownerKey,
@@ -362,7 +367,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                     token,
                   })
                 : refreshEntityRecordsCache({
-                    api,
+                    api:readApi,
                     contractId: selectedContractId,
                     entityTypeId,
                     ownerKey,
@@ -373,6 +378,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
                     token,
                   }),
             ]);
+            await revision.finish();
             return { definitionResult, recordsResult };
           },
         });
@@ -447,6 +453,7 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
     api,
     appView.id,
     appView.name,
+    recordsDefinitionKey,
     debouncedSearch,
     definitionCache,
     entityTypeId,

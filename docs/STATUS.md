@@ -3828,3 +3828,111 @@ Gate final UX integral: la suite global del candidato aislado falla1699/1738,39c
 ## Cabecera: conexión y sincronización independientes — local, 11-11-2026
 
 [Contrato visual y límites](UX_UI_REDESIGN.md#conexión-y-sincronización-separadas--11-11-2026-local-sin-publicar). Dos estados visibles y una sola acción Diagnóstico; Online exige evidencia existente de Core en la época de conectividad actual. Preparación/lecturas no se presentan como envío. Cola vacía significa Sin pendientes, no ACK ni frescura. Sincronizado requiere feedback confirmado de la experiencia visible; estados no comprobados permanecen explícitos. Sin pulso repetitivo ni nuevos probes/timers. Sólo presentación, tokens y accesibilidad; motores/Core/API/SQLite/OPFS/outbox/namespace intactos. Evidencia, parche e inventario independientes: backups/connectivity-sync-presentation/2026-11-11/. No producción, commit, push ni deploy. Índices habituales, 402 exclusiones y demás pendientes preservados.
+
+
+## Preparación offline repetitiva: optimización local — 11-11-2026
+
+Lote Client independiente sobre `2e836c9`: handoff `/views` de un mismo evento lifecycle→Inicio,
+catálogo completo compartido dentro de cada pasada compatible, y estados visuales Comprobando /
+Preparando separados. Continúan la revalidación remota al regresar online, las invalidaciones y
+la recuperación publicada. Sin TTL ni modificaciones de Core, API, persistencia, outbox o envío.
+
+Se conservan las 402 exclusiones, índices habituales y demás pendientes. Sin commit/push/deploy.
+Pruebas focalizadas (202), typecheck, lint y build web; Chromium/OPFS con API sintética y SQLite
+con reapertura. Evidencia y delta reconstruible en `backups/offline-preparation-dedup/2026-11-11/`.
+No demuestra latencias productivas ni frescura continua sin señales. Safari/iPhone/native pendientes.
+La política de preparación global en foreground/reapertura no se elimina en este lote.
+
+
+## Revisión incremental — recibos Client en sombra, etapa 3 local 11-11-2026
+
+Implementación [independiente de recibos](REVISION_RECEIPTS_SHADOW.md), sobre las etapas Core
+1/2 locales. APIs negociadas nuevas y prueba durable de materialización existente; preparación
+automática y métodos ordinarios intactos. Sin activación de reutilización, commit, push, deploy
+o producción. No es un certificado global de experiencia ni de frescura offline. Evidencia,
+inventario/parche y límites: backups/offline-revision-receipts/2026-11-11/.
+
+
+## Revisión incremental — etapa 4 Client, integración local 11-11-2026
+
+[Recibos de preparación ordinaria](PREPARATION_REVISION_RECEIPTS.md): integración observacional,
+sin omitir descargas ni cambiar política automática. Composición durable de metadata/origen/fechas/
+current cuando sus contenidos están verificados; metadata-only y context-required permanecen explícitos.
+Incompatibilidad Attendance/Observación demostrada: se rechaza su acreditación, sin ampliar Core.
+NO-GO para activar reutilización. Lote/evidencia: backups/offline-revision-receipt-integration/2026-11-11/.
+Sin producción, commit/push/deploy; Core, índices habituales, 402 exclusiones y demás pendientes preservados.
+
+
+## 12-11-2026 — Observación en preparación Attendance (local)
+
+Se corrige la omisión de latest en Core mediante proyección aditiva versionada y vinculada
+al observationFieldId. Client conserva texto/null/vacío explícitos en el runtime compartido
+y sólo acredita recibos tras verificación local completa. items=[] por falta de búsqueda
+no significa día vacío. latest>10 sigue parcial; Core anterior sin proyección no se acredita.
+No se activa reutilización ni omisión, no cambia otro workflow ni el motor offline.
+Contrato, compatibilidad y límites: docs/ATTENDANCE_OBSERVATION_COVERAGE.md.
+
+
+## 12-11-2026 — Attendance: descarga diaria completa (local)
+
+[Contrato y límites](ATTENDANCE_DAY_COVERAGE.md): lista reciente legacy=10 conservada; snapshot
+optativo paginado v1 (hasta100 por página), revisiones comunes, conteo/IDs/campos verificados y
+persistencia sólo tras reunir el día completo. Los recibos mensuales incluyen todos los sellos;
+HTTP409/interrupción/scope retirado conservan la copia previa y no acreditan lo incompleto.
+Sin omisión/reutilización, cambios de escritores o de motores offline. Core anterior mantiene
+la limitación legacy explícita; requiere Core nuevo antes de Client para ampliar cobertura.
+
+
+## 12-11-2026 — Recibos de contextos y catálogos (local)
+
+Se inventarían opciones SELECT y catálogos RELATION directos de RECORDS, Attendance y
+STATE_UPDATE. Descargas completas compartidas por ejecución, páginas vinculadas a revisión,
+verificación local transaccional y recibos separados versionados; vacío confirmado distinto
+de ausencia/incompletitud. Pendientes/conflictos se conservan e impiden acreditar su colección.
+No certifica registros de todas las combinaciones de contexto ni colecciones transitivas;
+no activa reutilización/omisión ni cambia disparadores, comandos o sincronización. Core intacto.
+Contrato, compatibilidad y límites: [CATALOG_REVISION_RECEIPTS.md](CATALOG_REVISION_RECEIPTS.md).
+
+
+## 12-11-2026 — Datos RECORDS vinculados a revisiones (local)
+
+[Contrato y límites](RECORDS_REVISION_COVERAGE.md): el refresco completo existente al abrir
+RECORDS sin búsqueda obtiene una prueba durable sólo tras descargar/persistir/verificar todas
+las páginas con revisión consistente. Búsquedas/páginas/ordenamientos específicos siguen parciales;
+Inicio conserva metadata y no descarga colecciones nuevas. Cero confirmado, parcial y no preparado
+se distinguen; datos anteriores, pendientes y conflictos se conservan. Namespace de recibos
+aditivo, catálogos separados y reutilización/omisión deshabilitadas. Core y motores offline intactos.
+
+
+## 12-11-2026 — PANEL y REPORT/MATRIX: consultas vinculadas (local)
+
+[Contrato](CONSULTATION_REVISION_COVERAGE.md): recibos de ventanas exactas, nunca por metadata.
+PANEL sólo completa un dataset al verificar todas sus páginas bajo la misma revisión; TABLE/MATRIX
+acreditan su consulta completa sin modificar cálculos/orden. REPORT añade guard transaccional
+opcional y lectura sólo SQLite con offline conocido. Copias anteriores, R1/R2 PANEL y pendientes
+se conservan. Sin preparación automática nueva, omisión/reutilización, cambios Core o motores sync.
+
+
+## 12-11-2026 — Primera selección de contrato
+
+Se elimina la hidratación duplicada que publicaba null tardío tras una elección explícita.
+Login/loadContext/restauración conservan la lectura de preferencia. Contrato y límites en
+[CONTRACT_SELECTION_HYDRATION.md](CONTRACT_SELECTION_HYDRATION.md). Sin producción ni publicación.
+
+
+## 13-11-2026 — Client: negociación Core V2 en sombra, local
+
+[Contrato y límites](REVISION_NEGOTIATION_CLIENT.md): validación de nonce, petición, scope, versiones,
+revisión/epoch/definiciones y respuestas retiradas. V1-only explícito conserva descargas sin acreditar
+V2. Un observador vincula recibos verificados al handle/runtime actual; reapertura o restauración
+requiere descarga ordinaria antes de nueva acreditación. reuse=false/skipDownloads=false; sin cambios
+Core, motores SQLite/OPFS, outbox o sincronización. Sin producción, commit, push ni deploy.
+
+
+## 13-11-2026 — Gate selectivo local de Attendance
+
+[Contrato y límites](SELECTIVE_OFFLINE_REUSE.md): policy2 optativa Core/Client, apagada por defecto;
+recibo mensual íntegro del mismo handle/sesión y consumo dentro de su transacción de inspección.
+Rechazo conserva descarga normal; retirada final provoca una sola pasada ordinaria localizada.
+Catálogos y otros workflows continúan descargándose. Sin nueva migración, motores offline,
+comandos o sincronización; sin producción, commit/push/deploy.

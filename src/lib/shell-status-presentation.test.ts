@@ -39,6 +39,11 @@ const baseInput = (overrides: Partial<Parameters<typeof resolveShellOperationalS
 const feedback = (kind: "local-saved" | "server-confirmed"): AppShellFeedbackInput["writeFeedback"] => ({
   kind, id: "feedback", appViewId: "fixture", appViewTitle: "Fixture", scopeKey: "synthetic-scope", recordedAt: epoch,
 });
+it("names a local coverage check without claiming a download or synchronization",()=>{
+ const status=resolveShellOperationalStatus(baseInput({isOfflinePreparationChecking:true,offlinePreparationStatus:"completed"}));
+ expect(status.notice).toBe("Comprobando uso offline");expect(status.sync.label).toBe("Sin pendientes");
+ expect(resolveShellOperationalStatus(baseInput({isOfflinePreparationRunning:true})).notice).toBe("Preparando uso offline");
+});
 describe("independent connection and pending-write presentation", () => {
   it("keeps a Core response valid when an ACK advances diagnostic updatedAt", () => {
     const connectionSince = coreConnectionSince({

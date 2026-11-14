@@ -19,7 +19,7 @@ export function useOfflinePreparationRecovery(input: Input) {
     let mounted = true;
     const current = () => mounted && latest.current.store === store && latest.current.ownerKey === ownerKey &&
       latest.current.contractId === contractId && latest.current.token === token;
-    latest.current.onChange({ active: false, diagnostics: null });
+    latest.current.onChange({ active: false, phase: "idle", diagnostics: null });
     if (!ownerKey || !contractId || !token) return () => { mounted = false; };
     const unsubscribe = subscribeOfflinePreparationExecution({ store, ownerKey, contractId, token,
       onChange: value => { if (current()) latest.current.onChange(value); } });

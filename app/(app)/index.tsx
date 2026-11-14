@@ -23,7 +23,7 @@ import { buildStateUpdateCoverageScope, deriveOfflineAvailability, OfflineAvaila
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
 import { createHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
 import { prewarmAssignedAppViewsOnce } from "@/lib/app-view-prewarm";
-import { loadAppViewsWithCache } from "@/lib/app-navigation-cache";
+import { appViewsAuthorizationScope, loadAppViewsWithCache } from "@/lib/app-navigation-cache";
 import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, APP_SHELL_WIDE_BREAKPOINT, getHomeGridLayout, HOME_DESKTOP_CARD_GAP, HOME_MAX_WIDTH } from "@/lib/app-shell-layout";
 import { selectContractId } from "@/lib/contract-selection";
 import { subscribeLocalDatabaseCacheChanges } from "@/lib/local-db";
@@ -35,10 +35,12 @@ export default function HomeScreen() {
   const {
     api,
     context,
+    me,
     definitionCache,
     ownerKey,
     recordOfflinePreparationDiagnostics,
     recordsReconnectRefreshKey,
+    recordsReconnectReadEvent,
     selectedContractId,
     setSelectedContractId,
     status,
@@ -62,6 +64,8 @@ export default function HomeScreen() {
   const { category } = useLocalSearchParams();
   const publishCatalog = usePublishDesktopCatalog();
   const viewsScope = ownerKey && selectedContractId ? ownerKey + ":" + selectedContractId : null;
+  const authorizationScope = appViewsAuthorizationScope(me, context);
+  const previousViewsLoad = useRef<{ scope: string | null; token: string | null; api: typeof api; key: number; retry: number; authorizationScope: string | null } | null>(null);
   const hasCompatibleViews = Boolean(viewsScope && loadedViewsScope === viewsScope);
   useHomeReadActivity({ isLoading: isLoadingViews || (!context && status !== "offline"), hasContent: hasCompatibleViews, error });
   useEffect(() => {
@@ -197,6 +201,13 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let isMounted = true;
+    const previous = previousViewsLoad.current;
+    previousViewsLoad.current = { scope: viewsScope, token, api, key: recordsReconnectRefreshKey, retry: viewsRetryVersion, authorizationScope };
+    // Only this refresh notification may consume its lifecycle result. Mounts,
+    // navigation, retry and later manual syncs still perform their own read.
+    const readEvent = previous && previous.scope === viewsScope && previous.token === token && previous.api === api &&
+      previous.key !== recordsReconnectRefreshKey && previous.retry === viewsRetryVersion
+      ? recordsReconnectReadEvent : null;
 
     async function loadViews() {
       if (!token || !selectedContractId || !ownerKey) {
@@ -229,6 +240,8 @@ export default function HomeScreen() {
             if (isMounted) setCacheNotice(result.status === "error" ? { scope: viewsScope, message: "Las experiencias están disponibles ahora, pero no se pudo guardar la lista para abrir Inicio sin conexión. Reintenta con conexión." } : null);
           },
           token,
+          readEvent,
+          authorizationScope,
         });
 
         if (isMounted) {
@@ -250,6 +263,7 @@ export default function HomeScreen() {
             token,
             trigger: viewsRetryVersion > 0 ? "manual-retry" : "home",
             reuseCompleted: viewsRetryVersion === 0,
+            authorizationScope,
           }).finally(() => {
             if (isMounted) {
               void availabilityRefreshRef.current?.request();
@@ -272,7 +286,7 @@ export default function HomeScreen() {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope, recordsReconnectRefreshKey]);
+  }, [api, authorizationScope, definitionCache, ownerKey, recordOfflinePreparationDiagnostics, refreshOfflineAvailability, selectedContractId, token, viewsRetryVersion, viewsScope, recordsReconnectRefreshKey, recordsReconnectReadEvent]);
 
   useEffect(() => {
     availabilityViewsRef.current = views;

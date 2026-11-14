@@ -954,3 +954,25 @@ huellas son observabilidad, no autorización. Compatibilidad: snapshots anterior
 su lectura exacta anterior; runtimes anteriores ignoran el recibo y no reciben esta corrección. No
 hay cambio de formato de intenciones, esquema ni namespace. Evidencia/inventario:
 backups/panel-revision-reconciliation/2026-11-02/. Core/402 exclusiones/pendientes preservados.
+
+
+## Recibos persistidos de revisión — etapa 3 local, 11-11-2026
+
+Vía [optativa y observacional](REVISION_RECEIPTS_SHADOW.md) sobre app_metadata/SQLite singleton.
+No hay migración ni namespace nuevo, cola adicional, borrado o escritura sobre datos/outbox.
+Se acreditan artefactos exactos sólo después de descarga verificada y lectura local transaccional;
+páginas distintas, overlays, 409, scope obsoleto, error de storage o falta de cobertura no publican
+prueba. Los recibos sobreviven reapertura, pero offline no acreditan frescura. Ningún flujo usa
+recibos para omitir descargas y no se alteran los disparadores de preparación.
+
+
+## Etapa 4: composición de recibos sin omisión, 11-11-2026
+
+[Integración y cobertura declarada](PREPARATION_REVISION_RECEIPTS.md) en el preparador existente.
+Sólo metadata propia en app_metadata, sin esquema/namespace nuevos ni cambios en intenciones/outbox.
+La misma pasada descarga y persiste; el recibo comprueba contenido/metadata/marcadores dentro del
+coordinador. Scoped por owner/usuario/app/contrato/autorización/AppView; fechas y cobertura explícitas.
+Reapertura exige inspección de integridad; offline no certifica frescura. Una descarga interrumpida,
+409, marcador parcial, permiso cambiado o cuerpo mutado no recibe acreditación completa.
+Recibo metadata-only no prepara colecciones/reportes, y el mes sin Observación no prueba el mes
+con ese campo configurado. Los límites y propuesta de incompatibilidad Core están documentados.

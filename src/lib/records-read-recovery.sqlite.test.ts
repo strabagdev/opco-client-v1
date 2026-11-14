@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import ts from "typescript";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
+import { createRecordsRevisionRead } from "./records-revision-read";
 import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
 import { RecordsLocalReadError, recordsLocalCoverage, recordsLocalCoverageMessage, loadRecordsCacheFirst, selectPresentableLocalRecords, shouldStartRecordsOpeningMeasurement, activateRecordsOpeningHistoryOwner, hydrateRecordsOpeningHistory, recordRecordsOpeningMeasurement } from "../renderers/records/records-opening";
 import { getEntityDefinitionWithCache } from "./definition-cache";
@@ -111,10 +112,10 @@ function fixture(){
  getEntityRecords:vi.fn(async(_token:string,_contract:string,_entity:string,query:{page?:number;pageSize?:number;search?:string}={})=>{events.push({endpoint:"records",online});if(!online)throw new OpcoNetworkError("synthetic offline records");const page=query.page??1,pageSize=query.pageSize??100;const filtered=query.search?remoteRecords.filter(r=>r.displayName.toLowerCase().includes(query.search!.toLowerCase())):remoteRecords;return{records:filtered.slice((page-1)*pageSize,page*pageSize),pagination:{page,pageSize,total:filtered.length,totalPages:Math.max(1,Math.ceil(filtered.length/pageSize))}};}),getAttendanceWorkflow:vi.fn(),getStateUpdateWorkflow:vi.fn()};
  const model:Record<string,unknown>={error:null,isLoading:true,isRefreshing:false,isLoadingMore:false,localCoverage:null,readErrorCode:null,definition:null,records:[],listItems:[],pagination:null,loadedScope:null};
  const dataScopeKey=ownerKey+":"+contractId+":"+entityTypeId+':""';
- const ctx:Record<string,unknown>={api,appView:view,entityTypeId,token:"synthetic",selectedContractId:contractId,ownerKey,definitionCache:store,dataScopeKey,
+ const ctx:Record<string,unknown>={recordsDefinitionKey:JSON.stringify(view),api,appView:view,entityTypeId,token:"synthetic",selectedContractId:contractId,ownerKey,definitionCache:store,dataScopeKey,
  sharedOpening:null,debouncedSearch:"",loadedScopeRef:{current:null},measuredOpeningScopeRef:{current:dataScopeKey+":"+view.id},
  readGenerationRef:{current:0},loadMoreFlightRef:{current:null},
- PAGE_SIZE:25,loadRecordsCacheFirst,selectPresentableLocalRecords,shouldStartRecordsOpeningMeasurement,activateRecordsOpeningHistoryOwner,hydrateRecordsOpeningHistory,recordRecordsOpeningMeasurement,
+ createRecordsRevisionRead,PAGE_SIZE:25,loadRecordsCacheFirst,selectPresentableLocalRecords,shouldStartRecordsOpeningMeasurement,activateRecordsOpeningHistoryOwner,hydrateRecordsOpeningHistory,recordRecordsOpeningMeasurement,
  RecordsLocalReadError, recordsLocalCoverage, recordsLocalCoverageMessage, assertRecordsReadActive, RecordsReadCancelledError, getRecordsReadErrorCode,
  getEntityDefinitionWithCache,loadRecordsWithOfflineCache,refreshEntityRecordsCache,buildRecordListItem,classifySyncTelemetryError,getRecordsListErrorMessage,
  monotonicNow:()=>performance.now(),elapsedMs:(start:number,end=performance.now())=>Math.max(0,Math.round(end-start)),createOpeningMeasurementId:()=>"test-read-"+(++measurementSequence),

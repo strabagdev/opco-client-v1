@@ -1,3 +1,5 @@
+import {createManifestNegotiationRequest,manifestNegotiationPath,validateManifestNegotiation,recordNegotiationDiagnostic} from "./revision-negotiation";
+import { revisionReadPath, assertRevisionRequestBinding, assertRevisionResponseShape, validateRevisionDownload, validateRevisionManifest, RevisionReceiptError, type RevisionManifest, type RevisionResource, type RevisionDownload } from "./revision-receipts";
 import {workflowWriteMetadata, type WorkflowWriteCommand, type WorkflowWriteContract} from "./workflow-write-contract";
 import {verifyPresentationDefinition,type SubjectPresentationConfig,type SubjectPresentationDefinition,type SubjectPresentationProjection} from "./subject-presentation";
 import { verifyWorkflowSearchComparison, SearchComparisonError, type WorkflowSearchComparison } from "./search-comparison";
@@ -630,6 +632,7 @@ export type AttendanceItem = {
 
 export type AttendanceLatestItem = {
   attendanceRecordId: string;
+  observation?: string | null;
   contextValues?: AttendanceContextValues;
   person: {
     presentation?:SubjectPresentationProjection;
@@ -642,6 +645,9 @@ export type AttendanceLatestItem = {
 };
 
 export type AttendanceResponse = {
+  daySnapshotCapabilities?: {version:1;maxPageSize:number};
+  daySnapshot?: {version:1;page:number;pageSize:number;total:number;totalPages:number;hasMore:boolean};
+  observationProjection?: {version: 1; fieldId: string};
   workflowWriteContract?: WorkflowWriteContract | null;
   searchFieldId?: string;
   codeSearchField?: WorkflowCodeSearchField;
@@ -1159,6 +1165,7 @@ export class OpcoNetworkError extends Error {
 type FetchLike = typeof fetch;
 
 type ApiClientOptions = {
+  selectiveReuse?: boolean;
   apiUrl?: string;
   fetcher?: FetchLike;
   onSessionInvalid?: (diagnostics: OpcoSessionTerminationDiagnostics) => void;
@@ -1386,9 +1393,9 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     }
   }
 
-  async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}) {
+  async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}, parser: OpcoResponseParser<T> = parseApiEnvelope<T>) {
     try {
-      return await request<T>(path, withAuthHeaders(init, token));
+      return await request<T>(path, withAuthHeaders(init, token), parser);
     } catch (error) {
       if (!shouldRefresh(error)) {
         await clearInvalidSession(error);
@@ -1401,7 +1408,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     });
 
     try {
-      return await request<T>(path, withAuthHeaders(init, refreshed.accessToken));
+      return await request<T>(path, withAuthHeaders(init, refreshed.accessToken), parser);
     } catch (error) {
       await clearInvalidSession(error);
       throw error;
@@ -1503,6 +1510,53 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   }
 
   return {
+    selectiveReuseEnabled: options.selectiveReuse ?? config.offlineReusePolicy,
+    async getOfflineRevisionManifest(token:string,contractId:string,input:{ownerKey?:string;expected?:RevisionManifest;isCurrent?:()=>boolean;date?:string;month?:string;appViewIds?:string[];selectiveReuse?:boolean}={}) {
+      const current=input.isCurrent??(()=>true);
+      const legacyManifest=(raw:unknown)=>{
+        const manifest=validateRevisionManifest(raw);
+        if(!current())throw new RevisionReceiptError("REVISION_SCOPE_RETIRED");
+        if(manifest.scope.contractId!==contractId||input.ownerKey&&input.ownerKey!==`${manifest.scope.organizationId}:${manifest.scope.userId}`||input.expected&&(input.expected.scope.applicationId!==manifest.scope.applicationId||input.expected.scope.authorizationFingerprint!==manifest.scope.authorizationFingerprint))throw new RevisionReceiptError("REVISION_SCOPE_MISMATCH");
+        return manifest;
+      };
+      const query=await createManifestNegotiationRequest({...input,selectiveReuse:input.selectiveReuse===true && (options.selectiveReuse ?? config.offlineReusePolicy)});
+      try {
+        const raw=await authenticatedRequest<unknown>(manifestNegotiationPath(contractId,query),token);
+        // Some historical servers ignore query parameters. This is v1 only, never a v2 attestation.
+        if((raw as {version?:unknown})?.version===1){
+          if(!current())throw new RevisionReceiptError("REVISION_SCOPE_RETIRED");
+          recordNegotiationDiagnostic("transport","REVISION_NEGOTIATION_V1_ONLY");return legacyManifest(raw);
+        }
+        return await validateManifestNegotiation(raw,query,{contractId,ownerKey:input.ownerKey,...(input.expected?{applicationId:input.expected.scope.applicationId,authorizationFingerprint:input.expected.scope.authorizationFingerprint}:{})},token,current);
+      }catch(error){
+        if(!current())throw new RevisionReceiptError("REVISION_SCOPE_RETIRED");
+        const reason=error&&typeof error==="object"&&"code"in error&&typeof error.code==="string"?error.code:"REVISION_NEGOTIATION_UNAVAILABLE";
+        recordNegotiationDiagnostic("transport",reason);
+        // Only explicit unsupported-v2 errors negotiate legacy; malformed/retired/denied v2 never does.
+        if(error instanceof OpcoApiError&&error.status===400&&["INVALID_OFFLINE_MANIFEST_QUERY","INVALID_OFFLINE_MANIFEST_VERSION"].includes(error.code)){
+          const params=new URLSearchParams({version:"1"});if(input.date)params.set("date",input.date);if(input.month)params.set("month",input.month);for(const id of query.appViewIds)params.append("appViewId",id);
+          const legacy=legacyManifest(await authenticatedRequest<unknown>(`/api/v1/contracts/${encodeURIComponent(contractId)}/offline/manifest?${params}`,token));
+          if(!current())throw new RevisionReceiptError("REVISION_SCOPE_RETIRED");
+          recordNegotiationDiagnostic("transport","REVISION_NEGOTIATION_V1_ONLY");return legacy;
+        }
+        throw error;
+      }
+    },
+    async getRevisionRead(token:string,contractId:string,resource:RevisionResource,expectedReadRevision?:string,diagnostics:Pick<OpcoRequestInit,"diagnosticOperation"|"diagnosticSyncRunId">={}):Promise<RevisionDownload> {
+      const raw=await authenticatedRequest<unknown>(revisionReadPath(contractId,resource,expectedReadRevision),token,diagnostics,(body,status,id)=>{
+        parseApiEnvelope<unknown>(body,status,id);return body;
+      });
+      const verified=await validateRevisionDownload(raw);await assertRevisionRequestBinding(contractId,resource,verified);const value=verified.data;assertRevisionResponseShape(resource,value);
+      if(resource.kind==="state-update"&&(resource.query?.currentBatchVersion||resource.query?.subjectRecordIds)){
+        const raw=value as StateUpdateRawResponse,ids=resource.query.subjectRecordIds;const capability={version:1 as const,maxSubjects:raw.currentBatchCapabilities?.maxSubjects??0,configurationFingerprint:String(resource.query.currentBatchFingerprint??"")};
+        verifyRawCurrentBatch(raw,Array.isArray(ids)?ids:ids?[ids]:[],capability,contractId,resource.appViewId!);
+      }
+      const normalized=resource.kind==="records"?normalizeEntityRecordsResponse(value as EntityRecordsResponse)
+        :resource.kind==="record"?normalizeEntityRecordResponse(value as EntityRecordResponse)
+        :resource.kind==="attendance"?sanitizeSubjectPresentationResponse(normalizeAttendanceResponse(value as AttendanceResponse))
+        :resource.kind==="state-update"?sanitizeSubjectPresentationResponse(normalizeStateUpdateResponse(value as StateUpdateRawResponse)):value;
+      return {...verified,normalized,resource};
+    },
     refreshSession,
     login(email: string, password: string, options: { preferredOrganizationId?: string | null } = {}) {
       return request<LoginResult>("/api/v1/auth/login", {
@@ -2507,7 +2561,7 @@ export function parseServerTimingHeader(value: string | null | undefined): OpcoS
     .filter((metric): metric is OpcoServerTimingMetric => Boolean(metric));
 }
 
-function attendanceDiagnosticOperation(query: AttendanceWorkflowQuery): OpcoDiagnosticRequestOperation {
+export function attendanceDiagnosticOperation(query: AttendanceWorkflowQuery): OpcoDiagnosticRequestOperation {
   if (query.personRecordId?.trim()) {
     return "PERSON_LOAD";
   }
@@ -2519,7 +2573,7 @@ function attendanceDiagnosticOperation(query: AttendanceWorkflowQuery): OpcoDiag
   return "DAY_LOAD";
 }
 
-function stateUpdateReadDiagnosticOperation(query: StateUpdateWorkflowQuery): OpcoDiagnosticRequestOperation {
+export function stateUpdateReadDiagnosticOperation(query: StateUpdateWorkflowQuery): OpcoDiagnosticRequestOperation {
   if (query.search?.trim()) {
     return "SEARCH";
   }
