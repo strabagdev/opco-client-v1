@@ -339,7 +339,11 @@ export function RecordsRenderer({ appView }: AppViewRendererProps<RecordsAppView
           },
           refreshRemote: async () => {
             const onNetworkFallback = (error: unknown) => { if (isActive()) remoteFallbackError = error; };
-            const revision = await createRecordsRevisionRead({api,store:definitionCache,token,ownerKey,contractId:selectedContractId,appView:JSON.parse(recordsDefinitionKey),isCurrent:isActive});
+            const revision = await createRecordsRevisionRead({api,store:definitionCache,token,ownerKey,contractId:selectedContractId,appView:JSON.parse(recordsDefinitionKey),query:{search:debouncedSearch,page:1,pageSize:PAGE_SIZE},isCurrent:isActive});
+            if(revision.reused){
+              currentCoverage="complete";
+              return {definitionResult:{definition:revision.reused.definition,source:"cache" as const,syncedAt:revision.reused.verifiedAt},recordsResult:revision.reused.records};
+            }
             const readApi=revision.api;
             const [definitionResult, recordsResult] = await Promise.all([
               getEntityDefinitionWithCache({

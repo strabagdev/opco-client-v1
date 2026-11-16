@@ -1,12 +1,15 @@
+import {canConsumeGenericReceipt} from "./revision-negotiation";
+import {recordSelectiveReuseDiagnostic} from "./selective-reuse";
 import type { AppView, OpcoApi, PanelResponse, ReportResponse, PanelQuery, ReportQuery } from "./opco-api";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
 import type { ConsultationContext } from "./consultation-revision-storage";
 import { consultationPlan, consultationQuery, type ConsultationRequest } from "./consultation-revision-contract";
 import { assertRevisionMatches, assertRevisionScope, revisionCanonical, revisionHash, validateRevisionDownload, RevisionReceiptError, type RevisionDownload, type RevisionResource } from "./revision-receipts";
-type Api=Partial<Pick<OpcoApi,"getPanel"|"getReport"|"getAppViews"|"getRevisionRead"|"getOfflineRevisionManifest">>;
+type Api=Partial<Pick<OpcoApi,"getPanel"|"getReport"|"getAppViews"|"getRevisionRead"|"getOfflineRevisionManifest"|"genericReuseEnabled">>;
+type VerifiedConsultation={response:PanelResponse|ReportResponse;appView:AppView;verifiedAt:string};
 const generations=new WeakMap<object,Map<string,object>>();
 const proof=(v:unknown,code:string)=>{if(!v)throw new RevisionReceiptError(code);};
-export async function createConsultationRevisionRead(input:{api:Api;store:Partial<RevisionReceiptStore>&{getOfflinePreparationCoordinatorKey?():object};appView?:AppView;appViewId?:string;kind:"panel"|"report";query:PanelQuery&ReportQuery;snapshotDatasetId?:string;ownerKey:string;contractId:string;token:string;isCurrent():boolean}) {
+export async function createConsultationRevisionRead(input:{api:Api;store:Partial<RevisionReceiptStore>&{getOfflinePreparationCoordinatorKey?():object};appView?:AppView;appViewId?:string;kind:"panel"|"report";query:PanelQuery&ReportQuery;snapshotDatasetId?:string;ownerKey:string;contractId:string;token:string;isCurrent():boolean}):Promise<{api:Api;assertActive():void;reused?:VerifiedConsultation;finish():Promise<void>}> {
  const rawRequest:ConsultationRequest={appView:input.appView!,resource:{kind:input.kind,appViewId:input.appView?.id??input.appViewId,query:consultationQuery(input.kind,input.query)},snapshotDatasetId:input.snapshotDatasetId};
  const identity=input.store.getOfflinePreparationCoordinatorKey?.()??input.store,scopeKey=revisionCanonical({owner:input.ownerKey,contract:input.contractId,kind:input.kind,view:input.appView?.id??input.appViewId,query:rawRequest.resource.query,snapshot:input.snapshotDatasetId});
  let map=generations.get(identity);if(!map){map=new Map();generations.set(identity,map);}const generation={};map.set(scopeKey,generation);
@@ -22,6 +25,20 @@ export async function createConsultationRevisionRead(input:{api:Api;store:Partia
   const effective=(assignment.normalized as {views:AppView[]}).views.find(v=>v.id===input.appView!.id);proof(effective?.type===input.appView.type,"CONSULTATION_ASSIGNMENTS_CHANGED");
   if(input.kind==="report")proof(revisionCanonical(effective)===revisionCanonical(input.appView),"CONSULTATION_CONFIGURATION_CHANGED");
   request={...rawRequest,appView:effective!};context={scope,manifest,sessionId:crypto.randomUUID(),request,isCurrent:current};await input.store.beginConsultationRevision(context);
+  if(input.api.genericReuseEnabled&&input.store.inspectConsultationRevision){
+   const consume=async(m:typeof manifest)=>{
+    let accepted:VerifiedConsultation|undefined;
+    const observation=await input.store.inspectConsultationRevision!({scope,manifest:m,request,isCurrent:current,
+     onVerified:async(receipt,storage,response)=>{if(await canConsumeGenericReceipt({manifest:m,receipt,appViewId:request.appView.id,kind:"exact-query-window",storage,isCurrent:current}))accepted={response,appView:request.appView,verifiedAt:receipt.verifiedAt};}});
+    // A whole dataset may remain partial; only this verified exact window is consumed.
+    return observation.status==="match_shadow"&&observation.windowPrepared&&current()?accepted:undefined;
+   };
+   if(await consume(manifest)){
+    const last=await input.api.getOfflineRevisionManifest(input.token,input.contractId,{ownerKey:input.ownerKey,isCurrent:current,expected:manifest});assertActive();
+    const reused=await consume(last);if(reused){recordSelectiveReuseDiagnostic("CONSULTATION_REUSED",true);return{api:input.api,assertActive,reused,async finish(){}};}
+   }
+  }
+
  }catch(error){await status(error instanceof RevisionReceiptError?error.code:"CONSULTATION_REVISION_UNAVAILABLE");if(error&&typeof error==="object"&&"status"in error&&[401,403].includes(Number(error.status)))throw error;if(error instanceof RevisionReceiptError&&["REVISION_SCOPE_RETIRED","REVISION_SCOPE_MISMATCH","CONSULTATION_ASSIGNMENTS_CHANGED","CONSULTATION_CONFIGURATION_CHANGED"].includes(error.code))throw error;return fallback;}
  const api:Api={...input.api,getAppViews:async(_token,_contract)=>{proof(_contract===input.contractId,"REVISION_SCOPE_MISMATCH");return{views:(assignment.normalized as {views:AppView[]}).views};}};
  const read=async(diagnostics?:{diagnosticRequestId:string})=>{

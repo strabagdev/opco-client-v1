@@ -1,4 +1,4 @@
-type Diagnostic={code:"NORMAL_DOWNLOAD"|"ATTENDANCE_REUSED"|"REUSE_WITHDRAWN";reuse:boolean;skipDownloads:boolean};
+type Diagnostic={code:"NORMAL_DOWNLOAD"|"ATTENDANCE_REUSED"|"REUSE_WITHDRAWN"|"PREPARATION_REUSED"|"CATALOG_REUSED"|"RECORDS_REUSED"|"CONSULTATION_REUSED";reuse:boolean;skipDownloads:boolean};
 const history:Diagnostic[]=[];
 export function recordSelectiveReuseDiagnostic(code:Diagnostic["code"],reused=false){
  history.push({code,reuse:reused,skipDownloads:reused});if(history.length>50)history.shift();

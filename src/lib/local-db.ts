@@ -250,7 +250,7 @@ export type CachedPanelSnapshot = {
 
 export function getLocalDatabase(): LocalDatabase {
   return {
-    ...createRevisionReceiptStorage(getDatabase,{panel:panelSnapshotQueryKey,report:reportSnapshotQueryKey,attendanceDay:attendanceDaySnapshotHydrationKey,stateSnapshot:stateUpdateSnapshotCoverageKey,stateCurrent:stateUpdateCurrentCoverageKey}),
+    ...createRevisionReceiptStorage(getDatabase,{panel:panelSnapshotQueryKey,report:reportSnapshotQueryKey,attendanceDay:attendanceDaySnapshotHydrationKey,stateSnapshot:stateUpdateSnapshotCoverageKey,stateCurrent:stateUpdateCurrentCoverageKey},listCachedRecordsFromDatabase),
     clearNavigationCache,
     clearRecordsOpeningHistory,
     clearOrphanedFailedRecordNotice,
@@ -1846,7 +1846,12 @@ async function reconcileRemoteRecordsSnapshot({
   } satisfies RecordsReconcileDiagnostics;
 }
 
-async function listCachedRecords({
+async function listCachedRecords(input:Parameters<typeof listCachedRecordsFromDatabase>[1]) {
+  return listCachedRecordsFromDatabase(await getDatabase(),input);
+}
+
+/** Same query/projection, also usable by the receipt inspector under its existing transaction. */
+async function listCachedRecordsFromDatabase(db:SQLite.SQLiteDatabase,{
   contractId,
   direction,
   entityTypeId,
@@ -1875,7 +1880,6 @@ async function listCachedRecords({
   workflowSearchFieldId?: string;
   sort?: `field:${string}` | `fieldId:${string}` | "displayName" | "updatedAt";
 }) {
-  const db = await getDatabase();
   const rows = await db.getAllAsync<EntityRecordRow>(
     `
       SELECT *

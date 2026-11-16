@@ -1166,6 +1166,7 @@ type FetchLike = typeof fetch;
 
 type ApiClientOptions = {
   selectiveReuse?: boolean;
+  genericReuse?: boolean;
   apiUrl?: string;
   fetcher?: FetchLike;
   onSessionInvalid?: (diagnostics: OpcoSessionTerminationDiagnostics) => void;
@@ -1511,7 +1512,8 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
   return {
     selectiveReuseEnabled: options.selectiveReuse ?? config.offlineReusePolicy,
-    async getOfflineRevisionManifest(token:string,contractId:string,input:{ownerKey?:string;expected?:RevisionManifest;isCurrent?:()=>boolean;date?:string;month?:string;appViewIds?:string[];selectiveReuse?:boolean}={}) {
+    genericReuseEnabled: options.genericReuse ?? config.offlineGenericReusePolicy,
+    async getOfflineRevisionManifest(token:string,contractId:string,input:{ownerKey?:string;expected?:RevisionManifest;isCurrent?:()=>boolean;date?:string;month?:string;appViewIds?:string[];selectiveReuse?:boolean;genericReuse?:boolean}={}):Promise<RevisionManifest> {
       const current=input.isCurrent??(()=>true);
       const legacyManifest=(raw:unknown)=>{
         const manifest=validateRevisionManifest(raw);
@@ -1519,13 +1521,18 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         if(manifest.scope.contractId!==contractId||input.ownerKey&&input.ownerKey!==`${manifest.scope.organizationId}:${manifest.scope.userId}`||input.expected&&(input.expected.scope.applicationId!==manifest.scope.applicationId||input.expected.scope.authorizationFingerprint!==manifest.scope.authorizationFingerprint))throw new RevisionReceiptError("REVISION_SCOPE_MISMATCH");
         return manifest;
       };
-      const query=await createManifestNegotiationRequest({...input,selectiveReuse:input.selectiveReuse===true && (options.selectiveReuse ?? config.offlineReusePolicy)});
+      const query=await createManifestNegotiationRequest({...input,selectiveReuse:input.selectiveReuse===true && (options.selectiveReuse ?? config.offlineReusePolicy),genericReuse:(input.genericReuse??true)&&(options.genericReuse??config.offlineGenericReusePolicy)});
       try {
         const raw=await authenticatedRequest<unknown>(manifestNegotiationPath(contractId,query),token);
         // Some historical servers ignore query parameters. This is v1 only, never a v2 attestation.
         if((raw as {version?:unknown})?.version===1){
           if(!current())throw new RevisionReceiptError("REVISION_SCOPE_RETIRED");
           recordNegotiationDiagnostic("transport","REVISION_NEGOTIATION_V1_ONLY");return legacyManifest(raw);
+        }
+        const unsupported=raw as {version?:number;negotiation?:{nonce?:string;issues?:string[]}};
+        if(query.negotiation.storagePolicyVersion===3&&unsupported.version===2&&unsupported.negotiation?.nonce===query.nonce&&unsupported.negotiation.issues?.includes("STORAGE_POLICY_UNSUPPORTED")) {
+          recordNegotiationDiagnostic("transport","REVISION_GENERIC_REUSE_UNSUPPORTED");
+          return await this.getOfflineRevisionManifest(token,contractId,{...input,genericReuse:false});
         }
         return await validateManifestNegotiation(raw,query,{contractId,ownerKey:input.ownerKey,...(input.expected?{applicationId:input.expected.scope.applicationId,authorizationFingerprint:input.expected.scope.authorizationFingerprint}:{})},token,current);
       }catch(error){

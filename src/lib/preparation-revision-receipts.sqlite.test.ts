@@ -67,10 +67,16 @@ c.close()
   };
 }
 
+// A Vitest deadline does not cancel its async body. Drain it before closing the shared fixture.
+const activeHttpCases=new Set<Promise<void>>();
+function trackedHttpCase<Args extends unknown[]>(work:(...args:Args)=>Promise<void>){
+  return async(...args:Args)=>{const pending=work(...args);activeHttpCases.add(pending);try{await pending;}finally{activeHttpCases.delete(pending);}};
+}
+const drainHttpCases=()=>Promise.allSettled([...activeHttpCases]);
 let directory:string,db:ReturnType<typeof sqliteFile>,store:ReturnType<typeof getLocalDatabase>;
 async function open(){__resetLocalDatabaseForTests();db=sqliteFile(directory+"/opco-client-v10-epoch2.db");sqlite.openDatabaseAsync.mockResolvedValue(db);store=getLocalDatabase();await store.getSelectedContractId();}
 beforeEach(async()=>{directory=mkdtempSync("/tmp/preparation-revision-sqlite-");await open();});
-afterEach(async()=>{await db.closeAsync();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});vi.restoreAllMocks();});
+afterEach(async()=>{await drainHttpCases();await db.closeAsync();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});vi.restoreAllMocks();});
 
 describe("receipt inspection keeps exact proofs and scopes across reopen",()=>{
  const scope={ownerKey:"org:user",organizationId:"org",userId:"user",applicationId:"app",contractId:"contract",authorizationFingerprint:"b".repeat(64)};
@@ -102,7 +108,7 @@ realSuite("ordinary preparation with bound revision receipts, real HTTP and SQLi
     const manifest = await api.getOfflineRevisionManifest(login.accessToken,f.contract), scope={...manifest.scope,ownerKey:manifest.scope.organizationId+":"+manifest.scope.userId};
     const views=(await api.getAppViews(login.accessToken,f.contract)).views;
     await store.upsertAppViews(scope.ownerKey,f.contract,views,new Date().toISOString());traffic.splice(0);
-    return {f,api,scope,token:login.accessToken,views,traffic};
+    return {f,api,scope,initialManifest:manifest,token:login.accessToken,views,traffic};
   }
   async function prepare(x: Awaited<ReturnType<typeof setup>>, api: OpcoApi=x.api, signal?:AbortSignal) {
     await prewarmAssignedAppViews({api,store,token:x.token,ownerKey:x.scope.ownerKey,contractId:x.f.contract,appViews:x.views,signal});
@@ -110,7 +116,7 @@ realSuite("ordinary preparation with bound revision receipts, real HTTP and SQLi
   const inspect=(x:Awaited<ReturnType<typeof setup>>)=>store.inspectPreparationRevisionReceipts({scope:x.scope,isCurrent:()=>true});
   const control=(operation:string)=>execFileSync("node",[process.env.REVISION_RECEIPT_CONTROL!,operation],{env:{...process.env,DATABASE_URL:"postgresql://receipt_owner@127.0.0.1:19563/receipt_shadow?schema=public"},stdio:"pipe"});
   const protectedHash=async()=>revisionHash({rows:await db.getAllAsync("SELECT * FROM entity_records WHERE sync_status!='synced' ORDER BY local_id"),outbox:await db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")});
-  it("composes month/current/snapshot and metadata-only coverage without redownloading shared entities",async()=>{
+  it("composes month/current/snapshot and metadata-only coverage without redownloading shared entities",trackedHttpCase(async()=>{
     const x=await setup(),operations:{kind:string;operation:string|undefined}[]=[],read=x.api.getRevisionRead;
     x.api.getRevisionRead=async(...args)=>{operations.push({kind:args[2].kind,operation:args[4]?.diagnosticOperation});return read(...args);};
     await prepare(x);const result=await inspect(x),status=await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract);
@@ -126,8 +132,8 @@ realSuite("ordinary preparation with bound revision receipts, real HTTP and SQLi
     const before=x.traffic.length,ids=receipts.map(r=>r.snapshotId).sort();await db.closeAsync();await open();const reopened=await inspect(x);expect(reopened.map(r=>r.receipt!.snapshotId).sort()).toEqual(ids);expect(x.traffic.length).toBe(before);
     const m=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);expect((await store.inspectPreparationRevisionReceipts({scope:x.scope,manifest:m,isCurrent:()=>true})).every(r=>r.status==="match_shadow")).toBe(true);
     if(process.env.REVISION_PREPARATION_METRICS)writeFileSync(process.env.REVISION_PREPARATION_METRICS,JSON.stringify({receipts:receipts.map(r=>({appViewId:r.appViewId,coverage:r.coverage,parts:r.parts.length})),traffic:x.traffic,namespace:"opco-client-v10-epoch2.db"}));
-  });
-  it("keeps a signed legacy latest without Observation unaccredited",async()=>{
+  }));
+  it("keeps a signed legacy latest without Observation unaccredited",trackedHttpCase(async()=>{
     const x=await setup(async(url,init)=>{
       const response=await fetch(url,init);
       if(!String(url).includes("/views/"))return response;
@@ -143,8 +149,8 @@ realSuite("ordinary preparation with bound revision receipts, real HTTP and SQLi
     await prepare(x);
     expect((await inspect(x)).some(r=>r.receipt?.appViewId===x.f.attendance)).toBe(false);
     expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("PREPARATION_OBSERVATION_UNBOUND");
-  });
-  it.each(["note-text","note-empty","note-null"])("persists %s across SQLite reopen and detects a remote revision change",async operation=>{
+  }));
+  it.each(["note-text","note-empty","note-null"])("persists %s across SQLite reopen and detects a remote revision change",trackedHttpCase(async(operation:string)=>{
     const x=await setup();
     {
       control(operation);await prepare(x);
@@ -161,81 +167,91 @@ realSuite("ordinary preparation with bound revision receipts, real HTTP and SQLi
       const manifest=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);
       expect((await store.inspectPreparationRevisionReceipts({scope:x.scope,manifest,isCurrent:()=>true})).every(r=>r.status==="invalid" && r.reuseAllowed===false)).toBe(true);
     }
-  });
-  it("certifies the whole day using new bounded pages when legacy latest exceeds ten",async()=>{
-    const x=await setup();control("add-eleven");
-    try{
+  }));
+  describe("large-day fixture lifecycle",()=>{
+    let x:Awaited<ReturnType<typeof setup>>;
+    // Domain-module compilation and synthetic row creation/deletion are fixture work, not preparation.
+    beforeEach(async()=>{x=await setup();control("add-eleven");});
+    afterEach(async()=>{await drainHttpCases();control("remove-eleven");});
+    it("certifies the whole day using new bounded pages when legacy latest exceeds ten",trackedHttpCase(async()=>{
       const day=await x.api.getAttendanceWorkflow(x.token,x.f.contract,x.f.attendance,{date:x.f.day});
       expect(day.items).toEqual([]);expect(day.latest).toHaveLength(10);expect(day.summary.totalRegistered).toBe(11);
       await prepare(x);expect((await inspect(x)).some(r=>r.receipt?.appViewId===x.f.attendance)).toBe(true);
       expect(x.traffic.some(t=>t.query.includes("daySnapshotVersion=1"))).toBe(true);
-    }finally{control("remove-eleven");}
+    }));
   });
-  it("does not certify a swallowed failed Attendance day and keeps the usable cache",async()=>{
+  it("does not certify a swallowed failed Attendance day and keeps the usable cache",trackedHttpCase(async()=>{
     const x=await setup();await prepare(x);const cached=await db.getAllAsync("SELECT server_id FROM entity_records WHERE entity_type_id=?",x.f.source);
     const original=x.api.getRevisionRead;x.api.getRevisionRead=async(...args)=>{const q=args[2];if(q.kind==="attendance"&&q.appViewId===x.f.attendancePlain&&q.query?.date===x.f.day.slice(0,8)+"01")throw Error("Synthetic held day failed");return original(...args);};await prepare(x);
     expect((await inspect(x)).find(r=>r.receipt?.appViewId===x.f.attendancePlain)?.status??"invalid").toBe("invalid");expect(await db.getAllAsync("SELECT server_id FROM entity_records WHERE entity_type_id=?",x.f.source)).toEqual(cached);
     expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("PREPARATION_DAYS_INCOMPLETE");
-  });
-  it("gets a real 409 between normal source pages and never replaces prior valid rows with a mixed collection",async()=>{
+  }));
+  it("gets a real 409 between normal source pages and never replaces prior valid rows with a mixed collection",trackedHttpCase(async()=>{
     const x=await setup();await prepare(x);const before=await db.getAllAsync("SELECT server_id,values_json FROM entity_records WHERE entity_type_id=? ORDER BY server_id",x.f.source);
     const original=x.api.getRevisionRead;let changed=false;x.api.getRevisionRead=async(...args)=>{const d=await original(...args);if(!changed&&args[2].kind==="records"&&args[2].query?.page==="1"){changed=true;control("rename");}return d;};x.traffic.splice(0);await prepare(x);expect(changed).toBe(true);expect(x.traffic.some(t=>t.status===409)).toBe(true);
-    expect(await db.getAllAsync("SELECT server_id,values_json FROM entity_records WHERE entity_type_id=? ORDER BY server_id",x.f.source)).toEqual(before);expect((await inspect(x)).every(r=>r.status==="invalid")).toBe(true);
-  });
-  it("keeps independent ordinary downloads running after a data-vector change but refuses mixed receipts",async()=>{
+    expect(await db.getAllAsync("SELECT server_id,values_json FROM entity_records WHERE entity_type_id=? ORDER BY server_id",x.f.source)).toEqual(before);
+    const fresh=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);
+    expect(fresh.readBindingVector.revision).not.toBe(x.initialManifest.readBindingVector.revision);
+    const rejected=await store.inspectPreparationRevisionReceipts({scope:x.scope,manifest:fresh,isCurrent:()=>true});
+    expect(rejected.every(r=>r.status==="invalid")).toBe(true);expect(rejected.some(r=>r.reason==="REVISION_REMOTE_CHANGED")).toBe(true);
+  }));
+  it("keeps independent ordinary downloads running after a data-vector change but refuses mixed receipts",trackedHttpCase(async()=>{
     const x=await setup(),read=x.api.getRevisionRead;let changed=false;
     x.api.getRevisionRead=async(...args)=>{const d=await read(...args);if(!changed&&args[2].kind==="attendance"&&args[2].query?.date?.toString().endsWith("-01")){changed=true;control("rename");}return d;};
     await prepare(x);expect(changed).toBe(true);const days=x.traffic.filter(t=>t.path.endsWith("/views/"+x.f.attendancePlain+"/workflow/attendance"));
     expect(new Set(days.map(t=>new URLSearchParams(t.query).get("date"))).size).toBe(new Date(Number(x.f.day.slice(0,4)),Number(x.f.day.slice(5,7)),0).getDate());
     expect(days.every(t=>t.status===200)).toBe(true);expect((await inspect(x)).some(r=>r.receipt?.status==="verified")).toBe(false);
-    expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("REVISION_REMOTE_CHANGED");
-  });
-  it("rejects a response mutated after its verified download and persistence",async()=>{
+    const fresh=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);
+    expect(fresh.readBindingVector.revision).not.toBe(x.initialManifest.readBindingVector.revision);
+    // V2 rejects the expected vector during negotiation, before comparing individual read seals.
+    expect((await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))?.entries).toContainEqual(expect.objectContaining({status:"rejected",reason:"REVISION_NEGOTIATION_REJECTED"}));
+  }));
+  it("rejects a response mutated after its verified download and persistence",trackedHttpCase(async()=>{
     const x=await setup(),read=x.api.getRevisionRead,manifest=x.api.getOfflineRevisionManifest;let captured:Awaited<ReturnType<typeof read>>|undefined,calls=0;
     x.api.getRevisionRead=async(...args)=>{const d=await read(...args);if(args[2].kind==="records")captured=d;return d;};
     x.api.getOfflineRevisionManifest=async(...args)=>{const m=await manifest(...args);if(++calls===2&&captured)(captured.data as Record<string,unknown>).syntheticMutation=true;return m;};
     await prepare(x);expect((await inspect(x)).some(r=>r.receipt?.status==="verified")).toBe(false);
     expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("READ_REVISION_CONTENT_MISMATCH");
-  });
-  it("does not upgrade bounded latest to complete snapshot",async()=>{
+  }));
+  it("does not upgrade bounded latest to complete snapshot",trackedHttpCase(async()=>{
     const x=await setup();const original=x.api.getRevisionRead;x.api.getRevisionRead=async(...args)=>{const d=await original(...args);if(args[2].kind==="state-update"&&args[2].appViewId===x.f.state){const n=d.normalized as {latestPagination:{page:number;hasMore:boolean;total:number}};n.latestPagination={page:1,hasMore:true,total:999};}return d;};await prepare(x);
     expect((await inspect(x)).some(r=>r.receipt?.appViewId===x.f.state)).toBe(false);expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("PREPARATION_LATEST_INCOMPLETE");
-  });
-  it("preserves pending/conflict commands and refuses to certify a source overlay",async()=>{
+  }));
+  it("preserves pending/conflict commands and refuses to certify a source overlay",trackedHttpCase(async()=>{
     const x=await setup();for(const conflict of[false,true]){const row=await store.createLocalRecord({ownerKey:x.scope.ownerKey,contractId:x.f.contract,entityTypeId:x.f.source,values:{name:"Synthetic unsent"}});if(conflict)await db.runAsync("UPDATE entity_records SET sync_status='conflict' WHERE local_id=?",row.localId);}
     const before=await protectedHash();await prepare(x);expect(await protectedHash()).toBe(before);const receipts=(await inspect(x)).flatMap(r=>r.receipt?[r.receipt]:[]);expect(receipts.filter(r=>r.coverage.businessDataIncluded)).toHaveLength(0);
-  });
-  it("detects content changes and permission changes after reopening",async()=>{
+  }));
+  it("detects content changes and permission changes after reopening",trackedHttpCase(async()=>{
     const x=await setup();await prepare(x);await db.closeAsync();await open();await db.runAsync("UPDATE entity_records SET display_name='Synthetic local mutation' WHERE server_id=?",x.f.person);
     expect((await inspect(x)).filter(r=>r.status==="invalid").length).toBeGreaterThanOrEqual(3);
     try{control("role-member");const m=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);const next={...m.scope,ownerKey:x.scope.ownerKey};expect((await store.inspectPreparationRevisionReceipts({scope:next,manifest:m,isCurrent:()=>true})).every(r=>r.status==="invalid"&&r.reason==="REVISION_AUTHORIZATION_CHANGED")).toBe(true);}finally{control("role-admin");}
-  });
-  it("rejects stale scope and failed final receipt persistence without blocking ordinary preparation",async()=>{
+  }));
+  it("rejects stale scope and failed final receipt persistence without blocking ordinary preparation",trackedHttpCase(async()=>{
     const x=await setup(),controller=new AbortController(),original=x.api.getRevisionRead;let retired=false;
     x.api.getRevisionRead=async(...args)=>{const d=await original(...args);if(args[2].kind==="records"&&!retired){retired=true;controller.abort();}return d;};await prepare(x,x.api,controller.signal);expect((await inspect(x)).every(r=>r.status==="invalid")).toBe(true);
     x.api.getRevisionRead=original;const writer=db.runAsync;db.runAsync=async(sql,...args)=>{if(sql.includes("INSERT INTO app_metadata")&&String(args[0]).startsWith("preparation_revision_receipt:v1:"))throw Error("Synthetic receipt commit failure");return writer(sql,...args);};await prepare(x);db.runAsync=writer;
     expect((await store.getAppViewDefinition(x.scope.ownerKey,x.f.contract,x.f.records))?.status).toBe("ready");expect((await inspect(x)).some(r=>r.receipt?.status==="verified")).toBe(false);
-  });
-  it("isolates reopened receipts from other owners, contracts, apps and changed definitions",async()=>{
+  }));
+  it("isolates reopened receipts from other owners, contracts, apps and changed definitions",trackedHttpCase(async()=>{
     const x=await setup();await prepare(x);await db.closeAsync();await open();
     for(const scope of[{...x.scope,userId:"synthetic-other",ownerKey:x.scope.organizationId+":synthetic-other"},{...x.scope,contractId:"synthetic-other"},{...x.scope,applicationId:"synthetic-other"}])expect(await store.inspectPreparationRevisionReceipts({scope,isCurrent:()=>true})).toEqual([]);
     const cached=await store.getAppViewDefinition(x.scope.ownerKey,x.f.contract,x.f.records);expect(cached).not.toBeNull();
     await db.runAsync("UPDATE app_view_definitions SET status='partial' WHERE owner_key=? AND contract_id=? AND app_view_id=?",x.scope.ownerKey,x.f.contract,x.f.records);
     const result=await inspect(x);expect(result.filter(r=>r.status==="invalid")).toHaveLength(1);expect(result.find(r=>r.status==="invalid")?.reason).toBe("PREPARATION_DEFINITION_UNAVAILABLE");
-  });
-  it("does not continue scoped business reads after the authenticated owner mismatches",async()=>{
+  }));
+  it("does not continue scoped business reads after the authenticated owner mismatches",trackedHttpCase(async()=>{
     const x=await setup(),manifest=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);x.api.getOfflineRevisionManifest=async()=>({...manifest,scope:{...manifest.scope,userId:"synthetic-other"}});x.traffic.splice(0);await prepare(x);
     expect(x.traffic.filter(t=>t.path.includes("/entities/")||t.path.includes("/workflow/"))).toHaveLength(0);expect(await inspect(x)).toEqual([]);
     expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("REVISION_SCOPE_MISMATCH");
-  });
-  it("does not certify a stale visual projection against a fresh source",async()=>{
+  }));
+  it("does not certify a stale visual projection against a fresh source",trackedHttpCase(async()=>{
     const x=await setup(),commit=store.commitPreparationRevisionReceipt;store.commitPreparationRevisionReceipt=async(context,plan)=>{
       if(plan.appView.id===x.f.current){const rows=await db.getAllAsync("SELECT key,value FROM app_metadata WHERE substr(key,1,length(?))=?","subject_presentation:v1:","subject_presentation:v1:") as {key:string;value:string}[];const row=rows.find(r=>JSON.parse(r.key.slice("subject_presentation:v1:".length))[2]===x.f.current);expect(row).toBeDefined();const value=JSON.parse(row!.value);value.cells[0].value="Synthetic stale label";await db.runAsync("UPDATE app_metadata SET value=? WHERE key=?",JSON.stringify(value),row!.key);}
       return commit(context,plan);
     };await prepare(x);expect((await inspect(x)).some(r=>r.receipt?.appViewId===x.f.current)).toBe(false);expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("PREPARATION_PRESENTATION_UNVERIFIED");
-  });
-  it("keeps legacy Core preparation explicit and usable when the manifest is incompatible",async()=>{
+  }));
+  it("keeps legacy Core preparation explicit and usable when the manifest is incompatible",trackedHttpCase(async()=>{
     const x=await setup();x.api.getOfflineRevisionManifest=async()=>{throw Object.assign(Error("Old Core"),{code:"REVISION_MANIFEST_INCOMPATIBLE"});};await prepare(x);
     expect((await store.getAppViewDefinition(x.scope.ownerKey,x.f.contract,x.f.records))?.status).toBe("ready");expect(await inspect(x)).toEqual([]);expect(JSON.stringify(await store.getPreparationRevisionStatus(x.scope.ownerKey,x.f.contract))).toContain("REVISION_MANIFEST_INCOMPATIBLE");
-  });
+  }));
 });

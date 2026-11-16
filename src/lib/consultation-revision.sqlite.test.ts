@@ -7,7 +7,9 @@ import {beforeEach, afterEach, describe, it, expect, vi} from "vitest";
 import {getLocalDatabase, __resetLocalDatabaseForTests} from "./local-db";
 import {OpcoApiError,createOpcoApi} from "./opco-api";
 import {loadPanelDatasetWithOfflineCache} from "./offline-panels";
-import {consultationQuery} from "./consultation-revision-contract";
+import {consultationQuery,consultationPlan} from "./consultation-revision-contract";
+import {createConsultationRevisionRead} from "./consultation-revision-read";
+import {genericNegotiationFixture} from "../test/generic-negotiation-fixture";
 import {buildReportMatrixModel,buildReportTableModel} from "../renderers/reports/report-renderer-logic";
 import {OpcoNetworkError,type PanelQuery,type ReportQuery} from "./opco-api";
 import {loadReportWithOfflineCache} from "./offline-reports";
@@ -76,6 +78,45 @@ let directory:string,db:ReturnType<typeof sqliteFile>,store:ReturnType<typeof ge
 async function open(){__resetLocalDatabaseForTests();db=sqliteFile(directory+"/opco-client-v10-epoch2.db");sqlite.openDatabaseAsync.mockResolvedValue(db);store=getLocalDatabase();await store.getSelectedContractId();}
 beforeEach(async()=>{directory=mkdtempSync("/tmp/preparation-revision-sqlite-");await open();});
 afterEach(async()=>{await db.closeAsync();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});vi.restoreAllMocks();});
+
+describe("exact consultation consumption under real SQLite inspection",()=>{
+ async function seed(kind:"panel"|"report"="panel",total=21,mode:"TABLE"|"MATRIX"="TABLE"){
+  const f=await genericNegotiationFixture(["exact-query-window"],{type:kind==="panel"?"PANEL":"REPORT"});
+  const config=kind==="panel"?{schemaVersion:1,datasets:[]}:{entityTypeId:"entity",presentationMode:mode,timeFilter:"RANGE",valueDisplay:"LABEL"};
+  const view={id:"view",type:kind==="panel"?"PANEL":"REPORT",name:"Synthetic",configRevision:"a".repeat(64),config};
+  const query=kind==="panel"?{datasetId:"rows",page:1,pageSize:10}:{from:"2026-11-01",to:"2026-11-30"};
+  const response=kind==="panel"?{appView:{id:"view",name:"Synthetic",slug:"synthetic"},schemaVersion:1,configRevision:view.configRevision,calculatedAt:"2026-11-15T00:00:00Z",filters:[],modules:[],datasets:[{id:"rows",schema:{fields:[]},pagination:{page:1,pageSize:10,total,hasMore:total>10},rows:Array.from({length:Math.min(10,total)},(_,i)=>({id:"row"+i,values:{text:"Full synthetic text"}}))}]}:
+   {appView:{id:"view",name:"Synthetic",slug:"synthetic"},config,from:query.from,to:query.to,fields:[],records:Array.from({length:total},(_,i)=>({id:"row"+i,values:{}}))};
+  await store.upsertAppViews(f.scope.ownerKey,"contract",[view] as never,"2026-11-15T00:00:00Z");
+  const request={appView:view as never,resource:{kind,appViewId:"view",query:consultationQuery(kind,query)}};
+  const read=async(value:unknown)=>({version:1 as const,representationVersion:1 as const,mode:"shadow" as const,reuseAllowed:false as const,clientMaySkipReads:false as const,coverageCertified:false as const,revision:"1".repeat(64),manifestVectorRevision:f.manifest.readBindingVector.revision,epoch:f.manifest.epoch,authorizationFingerprint:f.scope.authorizationFingerprint,selectionFingerprint:"2".repeat(64),requestFingerprint:"3".repeat(64),contentHash:await revisionHash(value),snapshot:{isolation:"repeatable-read" as const,at:"2026-11-15T00:00:00Z"}});
+  const assignment={views:[view]},assignmentRead=await read(assignment),download={resource:request.resource,data:response,normalized:response,readRevision:await read(response)};
+  if(kind==="panel")await store.upsertPanelSnapshot({ownerKey:f.scope.ownerKey,contractId:"contract",appViewId:"view",configRevision:view.configRevision,datasetId:"rows",page:1,pageSize:10,panel:response as never,definition:view as never});
+  else await store.upsertReportSnapshot({ownerKey:f.scope.ownerKey,contractId:"contract",appViewId:"view",from:query.from,to:query.to,report:response as never});
+  const context={scope:f.scope,manifest:f.manifest,sessionId:"session",request,isCurrent:()=>true};await store.beginConsultationRevision(context);const receipt=await store.commitConsultationRevision(context,consultationPlan(request,f.scope,download,assignmentRead));
+  const api={genericReuseEnabled:true,getOfflineRevisionManifest:vi.fn(async()=>f.manifest),getRevisionRead:vi.fn(async()=>({resource:{kind:"views" as const},data:assignment,normalized:assignment,readRevision:assignmentRead})),getPanel:vi.fn(),getReport:vi.fn()};
+  return{f,view,query,response,request,receipt,api,input:{api,store,appView:view as never,appViewId:"view",kind,query,ownerKey:f.scope.ownerKey,contractId:"contract",token:"synthetic",isCurrent:()=>true}};
+ }
+ it.each([0,1,21])("consumes a complete PANEL page of %s rows without claiming the whole dataset",async total=>{
+  const x=await seed("panel",total),before=await store.inspectConsultationRevision({scope:x.f.scope,request:x.request,isCurrent:()=>true});
+  expect(before.windowPrepared).toBe(true);expect(before.coverage).toBe(total>10?"partial":"complete");
+  const write=vi.spyOn(store,"upsertPanelSnapshot"),result=await loadPanelDatasetWithOfflineCache({...x.input,query:{datasetId:"rows",page:1,pageSize:10},configRevision:x.view.configRevision});
+  expect(result).toMatchObject({fromCache:true,offline:false,panel:x.response});expect(x.api.getPanel).not.toHaveBeenCalled();expect(write).not.toHaveBeenCalled();
+  expect((await store.inspectConsultationRevision({scope:x.f.scope,request:x.request,isCurrent:()=>true})).receipt?.snapshotId).toBe(x.receipt.snapshotId);
+ });
+ it.each(["TABLE","MATRIX"] as const)("reuses exact %s inputs and never rewrites the snapshot",async mode=>{
+  const x=await seed("report",2,mode),write=vi.spyOn(store,"upsertReportSnapshot");const result=await loadReportWithOfflineCache(x.input);
+  expect(result).toMatchObject({fromCache:true,offline:false,report:x.response});expect(x.api.getReport).not.toHaveBeenCalled();expect(write).not.toHaveBeenCalled();
+ });
+ it.each([{page:2},{pageSize:20},{datasetId:"other"},{filters:{ref:"stable-other-id"}},{search:"other"}])("does not reuse another PANEL query %j",async change=>{
+  const x=await seed();expect((await createConsultationRevisionRead({...x.input,query:{...x.query,...change}})).reused).toBeUndefined();
+ });
+ it("does not reuse another period and rejects a new storage handle after reopen",async()=>{
+  const x=await seed("report",0);expect((await createConsultationRevisionRead({...x.input,query:{from:"2026-12-01",to:"2026-12-31"}})).reused).toBeUndefined();
+  await db.closeAsync();await open();expect((await createConsultationRevisionRead({...x.input,store})).reused).toBeUndefined();
+  expect((await store.getReportSnapshot({ownerKey:x.f.scope.ownerKey,contractId:"contract",appViewId:"view",from:x.query.from,to:x.query.to}))?.report).toEqual(x.response);
+ });
+});
 
 
 const scope={ownerKey:"synthetic:actor",contractId:"synthetic-contract",appViewId:"synthetic-report",from:"2026-11-01",to:"2026-11-30"};

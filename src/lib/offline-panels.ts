@@ -120,6 +120,11 @@ export async function loadPanelDatasetWithOfflineCache({
   try {
     recordPanelRead(diagnostic, "request", "started");
     revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"panel",query,snapshotDatasetId,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
+    if(revision.reused){
+      assertActive();const panel=revision.reused.response as PanelResponse;
+      recordPanelRead(diagnostic,"snapshot_read","hit",panel.configRevision,null,revision.reused.verifiedAt);
+      return{fromCache:true,offline:false,panel,syncedAt:revision.reused.verifiedAt,definition:revision.reused.appView as PanelAppView};
+    }
     const readApi=revision.api;
     const panel = await readApi.getPanel!(token, contractId, appViewId, query, { diagnosticRequestId: diagnostic.readId });
     assertActive();

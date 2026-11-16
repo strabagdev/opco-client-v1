@@ -44,6 +44,7 @@ export async function loadReportWithOfflineCache({
   if(knownOffline){const cached=await readCached();if(!cached)throw new ReportSnapshotMissingError();return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};}
   try {
     revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"report",query,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
+    if(revision.reused){assertActive();return{fromCache:true,offline:false,report:revision.reused.response as ReportResponse,syncedAt:revision.reused.verifiedAt};}
     const report=await revision.api.getReport!(token,contractId,appViewId,query);assertActive();
     const syncedAt=new Date().toISOString();await store.upsertReportSnapshot({...scope,report,syncedAt,assertActive});assertActive();await revision.finish();assertActive();
     return{fromCache:false,offline:false,report,syncedAt};

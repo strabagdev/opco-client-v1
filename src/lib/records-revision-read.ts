@@ -1,14 +1,16 @@
-import type { AppView, EntityDefinitionResponse, EntityRecordsResponse, OpcoApi } from "./opco-api";
+import {canConsumeGenericReceipt} from "./revision-negotiation";
+import {recordSelectiveReuseDiagnostic} from "./selective-reuse";
+import type { AppView, EntityDefinitionResponse, EntityRecordsResponse, EntityRecordsQuery, OpcoApi } from "./opco-api";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
-import type { RecordsRevisionContext } from "./records-revision-storage";
+import type { RecordsRevisionContext,VerifiedRecordsRead } from "./records-revision-storage";
 import { recordsCoveragePlan, recordsRevisionQuery, assertRecordsPage } from "./records-revision-contract";
 import { assertRevisionMatches, assertRevisionScope, revisionCanonical, revisionHash, RevisionReceiptError, validateRevisionDownload, type RevisionDownload, type RevisionResource } from "./revision-receipts";
 
-type Api = Pick<OpcoApi,"getEntityDefinition"|"getEntityRecords"> & Partial<Pick<OpcoApi,"getRevisionRead"|"getOfflineRevisionManifest">>;
+type Api = Pick<OpcoApi,"getEntityDefinition"|"getEntityRecords"> & Partial<Pick<OpcoApi,"getRevisionRead"|"getOfflineRevisionManifest"|"genericReuseEnabled">>;
 function requireProof(v:unknown,code:string):asserts v {if(!v)throw new RevisionReceiptError(code);}
 const reason = (e:unknown) => e && typeof e==="object" && "code"in e && typeof e.code==="string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(e.code)?e.code:"RECORDS_REVISION_UNAVAILABLE";
-/** Observes existing RECORDS reads. It never schedules a collection download or decides reuse. */
-export async function createRecordsRevisionRead(input:{api:Api;store:Partial<RevisionReceiptStore>;token:string;ownerKey:string;contractId:string;appView:AppView;isCurrent():boolean}) {
+/** Observes demand reads; a negotiated complete receipt may supply the verified local copy. No new collection is scheduled. */
+export async function createRecordsRevisionRead(input:{api:Api;store:Partial<RevisionReceiptStore>;token:string;ownerKey:string;contractId:string;appView:AppView;query?:EntityRecordsQuery;isCurrent():boolean}):Promise<{api:Api;reused?:VerifiedRecordsRead;finish():Promise<void>}> {
  const status=async(code:string,partial=false)=>{try{if(input.isCurrent())await input.store.recordRecordsRevisionStatus?.({...input,appViewId:input.appView.id,reason:code,partial});}catch{/* Diagnostics cannot block records or outbox. */}};
  const fallback={api:input.api,async finish(){await status("RECORDS_REVISION_UNAVAILABLE");}};
  if(!input.api.getRevisionRead || !input.api.getOfflineRevisionManifest || !input.store.beginRecordsRevisionRead || !input.store.commitRecordsRevisionReceipt)return fallback;
@@ -19,6 +21,20 @@ export async function createRecordsRevisionRead(input:{api:Api;store:Partial<Rev
   context={scope,manifest,sessionId:crypto.randomUUID(),appViewId:input.appView.id,isCurrent:input.isCurrent};await input.store.beginRecordsRevisionRead(context);
   await read({kind:"views"});
   requireProof(((downloads[0].normalized as {views:AppView[]}).views??[]).some(v=>revisionCanonical(v)===revisionCanonical(input.appView)),"RECORDS_CONFIGURATION_CHANGED");
+  const query=recordsRevisionQuery(input.query??{}),eligible=Object.keys(query).every(k=>["page","pageSize"].includes(k))&&Number(query.page??1)===1;
+  if(input.api.genericReuseEnabled&&eligible&&input.store.inspectRecordsRevisionCoverage){
+   const consume=async(m:typeof manifest)=>{
+    let accepted:VerifiedRecordsRead|undefined;
+    const observation=await input.store.inspectRecordsRevisionCoverage!({scope,manifest:m,appView:input.appView,page:1,pageSize:Number(query.pageSize??25),isCurrent:input.isCurrent,
+     onVerified:async(receipt,storage,local)=>{if(await canConsumeGenericReceipt({manifest:m,receipt,appViewId:input.appView.id,kind:"unfiltered-collection",storage,isCurrent:input.isCurrent}))accepted=local;}});
+    return observation.status==="match_shadow"&&input.isCurrent()?accepted:undefined;
+   };
+   if(await consume(manifest)){
+    const last=await input.api.getOfflineRevisionManifest(input.token,input.contractId,{ownerKey:input.ownerKey,isCurrent:input.isCurrent,expected:manifest});current();
+    const reused=await consume(last);if(reused){recordSelectiveReuseDiagnostic("RECORDS_REUSED",true);return{api:input.api,reused,async finish(){}};}
+   }
+  }
+
  }catch(error){await status(reason(error));if(error&&typeof error==="object"&&"status"in error&&[401,403].includes(Number(error.status)))throw error;
   if(error instanceof RevisionReceiptError&&["REVISION_SCOPE_RETIRED","REVISION_SCOPE_MISMATCH","RECORDS_CONFIGURATION_CHANGED"].includes(error.code))throw error;
   return fallback;

@@ -363,11 +363,11 @@ export function stateUpdateContextPreparationKey(scope: StateUpdateCurrentCovera
 }
 
 export type StateUpdateContextPreparationInput = {
-  api: Pick<OpcoApi, "getEntityRecords" | "getStateUpdateWorkflow">;
+  api: Pick<OpcoApi, "getEntityRecords" | "getStateUpdateWorkflow"> & Partial<PreparationRevisionApi>;
   token: string;
   scope: StateUpdateCurrentCoverageScope;
   store: Parameters<typeof refreshEntityRecordsCache>[0]["store"] &
-    Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot"> & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">>;
+    Pick<StateUpdateOfflineStore, "getStateUpdateCurrentCoverage" | "setStateUpdateCurrentCoverage" | "upsertStateUpdateSnapshot"> & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">> & Partial<AppViewPrewarmStore & Pick<AppNavigationCache,"getAppViews"> & import("./revision-receipt-storage").RevisionReceiptStore>;
   signal: AbortSignal;
   force?: boolean;
   currentBatchCapabilities?: import("./opco-api").StateUpdateCurrentBatchCapabilities;
@@ -387,24 +387,50 @@ export function prepareStateUpdateContextOnce(input: StateUpdateContextPreparati
   const promise = (async () => {
     const coverage = await input.store.getStateUpdateCurrentCoverage(input.scope);
     if (input.signal.aborted || (!input.force && coverage?.status === "complete")) return;
+    let recorder:Awaited<ReturnType<typeof createPreparationRevisionRun>>|null=null;
+    const cached=await input.store.getAppViewDefinition?.(input.scope.ownerKey,input.scope.contractId,input.scope.appViewId);
+    if(cached?.definition.kind==="state-update"&&input.store.getAppViews&&input.api.getEntityDefinition&&input.api.getOfflineRevisionManifest&&input.api.getRevisionRead&&input.store.upsertAppViewDefinition){
+      const assigned=await input.store.getAppViews(input.scope.ownerKey,input.scope.contractId);
+      if(assigned)recorder=await createPreparationRevisionRun({api:input.api as PreparationRevisionApi,store:input.store as AppViewPrewarmStore,token:input.token,ownerKey:input.scope.ownerKey,contractId:input.scope.contractId,appViews:assigned.views,runId:"context-"+Date.now(),signal:input.signal,contextScope:input.scope,contextPrepared:cached.definition});
+    }
+    if(recorder&&!recorder.recording)recorder=null;
+    if(recorder&&cached&&await recorder.tryReusePreparation(cached.definition.appView)){
+      const withdrawn=await recorder.finish();if(!withdrawn.length)return;
+      // One ordinary local fallback; do not re-enter the coordinator or negotiate another reuse.
+      recorder=null;
+    }
+    const readApi=recorder?.api??input.api,writeStore=(recorder?.store??input.store) as typeof input.store;
+    if(recorder&&cached){
+      const anchor=await readApi.getStateUpdateWorkflow(input.token,input.scope.contractId,input.scope.appViewId,{date:input.scope.date,identity:input.scope.identity,pageSize:1});
+      if(input.signal.aborted)return;
+      if(anchor.contextRequired||anchor.appView.id!==input.scope.appViewId||anchor.date!==input.scope.date||anchor.sourceEntityType.id!==input.scope.sourceEntityTypeId||anchor.targetEntityType.id!==input.scope.targetEntityTypeId||compositeIdentityKey(anchor.identityContext)!==compositeIdentityKey(input.scope.identity))throw new Error("STATE_UPDATE_CONTEXT_RESPONSE_MISMATCH");
+      const definition=await (readApi as PreparationRevisionApi).getEntityDefinition(input.token,input.scope.contractId,input.scope.sourceEntityTypeId);
+      if(input.signal.aborted)return;
+      await writeStore.upsertEntityDefinition!(input.scope.contractId,input.scope.sourceEntityTypeId,definition.entity,new Date().toISOString());
+      await writeStore.upsertAppViewDefinition!(baseDefinitionInput({appView:cached.definition.appView,ownerKey:input.scope.ownerKey,contractId:input.scope.contractId,status:"ready",lastPreparedAt:new Date().toISOString(),definition:stateUpdatePreparedDefinition(cached.definition.appView,anchor)}));
+      if(input.signal.aborted)return;
+      await writeStore.upsertStateUpdateSnapshot({...input.scope,complete:false,items:anchor.items,latest:anchor.latest,schedulePolicy:anchor.schedulePolicy,scheduleResolution:anchor.scheduleResolution});
+    }
     let sourceRemoteTotal: number | undefined;
     let sourceFetched = 0;
     const source = await refreshEntityRecordsCache({
-      api: input.api, token: input.token, ownerKey: input.scope.ownerKey,
-      contractId: input.scope.contractId, entityTypeId: input.scope.sourceEntityTypeId, store: input.store,
+      api: readApi, token: input.token, ownerKey: input.scope.ownerKey,
+      contractId: input.scope.contractId, entityTypeId: input.scope.sourceEntityTypeId, store:writeStore,
       onDiagnostics: diagnostics => {
         sourceRemoteTotal = diagnostics.remoteTotal ?? undefined;
         sourceFetched = diagnostics.recordsFetched;
       },
     });
     if (input.signal.aborted) return;
-    const result = await prepareStateUpdateCurrent({ ...input, sourceRemoteTotal, sourceFetched,
+    const result = await prepareStateUpdateCurrent({ ...input,api:readApi,store:writeStore, sourceRemoteTotal, sourceFetched,
       retainCoverageUntilComplete: Boolean(coverage),
       sourceCacheTotal: source.pagination.total, runWithConcurrency, concurrency: PREWARM_CONCURRENCY });
     if(!input.signal.aborted && input.store.getAppViewDefinition){const prepared=await input.store.getAppViewDefinition(input.scope.ownerKey,input.scope.contractId,input.scope.appViewId);if(prepared&&!await preparedPresentationAvailable(input.store,input.scope,prepared.definition))throw new Error("SUBJECT_PRESENTATION_INCOMPLETE");}
     if (!input.signal.aborted && result?.status !== "complete") {
       throw new Error("STATE_UPDATE_CURRENT_PREPARATION_INCOMPLETE");
     }
+    if(recorder){recorder.viewResult(input.scope.appViewId,"success");await recorder.finish();}
+
   })().finally(() => {
     if (activePrewarms.get(key)?.promise === promise) activePrewarms.delete(key);
   });
@@ -532,7 +558,7 @@ export async function prewarmAssignedAppViews({
       let nextTelemetry: OfflinePreparationAppViewTelemetry;let skippedByReuse=false;
 
       try {
-        skippedByReuse=await revision.tryReuseAttendance(appView);
+        skippedByReuse=await (revision.tryReusePreparation?.(appView)??revision.tryReuseAttendance(appView));
         nextTelemetry = skippedByReuse
           ? completeAppViewTelemetry(initial,Date.parse(initial.appViewStartedAt),"skipped")
           : await prewarmOneAppView({
@@ -620,7 +646,7 @@ export async function prewarmAssignedAppViews({
   for(const id of revision.validatedReuseIds())onAppViewPrepared?.(id);
   if(withdrawn.length&&!signal?.aborted){
     // Exactly one ordinary pass, only affected views; this child cannot reuse or recurse again.
-    await prewarmAssignedAppViews({api:{...ordinaryApi,selectiveReuseEnabled:false},appViews,contractId,
+    await prewarmAssignedAppViews({api:{...ordinaryApi,selectiveReuseEnabled:false,genericReuseEnabled:false},appViews,contractId,
       onTelemetry,ownerKey,store,token,signal,trigger,recoveryOf,prepareAppViewIds:withdrawn,onAppViewPrepared});
   }
 }

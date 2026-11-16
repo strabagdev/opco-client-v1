@@ -1,7 +1,16 @@
 import {describe,it,expect} from "vitest";
-import {isPreparationCoverage,type PreparationCoverage} from "./preparation-revision-contract";
+import {isPreparationCoverage,genericPreparationRequest,type PreparationCoverage} from "./preparation-revision-contract";
 const metadata:PreparationCoverage={version:1,kind:"metadata-only",complete:true,scope:"ordinary-preparation",businessDataIncluded:false,arbitraryQueries:false,relationCatalogs:false,latest:"not-included",dates:[]};
 describe("bounded preparation coverage contract",()=>{
+  it("requests the exact current day and never promotes current or context to complete history",()=>{
+    const view={id:"state",type:"WORKFLOW",config:{workflowKey:"state-update"}} as never;
+    const prepared={kind:"state-update",appView:view,uniqueness:"subject",historyMode:"append",dateFieldId:"date"};
+    const today=new Date(2026,10,15,10);
+    expect(genericPreparationRequest(view,prepared as never,today)).toMatchObject({kind:"state-update-current",dates:["2026-11-15"]});
+    expect(genericPreparationRequest(view,{...prepared,uniqueness:"subject-date"} as never,today)).toMatchObject({kind:"state-update-snapshot",dates:["2026-11-15"]});
+    expect(genericPreparationRequest(view,{...prepared,uniqueness:"subject-date-fields"} as never,today)).toMatchObject({kind:"context-required",dates:[]});
+    expect(genericPreparationRequest(view,prepared as never,new Date(2026,10,16,10))?.dates).toEqual(["2026-11-16"]);
+  });
   it("names metadata-only coverage without claiming records, catalogs or arbitrary queries",()=>{expect(isPreparationCoverage(metadata)).toBe(true);});
   it.each([{version:0},{complete:false},{scope:"all-data"},{businessDataIncluded:true},{arbitraryQueries:true},{relationCatalogs:true},{latest:undefined},{dates:["2026-11-11"]}])("rejects incompatible or inflated metadata %j",change=>{expect(isPreparationCoverage({...metadata,...change})).toBe(false);});
   it("requires every date of the exact Attendance month",()=>{

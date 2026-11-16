@@ -108,15 +108,24 @@ realSuite("catalog receipts with real Core and SQLite",()=>{
   await prepare(x);expect((await inspect(x))[0].status).toBe("remote_unchecked");
  });
  it("rejects a real revision change between catalog pages without replacing prior complete data",async()=>{
-  const x=await setup();await prepare(x);const before=await db.getAllAsync("SELECT local_id,values_json,display_name FROM entity_records ORDER BY local_id"),read=x.api.getRevisionRead;let changed=false;
+  const x=await setup();await prepare(x);const original=(await inspect(x))[0].receipt!,before=await db.getAllAsync("SELECT local_id,values_json,display_name FROM entity_records ORDER BY local_id"),read=x.api.getRevisionRead;let changed=false;
   x.api.getRevisionRead=async(...args)=>{const d=await read(...args);if(!changed&&args[2].kind==="records"&&args[2].entityTypeId===x.f.catalog&&args[2].query?.page==="1"){changed=true;control("catalog");}return d;};
-  await prepare(x);expect(changed).toBe(true);expect(x.traffic.some(t=>t.status===409)).toBe(true);expect((await inspect(x)).every(r=>r.status==="invalid")).toBe(true);
+  await prepare(x);expect(changed).toBe(true);expect(x.traffic.some(t=>t.status===409)).toBe(true);
+  const retained=(await inspect(x))[0];expect(retained).toMatchObject({status:"remote_unchecked",receipt:{snapshotId:original.snapshotId,localHash:original.localHash},reuseAllowed:false});
+  const fresh=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);
+  expect(fresh.readBindingVector.revision).not.toBe(original.remote.vector);
+  expect(await store.inspectCatalogRevisionReceipts({scope:x.scope,manifest:fresh,isCurrent:()=>true})).toMatchObject([{status:"invalid",reason:"REVISION_REMOTE_CHANGED",receipt:null,reuseAllowed:false}]);
   expect(await db.getAllAsync("SELECT local_id,values_json,display_name FROM entity_records ORDER BY local_id")).toEqual(before);
  });
  it("keeps incomplete/interrupted catalogs unaccredited and revalidates after reconnect",async()=>{
-  const x=await setup();await prepare(x);const read=x.api.getRevisionRead;x.api.getRevisionRead=async(...args)=>{if(args[2].kind==="records"&&args[2].entityTypeId===x.f.catalog&&args[2].query?.page==="2")throw Error("Synthetic interrupted catalog");return read(...args);};
-  await prepare(x);await db.closeAsync();await open();expect((await inspect(x)).every(r=>r.status==="invalid")).toBe(true);expect((await store.listCachedRecords({ownerKey:x.scope.ownerKey,contractId:x.f.contract,entityTypeId:x.f.catalog,pageSize:200})).pagination.total).toBe(137);
-  x.api.getRevisionRead=read;await prepare(x);expect((await inspect(x))[0].status).toBe("remote_unchecked");
+  const x=await setup();await prepare(x);const original=(await inspect(x))[0].receipt!,read=x.api.getRevisionRead;x.api.getRevisionRead=async(...args)=>{if(args[2].kind==="records"&&args[2].entityTypeId===x.f.catalog&&args[2].query?.page==="2")throw Error("Synthetic interrupted catalog");return read(...args);};
+  await prepare(x);await db.closeAsync();await open();
+  expect((await inspect(x))[0]).toMatchObject({status:"remote_unchecked",receipt:{snapshotId:original.snapshotId,localHash:original.localHash},reuseAllowed:false});
+  const fresh=await x.api.getOfflineRevisionManifest(x.token,x.f.contract);
+  expect(fresh.readBindingVector.revision).toBe(original.remote.vector);
+  expect((await store.inspectCatalogRevisionReceipts({scope:x.scope,manifest:fresh,isCurrent:()=>true}))[0]).toMatchObject({status:"match_shadow",receipt:{snapshotId:original.snapshotId},reuseAllowed:false});
+  expect((await store.listCachedRecords({ownerKey:x.scope.ownerKey,contractId:x.f.contract,entityTypeId:x.f.catalog,pageSize:200})).pagination.total).toBe(137);
+  x.api.getRevisionRead=read;await prepare(x);const refreshed=(await inspect(x))[0];expect(refreshed.status).toBe("remote_unchecked");expect(refreshed.receipt!.snapshotId).not.toBe(original.snapshotId);
  });
  it("isolates permissions, owners, contracts and apps",async()=>{
   const x=await setup();await prepare(x);

@@ -1,4 +1,7 @@
-import {canConsumeAttendanceReceipt} from "./revision-negotiation";
+import {compositeIdentityKey} from "./state-update-identity";
+import type {StateUpdateCurrentCoverageScope} from "./state-update-offline";
+import {genericPreparationRequest,matchesPreparationRequest} from "./preparation-revision-contract";
+import {canConsumeAttendanceReceipt,canConsumeGenericReceipt} from "./revision-negotiation";
 import {recordSelectiveReuseDiagnostic} from "./selective-reuse";
 import {catalogDependencies,catalogRootIds,catalogSupported} from "./catalog-revision-contract";
 import type {CatalogPlan} from "./catalog-revision-storage";
@@ -16,10 +19,10 @@ import type { PreparationCoverage, PreparationMarker, PreparationPart, Preparati
 import { assertRevisionMatches, assertRevisionScope, revisionCanonical, revisionHash, validateRevisionDownload, RevisionReceiptError, type RevisionDownload, type RevisionResource } from "./revision-receipts";
 
 type BusinessApi = Pick<OpcoApi, "getAttendanceWorkflow" | "getStateUpdateWorkflow" | "getEntityDefinition" | "getEntityRecords">;
-export type PreparationRevisionApi = BusinessApi & Partial<Pick<OpcoApi, "getOfflineRevisionManifest" | "getRevisionRead" | "selectiveReuseEnabled">>;
+export type PreparationRevisionApi = BusinessApi & Partial<Pick<OpcoApi, "getOfflineRevisionManifest" | "getRevisionRead" | "selectiveReuseEnabled" | "genericReuseEnabled">>;
 type Store = AppViewPrewarmStore & Partial<RevisionReceiptStore>;
-type Input = { api: PreparationRevisionApi; store: Store; token: string; ownerKey: string; contractId: string; appViews: AppView[]; runId: string; signal?: AbortSignal };
-const generations = new WeakMap<object, object>();
+type Input = { api: PreparationRevisionApi; store: Store; token: string; ownerKey: string; contractId: string; appViews: AppView[]; runId: string; signal?: AbortSignal; contextScope?:StateUpdateCurrentCoverageScope; contextPrepared?:PreparedAppViewDefinition };
+const generations = new WeakMap<object, Map<string,object>>();
 const same = (a: unknown, b: unknown) => revisionCanonical(a) === revisionCanonical(b);
 function requireProof(value: unknown, code: string): asserts value {if (!value) throw new RevisionReceiptError(code);}
 function errorCode(error: unknown) {
@@ -49,24 +52,26 @@ function workflowScope(input: Input, appView: AppView, response: AttendanceRespo
     sourceEntityTypeId: response.sourceEntityType.id, targetEntityTypeId: response.targetEntityType.id,
     date: response.date, dateFieldId: prepared.dateFieldId, uniqueness: prepared.uniqueness, historyMode: prepared.historyMode};
 }
-/** Uses the existing downloads, writers, sharing and scheduling. Default shadow does not skip; an explicit policy2 gate can consume a verified Attendance receipt. */
+/** Uses existing downloads, writers and scheduling. Omission requires the independent negotiated Attendance or generic gate plus a verified receipt. */
 export async function createPreparationRevisionRun(input: Input) {
-  const fallback = {validatedReuseIds(){return [] as string[];},async tryReuseAttendance(_view:AppView){return false;},async prepareCatalogs() {},api: input.api as BusinessApi, store: input.store, viewResult(_id: string, _result: string) {}, async finish() {return [] as string[];}};
+  const fallback = {validatedReuseIds(){return [] as string[];},async tryReuseAttendance(_view:AppView){return false;},async tryReusePreparation(_view:AppView){return false;},recording:false,async prepareCatalogs() {},api: input.api as BusinessApi, store: input.store, viewResult(_id: string, _result: string) {}, async finish() {return [] as string[];}};
   const store = input.store;
   if (!store.commitPreparationRevisionReceipt || !store.retirePreparationRevisionReceipts || !store.recordPreparationRevisionStatus ||
       !store.beginRevisionReceiptSession || !input.api.getOfflineRevisionManifest || !input.api.getRevisionRead) return fallback;
   const identity = store.getOfflinePreparationCoordinatorKey?.() ?? store, generation = {};
-  generations.set(identity, generation);
-  const current = () => !input.signal?.aborted && generations.get(identity) === generation;
+  const slot=input.contextScope?"context:"+revisionCanonical(input.contextScope):"ordinary";
+  let slots=generations.get(identity);if(!slots){slots=new Map();generations.set(identity,slots);}slots.set(slot,generation);
+  const current = () => !input.signal?.aborted && slots!.get(slot) === generation;
   const status = async (state: "emitted" | "rejected" | "unavailable", reason: string | null, appViewId?: string) => {
     try {if (current()) await store.recordPreparationRevisionStatus!(input.ownerKey, input.contractId, {runId: input.runId, appViewId, status: state, reason});} catch { /* Observability cannot alter preparation/outbox. */ }
   };
   const normalizedHashes = new WeakMap<RevisionDownload,string>();
   const attendanceDays = new Map<string,{response:AttendanceResponse;pages:RevisionDownload[]}>();
   const downloads: RevisionDownload[] = [], definitions = new Map<string, PreparedAppViewDefinition>(), outcomes = new Map<string, string>();
-  const reused=new Set<string>();let reuseValidated=false;
+  if(input.contextPrepared)definitions.set(input.contextPrepared.appView.id,input.contextPrepared);
+  const reused=new Set<string>(),reusedCatalogs=new Set<string>();let reuseValidated=false;
   const reuseDates=currentMonthDateKeys(new Date());
-  const negotiationOptions=input.api.selectiveReuseEnabled?{selectiveReuse:true,month:reuseDates[0].slice(0,7)}:{};
+  const negotiationOptions={...(input.api.selectiveReuseEnabled?{selectiveReuse:true,month:reuseDates[0].slice(0,7)}:{}),...(input.api.genericReuseEnabled?{genericReuse:true}:{})};
   let context: PreparationRevisionContext, views: RevisionDownload;
   try {
     const manifest = await input.api.getOfflineRevisionManifest(input.token, input.contractId,{ownerKey:input.ownerKey,isCurrent:current,...negotiationOptions});
@@ -178,7 +183,7 @@ export async function createPreparationRevisionRun(input: Input) {
     requireProof(initial.appView.id === appView.id && initial.sourceEntityType.id === prepared.sourceEntityTypeId && initial.targetEntityType.id === prepared.targetEntityTypeId, "PREPARATION_DEFINITION_MISMATCH");
     parts.push(definitionPart(prepared.sourceEntityTypeId), collection(prepared.sourceEntityTypeId));
     coverage.sourceEntityTypeId = prepared.sourceEntityTypeId; coverage.subjectCount = (parts[parts.length - 1].artifact as {total: number}).total;
-    if (prepared.uniqueness === "subject-date-fields") {coverage.kind = "context-required"; return {appView, prepared, coverage, parts, markers};}
+    if (prepared.uniqueness === "subject-date-fields"&&!input.contextScope) {coverage.kind = "context-required"; return {appView, prepared, coverage, parts, markers};}
     if (appView.config.workflowKey === "attendance") {
       coverage.kind = "attendance-month"; coverage.businessDataIncluded = true; coverage.latest = "complete-snapshot";
       const anchor = (initial as AttendanceResponse).date; requireProof(/^\d{4}-\d{2}-\d{2}$/.test(anchor), "PREPARATION_CONTEXT_MISMATCH");
@@ -195,9 +200,10 @@ export async function createPreparationRevisionRun(input: Input) {
         parts.push({...materialized, artifact: {...materialized.artifact, completeEventIds: materialized.artifact.eventIds}, resource:bound[0].resource, reads:bound.map(page=>page.readRevision)});markers.push({kind:"attendance",scope});
       }
     } else {
-      const data = initial as StateUpdateResponse, scope = workflowScope(input, appView, data, prepared);
+      const data = initial as StateUpdateResponse, scope:StateUpdateCurrentCoverageScope = input.contextScope??workflowScope(input, appView, data, prepared);
+      if(input.contextScope)requireProof(scope.appViewId===appView.id&&scope.sourceEntityTypeId===data.sourceEntityType.id&&scope.targetEntityTypeId===data.targetEntityType.id&&scope.date===data.date&&scope.uniqueness===data.uniqueness&&scope.historyMode===data.historyMode&&compositeIdentityKey(scope.identity)===compositeIdentityKey(data.identityContext)&&(!scope.scheduleBindingId||scope.scheduleBindingId===data.schedulePolicy?.bindingId),"PREPARATION_CONTEXT_MISMATCH");
       requireProof(!data.contextRequired, "PREPARATION_CONTEXT_REQUIRED");
-      const fullCurrent = prepared.uniqueness === "subject" && prepared.historyMode === "append" && !!prepared.dateFieldId;
+      const fullCurrent = !!input.contextScope || prepared.uniqueness === "subject" && prepared.historyMode === "append" && !!prepared.dateFieldId;
       coverage.kind = fullCurrent ? "state-update-current" : "state-update-snapshot";
       coverage.businessDataIncluded = true; coverage.latest = fullCurrent ? "bounded-first-page" : "complete-snapshot"; coverage.dates = scope.date ? [scope.date] : [];
       if (!fullCurrent) requireProof(data.latestPagination?.page === 1 && !data.latestPagination.hasMore && data.latestPagination.total === (data.latest?.length ?? 0), "PREPARATION_LATEST_INCOMPLETE");
@@ -237,6 +243,34 @@ export async function createPreparationRevisionRun(input: Input) {
       recordSelectiveReuseDiagnostic("ATTENDANCE_REUSED",true);return true;
     }catch{recordSelectiveReuseDiagnostic("NORMAL_DOWNLOAD");return false;}
   }
+  async function checkGenericPreparation(appView:AppView,manifest=context.manifest){
+    if(!input.api.genericReuseEnabled||!store.inspectPreparationRevisionReceipts)return null;
+    let accepted:PreparedAppViewDefinition|null=null;
+    await store.inspectPreparationRevisionReceipts({scope:context.scope,manifest,isCurrent:current,
+      appViewId:appView.id,
+      onVerified:async(receipt,storage,prepared)=>{
+        const request=input.contextScope?{appViewId:appView.id,kind:"state-update-current" as const,dates:input.contextScope.date?[input.contextScope.date]:[],identity:input.contextScope.identity,definition:appView}:genericPreparationRequest(appView,prepared);
+        if(request&&request.kind!=="attendance-month"&&matchesPreparationRequest(receipt,request,prepared)&&await canConsumeGenericReceipt({manifest,receipt,appViewId:appView.id,kind:request.kind,storage,isCurrent:current}))accepted=prepared;
+      }});
+    return current()?accepted:null;
+  }
+  async function tryReusePreparation(appView:AppView){
+    if(appView.type==="WORKFLOW"&&appView.config.workflowKey==="attendance")return tryReuseAttendance(appView);
+    try{
+      const prepared=await checkGenericPreparation(appView);
+      if(!prepared)return false;
+      definitions.set(appView.id,prepared);reused.add(appView.id);recordSelectiveReuseDiagnostic("PREPARATION_REUSED",true);return true;
+    }catch{return false;}
+  }
+  async function checkCatalogReuse(appView:AppView,manifest=context.manifest){
+    if(!input.api.genericReuseEnabled||!store.inspectCatalogRevisionReceipts)return false;
+    let accepted=false;
+    await store.inspectCatalogRevisionReceipts({scope:context.scope,manifest,appViewId:appView.id,isCurrent:current,
+      onVerified:async(receipt,storage,prepared)=>{
+        if(same(prepared.appView,appView)&&await canConsumeGenericReceipt({manifest,receipt,appViewId:appView.id,kind:"field-options-and-direct-catalogs",storage,isCurrent:current}))accepted=true;
+      }});
+    return current()&&accepted;
+  }
   const catalogPlans=new Map<string,CatalogPlan>(),catalogDefinitions=new Map<string,Promise<void>>(),catalogCollections=new Map<string,Promise<void>>();
   const loadCatalogDefinition=(id:string)=>{
     let promise=catalogDefinitions.get(id);if(promise)return promise;
@@ -265,7 +299,9 @@ export async function createPreparationRevisionRun(input: Input) {
     for(const view of input.appViews){
       if(!catalogSupported(view)||!outcomes.has(view.id))continue;
       try{
-        requireProof(current(),"REVISION_SCOPE_RETIRED");const prepared=definitions.get(view.id);requireProof(prepared,"CATALOG_DEFINITION_UNAVAILABLE");
+        requireProof(current(),"REVISION_SCOPE_RETIRED");
+        if(await checkCatalogReuse(view)){reusedCatalogs.add(view.id);recordSelectiveReuseDiagnostic("CATALOG_REUSED",true);continue;}
+        const prepared=definitions.get(view.id);requireProof(prepared,"CATALOG_DEFINITION_UNAVAILABLE");
         const roots=catalogRootIds(view);for(const id of roots)await loadCatalogDefinition(id);
         const entities=new Map(downloads.filter(d=>d.resource.kind==="definition").map(d=>[d.resource.entityTypeId!, (d.normalized as EntityDefinitionResponse).entity]));
         const dependencies=catalogDependencies(view,prepared,entities);
@@ -278,7 +314,7 @@ export async function createPreparationRevisionRun(input: Input) {
       }catch(error){await status("rejected",errorCode(error),view.id);}
     }
   }
-  return {api, store: observedStore,prepareCatalogs,tryReuseAttendance,validatedReuseIds:()=>reuseValidated&&current()?[...reused]:[], viewResult(id: string, result: string) {outcomes.set(id, result);}, async finish() {
+  return {recording:true,api, store: observedStore,prepareCatalogs,tryReuseAttendance,tryReusePreparation,validatedReuseIds:()=>reuseValidated&&current()?[...reused]:[], viewResult(id: string, result: string) {outcomes.set(id, result);}, async finish() {
     try {
       requireProof(current(), "REVISION_SCOPE_RETIRED");
       const manifest = await input.api.getOfflineRevisionManifest!(input.token, input.contractId,{ownerKey:input.ownerKey,isCurrent:current,expected:context.manifest,...negotiationOptions}); assertRevisionScope(context.scope, manifest);
@@ -288,8 +324,10 @@ export async function createPreparationRevisionRun(input: Input) {
         assertRevisionMatches(manifest, d.readRevision);
       }
       for(const id of reused){
-        requireProof(await checkReuse(input.appViews.find(view=>view.id===id)!,manifest),"SELECTIVE_REUSE_WITHDRAWN");
+        const view=input.appViews.find(view=>view.id===id)!;
+        requireProof(await (view.type==="WORKFLOW"&&view.config.workflowKey==="attendance"?checkReuse(view,manifest):checkGenericPreparation(view,manifest)),"SELECTIVE_REUSE_WITHDRAWN");
       }
+      for(const id of reusedCatalogs)requireProof(await checkCatalogReuse(input.appViews.find(view=>view.id===id)!,manifest),"SELECTIVE_CATALOG_REUSE_WITHDRAWN");
       context = {...context, manifest};
       for(const [id,plan] of catalogPlans){
         try{await store.commitCatalogRevisionReceipt!(context,plan);await status("emitted","CATALOG_MANIFEST_MATCH_SHADOW",id);}
@@ -304,7 +342,7 @@ export async function createPreparationRevisionRun(input: Input) {
       return [] as string[];
     } catch (error) {
       await status("rejected", errorCode(error));
-      if(current()&&reused.size){recordSelectiveReuseDiagnostic("REUSE_WITHDRAWN");return [...reused];}
+      if(current()&&(reused.size||reusedCatalogs.size)){recordSelectiveReuseDiagnostic("REUSE_WITHDRAWN");return [...new Set([...reused,...reusedCatalogs])];}
       return [] as string[];
     }
   }};

@@ -1,3 +1,4 @@
+import {formatDateInputValue} from "./record-form";
 import { revisionCanonical } from "./revision-receipts";
 import type { AppView } from "./opco-api";
 import type { PreparedAppViewDefinition } from "./app-view-definitions-cache";
@@ -68,7 +69,7 @@ export type PreparationReceiptRequest = {
   identity?: StateUpdateScope["identity"];
   definition?: AppView;
 };
-export type PreparationInspection = { scope: RevisionScope; manifest?: RevisionManifest; request?: PreparationReceiptRequest; isCurrent(): boolean;
+export type PreparationInspection = { appViewId?:string; scope: RevisionScope; manifest?: RevisionManifest; request?: PreparationReceiptRequest; isCurrent(): boolean;
   /** Internal read-only consumption point: runs under the same SQLite transaction as verification. */
   onVerified?(receipt:PreparationRevisionReceipt, storage:object, prepared:PreparedAppViewDefinition):Promise<void>;
 };
@@ -101,4 +102,13 @@ export function isPreparationCoverage(value: unknown): value is PreparationCover
     return c.dates.length === count && c.dates.every((date,index) => date === month + "-" + String(index+1).padStart(2,"0"));
   }
   return c.dates.length <= 1 && c.latest === (c.kind === "state-update-current" ? "bounded-first-page" : "complete-snapshot");
+}
+
+
+/** Requested ordinary coverage; never broadens current into history or a context into all identities. */
+export function genericPreparationRequest(appView:AppView,prepared:PreparedAppViewDefinition,now=new Date()):PreparationReceiptRequest|null {
+  if(["RECORDS","PANEL","REPORT"].includes(appView.type))return{appViewId:appView.id,kind:"metadata-only",dates:[],definition:appView};
+  if(appView.type!=="WORKFLOW"||appView.config.workflowKey!=="state-update"||prepared.kind!=="state-update")return null;
+  const kind=prepared.uniqueness==="subject-date-fields"?"context-required":prepared.uniqueness==="subject"&&prepared.historyMode==="append"&&!!prepared.dateFieldId?"state-update-current":"state-update-snapshot";
+  return{appViewId:appView.id,kind,dates:kind==="context-required"||!prepared.dateFieldId?[]:[formatDateInputValue(now)],definition:appView};
 }

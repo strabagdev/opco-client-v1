@@ -1,6 +1,6 @@
 import {observeNegotiatedReceipts} from "./revision-negotiation";
 import {createConsultationRevisionStorage} from "./consultation-revision-storage";
-import {createRecordsRevisionStorage} from "./records-revision-storage";
+import {createRecordsRevisionStorage,type VerifiedRecordsReader} from "./records-revision-storage";
 import {createCatalogRevisionStorage} from "./catalog-revision-storage";
 import { createPreparationRevisionStorage, type PreparationCoverageKeys } from "./preparation-revision-storage";
 import type * as SQLite from "expo-sqlite";
@@ -89,11 +89,11 @@ async function materialization(db:SQLite.SQLiteDatabase,scope:RevisionScope,arti
  }
  return {configuration:configured.configuration,definition:JSON.parse(definition.definition_json),rows,authorities};
 }
-export function createRevisionReceiptStorage(getDatabase:()=>Promise<Database>,queryKeys:{panel(scope:PanelSnapshotScope):string;report(scope:ReportSnapshotScope):string}&PreparationCoverageKeys){
+export function createRevisionReceiptStorage(getDatabase:()=>Promise<Database>,queryKeys:{panel(scope:PanelSnapshotScope):string;report(scope:ReportSnapshotScope):string}&PreparationCoverageKeys,readRecords?:VerifiedRecordsReader){
  async function active(db:SQLite.SQLiteDatabase,c:ReceiptContext){assertRevisionScope(c.scope,c.manifest);assertLocal(c.isCurrent(),"REVISION_SCOPE_RETIRED");assertLocal(same(await readJson(db,ACTIVE),{scope:c.scope,sessionId:c.sessionId}),"REVISION_SCOPE_RETIRED");}
  return observeNegotiatedReceipts({
   ...createConsultationRevisionStorage(getDatabase,(db,scope,artifact,expected)=>materialization(db,scope,artifact,expected,queryKeys)),
-  ...createRecordsRevisionStorage(getDatabase,(db,scope,artifact,expected)=>materialization(db,scope,artifact,expected,queryKeys)),
+  ...createRecordsRevisionStorage(getDatabase,(db,scope,artifact,expected)=>materialization(db,scope,artifact,expected,queryKeys),readRecords),
   ...createCatalogRevisionStorage(getDatabase,{active,materialize:(db,scope,artifact,expected)=>materialization(db,scope,artifact,expected,queryKeys)}),
   ...createPreparationRevisionStorage(getDatabase,{active,keys:queryKeys,materialize:(db,scope,artifact,expected)=>materialization(db,scope,artifact,expected,queryKeys)}),
   async invalidateRevisionReceiptScope(scope:RevisionScope,reason:string){

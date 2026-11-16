@@ -1,5 +1,6 @@
 import type * as SQLite from "expo-sqlite";
-import type { AppView } from "./opco-api";
+import type { AppView, EntityDefinition } from "./opco-api";
+import type {CachedRecordsResult} from "./offline-records";
 import type { ReceiptArtifact, ReceiptContext, ReceiptExpected } from "./revision-receipt-storage";
 import type { PreparationPart } from "./preparation-revision-contract";
 import type { RecordsCoveragePlan } from "./records-revision-contract";
@@ -17,7 +18,9 @@ const key = (s:Pick<RevisionScope,"ownerKey"|"contractId">,id:string) => JSON.st
 const same = (a:unknown,b:unknown) => revisionCanonical(a) === revisionCanonical(b);
 function proof(v:unknown,code="RECORDS_COVERAGE_INCOMPLETE"):asserts v {if(!v)throw new RevisionReceiptError(code);}
 const write = (db:SQLite.SQLiteDatabase,k:string,v:unknown) => db.runAsync("INSERT INTO app_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",k,JSON.stringify(v));
-export function createRecordsRevisionStorage(getDatabase:()=>Promise<Database>,materialize:(db:SQLite.SQLiteDatabase,s:RevisionScope,a:ReceiptArtifact,e?:ReceiptExpected)=>Promise<unknown>) {
+export type VerifiedRecordsRead={definition:EntityDefinition;records:CachedRecordsResult;verifiedAt:string};
+export type VerifiedRecordsReader=(db:SQLite.SQLiteDatabase,input:{ownerKey:string;contractId:string;entityTypeId:string;page:number;pageSize:number})=>Promise<CachedRecordsResult>;
+export function createRecordsRevisionStorage(getDatabase:()=>Promise<Database>,materialize:(db:SQLite.SQLiteDatabase,s:RevisionScope,a:ReceiptArtifact,e?:ReceiptExpected)=>Promise<unknown>,readRecords?:VerifiedRecordsReader) {
  async function active(db:SQLite.SQLiteDatabase,c:RecordsRevisionContext) {
   proof(c.isCurrent(),"REVISION_SCOPE_RETIRED");assertRevisionScope(c.scope,c.manifest);
   const row=await db.getFirstAsync<{value:string}>("SELECT value FROM app_metadata WHERE key=?","records_revision_active:v1:"+key(c.scope,c.appViewId));
@@ -58,7 +61,7 @@ export function createRecordsRevisionStorage(getDatabase:()=>Promise<Database>,m
     await write(tx,"records_revision_receipt:v1:"+key(c.scope,c.appViewId),receipt);
    },"transaction:records-revision-commit");return receipt;
   },
-  async inspectRecordsRevisionCoverage(input:{scope:RevisionScope;appView:AppView;manifest?:RevisionManifest;isCurrent():boolean}) {
+  async inspectRecordsRevisionCoverage(input:{scope:RevisionScope;appView:AppView;manifest?:RevisionManifest;page?:number;pageSize?:number;isCurrent():boolean;onVerified?(receipt:RecordsRevisionReceipt,storage:object,local:VerifiedRecordsRead):Promise<void>}) {
    const db=await getDatabase();if(input.manifest)assertRevisionScope(input.scope,input.manifest);
    let result!:{coverage:"complete"|"partial"|"unprepared";status:"match_shadow"|"remote_unchecked"|"invalid"|"unavailable";reason:string|null;receipt:RecordsRevisionReceipt|null;reuseAllowed:false};
    await db.withTransactionAsync(async tx=>{
@@ -70,8 +73,13 @@ export function createRecordsRevisionStorage(getDatabase:()=>Promise<Database>,m
      proof(same(receipt.scope,input.scope),"REVISION_AUTHORIZATION_CHANGED");proof(receipt.appViewId===input.appView.id && input.appView.type==="RECORDS" && input.appView.config.entityTypeId===receipt.entityTypeId,"RECORDS_CONFIGURATION_CHANGED");
      proof(receipt.status==="verified",receipt.invalidReason??"RECORDS_RECEIPT_INVALID");
      const views=await materialize(tx,input.scope,{kind:"views"});proof(same((views as AppView[]).find(v=>v.id===input.appView.id),input.appView),"RECORDS_CONFIGURATION_CHANGED");
-     proof(await revisionHash(await content(tx,input.scope,receipt))===receipt.localHash,"REVISION_LOCAL_CONTENT_MISMATCH");
+     const local=await content(tx,input.scope,receipt);proof(await revisionHash(local)===receipt.localHash,"REVISION_LOCAL_CONTENT_MISMATCH");
      if(input.manifest)proof(receipt.remote.epoch===input.manifest.epoch && receipt.remote.vector===input.manifest.readBindingVector.revision && receipt.remote.metadata===input.manifest.readDefinitionsRevision,"REVISION_REMOTE_CHANGED");
+     if(input.manifest&&input.onVerified&&readRecords){
+      const page=input.page??1,pageSize=input.pageSize??25;proof(Number.isSafeInteger(page)&&page>0&&Number.isSafeInteger(pageSize)&&pageSize>0,"RECORDS_QUERY_INCOMPATIBLE");
+      const records=await readRecords(tx,{ownerKey:input.scope.ownerKey,contractId:input.scope.contractId,entityTypeId:receipt.entityTypeId,page,pageSize});
+      await input.onVerified(receipt,db,{definition:local.values[1] as EntityDefinition,records,verifiedAt:receipt.verifiedAt});proof(input.isCurrent(),"REVISION_SCOPE_RETIRED");
+     }
      result={coverage:"complete",status:input.manifest?"match_shadow":"remote_unchecked",reason:null,receipt,reuseAllowed:false};
     } catch(error) {
      const reason=error instanceof RevisionReceiptError?error.code:"RECORDS_RECEIPT_LOCAL_ERROR";

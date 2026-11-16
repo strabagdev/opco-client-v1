@@ -9,6 +9,7 @@ import {OpcoApiError,createOpcoApi} from "./opco-api";
 import {createRecordsRevisionRead} from "./records-revision-read";
 import {refreshEntityRecordsCache,loadRecordsWithOfflineCache} from "./offline-records";
 import {revisionHash} from "./revision-receipts";
+import {genericNegotiationFixture} from "../test/generic-negotiation-fixture";
 const sqlite=vi.hoisted(()=>({openDatabaseAsync:vi.fn()}));vi.mock("expo-sqlite",()=>sqlite);
 function sqliteFile(path: string) {
   const worker = spawn("python3", ["-u", "-c", `
@@ -72,6 +73,40 @@ let directory:string,db:ReturnType<typeof sqliteFile>,store:ReturnType<typeof ge
 async function open(){__resetLocalDatabaseForTests();db=sqliteFile(directory+"/opco-client-v10-epoch2.db");sqlite.openDatabaseAsync.mockResolvedValue(db);store=getLocalDatabase();await store.getSelectedContractId();}
 beforeEach(async()=>{directory=mkdtempSync("/tmp/preparation-revision-sqlite-");await open();});
 afterEach(async()=>{await db.closeAsync();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});vi.restoreAllMocks();});
+
+describe("RECORDS verified consumption uses the original SQLite query",()=>{
+ async function seed(total=2){
+  const f=await genericNegotiationFixture(["unfiltered-collection"]),view={id:"view",name:"Synthetic",type:"RECORDS" as const,config:{entityTypeId:"entity"}},entity={id:"entity",name:"Synthetic",active:true,fields:[]};
+  const rows=Array.from({length:total},(_,i)=>({id:"row"+i,displayName:i%2?"A long label":"Z long label",updatedAt:"2026-11-15T00:00:00Z",values:{}}));
+  await store.upsertAppViews(f.scope.ownerKey,"contract",[view] as never,"2026-11-15T00:00:00Z");await store.upsertEntityDefinition("contract","entity",entity as never,"2026-11-15T00:00:00Z");
+  await store.upsertRemoteRecords({ownerKey:f.scope.ownerKey,contractId:"contract",entityTypeId:"entity",records:rows as never});
+  const read={version:1 as const,representationVersion:1 as const,mode:"shadow" as const,reuseAllowed:false as const,clientMaySkipReads:false as const,coverageCertified:false as const,revision:"1".repeat(64),manifestVectorRevision:f.manifest.readBindingVector.revision,epoch:f.manifest.epoch,authorizationFingerprint:f.scope.authorizationFingerprint,selectionFingerprint:"2".repeat(64),requestFingerprint:"3".repeat(64),contentHash:await revisionHash({views:[view]}),snapshot:{isolation:"repeatable-read" as const,at:"2026-11-15T00:00:00Z"}};
+  const context={scope:f.scope,manifest:f.manifest,sessionId:"session",appViewId:"view",isCurrent:()=>true};await store.beginRecordsRevisionRead(context);
+  const receipt=await store.commitRecordsRevisionReceipt(context,{appView:view as never,entityTypeId:"entity",parts:[
+   {resource:{kind:"views"},artifact:{kind:"views"},expected:{json:[view]},reads:[read]},
+   {resource:{kind:"definition",entityTypeId:"entity"},artifact:{kind:"definition",entityTypeId:"entity"},expected:{json:entity},reads:[read]},
+   {resource:{kind:"records",entityTypeId:"entity"},artifact:{kind:"records",entityTypeId:"entity",total},expected:{records:rows as never},reads:[read]},
+  ]});
+  const api={genericReuseEnabled:true,getOfflineRevisionManifest:vi.fn(async()=>f.manifest),getRevisionRead:vi.fn(async()=>({resource:{kind:"views" as const},data:{views:[view]},normalized:{views:[view]},readRevision:read})),getEntityDefinition:vi.fn(),getEntityRecords:vi.fn()};
+  return{f,view,api,receipt,input:{api,store,appView:view as never,token:"synthetic",ownerKey:f.scope.ownerKey,contractId:"contract",isCurrent:()=>true}};
+ }
+ it.each([0,2,101])("consumes %s prepared records with identical ordering, IDs and pagination",async n=>{
+  const x=await seed(n),before=await store.listCachedRecords({ownerKey:x.f.scope.ownerKey,contractId:"contract",entityTypeId:"entity",pageSize:25});
+  const result=await createRecordsRevisionRead({...x.input,query:{page:1,pageSize:25}});expect(result.reused?.records).toEqual(before);expect(result.reused?.definition).toMatchObject({id:"entity"});
+  expect(x.api.getEntityRecords).not.toHaveBeenCalled();expect(x.api.getEntityDefinition).not.toHaveBeenCalled();
+  expect((await store.inspectRecordsRevisionCoverage({scope:x.f.scope,appView:x.view as never,isCurrent:()=>true})).receipt?.snapshotId).toBe(x.receipt.snapshotId);
+ });
+ it.each([{search:"other"},{sort:"displayName" as const},{page:2},{fieldIdHasValue:"field"}])("does not substitute the collection for a different query %j",async query=>{
+  const x=await seed();expect((await createRecordsRevisionRead({...x.input,query})).reused).toBeUndefined();
+ });
+ it("reopens SQLite without trusting an old runtime marker and keeps all cached rows",async()=>{
+  const x=await seed();await db.closeAsync();await open();const result=await createRecordsRevisionRead({...x.input,store});expect(result.reused).toBeUndefined();expect((await store.listCachedRecords({ownerKey:x.f.scope.ownerKey,contractId:"contract",entityTypeId:"entity"})).pagination.total).toBe(2);
+ });
+ it("rejects changed local content without treating it as an empty collection",async()=>{
+  const x=await seed();await db.runAsync("UPDATE entity_records SET display_name='Changed synthetic label' WHERE server_id='row0'");
+  expect((await createRecordsRevisionRead(x.input)).reused).toBeUndefined();expect((await store.listCachedRecords({ownerKey:x.f.scope.ownerKey,contractId:"contract",entityTypeId:"entity"})).pagination.total).toBe(2);
+ });
+});
 
 
 const realSuite=process.env.RECORDS_COVERAGE_HTTP==="1"?describe.sequential:describe.skip;

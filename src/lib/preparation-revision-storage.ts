@@ -36,9 +36,10 @@ async function read(db: SQLite.SQLiteDatabase, key: string) {
   const row = await db.getFirstAsync<{value: string}>("SELECT value FROM app_metadata WHERE key=?", key);
   return row ? JSON.parse(row.value) as Record<string, unknown> : null;
 }
-function key(scope: RevisionScope, appViewId: string) {
+function key(scope: RevisionScope, appViewId: string, plan?:Pick<PreparationPlan,"markers">) {
   // A new coverage retires the old one for this experience; it cannot leave an old day looking current.
-  return prefix(scope.ownerKey, scope.contractId) + JSON.stringify([scope.applicationId, scope.userId, appViewId]);
+  const selected=plan?.markers.find(marker=>marker.kind==="current"&&marker.scope.identity);
+  return prefix(scope.ownerKey, scope.contractId) + JSON.stringify([scope.applicationId, scope.userId, appViewId,...(selected?[revisionCanonical(selected.scope)]:[])]);
 }
 function markerKey(marker: PreparationMarker, keys: PreparationCoverageKeys) {
   const value = marker.kind === "attendance" ? keys.attendanceDay?.(marker.scope)
@@ -155,7 +156,7 @@ export function createPreparationRevisionStorage(getDatabase: () => Promise<Data
         await dependencies.active(tx, context);
         receipt = {...base, version: 1, mode: "shadow", reuseAllowed: false, runId: context.runId, snapshotId: crypto.randomUUID(), scope: context.scope,
           remote: {epoch: context.manifest.epoch, vector: context.manifest.readBindingVector.revision, metadata: context.manifest.readDefinitionsRevision}, localHash, verifiedAt: new Date().toISOString(), status: "verified"};
-        await write(tx, key(context.scope, plan.appView.id), receipt);
+        await write(tx, key(context.scope, plan.appView.id,plan), receipt);
       }, "transaction:preparation-revision-commit");
       return receipt;
     },
@@ -170,7 +171,7 @@ export function createPreparationRevisionStorage(getDatabase: () => Promise<Data
           try {
             receipt = JSON.parse(row.value) as PreparationRevisionReceipt;
             requireProof(receipt.version === 1 && receipt.mode === "shadow" && receipt.reuseAllowed === false && isPreparationCoverage(receipt.coverage), "PREPARATION_RECEIPT_INCOMPATIBLE");
-            if (input.request && receipt.appViewId !== input.request.appViewId) continue;
+            if ((input.appViewId??input.request?.appViewId) && receipt.appViewId !== (input.appViewId??input.request?.appViewId)) continue;
             if (receipt.scope.applicationId !== input.scope.applicationId || receipt.scope.userId !== input.scope.userId) continue;
             requireProof(same(receipt.scope, input.scope), "REVISION_AUTHORIZATION_CHANGED");
             requireProof(receipt.status === "verified", receipt.invalidReason ?? "PREPARATION_RECEIPT_INVALID");

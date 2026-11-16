@@ -50,15 +50,17 @@ export function createCatalogRevisionStorage(getDatabase:()=>Promise<Database>,d
     receipt={...base,version:1,mode:"shadow",reuseAllowed:false,scope:context.scope,snapshotId:crypto.randomUUID(),coverage:{kind:"field-options-and-direct-catalogs",complete:true,contextBusinessRecords:false,transitiveCatalogs:false},remote:{epoch:context.manifest.epoch,vector:context.manifest.readBindingVector.revision,metadata:context.manifest.readDefinitionsRevision},localHash,verifiedAt:new Date().toISOString(),status:"verified"};await write(tx,key(context.scope,receipt.appViewId),receipt);
    },"transaction:catalog-revision-commit");return receipt;
   },
-  async inspectCatalogRevisionReceipts(input:{scope:RevisionScope;manifest?:RevisionManifest;isCurrent():boolean}):Promise<CatalogObservation[]>{
+  async inspectCatalogRevisionReceipts(input:{scope:RevisionScope;manifest?:RevisionManifest;appViewId?:string;isCurrent():boolean;onVerified?(receipt:CatalogReceipt,storage:object,prepared:PreparedAppViewDefinition):Promise<void>}):Promise<CatalogObservation[]>{
    const db=await getDatabase(),result:CatalogObservation[]=[];if(input.manifest)assertRevisionScope(input.scope,input.manifest);
    await db.withTransactionAsync(async tx=>{requireProof(input.isCurrent(),"REVISION_SCOPE_RETIRED");
     for(const row of await tx.getAllAsync<{key:string;value:string}>("SELECT key,value FROM app_metadata WHERE substr(key,1,length(?))=?",prefix(input.scope),prefix(input.scope))){let receipt:CatalogReceipt|null=null;
      try{receipt=JSON.parse(row.value);requireProof(receipt?.version===1&&typeof receipt.snapshotId==="string"&&receipt.mode==="shadow"&&receipt.reuseAllowed===false&&receipt.coverage.kind==="field-options-and-direct-catalogs"&&receipt.coverage.complete===true&&receipt.coverage.contextBusinessRecords===false&&receipt.coverage.transitiveCatalogs===false,"CATALOG_RECEIPT_INCOMPATIBLE");
+      if(input.appViewId&&receipt.appViewId!==input.appViewId)continue;
       if(receipt.scope.applicationId!==input.scope.applicationId||receipt.scope.userId!==input.scope.userId)continue;
       requireProof(same(receipt.scope,input.scope),"REVISION_AUTHORIZATION_CHANGED");requireProof(receipt.status==="verified",receipt.invalidReason??"CATALOG_RECEIPT_INVALID");
-      requireProof(await revisionHash(await content(tx,input.scope,receipt))===receipt.localHash,"REVISION_LOCAL_CONTENT_MISMATCH");
+      const local=await content(tx,input.scope,receipt);requireProof(await revisionHash(local)===receipt.localHash,"REVISION_LOCAL_CONTENT_MISMATCH");
       if(input.manifest)requireProof(receipt.remote.epoch===input.manifest.epoch&&receipt.remote.vector===input.manifest.readBindingVector.revision&&receipt.remote.metadata===input.manifest.readDefinitionsRevision,"REVISION_REMOTE_CHANGED");
+      if(input.manifest)await input.onVerified?.(receipt,db,local.prepared);requireProof(input.isCurrent(),"REVISION_SCOPE_RETIRED");
       result.push({status:input.manifest?"match_shadow":"remote_unchecked",reason:null,receipt,reuseAllowed:false});
      }catch(error){const reason=error instanceof RevisionReceiptError?error.code:"CATALOG_LOCAL_READ_FAILED";if(receipt)await write(tx,row.key,{...receipt,status:"invalid",invalidReason:reason});result.push({status:"invalid",reason,receipt:null,reuseAllowed:false});}
     }requireProof(input.isCurrent(),"REVISION_SCOPE_RETIRED");
