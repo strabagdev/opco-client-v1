@@ -1,3 +1,4 @@
+import { AttendanceRecordList } from "./attendance-record-list";
 import {attendanceDailyCount, attendanceReadScope, attendanceHistoryMode, type AttendanceRepetitionPolicy} from "../../../lib/attendance-repetition";
 import { actionSurface } from "../../../theme/operational-presentation";
 import { metrics, type ThemeColors } from "../../../theme/tokens";
@@ -479,7 +480,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     const localVisibleLatest = localLatest.items.map((item) => stateUpdateLatestToAttendanceLatest(item, appView.config.statusFieldId));
-    const visibleLatest = mergeAttendanceLatestWithLocalOverlay(remoteSnapshot?.latest ?? [], localVisibleLatest);
+    const visibleLatest = appView.config.repetitionPolicy && appView.config.repetitionPolicy !== "ONE_PER_DAY"
+      ? [...(remoteSnapshot?.latest ?? []), ...localVisibleLatest]
+      : mergeAttendanceLatestWithLocalOverlay(remoteSnapshot?.latest ?? [], localVisibleLatest);
 
     setLatest(visibleLatest);
     setTotalRegistered(Math.max(summary.totalRegistered, remoteSnapshot?.totalRegistered ?? 0));
@@ -1814,7 +1817,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       {selectedItem && appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? <View style={styles.latestBlock}>
         <Text style={styles.sectionTitle}>{editingTarget ? "Editando el registro seleccionado" : "Nuevo registro independiente"}</Text>
         {editingTarget ? <Pressable accessibilityRole="button" onPress={()=>void selectRepeatedPerson(selectedItem)} style={styles.modalSecondaryButton}><Text style={styles.modalSecondaryText}>Registrar uno nuevo</Text></Pressable> : null}
-        {personRecords.map((record,index)=><View key={record.attendance?.recordId} style={styles.latestRow}><Text style={styles.statusMeta}>Registro {index+1} · {record.attendance?.statusLabel??"Sin estado"} · {record.attendance?.updatedAt ? formatLocalTime(record.attendance.eventOccurredAt??record.attendance.updatedAt) : "Sin hora disponible"}</Text><Pressable accessibilityRole="button" accessibilityLabel="Editar este registro diario" onPress={()=>void editRepeatedRecord(record)} style={styles.modalSecondaryButton}><Text style={styles.modalSecondaryText}>Editar</Text></Pressable></View>)}
+        <AttendanceRecordList records={[
+          ...personRecords.flatMap(item => item.attendance ? [{ ...item.attendance, person: item.person }] : []),
+          ...(editingTarget && selectedItem.attendance && !personRecords.some(item => item.attendance?.recordId === selectedItem.attendance?.recordId)
+            ? [{ ...selectedItem.attendance, person: selectedItem.person }] : []),
+        ]}
+          fields={contextFields} statuses={statuses} store={definitionCache}
+          scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date } : null}
+          selectedRecordId={editingTarget ? selectedItem.attendance?.recordId : undefined}
+          onEdit={record => { const original = personRecords.find(item => item.attendance?.recordId === record.recordId)
+            ?? (selectedItem.attendance?.recordId === record.recordId ? selectedItem : undefined); if (original) void editRepeatedRecord(original); }} />
       </View> : null}
       {selectedItem ? (
         <View testID="attendance-form" style={styles.checkInPanel}>
@@ -1888,7 +1900,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} onEdit={appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? editRepeatedRecord : undefined} /> : null}
+      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache} scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date } : null} onEdit={appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? editRepeatedRecord : undefined} /> : null}
 
       <Modal animationType="fade" transparent visible={!!repeatWarning} onRequestClose={cancelRepeatedRecord}>
         <View style={styles.modalBackdrop}><View accessibilityViewIsModal style={styles.modalPanel}>
@@ -1963,25 +1975,20 @@ function AttendanceContextSelectors({
   );
 }
 
-function LatestAttendanceList({ latest, onEdit }: { latest: AttendanceLatestItem[]; onEdit?:(item:AttendanceItem)=>void }) {
+function LatestAttendanceList({ latest, onEdit, ...presentation }: Pick<Parameters<typeof AttendanceRecordList>[0], "fields" | "statuses" | "scope" | "store"> & {
+  latest: AttendanceLatestItem[]; onEdit?:(item:AttendanceItem)=>void;
+}) {
   const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
-  return (
-    <View style={styles.latestBlock}>
-      <Text style={styles.sectionTitle}>Registros del día</Text>
-      {latest.length > 0 ? <Text style={[styles.statusMeta, { width: "auto" }]}>Los más recientes de esta fecha.</Text> : null}
-      {latest.length === 0 ? <Text style={styles.empty}>Sin registros para esta fecha.</Text> : null}
-      {latest.map((item) => (
-        <View key={item.attendanceRecordId} style={styles.latestRow}>
-          <View style={styles.personText}>
-            <Text style={styles.personName}>{item.person.displayName}</Text>
-            <Text style={styles.statusMeta}>{item.statusLabel ?? "Sin estado"}</Text>
-          </View>
-          {onEdit ? <Pressable accessibilityRole="button" accessibilityLabel="Editar este registro diario" onPress={()=>onEdit({person:item.person,attendance:{...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),recordId:item.attendanceRecordId,updatedAt:item.updatedAt,statusOptionId:item.statusOptionId,statusLabel:item.statusLabel,contextValues:item.contextValues,observation:item.observation??null}})} style={styles.modalSecondaryButton}><Text style={styles.modalSecondaryText}>Editar</Text></Pressable> : null}
-          {item.updatedAt ? <Text style={styles.latestTime}>{formatLocalTime(item.updatedAt)}</Text> : null}
-        </View>
-      ))}
-    </View>
-  );
+  return <View style={styles.latestBlock}>
+    <Text style={styles.sectionTitle}>Registros del día</Text>
+    {latest.length > 0 ? <Text style={[styles.statusMeta, { width: "auto" }]}>Los más recientes de esta fecha.</Text> : <Text style={styles.empty}>Sin registros para esta fecha.</Text>}
+    <AttendanceRecordList {...presentation} records={latest.map(item => ({ ...item, recordId: item.attendanceRecordId }))}
+      onEdit={onEdit ? record => {
+        const item = latest.find(event => event.attendanceRecordId === record.recordId);
+        if (item) onEdit({ person: item.person, attendance: { ...(item.eventOccurredAt ? { eventOccurredAt: item.eventOccurredAt } : {}), recordId: item.attendanceRecordId,
+          updatedAt: item.updatedAt, statusOptionId: item.statusOptionId, statusLabel: item.statusLabel, contextValues: item.contextValues, observation: item.observation ?? null } });
+      } : undefined} />
+  </View>;
 }
 
 function ConflictModal({
@@ -2073,12 +2080,6 @@ function stateUpdateResultToAttendanceResult(
   };
 }
 
-function formatLocalTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
 
 export function createAttendanceBaseStyles(p: ThemeColors = colors) {
   return StyleSheet.create({

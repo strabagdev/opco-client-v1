@@ -1,8 +1,9 @@
+import { loadAttendanceRecordPresentation } from "../renderers/workflows/attendance/attendance-record-presentation";
 import { OpcoNetworkError } from "./opco-api";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
 import { type OpcoApi } from "./opco-api";
@@ -254,4 +255,70 @@ describe("Attendance independent events in real SQLite", () => {
         expect(await list()).toHaveLength(1);
         expect(await store.listPendingStateUpdateOperations("different-user")).toHaveLength(0);
     });
+});
+
+
+function presentationEvidence(name: string, rows: unknown) {
+  const directory = process.env.ATTENDANCE_PRESENTATION_EVIDENCE_DIR;
+  if (!directory?.startsWith("/tmp/opco-attendance-record-presentation-20261117/")) return;
+  mkdirSync(directory, { recursive: true });writeFileSync(`${directory}/${name}.json`, JSON.stringify(rows, null, 2));
+}
+
+describe("Attendance presentation identity backed by existing SQLite rows", () => {
+  const contexts = [
+    { id: "choice", name: "Área configurada", type: "SELECT" as const, required: false, options: [{ optionId: "option-one", value: "one", label: "Sector norte" }] },
+    { id: "relation", name: "Referencia configurada", type: "RELATION" as const, required: false, config: { relationKind: "ONE", targetEntityTypeId: "catalog" } },
+  ];
+  const read = async () => Promise.all((await list()).map(record => loadAttendanceRecordPresentation(store, scope, {
+    person: record.subject, recordId: record.serverRecordId ?? record.localRecordId, statusLabel: record.stateValues[0]?.label ?? null, statusOptionId: record.stateValues[0]?.optionId ?? null,
+    eventOccurredAt: record.eventOccurredAt, updatedAt: record.updatedAt ?? "", contextValues: record.extraValues as never,
+  }, contexts, [], "America/Santiago")));
+  it("keeps two full references through identical captures, ACK, fresh snapshot, reopen and exact edit", async () => {
+    await store.upsertRemoteRecords({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "catalog", records: [{ id: "lot-1", displayName: "Catálogo sintético", values: {}, updatedAt: "2026-11-16T10:00:00.000Z" }] });
+    await store.saveStateUpdateLocally(input());await store.saveStateUpdateLocally(input());
+    const pendingBefore = await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id");
+    const before = await read();presentationEvidence("pending", before);
+    expect(new Set(before.map(v => v.reference)).size).toBe(2);
+    expect(before.every(v => v.referenceKind === "local" && v.timestamps[0].label === "Hora de captura")).toBe(true);
+    expect(before[0].fields.slice(1).flatMap(f => f.values.map(v => v.text))).toEqual(["Sector norte", "Catálogo sintético"]);
+    expect(await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")).toEqual(pendingBefore);
+    const operations = await store.listPendingStateUpdateOperations(scope.ownerKey);
+    for (const [index, operation] of operations.entries()) await store.completeStateUpdateOperation(operation, { result: "CREATED", recordId: "remote-presentation-" + index, subjectRecordId: "subject", updatedAt: "2026-11-16T10:00:00.000Z" });
+    const references = before.map(v => v.reference).sort();
+    expect((await read()).map(v => v.reference).sort()).toEqual(references);
+    for (const [index, operation] of operations.entries()) expect((await read()).find(row => row.serverId === "remote-presentation-" + index)?.reference).toBe(operation.localRecordId);
+    presentationEvidence("ack", await read());
+    await reopen();expect((await read()).map(v => v.reference).sort()).toEqual(references);
+    const serverEvents = (await list()).map(record => ({ recordId: record.serverRecordId!, date: scope.date, subject: record.subject, stateValues: record.stateValues, extraValues: record.extraValues, eventOccurredAt: record.eventOccurredAt, updatedAt: "2026-11-16T10:01:00.000Z" }));
+    await store.upsertStateUpdateSnapshot({ ...scope, historyMode: "append", uniqueness: "subject-date", complete: false, items: [], latest: serverEvents });
+    await reopen();expect((await read()).map(v => v.reference).sort()).toEqual(references);
+    for (const [index, operation] of operations.entries()) expect((await read()).find(row => row.serverId === "remote-presentation-" + index)?.reference).toBe(operation.localRecordId);
+    presentationEvidence("reopened", await read());
+    const original = (await list())[0], other = (await list())[1];
+    await store.saveStateUpdateLocally({ ...input(), targetLocalRecordId: original.localRecordId, targetRecordId: original.serverRecordId, overwrite: true, expectedUpdatedAt: original.updatedAt, stateValues: [{ fieldId: "state", optionId: "b" }] });
+    await reopen();expect((await read()).map(v => v.reference).sort()).toEqual(references);
+    const after = await list();expect(after).toHaveLength(2);expect(after.find(v => v.localRecordId === other.localRecordId)?.stateValues).toEqual(other.stateValues);
+    expect((await store.listPendingStateUpdateOperations(scope.ownerKey))[0].payload).toMatchObject({ targetRecordId: original.serverRecordId, expectedUpdatedAt: original.updatedAt });
+    const originalAfter = after.find(v => v.localRecordId === original.localRecordId)!;
+    await store.saveStateUpdateLocally({ ...input(), targetLocalRecordId: other.localRecordId, targetRecordId: other.serverRecordId, overwrite: true, expectedUpdatedAt: other.updatedAt, stateValues: [{ fieldId: "state", optionId: "b" }] });
+    await reopen();const both = await list();expect(both).toHaveLength(2);
+    expect(both.find(v => v.localRecordId === original.localRecordId)?.stateValues).toEqual(originalAfter.stateValues);
+    const edits = await store.listPendingStateUpdateOperations(scope.ownerKey);expect(edits).toHaveLength(2);
+    expect(new Set(edits.map(v => (v.payload as OfflineStateUpdatePayload).targetRecordId)).size).toBe(2);
+    expect((await read()).map(v => v.reference).sort()).toEqual(references);presentationEvidence("edited", await read());
+  });
+  it("uses the server identity for historical snapshots and does not invent timestamp provenance", async () => {
+    await store.upsertStateUpdateSnapshot({ ...scope, historyMode: "append", uniqueness: "subject-date", complete: false, items: [], latest: [{ recordId: "historical-server-id", date: scope.date, subject: { id: "subject", displayName: "Synthetic" }, stateValues: [{ fieldId: "state", optionId: "a", label: "A" }], extraValues: { relation: [{ id: "related-id", displayName: "Etiqueta histórica" }], choice: "one" }, eventOccurredAt: "2026-11-15T10:00:00.000Z", updatedAt: "2026-11-16T10:00:00.000Z" }] });
+    const before = (await read())[0];presentationEvidence("historical", [before]);expect(before.reference).toBe("historical-server-id");expect(before.referenceKind).toBe("server");
+    expect(before.timestamps.map(v => v.label)).toEqual(["Hora de referencia", "Última modificación"]);
+    expect(before.fields[2].values[0].text).toBe("Etiqueta histórica");
+    await reopen();expect((await read())[0].reference).toBe(before.reference);
+    const original = (await list())[0];
+    const { eventOccurredAt: omittedCapture, ...edit } = input();void omittedCapture;
+    await store.saveStateUpdateLocally({ ...edit, targetLocalRecordId: original.localRecordId, targetRecordId: original.serverRecordId, overwrite: true, expectedUpdatedAt: original.updatedAt, stateValues: [{ fieldId: "state", optionId: "b" }] });
+    await reopen();const corrected = (await read())[0];
+    expect(corrected.reference).toBe(before.reference);expect(corrected.referenceKind).toBe("server");
+    expect(corrected.timestamps[0].label).toBe("Hora de referencia");
+    presentationEvidence("historical-edited", [corrected]);
+  });
 });
