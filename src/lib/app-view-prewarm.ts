@@ -1,3 +1,4 @@
+import {attendanceHistoryMode} from "./attendance-repetition";
 import {completeAttendanceDay} from "./attendance-day-pages";
 import { createPreparationRevisionRun, type PreparationRevisionApi } from "./preparation-revision-receipts";
 import { homePreparationDay, homePreparationProof, preparationSignature } from "./home-preparation-policy";
@@ -754,7 +755,7 @@ async function prewarmOneAppView({
               required: field.required,
               type: "SELECT" as const,
             })),
-            historyMode: "update-current",
+            historyMode: attendanceHistoryMode(attendanceConfig),
             kind: "state-update",
             workflowWriteContract: response.workflowWriteContract,
             ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),

@@ -3873,3 +3873,16 @@ recibo mensual íntegro del mismo handle/sesión y consumo dentro de su transacc
 Rechazo conserva descarga normal; retirada final provoca una sola pasada ordinaria localizada.
 Catálogos y otros workflows continúan descargándose. Sin nueva migración, motores offline,
 comandos o sincronización; sin producción, commit/push/deploy.
+
+
+## Attendance — política de repetición por experiencia (16-11-2026, local)
+
+Política opcional ONE_PER_DAY (valor predeterminado), MULTIPLE_WITH_WARNING o MULTIPLE.
+El preset reutiliza STATE_UPDATE, el lock de identidad y la cola compartida; edición por ID
+y base explícitos, altas múltiples durables y negociación compatible antes del envío.
+Sin migraciones ni activación de experiencias. Contrato, límites y operación:
+[ATTENDANCE_REPETITION.md](ATTENDANCE_REPETITION.md).
+
+## Attendance repetition compatibility review — 2026-11-17
+
+Repeat intents use the dedicated workflow/state-update/repetition command address, delegating to the common engine. No fallback to legacy POST is allowed on 404/405, including a Core rollback after the compatibility GET. Legacy/default intents retain their request route/body; explicit ONE is semantically identical to an omitted policy. Before sync, a known cached Attendance policy mismatch retains the pending command/base/key with an explicit review error. No schema, outbox, namespace or synchronization scheduler change is introduced. See ATTENDANCE_REPETITION.md for upgrade and compatible rollback limits.

@@ -1,9 +1,11 @@
+import type { AppViewDefinitionCache } from "../lib/app-view-definitions-cache";
+import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "../lib/attendance-repetition";
 import {workflowWriteMetadata,WorkflowWriteReviewError} from "../lib/workflow-write-contract";
 import { StateUpdateScheduleReviewError, stateUpdateScheduleMetadata } from "../lib/state-update-schedule";
 import { compositeIdentityKey } from "../lib/state-update-identity";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
-import { OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
+import { type AttendanceWorkflowConfig, OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
@@ -20,7 +22,7 @@ export type StateUpdateSyncStore = {
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
   markStateUpdateOperationSyncing(operationId: string, expectedRequestId?: string): Promise<boolean | void>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
-} & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
+} & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">> & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export type StateUpdateSyncResult = {
   completed: number;
@@ -90,6 +92,9 @@ async function runSync({
     }).catch(() => undefined),
   ));
 
+  // A retained command must not be reinterpreted by a Core that only understands one-per-day.
+  // Share this authenticated compatibility read inside this run, never across owners or reconnects.
+  const repetitionChecks=new Map<string,Promise<void>>();
   for (const operation of operations) {
     const payload = operation.payload as OfflineStateUpdatePayload;
 
@@ -101,7 +106,26 @@ async function runSync({
       if (await store.markStateUpdateOperationSyncing(operation.id, operation.clientRequestId) === false) continue;
       result.operationsAttempted += 1;
 
+      const prepared = await store.getAppViewDefinition?.(ownerKey,operation.contractId,payload.appViewId);
+      const view = prepared?.definition.appView;
+      const cachedConfig=view?.type==="WORKFLOW" ? view.config as AttendanceWorkflowConfig & {workflow?:string} : null;
+      if(cachedConfig && (cachedConfig.workflowKey??cachedConfig.workflow)==="attendance" && attendanceRepetitionPolicy(cachedConfig)!==(payload.repetitionPolicy??"ONE_PER_DAY")) {
+        throw new OpcoApiError("La política preparada cambió desde esta captura. Revisa la intención conservada; no se reinterpretó.","ATTENDANCE_POLICY_CHANGED",409);
+      }
+      if(payload.repetitionPolicy&&payload.repetitionPolicy!=="ONE_PER_DAY"){
+        const key=JSON.stringify([operation.contractId,payload.appViewId,payload.date,payload.repetitionPolicy]);
+        let compatible=repetitionChecks.get(key);
+        if(!compatible){
+          compatible=(async()=>{
+            if(!api.getStateUpdateWorkflow)throw new OpcoApiError("No se pudo acreditar la política de este servidor. La intención se conserva.","ATTENDANCE_POLICY_UNVERIFIED",409);
+            const read=await api.getStateUpdateWorkflow(token,operation.contractId,payload.appViewId,{date:payload.date,subjectRecordId:payload.subjectRecordId,pageSize:1},{diagnosticSyncRunId:syncRunId});
+            if(read.appView.id!==payload.appViewId||read.date!==payload.date||read.repetitionPolicy!==payload.repetitionPolicy||read.historyMode!=="append"||read.uniqueness!=="subject-date")throw new OpcoApiError("El servidor o la definición no acreditan esta política. Revisa la intención conservada.","ATTENDANCE_POLICY_UNVERIFIED",409);
+          })();repetitionChecks.set(key,compatible);
+        }
+        await compatible;
+      }
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
+        ...attendanceRepetitionMetadata(payload),
         ...workflowWriteMetadata(payload),
         ...stateUpdateScheduleMetadata(payload),
         identity: payload.identity,

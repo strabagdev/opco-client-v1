@@ -1,3 +1,4 @@
+import {attendanceRepetitionMetadata, type AttendanceRepetitionCommand} from "./attendance-repetition";
 import { readAttendanceContextValue } from "./attendance-context-values";
 import {workflowWriteMetadata, type WorkflowWriteMetadata} from "./workflow-write-contract";
 import {
@@ -16,7 +17,7 @@ import { CachedStateUpdateRecord } from "./state-update-offline";
 
 export type AttendanceSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
-export type CachedAttendanceRecord = WorkflowWriteMetadata & {
+export type CachedAttendanceRecord = AttendanceRepetitionCommand & WorkflowWriteMetadata & {
   conflictIdentity?: string;
   attempts?: number;
   conflictRemoteStatusLabel?: string | null;
@@ -94,6 +95,7 @@ export function stateUpdateItemToAttendanceItem(
   return {
     attendance: item.current
       ? {
+          ...(item.current.eventOccurredAt ? {eventOccurredAt:item.current.eventOccurredAt} : {}),
           observation: readObservation(item.current.extraValues, observationFieldId),
           contextValues: readContextValues(item.current.extraValues, observationFieldId, contextFields),
           recordId: item.current.recordId,
@@ -115,6 +117,7 @@ export function stateUpdateLatestToAttendanceLatest(
 
   return {
     attendanceRecordId: item.recordId,
+    ...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),
     ...(item.extraValues ? { contextValues: readContextValues(item.extraValues, undefined, contextFields) } : {}),
     person: item.subject,
     statusLabel: status?.label ?? null,
@@ -133,6 +136,7 @@ export function stateUpdateConflictToAttendanceRecord(
   const remoteStatus = record.conflictRemoteStateValues?.find((value) => value.fieldId === statusFieldId);
 
   return {
+    ...attendanceRepetitionMetadata(record),
     conflictIdentity: record.conflictIdentity,
     attempts: record.attempts,
     conflictRemoteStatusLabel: remoteStatus?.label ?? null,

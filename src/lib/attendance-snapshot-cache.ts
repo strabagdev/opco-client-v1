@@ -1,3 +1,4 @@
+import {attendanceHistoryMode} from "./attendance-repetition";
 import {completeAttendanceDay,assertVerifiedAttendanceDayScope} from "./attendance-day-pages";
 import { attendanceStateFields } from "./attendance-offline";
 import { attendanceResponseToStateUpdateItems, isAttendanceRemoteSnapshotComplete } from "../renderers/workflows/attendance/attendance-workflow-logic";
@@ -8,7 +9,7 @@ export type AttendanceMonthStatus = "complete" | "partial" | "none";
 
 export type CacheAttendanceRemoteSnapshotInput = {
   appViewId: string;
-  config: Pick<AttendanceWorkflowConfig, "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
+  config: Pick<AttendanceWorkflowConfig, "repetitionPolicy" | "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
   contractId: string;
   ownerKey: string;
   response: AttendanceResponse;
@@ -87,6 +88,7 @@ export async function cacheAttendanceRemoteSnapshot({
     subjectPresentation:response.subjectPresentation,
     appViewId,
     complete,
+    ...(attendanceHistoryMode(config)==="append"?{historyMode:"append" as const,uniqueness:"subject-date" as const}:{}),
     contractId,
     date: response.date,
     projectionDefinition: {

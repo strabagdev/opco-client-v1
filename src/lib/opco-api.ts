@@ -1,3 +1,5 @@
+import type {AttendanceRepetitionCommand, AttendanceRepetitionPolicy} from "./attendance-repetition";
+import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "./attendance-repetition";
 import {createManifestNegotiationRequest,manifestNegotiationPath,validateManifestNegotiation,recordNegotiationDiagnostic} from "./revision-negotiation";
 import { revisionReadPath, assertRevisionRequestBinding, assertRevisionResponseShape, validateRevisionDownload, validateRevisionManifest, RevisionReceiptError, type RevisionManifest, type RevisionResource, type RevisionDownload } from "./revision-receipts";
 import {workflowWriteMetadata, type WorkflowWriteCommand, type WorkflowWriteContract} from "./workflow-write-contract";
@@ -160,6 +162,7 @@ export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
 
 export type AttendanceWorkflowConfig = {
+  repetitionPolicy?: AttendanceRepetitionPolicy;
   workflowWritePolicy?: unknown;
   subjectPresentation?: SubjectPresentationConfig;
   codeSearch?: { fieldId: string };
@@ -615,7 +618,9 @@ export type AttendanceContextField = {
 export type AttendanceContextValues = Record<string, { label: string; optionId: string } | { id: string; displayName?: string } | string | null | unknown[]>;
 
 export type AttendanceItem = {
+  dailyRecordCount?: number;
   attendance: {
+    eventOccurredAt?: string;
     contextValues?: AttendanceContextValues;
     observation: string | null;
     recordId: string;
@@ -631,6 +636,7 @@ export type AttendanceItem = {
 };
 
 export type AttendanceLatestItem = {
+  eventOccurredAt?: string;
   attendanceRecordId: string;
   observation?: string | null;
   contextValues?: AttendanceContextValues;
@@ -645,6 +651,8 @@ export type AttendanceLatestItem = {
 };
 
 export type AttendanceResponse = {
+  repetitionPolicy?: AttendanceRepetitionPolicy;
+  dailyRecords?: AttendanceItem[];
   daySnapshotCapabilities?: {version:1;maxPageSize:number};
   daySnapshot?: {version:1;page:number;pageSize:number;total:number;totalPages:number;hasMore:boolean};
   observationProjection?: {version: 1; fieldId: string};
@@ -679,7 +687,8 @@ export type AttendanceResponse = {
   };
 };
 
-export type AttendanceBatchEntry = {
+export type AttendanceBatchEntry = AttendanceRepetitionCommand & {
+  targetLocalRecordId?: string;
   writeCommand?: WorkflowWriteCommand;
   contextValues?: Record<string, string | null>;
   expectedUpdatedAt?: string;
@@ -800,6 +809,7 @@ export type StateUpdateConflictExtraValue = {
 };
 
 export type StateUpdateCurrent = StateUpdateScheduleMetadata & {
+  eventOccurredAt?:string;
   // Local read model only: an unsent scheduled intention can have no remote base.
   localExpectedUpdatedAt?: string | null;
   localScheduleReviewRequired?: boolean;
@@ -816,6 +826,7 @@ export type StateUpdateItem = {
 };
 
 export type StateUpdateLatestItem = StateUpdateScheduleMetadata & {
+  eventOccurredAt?:string;
   extraValuesFormat?: "field-value";
   date?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
@@ -847,6 +858,7 @@ export type StateUpdateCurrentBatch = { version: 1; requestedSubjectIds: string[
   results: { subjectRecordId: string; status: "resolved" | "error"; code?: string }[] };
 
 export type StateUpdateResponse = {
+  repetitionPolicy?: AttendanceRepetitionPolicy;
   workflowWriteContract?: WorkflowWriteContract | null;
   currentBatchCapabilities?: StateUpdateCurrentBatchCapabilities;
   currentBatch?: StateUpdateCurrentBatch;
@@ -921,6 +933,7 @@ type StateUpdateRawField = StateUpdateField | {
 type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "latestPagination" | "sourceEntityType" | "stateFields" | "uniqueness"> & {
   uniqueness?: StateUpdateUniqueness | { mode: StateUpdateUniqueness };
   workflow?: {
+    repetitionPolicy?: AttendanceRepetitionPolicy;
     dateFieldId?: string | null;
     historyMode?: StateUpdateHistoryMode;
     subjectFieldId?: string;
@@ -934,7 +947,7 @@ type StateUpdateRawResponse = Omit<StateUpdateResponse, "items" | "latest" | "la
   subjects?: StateUpdateRawItem[];
 };
 
-export type StateUpdateEntry = StateUpdateScheduleMetadata & {
+export type StateUpdateEntry = AttendanceRepetitionCommand & StateUpdateScheduleMetadata & {
   writeCommand?: WorkflowWriteCommand;
   identity?: CompositeStateIdentity;
   expectedUpdatedAt?: string;
@@ -1876,7 +1889,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         },
       ).then(normalizeAttendanceBatchResponse);
     },
-    saveStateUpdateWorkflow(
+    async saveStateUpdateWorkflow(
       token: string,
       contractId: string,
       appViewId: string,
@@ -1884,8 +1897,16 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       options: { diagnosticSyncRunId?: string | null } = {},
     ) {
       const submitted = JSON.parse(JSON.stringify(input)) as StateUpdateRequest;
+      let policy;
+      try { policy=attendanceRepetitionPolicy({repetitionPolicy:submitted.repetitionPolicy}); }
+      catch { throw new OpcoApiError("La política del comando no es compatible. La intención se conserva.","ATTENDANCE_POLICY_UNVERIFIED",409); }
+      if(policy==="ONE_PER_DAY" && (submitted.targetRecordId!==undefined || submitted.eventOccurredAt!==undefined || submitted.repetitionAcknowledged!==undefined)) {
+        throw new OpcoApiError("El comando conserva metadata de repetición sin una política compatible. Revisa la intención.","ATTENDANCE_POLICY_UNVERIFIED",409);
+      }
+      // Old Core has no handler for this path: even a rollback after the compatibility GET cannot run its update-current engine.
+      const commandPath=policy==="ONE_PER_DAY" ? "" : "/repetition";
       return authenticatedRequest<StateUpdateApiResponse>(
-        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update`,
+        `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update${commandPath}`,
         token,
         {
           body: JSON.stringify(serializeStateUpdateRequest(submitted)),
@@ -1893,7 +1914,12 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           diagnosticSyncRunId: options.diagnosticSyncRunId,
           method: "POST",
         },
-      ).then(response => normalizeStateUpdateBatchResponse(response, submitted));
+      ).then(response => normalizeStateUpdateBatchResponse(response, submitted)).catch(error=>{
+        if(commandPath && error instanceof OpcoApiError && (error.status===404||error.status===405)) {
+          throw new OpcoApiError("El servidor o la experiencia no admiten este comando de repetición. Actualiza y revisa la intención conservada.","ATTENDANCE_POLICY_UNVERIFIED",error.status);
+        }
+        throw error;
+      });
     },
     getHealth() {
       return request<unknown>("/api/v1/health", {
@@ -2024,6 +2050,7 @@ function normalizeStateUpdateResponse(response: StateUpdateRawResponse): StateUp
 
   return {
     ...response,
+    ...(response.workflow?.repetitionPolicy?{repetitionPolicy:response.workflow.repetitionPolicy}:{}),
     dateFieldId: dateFieldId ?? undefined,
     historyMode: response.historyMode ?? response.workflow?.historyMode,
     extraFields,
@@ -2234,6 +2261,7 @@ function normalizeStateUpdateBatchResponse(response: StateUpdateApiResponse, sub
 
 function serializeStateUpdateRequest(input: StateUpdateRequest) {
   return {
+    ...attendanceRepetitionMetadata({...input,repetitionPolicy:input.repetitionPolicy==="ONE_PER_DAY"?undefined:input.repetitionPolicy}),
     ...workflowWriteMetadata(input),
     ...stateUpdateScheduleRequest(input),
     ...(input.identity ? { identity: input.identity } : {}),
@@ -2591,6 +2619,10 @@ export function stateUpdateReadDiagnosticOperation(query: StateUpdateWorkflowQue
 function templateApiPath(path: string) {
   return path
     .split("?")[0]
+    .replace(
+      /^\/api\/v1\/contracts\/[^/]+\/views\/[^/]+\/workflow\/state-update\/repetition$/,
+      "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update/repetition",
+    )
     .replace(
       /^\/api\/v1\/contracts\/[^/]+\/views\/[^/]+\/workflow\/state-update$/,
       "/api/v1/contracts/:contractId/views/:appViewId/workflow/state-update",

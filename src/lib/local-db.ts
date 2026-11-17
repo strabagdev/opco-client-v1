@@ -1,3 +1,5 @@
+import {createClientRequestId} from "./client-request-id";
+import {attendanceRepetitionMetadata} from "./attendance-repetition";
 import { createRevisionReceiptStorage, type RevisionReceiptStore } from "./revision-receipt-storage";
 import { relationKind } from "./relation-cardinality";
 import {pinnedWorkflowWriteMetadata,workflowWriteMetadata,WorkflowWriteReviewError} from "./workflow-write-contract";
@@ -323,6 +325,7 @@ export function getLocalDatabase(): LocalDatabase {
 	    markStateUpdateSnapshotCoverage,
 	    discardStateUpdateLocalChange,
     resolveStateUpdateConflictWithLocal,
+    getAttendanceDailyRecords,
     saveStateUpdateLocally,
     getStateUpdateLocalCancellation,
     cancelNeverDispatchedStateUpdate,
@@ -2867,6 +2870,8 @@ async function saveStateUpdateLocallyWithRecordId(
   resolvedLocalRecordId?: string,
   conflictIdentity?: string,
 ) {
+  if(rawInput.targetRecordId && !rawInput.targetLocalRecordId && !resolvedLocalRecordId) throw Error("Selecciona primero la copia local del registro que se va a editar.");
+  if(rawInput.targetLocalRecordId && (!rawInput.repetitionPolicy || rawInput.repetitionPolicy==="ONE_PER_DAY")) throw Error("La edición por registro requiere una política compatible.");
   if (rawInput.uniqueness === "subject-date-fields" && (!rawInput.identity || !rawInput.date)) throw new Error("COMPOSITE_CONTEXT_REQUIRED");
   const input = {
     ...rawInput,
@@ -2874,10 +2879,10 @@ async function saveStateUpdateLocallyWithRecordId(
   };
   const db = await getDatabase();
   const now = new Date().toISOString();
-  let localRecordId = resolvedLocalRecordId ?? createStateUpdateLocalRecordId(input);
+  let localRecordId = resolvedLocalRecordId ?? input.targetLocalRecordId ?? (input.repetitionPolicy && input.repetitionPolicy!=="ONE_PER_DAY" ? `state_update_${encodeURIComponent(input.appViewId)}_${createClientRequestId()}` : createStateUpdateLocalRecordId(input));
   let saved: ReturnType<typeof normalizeStateUpdateRecord> | undefined;
   await db.withTransactionAsync(async (transaction) => {
-    if (!resolvedLocalRecordId) {
+    if (!resolvedLocalRecordId && !input.targetLocalRecordId) {
       const isolated = `state_update_intent_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId,
         input.appViewId, input.uniqueness, input.uniqueness === "subject-date" || input.uniqueness === "subject-date-fields" ? input.date ?? null : null,
         ...(input.identity ? [compositeIdentityKey(input.identity)] : []), input.subjectRecordId, input.historyMode === "append" ? localRecordId : null])}`;
@@ -2894,14 +2899,12 @@ async function saveStateUpdateLocallyWithRecordId(
     if (resolvedLocalRecordId) {
       await readSelectedStateUpdateConflict(transaction, { ...input, localRecordId, conflictIdentity: conflictIdentity ?? "" });
     }
-    let existingRecord = await getCachedRecordFromDatabase(transaction, {
-      contractId: input.contractId,
-      entityTypeId: input.targetEntityTypeId,
-      ownerKey: input.ownerKey,
-      recordId: localRecordId,
-    });
+    const selectedLookup = {contractId:input.contractId,entityTypeId:input.targetEntityTypeId,ownerKey:input.ownerKey,recordId:localRecordId};
+    let existingRecord = (input.targetLocalRecordId ? await getCachedRecordFromDatabase(transaction, {...selectedLookup,appViewId:input.appViewId,date:input.date}) : null) ?? await getCachedRecordFromDatabase(transaction, selectedLookup);
+    if (input.targetLocalRecordId && (!existingRecord || existingRecord.values.appViewId!==input.appViewId || existingRecord.values.subjectRecordId!==input.subjectRecordId || existingRecord.values.date!==input.date || (existingRecord.serverId??undefined)!==input.targetRecordId)) throw Error("El registro seleccionado cambió. No se modificó otro registro.");
+    if(input.repetitionPolicy && input.repetitionPolicy!=="ONE_PER_DAY" && !input.targetLocalRecordId && !resolvedLocalRecordId && existingRecord)throw Error("La identidad local ya existe; no se sobrescribió ningún registro.");
     const projectionScope = await stateUpdateV10Scope(transaction, input);
-    if (!resolvedLocalRecordId && input.historyMode === "update-current" && (!existingRecord || existingRecord.syncStatus === "synced")) {
+    if (!resolvedLocalRecordId && !input.targetLocalRecordId && !input.targetRecordId && input.historyMode === "update-current" && (!existingRecord || existingRecord.syncStatus === "synced")) {
       const remote = await findStateUpdateRecordForSubject({ ...input, subjectRecordId: input.subjectRecordId }, transaction);
       existingRecord = remote;
     }
@@ -2918,7 +2921,7 @@ async function saveStateUpdateLocallyWithRecordId(
       }
     }
     const physicalServerId = physical?.server_id === existingRecord?.serverId ? physical?.server_id ?? null : null;
-    const existingOperation = resolvedLocalRecordId || input.historyMode === "update-current"
+    const existingOperation = resolvedLocalRecordId || input.targetLocalRecordId || input.historyMode === "update-current"
       ? await transaction.getFirstAsync<PendingOperationRow>(
           `
             SELECT *
@@ -2937,7 +2940,9 @@ async function saveStateUpdateLocallyWithRecordId(
           STATE_UPDATE_OPERATION,
         )
       : null;
+    if (input.targetLocalRecordId && !existingRecord?.serverId && existingOperation && existingOperation.attempts>0 && !(existingOperation.last_error_code==="ATTENDANCE_REPEAT_CONFIRMATION_REQUIRED" && input.repetitionAcknowledged===true)) throw Error("El envío de este registro debe resolverse antes de editarlo; se conserva la intención.");
     const pinnedPayload = existingOperation ? parsePendingStateUpdatePayload(existingOperation.payload_json) : null;
+    if(input.targetLocalRecordId && input.targetRecordId && pinnedPayload && (input.expectedUpdatedAt??null)!==(pinnedPayload.expectedUpdatedAt??null)) throw Error("La versión base de la edición seleccionada requiere una resolución explícita.");
     const writeMetadata = pinnedWorkflowWriteMetadata(input,pinnedPayload,!!pinnedPayload);
     if (pinnedPayload?.writeCommand && !resolvedLocalRecordId && input.expectedUpdatedAt !== undefined && (input.expectedUpdatedAt ?? null) !== (pinnedPayload.expectedUpdatedAt ?? null)) throw new Error("La versión base de la intención requiere revisión explícita.");
     const durableSchedule = pinnedStateUpdateScheduleMetadata(existingRecord?.values, pinnedPayload);
@@ -2958,6 +2963,8 @@ async function saveStateUpdateLocallyWithRecordId(
       ? pinnedPayload.expectedUpdatedAt ?? null : input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
     const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
     const values: OfflineStateUpdateValues = {
+      ...(typeof existingRecord?.values.eventOccurredAt==="string"?{eventOccurredAt:existingRecord.values.eventOccurredAt}:{}),
+      ...attendanceRepetitionMetadata(input),
       ...writeMetadata,
       ...schedule,
       identity: input.identity,
@@ -2974,11 +2981,12 @@ async function saveStateUpdateLocallyWithRecordId(
       subjectRecordId: input.subjectRecordId,
     };
     const nextPayload: OfflineStateUpdatePayload = {
+      ...attendanceRepetitionMetadata(input),
       ...writeMetadata,
       ...schedule,
-      expectedRecordId: resolvedLocalRecordId
+      expectedRecordId: input.targetRecordId ?? (resolvedLocalRecordId
         ? (existingRecord?.conflictRemoteValues as OfflineStateUpdateValues | null)?.remoteRecordId ?? existingRecord?.serverId ?? undefined
-        : undefined,
+        : undefined),
       identity: input.identity,
       appViewId: input.appViewId,
       snapshotConfiguration: projectionScope.configuration,
@@ -3179,7 +3187,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     const previous = await stateUpdateSnapshots(transaction, scope);
     const events = new Map<string, { item: StateUpdateItem; eventDate?: string }>();
     for (const event of input.latest ?? []) events.set(event.recordId, {
-      item: { subject: event.subject, current: { ...stateUpdateScheduleMetadata(event), recordId: event.recordId, updatedAt: event.updatedAt,
+      item: { subject: event.subject, current: { ...attendanceRepetitionMetadata(event), ...stateUpdateScheduleMetadata(event), recordId: event.recordId, updatedAt: event.updatedAt,
         stateValues: event.stateValues ?? [], extraValues: event.extraValues, extraValuesFormat: event.extraValuesFormat } },
       eventDate: normalizeStateUpdateLogicalDate(event.date),
     });
@@ -3250,7 +3258,8 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
       const before = previous.find(p => stateUpdateLogicalRemoteId(p.row) === id);
       const localId = receipt?.local_id ?? before?.row.local_id ??
         `state_update_snapshot_${JSON.stringify([input.ownerKey, input.contractId, input.targetEntityTypeId, input.appViewId, scope.configuration, id])}`;
-      const values: OfflineStateUpdateValues = { ...stateUpdateScheduleMetadata(current), appViewId: input.appViewId, date: receivedDate,
+      const inheritedEventTime=knownSchedule ? JSON.parse(knownSchedule.values_json).eventOccurredAt : undefined;
+      const values: OfflineStateUpdateValues = { ...(typeof inheritedEventTime==="string"?{eventOccurredAt:inheritedEventTime}:{}), ...attendanceRepetitionMetadata(current), ...stateUpdateScheduleMetadata(current), appViewId: input.appViewId, date: receivedDate,
         identity: input.identity, snapshotConfiguration: scope.configuration, snapshotDateFieldId: input.dateFieldId, snapshotEventDate: eventDate ?? null,
         expectedUpdatedAt: current.updatedAt, extraValues: current.extraValues, extraValuesFormat: current.extraValuesFormat, stateValues: current.stateValues,
         subjectDisplayName: item.subject.displayName, subjectRecordId: item.subject.id };
@@ -3301,6 +3310,17 @@ async function getStateUpdateSummary(input: StateUpdateScope): Promise<import(".
     pendingCount: count(["pending_create", "pending_update"]), syncingCount: count(["syncing"]), totalRegistered: rows.length };
 }
 
+async function getAttendanceDailyRecords(input: StateUpdateScope & {
+    subjectRecordId: string;
+}) {
+    input = { historyMode: "append", uniqueness: "subject-date", ...input };
+    const db = await getDatabase();
+    const date = normalizeStateUpdateLogicalDate(input.date);
+    return (await stateUpdateRows(db, input)).filter(row => { const v = JSON.parse(row.values_json); return v.subjectRecordId === input.subjectRecordId && normalizeStateUpdateLogicalDate(v.date) === date; }).map(row => ({
+        ...normalizeStateUpdateRecord(mapStateUpdateStorageRow(row)), serverRecordId: stateUpdateLogicalRemoteId(row) ?? undefined,
+    }));
+}
+
 async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; pageSize?: number; search?: string; searchFieldId?: string }) {
   let matchingSubjects: Set<string> | undefined;
   const prepared = await getAppViewDefinition(input.ownerKey, input.contractId, input.appViewId);
@@ -3331,7 +3351,7 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
     : compare(b.cached_at, a.cached_at) || compare(a.local_id, b.local_id));
   return { items: rows.slice((page - 1) * pageSize, page * pageSize).map(row => {
     const record = normalizeStateUpdateRecord(mapStateUpdateStorageRow(row));
-    return { ...stateUpdateScheduleMetadata(record), date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
+    return { ...(record.eventOccurredAt?{eventOccurredAt:record.eventOccurredAt}:{}), ...stateUpdateScheduleMetadata(record), date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
       stateValues: record.stateValues.map(value => ({ ...value, label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label })),
       subject: record.subject, updatedAt: record.updatedAt ?? row.cached_at };
   }), pagination: { page, pageSize, total: rows.length, hasMore: page * pageSize < rows.length } };
@@ -3813,6 +3833,7 @@ async function completeStateUpdateOperationInTransaction(
     throw new StateUpdateScheduleReviewError();
   }
   const values: OfflineStateUpdateValues = {
+    ...attendanceRepetitionMetadata(payload),
     ...workflowWriteMetadata(payload),
     ...sentSchedule,
     ...acknowledgedSchedule,
@@ -3841,6 +3862,7 @@ async function persistStateUpdateReceipt(db: SQLite.SQLiteDatabase, operation: P
   const raw = await db.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=?", operation.localRecordId);
   if (!raw) throw new Error("La intencion seleccionada ya no existe.");
   const decoded = JSON.parse(raw.values_json) as OfflineStateUpdateValues;
+  if(!values.eventOccurredAt&&decoded.eventOccurredAt)values.eventOccurredAt=decoded.eventOccurredAt;
   const scope = await stateUpdateV10Scope(db, { ownerKey: operation.ownerKey, contractId: operation.contractId,
     appViewId: payload.appViewId, targetEntityTypeId: operation.entityTypeId, date: payload.date,
     identity: payload.identity, dateFieldId: payload.snapshotDateFieldId, historyMode: payload.historyMode, uniqueness: payload.uniqueness });

@@ -1,3 +1,4 @@
+import {attendanceRepetitionMetadata, type AttendanceRepetitionCommand} from "./attendance-repetition";
 import {workflowWriteMetadata, type WorkflowWriteMetadata} from "./workflow-write-contract";
 import { stateUpdateScheduleMetadata, stateUpdateSchedulesEqual, stateUpdateScheduleIntentFingerprint, type StateUpdateScheduleMetadata } from "./state-update-schedule";
 import { compositeIdentityKey } from "./state-update-identity";
@@ -23,7 +24,7 @@ export type StateUpdateCompatibleWorkflowKey = typeof STATE_UPDATE_COMPATIBLE_WO
 
 export type StateUpdateSyncStatus = "synced" | "pending" | "syncing" | "failed" | "conflict";
 
-export type OfflineStateUpdatePayload = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
+export type OfflineStateUpdatePayload = AttendanceRepetitionCommand & WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   identity?: CompositeStateIdentity;
   snapshotConfiguration?: string;
   expectedRecordId?: string;
@@ -80,7 +81,7 @@ export type StateUpdateSyncErrorDetails = {
   fields: StateUpdateSyncErrorFieldDetails[];
 };
 
-export type OfflineStateUpdateValues = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
+export type OfflineStateUpdateValues = AttendanceRepetitionCommand & WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   extraValuesFormat?: "field-value";
   identity?: CompositeStateIdentity;
   __opcoStateUpdateRemote?: { format: 1; recordId: string };
@@ -99,7 +100,7 @@ export type OfflineStateUpdateValues = WorkflowWriteMetadata & StateUpdateSchedu
   subjectRecordId: string;
 };
 
-export type CachedStateUpdateRecord = WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
+export type CachedStateUpdateRecord = AttendanceRepetitionCommand & WorkflowWriteMetadata & StateUpdateScheduleMetadata & {
   conflictRemoteSchedule?: StateUpdateScheduleMetadata["schedule"];
   conflictRemoteScheduleApplication?: StateUpdateScheduleMetadata["scheduleApplication"];
   extraValuesFormat?: "field-value";
@@ -789,9 +790,10 @@ export type StateUpdateScope = {
   targetEntityTypeId: string;
 };
 
-export type SaveStateUpdateLocallyInput = WorkflowWriteMetadata & StateUpdateScope & StateUpdateScheduleMetadata & {
+export type SaveStateUpdateLocallyInput = AttendanceRepetitionCommand & WorkflowWriteMetadata & StateUpdateScope & StateUpdateScheduleMetadata & {
   // Attendance may repeat an already-confirmed immutable intent without resetting its delivery.
   preserveIdenticalConfirmedIntent?: boolean;
+  targetLocalRecordId?: string;
   expectedUpdatedAt?: string | null;
   extraValues?: Record<string, EntityRecordValue>;
   historyMode: "append" | "update-current";
@@ -913,6 +915,7 @@ export type StateUpdateOfflineStore = {
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
+  getAttendanceDailyRecords(input:StateUpdateScope & {subjectRecordId:string}):Promise<(CachedStateUpdateRecord & {serverRecordId?:string})[]>;
   getStateUpdateSummary(input: StateUpdateScope): Promise<StateUpdateSummary>;
   getStateUpdateOutboxDiagnostics(ownerKey: string): Promise<StateUpdateOutboxDiagnostics>;
   getStateUpdateSyncDiagnosticsTelemetry(ownerKey: string): Promise<StateUpdateSyncDiagnosticsTelemetry | null>;
@@ -1020,6 +1023,7 @@ export function normalizeStateUpdateRecord(record: CachedEntityRecord, clientReq
   const conflictValues = record.conflictRemoteValues as Partial<OfflineStateUpdateValues> | null;
 
   return {
+    ...attendanceRepetitionMetadata(values),
     clientRequestId: clientRequestId ?? (typeof values.clientRequestId === "string" ? values.clientRequestId : undefined),
     conflictIdentity: JSON.stringify([record.localId, record.serverId, record.values, record.conflictRemoteValues,
       record.conflictRemoteUpdatedAt, clientRequestId ?? values.clientRequestId]),
@@ -1118,6 +1122,7 @@ export function normalizeStateUpdateIntent(payload: OfflineStateUpdatePayload) {
   const schedule = stateUpdateScheduleIntentFingerprint(payload);
   return {
     ...workflowWriteMetadata(payload),
+    ...attendanceRepetitionMetadata(payload),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(payload.identity ? { identity: compositeIdentityKey(payload.identity) } : {}),
     appViewId: payload.appViewId,

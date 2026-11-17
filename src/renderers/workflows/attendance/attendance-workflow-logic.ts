@@ -1,3 +1,4 @@
+import {attendanceRepetitionMetadata} from "../../../lib/attendance-repetition";
 import {isVerifiedAttendanceDay} from "../../../lib/attendance-day-pages";
 import { readAttendanceContextValue } from "../../../lib/attendance-context-values";
 import {workflowWriteMetadata} from "../../../lib/workflow-write-contract";
@@ -64,7 +65,7 @@ export function attendanceOfflineDayNotice(snapshotHydrated: boolean, localEvent
 export function attendanceConfigurationKey(config: AttendanceWorkflowConfig) {
   return JSON.stringify([config.sourceEntityTypeId, config.targetEntityTypeId, config.personFieldId,
     config.dateFieldId, config.statusFieldId, config.observationFieldId ?? null,
-    config.defaultCheckInOptionId, config.contextFieldIds ?? []]);
+    config.defaultCheckInOptionId, config.contextFieldIds ?? [], ...(config.repetitionPolicy && config.repetitionPolicy!=="ONE_PER_DAY" ? [config.repetitionPolicy] : [])]);
 }
 
 export function isAttendanceDayScopeCurrent(currentScope: AttendanceDayScope | null, requestedScope: AttendanceDayScope) {
@@ -254,6 +255,7 @@ export function attendanceResponseToStateUpdateItems(
               config.observationFieldId,
               item.attendance.observation,
             ),
+            ...(item.attendance.eventOccurredAt?{eventOccurredAt:item.attendance.eventOccurredAt}:{}),
             recordId: item.attendance.recordId,
             stateValues: [{
               fieldId: config.statusFieldId,
@@ -274,6 +276,7 @@ export function attendanceResponseToStateUpdateItems(
     items.set(item.person.id, {
       current: {
         extraValues,
+        ...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),
         recordId: item.attendanceRecordId,
         stateValues: [{
           fieldId: config.statusFieldId,
@@ -373,6 +376,7 @@ export function attendanceEntryToStateUpdateEntry(
   contextFields: AttendanceContextField[],
 ) {
   return {
+    ...attendanceRepetitionMetadata(entry),
     ...workflowWriteMetadata(entry),
     expectedUpdatedAt: entry.expectedUpdatedAt,
     extraValues: attendanceEntryExtraValues(entry, config, contextFields),
