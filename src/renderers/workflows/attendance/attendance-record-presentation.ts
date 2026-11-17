@@ -5,13 +5,15 @@ import { readAttendanceContextValue } from "../../../lib/attendance-context-valu
 import { getRelationTargetEntityTypeId } from "../../../lib/record-form";
 import { resolveStateUpdateSelectExtra } from "../../../lib/state-update-extras";
 import { attendanceRelationField } from "./attendance-workflow-logic";
+import { parseSubjectPresentation, projectSubject, validSubjectProjection, verifyPresentationDefinition, type PresentedSubject, type SubjectPresentationDefinition } from "../../../lib/subject-presentation";
 
 export type AttendanceReadRecord = {
   recordId: string;
-  person: { id: string; displayName: string };
+  person: PresentedSubject;
   statusLabel: string | null;
   statusOptionId: string | null;
   contextValues?: AttendanceContextValues;
+  observation?: string | null;
   eventOccurredAt?: string;
   updatedAt: string;
 };
@@ -28,6 +30,19 @@ export type AttendanceRecordPresentation = {
   syncLabel?: string;
 };
 export type AttendancePresentationStore = Pick<LocalDatabase, "getCachedRecord" | "getAttendanceDailyRecords">;
+/** Enrich the label only, using the existing authorized definition and exact scoped source row. */
+export async function readAttendancePresentedSubject(store: AttendancePresentationStore, scope: AttendancePresentationScope,
+  subject: PresentedSubject, config: unknown, metadata?: SubjectPresentationDefinition): Promise<PresentedSubject> {
+  if (config === undefined) return subject;
+  try {
+    const definition = verifyPresentationDefinition(metadata, undefined, parseSubjectPresentation(config)!);
+    if (validSubjectProjection(subject.presentation, definition, subject.id)) return subject;
+    const cached = await store.getCachedRecord({ownerKey: scope.ownerKey, contractId: scope.contractId,
+      entityTypeId: definition.sourceEntityTypeId, recordId: subject.id});
+    if (!cached || (cached.serverId ?? cached.localId) !== subject.id) return subject;
+    return {...subject, presentation: projectSubject(definition, subject.id, cached.values, [], cached.remoteUpdatedAt ?? undefined)};
+  } catch { return subject; }
+}
 const unavailable = (text = "Valor no disponible en esta lectura"): ReadValue => ({ text, status: "unavailable" });
 const value = (text: string): ReadValue => ({ text, status: "value" });
 const nonempty = (raw: unknown): raw is string => typeof raw === "string" && raw.trim().length > 0;
@@ -117,7 +132,31 @@ export async function loadAttendanceRecordPresentation(store: AttendancePresenta
 
 /** Overlay aliases of one row, never collapse independent records by person or timestamp. */
 export function distinctAttendancePresentations(rows: AttendanceRecordPresentation[]) {
-  const unique = new Map<string, AttendanceRecordPresentation>();
-  for (const row of rows) unique.set(JSON.stringify([row.referenceKind, row.reference]), row);
-  return [...unique.values()];
+  const unique: { row: AttendanceRecordPresentation; aliases: Set<string> }[] = [];
+  for (const row of rows) {
+    const aliases = new Set([row.reference, row.serverId, row.record.recordId].filter((id): id is string => Boolean(id)));
+    const matches = unique.filter(existing => existing.row.record.person.id === row.record.person.id &&
+      [...aliases].some(id => existing.aliases.has(id)));
+    if (!matches.length) unique.push({row, aliases});
+    else {
+      const first = matches[0];
+      for (const match of matches) for (const id of match.aliases) aliases.add(id);
+      const pending = matches.find(match => match.row.syncLabel)?.row;
+      first.row = row.syncLabel || !pending ? row : pending;
+      first.aliases = aliases;
+      for (const match of matches.slice(1)) unique.splice(unique.indexOf(match), 1);
+    }
+  }
+  return unique.map(item => item.row);
+}
+
+/** Only the configured related entity's ID groups records. Text, time and state never identify a row. */
+export function groupAttendancePresentations(rows: AttendanceRecordPresentation[]) {
+  const groups = new Map<string, { subject: PresentedSubject; rows: AttendanceRecordPresentation[] }>();
+  for (const row of distinctAttendancePresentations(rows)) {
+    const group = groups.get(row.record.person.id) ?? { subject: row.record.person, rows: [] };
+    group.rows.push(row);
+    groups.set(row.record.person.id, group);
+  }
+  return [...groups.values()];
 }

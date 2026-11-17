@@ -2,9 +2,9 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, it, expect, vi } from "vitest";
-import { attendanceDailyCount } from "../../../lib/attendance-repetition";
+import { attendanceDailyCount, attendanceHistoryMode } from "../../../lib/attendance-repetition";
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function actual(name: string, c: Record<string, unknown>) {
+function actual<T = void>(name: string, c: Record<string, unknown>) {
     let node: ts.FunctionDeclaration | undefined;
     const visit = (n: ts.Node) => {
         if (ts.isFunctionDeclaration(n) && n.name?.text === name)
@@ -14,7 +14,7 @@ function actual(name: string, c: Record<string, unknown>) {
     visit(source);
     if (!node)
         throw Error("Missing handler");
-    return new Function(...Object.keys(c), ts.transpileModule(node.getText(source) + `;return ${name};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(c)) as (...args: unknown[]) => Promise<void>;
+    return new Function(...Object.keys(c), ts.transpileModule(node.getText(source) + `;return ${name};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(c)) as (...args: unknown[]) => Promise<T>;
 }
 function fixture(online = false) {
     const c = { confirmationBasis: "basis", confirmationBasisRef: { current: "basis" }, selectedItem: { person: { id: "person", displayName: "Synthetic" }, attendance: null }, ownerKey: "owner", selectedContractId: "contract", isSaving: false, isOnline: online, token: "synthetic", saveInFlightRef: { current: false }, repeatCheckingRef: { current: false }, repeatWarning: null as null | {
@@ -27,7 +27,7 @@ function fixture(online = false) {
         }, contextFields: [], contextValues: { relation: "lot" }, attendanceContextValidationErrors: vi.fn(() => [] as {
             fieldId: string;
             message: string;
-        }[]), setContextErrors: vi.fn(), resolutionScope: "scope", resolutionScopeRef: { current: "scope" }, resolutionMountedRef: { current: true }, draftRevisionRef: { current: 0 }, confirmationSequenceRef: { current: 0 }, appView: { id: "view", config: { repetitionPolicy: "MULTIPLE_WITH_WARNING", targetEntityTypeId: "target" } }, eventCapturedAtRef: { current: "2026-11-16T10:00:00.000Z" }, editingTarget: null, captureWorkflowWriteCommand: () => ({}), writeContract: null, writeContractRequiredRef: { current: false }, supportsObservation: false, observation: "", date: "2026-11-16", definitionCache: { getAttendanceDailyRecords: vi.fn(async () => [{ syncStatus: "pending" }]) }, api: { getAttendanceWorkflow: vi.fn(async () => ({ appView: { id: "view" }, date: "2026-11-16", repetitionPolicy: "MULTIPLE_WITH_WARNING", items: [{ person: { id: "person" }, dailyRecordCount: 2 }] })) }, setRepeatChecking: vi.fn(), setError: vi.fn(), setConflict: vi.fn(), attendanceDailyCount, saveEntry: vi.fn(async () => { }), setRepeatWarning: vi.fn() };
+        }[]), setContextErrors: vi.fn(), resolutionScope: "scope", resolutionScopeRef: { current: "scope" }, resolutionMountedRef: { current: true }, draftRevisionRef: { current: 0 }, confirmationSequenceRef: { current: 0 }, appView: { id: "view", config: { repetitionPolicy: "MULTIPLE_WITH_WARNING", targetEntityTypeId: "target" } }, eventCapturedAtRef: { current: "2026-11-16T10:00:00.000Z" }, editingTarget: null, captureWorkflowWriteCommand: () => ({}), writeContract: null, writeContractRequiredRef: { current: false }, supportsObservation: false, observation: "", date: "2026-11-16", definitionCache: { getAttendanceDailyRecords: vi.fn(async () => [{ syncStatus: "pending" }]) }, api: { getAttendanceWorkflow: vi.fn(async () => ({ appView: { id: "view" }, date: "2026-11-16", repetitionPolicy: "MULTIPLE_WITH_WARNING", items: [{ person: { id: "person" }, dailyRecordCount: 2 }] })) }, setRepeatChecking: vi.fn(), setError: vi.fn(), setConflict: vi.fn(), attendanceDailyCount, attendanceHistoryMode, saveEntry: vi.fn(async () => { }), setRepeatWarning: vi.fn() };
     c.setRepeatWarning = vi.fn(value => { c.repeatWarning = value; });
     return c;
 }
@@ -81,4 +81,141 @@ it("resolves exact daily edits through the AppView/date projection, including af
   await actual("editRepeatedRecord",c)(item);
   expect(c.setEditingTarget).toHaveBeenCalledWith({targetRecordId:"remote-old",targetLocalRecordId:"local-old"});
   expect(c.definitionCache.getCachedRecord).toHaveBeenCalledWith(expect.objectContaining({appViewId:"view",date:"2026-11-16",recordId:"remote-old"}));
+});
+
+function editFixture(recordId = "local-snapshot") {
+  const c = fixture(true) as unknown as Record<string, any>;
+  c.appView.config.statusFieldId = "state";
+  const original = { person: { id: "person", displayName: "Synthetic" }, attendance: { recordId, updatedAt: "2026-11-16T10:00:00.000Z", statusOptionId: "a", contextValues: { relation: "original" } } };
+  const remote = { ...original, attendance: { ...original.attendance, recordId: "remote-selected", statusOptionId: "b" } };
+  c.definitionCache.getCachedRecord = vi.fn(async () => ({ localId: "local-snapshot", serverId: "remote-selected", syncStatus: "synced" }));
+  c.api.getAttendanceWorkflow.mockResolvedValue({ appView: { id: "view" }, date: c.date, repetitionPolicy: "MULTIPLE_WITH_WARNING", dailyRecords: [
+    { ...remote, attendance: { ...remote.attendance, recordId: "another-record", statusOptionId: "a" } }, remote,
+  ] });
+  c.api.getEntityRecord = vi.fn(async () => ({}));
+  Object.assign(c, { setEditingTarget: vi.fn(), setSelectedItem: vi.fn(), setContextValues: vi.fn(), setObservation: vi.fn(), cacheAttendanceRemoteSnapshot: vi.fn(), attendanceEditContextValues: () => ({ relation: "original" }) });
+  return { c, original, remote };
+}
+
+it("edits the exact server alias of a local snapshot instead of rejecting a present record", async () => {
+  const { c, original, remote } = editFixture();
+  await actual("editRepeatedRecord", c)(original);
+  expect(c.setSelectedItem).toHaveBeenCalledWith(remote);
+  expect(c.setEditingTarget).toHaveBeenCalledWith({ targetLocalRecordId: "local-snapshot", targetRecordId: "remote-selected" });
+  expect(c.setError).not.toHaveBeenCalledWith(expect.stringContaining("ya no está disponible"));
+});
+
+it("never substitutes a different same-person record when the selected server alias is absent", async () => {
+  const { c, original } = editFixture();
+  const response = await c.api.getAttendanceWorkflow();
+  c.api.getAttendanceWorkflow.mockResolvedValue({ ...response, dailyRecords: response.dailyRecords.slice(0, 1) });
+  await actual("editRepeatedRecord", c)(original);
+  expect(c.setSelectedItem).not.toHaveBeenCalled();
+  expect(c.setEditingTarget).not.toHaveBeenCalled();
+  expect(c.api.getEntityRecord).toHaveBeenCalledWith(c.token, c.selectedContractId, "target", "remote-selected");
+  expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("no aparece en esta persona o fecha"));
+});
+
+it("keeps permission/read failures and incompatible daily coverage distinct from a deleted record", async () => {
+  const denied = editFixture();
+  denied.c.api.getAttendanceWorkflow.mockRejectedValue(Error("No tienes permiso para consultar esta experiencia."));
+  await actual("editRepeatedRecord", denied.c)(denied.original);
+  expect(denied.c.setError).toHaveBeenCalledWith("No tienes permiso para consultar esta experiencia.");
+  const missing = editFixture();
+  missing.c.api.getAttendanceWorkflow.mockResolvedValue({ appView: { id: "view" }, date: missing.c.date, repetitionPolicy: "MULTIPLE_WITH_WARNING" });
+  await actual("editRepeatedRecord", missing.c)(missing.original);
+  expect(missing.c.setError).toHaveBeenCalledWith(expect.stringContaining("no incluyó los registros"));
+  expect(missing.c.setSelectedItem).not.toHaveBeenCalled();
+});
+
+it("reads a complete exact group while preserving a pending edit and excluding deleted synced copies", async () => {
+  const { stateUpdateItemToAttendanceItem } = await import("../../../lib/attendance-offline");
+  const { c, remote } = editFixture();
+  c.latest = [{person: remote.person}];
+  c.contextFields = [];
+  c.stateUpdateItemToAttendanceItem = stateUpdateItemToAttendanceItem;
+  const local = (id: string, syncStatus: string) => ({localRecordId: "local-" + id, serverRecordId: id, syncStatus,
+    subject: remote.person, stateValues: [{fieldId: "state", optionId: "a", label: "A local"}], extraValues: {}, updatedAt: remote.attendance.updatedAt});
+  c.definitionCache.getAttendanceDailyRecords.mockResolvedValue([local("remote-selected", "pending_update"), local("deleted", "synced")]);
+  const result = await actual<import("./attendance-record-list").AttendanceGroupRead>("readRecordGroup", c)("person");
+  expect(result.complete).toBe(true);
+  expect(result.records.map((r: any) => r.recordId)).toEqual(["another-record", "remote-selected"]);
+  expect(result.records[1].statusLabel).toBe("A local");
+});
+
+it("reads groups offline only from the shared store and refuses a result from a retired scope", async () => {
+  const { stateUpdateItemToAttendanceItem } = await import("../../../lib/attendance-offline");
+  const { hasSuccessfulAttendanceDayHydration } = await import("../../../lib/attendance-snapshot-cache");
+  const { c } = editFixture();
+  Object.assign(c, { latest: [], contextFields: [], isOnline: false, stateUpdateItemToAttendanceItem, hasSuccessfulAttendanceDayHydration });
+  c.definitionCache.getAttendanceDailyRecords.mockResolvedValue([]);
+  c.definitionCache.getAttendanceDaySnapshotHydration = vi.fn(async () => null);
+  expect(await actual("readRecordGroup", c)("person")).toEqual({records: [], complete: false});
+  expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
+  c.isOnline = true;
+  c.api.getAttendanceWorkflow.mockImplementation(async () => { c.resolutionScopeRef.current = "other"; return {}; });
+  await expect(actual("readRecordGroup", c)("person")).rejects.toThrow("experiencia cambió");
+});
+
+it("preserves Core missing and permission reasons for only the selected ID", async () => {
+  for (const message of ["No se encontró el registro seleccionado.", "No tienes permiso para leer este registro."]) {
+    const {c, original} = editFixture();
+    const response = await c.api.getAttendanceWorkflow();
+    c.api.getAttendanceWorkflow.mockResolvedValue({...response, dailyRecords: []});
+    c.api.getEntityRecord.mockRejectedValue(Error(message));
+    await actual("editRepeatedRecord", c)(original);
+    expect(c.setError).toHaveBeenCalledWith(message);
+    expect(c.setSelectedItem).not.toHaveBeenCalled();
+    expect(c.setEditingTarget).not.toHaveBeenCalled();
+    expect(c.api.getEntityRecord).toHaveBeenCalledWith(c.token, c.selectedContractId, "target", "remote-selected");
+  }
+});
+
+it("never opens a detached server-only edit when its exact local copy cannot be prepared", async () => {
+  const { c, original } = editFixture("remote-selected");
+  c.definitionCache.getCachedRecord.mockResolvedValue(null);
+  await actual("editRepeatedRecord", c)(original);
+  expect(c.setEditingTarget).not.toHaveBeenCalled();
+  expect(c.setSelectedItem).not.toHaveBeenCalled();
+  expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("copia local del registro seleccionado"));
+});
+
+it("edits an acknowledged pending creation without asking to create another or changing its capture", async () => {
+  const c = fixture() as unknown as Record<string, any>;
+  c.editingTarget = {targetLocalRecordId:"pending-selected",eventOccurredAt:"2026-11-16T09:00:00.000Z",repetitionAcknowledged:true};
+  await actual("saveRepeatedStatus", c)({optionId:"b",label:"B"});
+  expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({...c.editingTarget,statusOptionId:"b"}));
+  expect(c.setRepeatWarning).not.toHaveBeenCalled();
+  expect(c.definitionCache.getAttendanceDailyRecords).not.toHaveBeenCalled();
+  delete c.editingTarget.repetitionAcknowledged;
+  c.saveEntry.mockClear();
+  await actual("saveRepeatedStatus", c)({optionId:"b",label:"B"});
+  expect(c.saveEntry).not.toHaveBeenCalled();
+  expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("intención original"));
+});
+
+it("retains only the selected pending creation's original acknowledgement and timestamp", async () => {
+  const { c, original } = editFixture("pending-selected");
+  c.isOnline=false;
+  const values={appViewId:"view",subjectRecordId:"person",date:c.date,eventOccurredAt:"2026-11-16T09:00:00.000Z",repetitionAcknowledged:true};
+  c.definitionCache.getCachedRecord.mockResolvedValue({localId:"pending-selected",serverId:null,syncStatus:"pending_create",values});
+  c.normalizeStateUpdateRecord=()=>({subject:original.person,stateValues:[],extraValues:{}});
+  c.stateUpdateItemToAttendanceItem=()=>original;
+  await actual("editRepeatedRecord", c)(original);
+  expect(c.setEditingTarget).toHaveBeenCalledWith({targetLocalRecordId:"pending-selected",eventOccurredAt:values.eventOccurredAt,repetitionAcknowledged:true});
+  expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
+});
+
+it("reads default one-per-day groups using their update-current storage projection offline", async () => {
+  const {stateUpdateItemToAttendanceItem} = await import("../../../lib/attendance-offline");
+  const {hasSuccessfulAttendanceDayHydration} = await import("../../../lib/attendance-snapshot-cache");
+  const {c,remote}=editFixture();
+  delete c.appView.config.repetitionPolicy;
+  Object.assign(c,{latest:[{person:remote.person}],contextFields:[],isOnline:false,stateUpdateItemToAttendanceItem,hasSuccessfulAttendanceDayHydration});
+  c.definitionCache.getAttendanceDailyRecords.mockImplementation(async (scope: {historyMode?: string}) => scope.historyMode === "update-current" ? [{localRecordId:"one-local",serverRecordId:"one-server",subject:remote.person,stateValues:[{fieldId:"state",label:"A",optionId:"a"}],extraValues:{},updatedAt:remote.attendance.updatedAt,syncStatus:"synced"}] : []);
+  c.definitionCache.getAttendanceDaySnapshotHydration=vi.fn(async()=>({lastSuccessfulRefreshAt:"2026-11-16T12:00:00Z"}));
+  const result=await actual<import("./attendance-record-list").AttendanceGroupRead>("readRecordGroup",c)("person");
+  expect(result.records.map(r=>r.recordId)).toEqual(["one-server"]);
+  expect(result.complete).toBe(true);
+  expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
 });

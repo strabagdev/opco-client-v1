@@ -1,4 +1,4 @@
-import { AttendanceRecordList } from "./attendance-record-list";
+import { AttendanceRecordList, type AttendanceGroupRead } from "./attendance-record-list";
 import {attendanceDailyCount, attendanceReadScope, attendanceHistoryMode, type AttendanceRepetitionPolicy} from "../../../lib/attendance-repetition";
 import { actionSurface } from "../../../theme/operational-presentation";
 import { metrics, type ThemeColors } from "../../../theme/tokens";
@@ -175,7 +175,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [searchFieldId, setSearchFieldId] = useState<string>();
   const [searchReadId, setSearchReadId] = useState(0);
   const [items, setItems] = useState<AttendanceItem[]>([]);
-  const [editingTarget,setEditingTarget]=useState<{targetRecordId?:string;targetLocalRecordId?:string}|null>(null);
+  const [editingTarget,setEditingTarget]=useState<{targetRecordId?:string;targetLocalRecordId?:string;eventOccurredAt?:string;repetitionAcknowledged?:true}|null>(null);
   const [personRecords,setPersonRecords]=useState<AttendanceItem[]>([]);
   const eventCapturedAtRef=useRef<string|null>(null);
   const repeatCheckingRef=useRef(false);
@@ -900,6 +900,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             }
 
             const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
+            setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
 
             if (prepared?.definition.kind === "attendance" || prepared?.definition.kind === "state-update") {
               setWriteContract(prepared.definition.workflowWriteContract);
@@ -1024,6 +1025,40 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => clearTimeout(timeoutId);
   }, [searchPeople, searchText, searchFieldId, searchReadId]);
 
+  async function readRecordGroup(subjectRecordId: string): Promise<AttendanceGroupRead> {
+      if (!ownerKey || !selectedContractId) throw Error("Selecciona un contrato antes de consultar el detalle.");
+      const capturedScope = resolutionScope;
+      const local = await definitionCache.getAttendanceDailyRecords({ ownerKey, contractId: selectedContractId, appViewId: appView.id,
+          targetEntityTypeId: appView.config.targetEntityTypeId, date, subjectRecordId,
+          historyMode: attendanceHistoryMode(appView.config), uniqueness: "subject-date" });
+      if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+      const subject = latest.find(item => item.person.id === subjectRecordId)?.person;
+      const localItems = local.map(row => stateUpdateItemToAttendanceItem({ subject: subject ?? row.subject, current: {
+          ...(row.eventOccurredAt ? { eventOccurredAt: row.eventOccurredAt } : {}), recordId: row.serverRecordId ?? row.localRecordId,
+          updatedAt: row.expectedUpdatedAt ?? row.updatedAt ?? "", stateValues: row.stateValues, extraValues: row.extraValues,
+      } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields));
+      let items = localItems, complete = false;
+      if (isOnline && token) {
+          const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, personRecordId: subjectRecordId });
+          if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+          if (response.appView.id !== appView.id || response.date !== date ||
+              (response.repetitionPolicy ?? "ONE_PER_DAY") !== (appView.config.repetitionPolicy ?? "ONE_PER_DAY"))
+              throw Error("La definición cambió. Vuelve a abrir la experiencia.");
+          const remote = appView.config.repetitionPolicy && appView.config.repetitionPolicy !== "ONE_PER_DAY" ? response.dailyRecords : response.items;
+          if (!Array.isArray(remote) || remote.some(row => row.person.id !== subjectRecordId))
+              throw Error("La respuesta no acredita los registros de esta persona y fecha.");
+          const pending = new Set(local.filter(row => row.syncStatus !== "synced").map(row => row.serverRecordId ?? row.localRecordId));
+          items = [...remote.filter(row => !row.attendance || !pending.has(row.attendance.recordId)),
+              ...localItems.filter((row, index) => local[index].syncStatus !== "synced")];
+          complete = true;
+      } else {
+          complete = hasSuccessfulAttendanceDayHydration(await definitionCache.getAttendanceDaySnapshotHydration({ ownerKey,
+              contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date }));
+      }
+      if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+      return { records: items.flatMap(item => item.attendance ? [{ ...item.attendance, person: item.person }] : []), complete };
+  }
+
   async function selectRepeatedPerson(item: AttendanceItem) {
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
       confirmationSequenceRef.current++;
@@ -1078,9 +1113,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
                   return;
               if (response.appView.id !== appView.id || response.date !== date || response.repetitionPolicy !== appView.config.repetitionPolicy)
                   throw Error("La definición cambió. Vuelve a abrir la experiencia.");
-              const selected = response.dailyRecords?.find(r => r.attendance?.recordId === item.attendance?.recordId);
-              if (!selected?.attendance)
-                  throw Error("El registro seleccionado ya no está disponible; no se eligió otro.");
+              if (!Array.isArray(response.dailyRecords))
+                  throw Error("La respuesta no incluyó los registros de esta persona y fecha. No se eligió otro registro.");
+              // Recent OPFS rows keep their local identity, including after ACK. The
+              // server lookup must use the accredited alias of that same row.
+              const selectedServerId = cached?.serverId ?? item.attendance!.recordId;
+              const matches = response.dailyRecords.filter(r => r.person.id === item.person.id && r.attendance?.recordId === selectedServerId);
+              if (matches.length !== 1) {
+                  if (matches.length > 1) throw Error("La respuesta repite el registro seleccionado. No se eligió otro registro.");
+                  // Diagnose only this exact ID. This read never supplies a substitute
+                  // row; Core retains its explicit missing/permission errors.
+                  await api.getEntityRecord(token, selectedContractId, appView.config.targetEntityTypeId, selectedServerId);
+                  throw Error("El registro existe, pero ya no aparece en esta persona o fecha. Actualiza la experiencia; no se eligió otro registro.");
+              }
+              const selected = matches[0];
               item = selected;
               await cacheAttendanceRemoteSnapshot({ appViewId: appView.id, config: appView.config, contractId: selectedContractId, ownerKey, response: { ...response, items: [selected], latest: [] }, snapshotComplete: false, store: definitionCache });
               if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
@@ -1089,13 +1135,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, appViewId: appView.id, date, entityTypeId: appView.config.targetEntityTypeId, recordId: item.attendance!.recordId });
           if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
               return;
-          if (!isOnline && !cached)
-              throw Error("Este registro no está disponible para editar sin conexión.");
+          if (!cached)
+              throw Error(isOnline ? "No se pudo preparar la copia local del registro seleccionado. Vuelve a abrir la experiencia antes de editarlo." : "Este registro no está disponible para editar sin conexión.");
           if (cached && (!isOnline || cached.syncStatus !== "synced")) {
               const selected = normalizeStateUpdateRecord(cached);
               item = stateUpdateItemToAttendanceItem({ subject: selected.subject, current: { ...(selected.eventOccurredAt ? { eventOccurredAt: selected.eventOccurredAt } : {}), recordId: cached.serverId ?? cached.localId, updatedAt: selected.expectedUpdatedAt ?? selected.updatedAt ?? item.attendance!.updatedAt, stateValues: selected.stateValues, extraValues: selected.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields);
           }
-          setEditingTarget({ ...(cached ? { targetLocalRecordId: cached.localId } : {}), ...((cached?.serverId ?? (!cached ? item.attendance!.recordId : undefined)) ? { targetRecordId: cached?.serverId ?? item.attendance!.recordId } : {}) });
+          setEditingTarget({ targetLocalRecordId: cached.localId, ...(cached.serverId ? { targetRecordId: cached.serverId } : {
+              ...(typeof cached.values.eventOccurredAt === "string" ? { eventOccurredAt: cached.values.eventOccurredAt } : {}),
+              ...(cached.values.repetitionAcknowledged === true ? { repetitionAcknowledged: true as const } : {}),
+          }) });
           setSelectedItem(item);
           setContextValues(attendanceEditContextValues(contextFields, item, contextValues));
           setObservation(item.attendance!.observation ?? "");
@@ -1134,10 +1183,14 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               setConflict({ result: "CONFLICT", personRecordId: entry.personRecordId, personName: selectedItem.person.displayName, existing: selectedItem.attendance, requested: { statusOptionId: status.optionId, statusLabel: status.label }, confirmedEntry: entry, confirmationScope: scope, confirmationAttemptId: generation, confirmationRevision: revision, confirmationDraftKey: attendanceCommandKey(scope, appView.config, contextFields, entry) });
               return;
           }
-          if (appView.config.repetitionPolicy !== "MULTIPLE_WITH_WARNING") {
-              await saveEntry(entry);
+          // Editing an unsent creation updates its original intention, never authorizes
+          // another event. Preserve its existing acknowledgement and captured instant.
+          if (appView.config.repetitionPolicy === "MULTIPLE_WITH_WARNING" && !entry.repetitionAcknowledged) {
+              setError("Este registro pendiente requiere revisar la confirmación de su intención original antes de editarlo.");
               return;
           }
+          await saveEntry(entry);
+          return;
       }
       if (appView.config.repetitionPolicy !== "MULTIPLE_WITH_WARNING") {
           await saveEntry(entry);
@@ -1900,7 +1953,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache} scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date } : null} onEdit={appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? editRepeatedRecord : undefined} /> : null}
+      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache}
+        totalCount={totalRegistered} onLoadGroup={readRecordGroup} subjectConfig={appView.config.subjectPresentation} subjectDefinition={presentationDefinition}
+        scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date } : null} onEdit={appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? editRepeatedRecord : undefined} /> : null}
 
       <Modal animationType="fade" transparent visible={!!repeatWarning} onRequestClose={cancelRepeatedRecord}>
         <View style={styles.modalBackdrop}><View accessibilityViewIsModal style={styles.modalPanel}>
@@ -1975,18 +2030,17 @@ function AttendanceContextSelectors({
   );
 }
 
-function LatestAttendanceList({ latest, onEdit, ...presentation }: Pick<Parameters<typeof AttendanceRecordList>[0], "fields" | "statuses" | "scope" | "store"> & {
+function LatestAttendanceList({ latest, onEdit, ...presentation }: Pick<Parameters<typeof AttendanceRecordList>[0], "fields" | "statuses" | "scope" | "store" | "onLoadGroup" | "totalCount" | "subjectConfig" | "subjectDefinition"> & {
   latest: AttendanceLatestItem[]; onEdit?:(item:AttendanceItem)=>void;
 }) {
   const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;
   return <View style={styles.latestBlock}>
     <Text style={styles.sectionTitle}>Registros del día</Text>
-    {latest.length > 0 ? <Text style={[styles.statusMeta, { width: "auto" }]}>Los más recientes de esta fecha.</Text> : <Text style={styles.empty}>Sin registros para esta fecha.</Text>}
-    <AttendanceRecordList {...presentation} records={latest.map(item => ({ ...item, recordId: item.attendanceRecordId }))}
+    {latest.length > 0 ? <Text style={[styles.statusMeta, { width: "auto" }]}>Abre el detalle para consultar los registros de esta fecha.</Text> : <Text style={styles.empty}>Sin registros para esta fecha.</Text>}
+    <AttendanceRecordList {...presentation} grouped records={latest.map(item => ({ ...item, recordId: item.attendanceRecordId }))}
       onEdit={onEdit ? record => {
-        const item = latest.find(event => event.attendanceRecordId === record.recordId);
-        if (item) onEdit({ person: item.person, attendance: { ...(item.eventOccurredAt ? { eventOccurredAt: item.eventOccurredAt } : {}), recordId: item.attendanceRecordId,
-          updatedAt: item.updatedAt, statusOptionId: item.statusOptionId, statusLabel: item.statusLabel, contextValues: item.contextValues, observation: item.observation ?? null } });
+        const { person, ...attendance } = record;
+        onEdit({ person, attendance: { ...attendance, observation: record.observation ?? null } });
       } : undefined} />
   </View>;
 }

@@ -50,7 +50,7 @@ describe("Attendance read presentation, without command or DATE changes", () => 
   });
   it("uses all characters of colliding prefixes and keeps independent rows with identical visible values", async () => {
     const first = await loadAttendanceRecordPresentation(store(), scope, record, []);
-    const rows = ["same-prefix-111111", "same-prefix-111112"].map(reference => ({ ...first, reference }));
+    const rows = ["same-prefix-111111", "same-prefix-111112"].map(reference => ({ ...first, reference, serverId: reference, record: { ...first.record, recordId: reference } }));
     expect(distinctAttendancePresentations(rows)).toHaveLength(2);
     const html = renderToStaticMarkup(<>{rows.map(row => <AttendanceRecordRow key={row.reference} row={row} onEdit={vi.fn()} />)}</>);
     expect(html).toContain("same-prefix-111111"); expect(html).toContain("same-prefix-111112");
@@ -69,6 +69,46 @@ it("prioritizes editing and operational values before full secondary identifiers
   const html = renderToStaticMarkup(<AttendanceRecordRow row={row} selected onEdit={vi.fn()} />);
   expect(html.indexOf(">Editar<")).toBeLessThan(html.indexOf(">Estado<"));
   expect(html).toContain("Editando este registro");
-  expect(html.indexOf(">Estado<")).toBeLessThan(html.indexOf(">Referencia local fija<"));
-  expect(html).toContain(`Referencia completa: ${row.reference}`);
+  expect(html).not.toContain(">Referencia local fija<");
+  expect(html).not.toContain(">Copiar referencia<");
+  expect(html).toContain(">Detalle técnico<");
+  expect(html).toContain(`Editar registro ${row.reference}`);
+  expect(html).not.toContain(`>${row.reference}<`);
+});
+
+it("groups by related subject ID, preserves configured presentation, and never combines equal labels", async () => {
+  const { groupAttendancePresentations } = await import("./attendance-record-presentation");
+  const one = await loadAttendanceRecordPresentation(store(), scope, record, []);
+  const two = { ...one, reference: "other-event", serverId: "other-event", record: { ...record, recordId: "other-event" } };
+  const otherSubject = { ...two, record: { ...two.record, person: { ...record.person, id: "different-person" } } };
+  const groups = groupAttendancePresentations([one, two, otherSubject]);
+  expect(groups.map(g => [g.subject.id, g.rows.length])).toEqual([[record.person.id, 2], ["different-person", 1]]);
+});
+
+it("counts a pending identity, its ACK and its remote snapshot once without merging independent events", async () => {
+  const row = await loadAttendanceRecordPresentation(store(), scope, record, []);
+  const local = { ...row, reference: "local-event", referenceKind: "local" as const, serverId: undefined,
+    syncLabel: "Cambio local · pendiente", record: { ...record, recordId: "local-event", statusLabel: "B" } };
+  const ack = { ...local, serverId: "server-id", syncLabel: undefined };
+  const independent = { ...row, reference: "server-two", serverId: "server-two", record: { ...record, recordId: "server-two" } };
+  const unique = distinctAttendancePresentations([local, row, ack, independent]);
+  expect(unique).toHaveLength(2);
+  expect(unique[0].record.statusLabel).toBe("B");
+});
+
+it("shows a configured subject name from the exact scoped offline source row", async () => {
+  const { readAttendancePresentedSubject } = await import("./attendance-record-presentation");
+  const { presentationFingerprint } = await import("../../../lib/subject-presentation");
+  const config={version:1 as const,titleFieldIds:["code"],secondaryFieldIds:["name"]};
+  const fields=[{id:"code",key:"code",name:"Código",type:"TEXT",multiple:false},{id:"name",key:"name",name:"Nombre",type:"TEXT",multiple:false}];
+  const definition={version:1 as const,sourceEntityTypeId:"people",config,fields,fingerprint:presentationFingerprint("people",config,fields)};
+  const data=store();
+  vi.mocked(data.getCachedRecord).mockResolvedValue({localId:"person-cache",serverId:"person",values:{code:"S-001",name:"Nombre configurado"}} as never);
+  const result=await readAttendancePresentedSubject(data,scope,record.person,config,definition);
+  expect(result.presentation?.cells.map(c=>c.value)).toEqual(["S-001","Nombre configurado"]);
+  expect(result.id).toBe(record.person.id);
+  expect(data.getCachedRecord).toHaveBeenCalledWith({ownerKey:"owner",contractId:"contract",entityTypeId:"people",recordId:"person"});
+  vi.mocked(data.getCachedRecord).mockResolvedValue({localId:"other",serverId:"another-person",values:{code:"OTHER"}} as never);
+  expect(await readAttendancePresentedSubject(data,scope,record.person,config,definition)).toBe(record.person);
+  expect(await readAttendancePresentedSubject(data,scope,record.person,config,{...definition,fingerprint:"incompatible"})).toBe(record.person);
 });
