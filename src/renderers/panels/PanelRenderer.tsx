@@ -1,3 +1,4 @@
+import { PanelCompatibilityError } from "../../lib/panel-compatibility";
 import { metrics, type ThemeColors } from "../../theme/tokens";
 import { colors } from "../../theme/paint";
 import { CompactSelect } from "@/components/compact-select";
@@ -22,7 +23,7 @@ import { panelReadRows } from "./panel-read-presentation";
 import { loadPanelDatasetWithOfflineCache, PANEL_DISCOVERY_SNAPSHOT_DATASET_ID, PanelLocalReadError, PanelSnapshotMissingError } from "@/lib/offline-panels";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { loadRecordsWithOfflineCache } from "@/lib/offline-records";
-import { EntityField, PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
+import { OpcoApiError, EntityField, PanelAppView, PanelFilterConfig, PanelModuleConfig, PanelResponse, PanelTableConfig } from "@/lib/opco-api";
 import { getRelationTargetEntityTypeId } from "@/lib/record-form";
 import { stableTextInputStyle } from "@/lib/visual-stability";
 import { RecordFieldInput } from "@/renderers/records/RecordFieldInput";
@@ -377,7 +378,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
             ...current,
             [datasetId]: {
               error: error instanceof Error ? error.message : "No fue posible cargar el dataset.",
-              errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError || error instanceof PanelDefinitionError ? error.code : "PANEL_READ_FAILED",
+              errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError || error instanceof PanelDefinitionError || error instanceof PanelCompatibilityError || error instanceof OpcoApiError && error.code === "PANEL_CLIENT_UPDATE_REQUIRED" ? error.code : "PANEL_READ_FAILED",
               fromCache: false,
               offline: false,
               isLoading: false,

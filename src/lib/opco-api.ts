@@ -1,3 +1,4 @@
+import { PANEL_ACCEPT, assertPanelResponseCompatibility, type PanelCompatibility } from "./panel-compatibility";
 import type {AttendanceRepetitionCommand, AttendanceRepetitionPolicy} from "./attendance-repetition";
 import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "./attendance-repetition";
 import {createManifestNegotiationRequest,manifestNegotiationPath,validateManifestNegotiation,recordNegotiationDiagnostic} from "./revision-negotiation";
@@ -399,6 +400,7 @@ export type DashboardAppView = {
   type: "DASHBOARD";
 };
 export type PanelAppView = {
+  panelCompatibility?: PanelCompatibility;
   config: PanelAppViewConfig;
   configRevision?: string;
   icon: string | null;
@@ -540,6 +542,7 @@ export type PanelDataset = {
 };
 
 export type PanelResponse = {
+  panelCompatibility?: PanelCompatibility;
   appView: {
     id: string;
     name: string;
@@ -1342,7 +1345,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         ...fetchInit,
         signal: controller.signal,
         headers: {
-          Accept: "application/json",
+          Accept: /\/(?:views|panels\/[^/?]+|offline\/manifest)(?:\?|$)/.test(path) ? PANEL_ACCEPT : "application/json",
           "Content-Type": "application/json",
           ...fetchInit.headers,
           [OPCO_REQUEST_ID_HEADER]: diagnosticRequestId,
@@ -1591,6 +1594,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         const raw=value as StateUpdateRawResponse,ids=resource.query.subjectRecordIds;const capability={version:1 as const,maxSubjects:raw.currentBatchCapabilities?.maxSubjects??0,configurationFingerprint:String(resource.query.currentBatchFingerprint??"")};
         verifyRawCurrentBatch(raw,Array.isArray(ids)?ids:ids?[ids]:[],capability,contractId,resource.appViewId!);
       }
+      if(resource.kind==="panel")assertPanelResponseCompatibility(value as PanelResponse,"online");
       const normalized=resource.kind==="records"?normalizeEntityRecordsResponse(value as EntityRecordsResponse)
         :resource.kind==="record"?normalizeEntityRecordResponse(value as EntityRecordResponse)
         :resource.kind==="attendance"?sanitizeSubjectPresentationResponse(normalizeAttendanceResponse(value as AttendanceResponse))
@@ -1761,7 +1765,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         }`,
         token,
         diagnostics ? { headers: { "X-Opco-Request-Id": diagnostics.diagnosticRequestId } } : undefined,
-      );
+      ).then(panel => { assertPanelResponseCompatibility(panel, "online"); return panel; });
     },
     createEntityRecord(token: string, contractId: string, entityTypeId: string, input: CreateEntityRecordInput) {
       return authenticatedRequest<EntityRecordResponse>(

@@ -140,3 +140,37 @@ Publish compatible Core then Client before configuring these optional datasets. 
 extension rejects unknown dataset properties; older Client cannot present grouped pages correctly.
 To roll back, remove the new descriptors/modules through compatible Core first, preserve all source
 records/initial values, and retain the existing storage. Do not clear OPFS to downgrade presentation.
+
+## PANEL consumer compatibility (local guard, 2026-11-18)
+
+PANEL/catalog requests advertise the implemented `counts-v1`, `difference-v1`, `groups-v1`, `today-v1`
+features in the standard Accept parameter contract. It stays within the CORS safelist and adds no
+custom header/preflight requirement. Legacy Core can still serve compatible definitions unchanged.
+For new descriptors, online data requires Core's complete panelCompatibility acknowledgement bound
+to the response's configRevision; missing, partial, unknown or mismatched claims are rejected before
+cache writes. An explicit HTTP426 is not a network failure and never silently falls back to cached
+information as if the current read succeeded. Existing error text remains visible to old readers.
+
+Core projects unsupported views into a legacy update shell rather than exposing a partially interpreted
+new configuration; compatible views remain available. A new Client that cached such a projection asks
+to connect and obtain its compatible definition. No identity, permission, session, cache, pending work,
+conflict or outbox is removed. Known semantically supported pre-guard snapshots remain usable offline
+without asserting they are fresh. Future/contradictory cached capability metadata is rejected in place.
+Read-revision binding includes acknowledgement metadata only when present; legacy fingerprints remain
+unchanged. Both direct and revision-bound PANEL readers use the same server admission.
+
+A disconnected Client that predates the guard cannot be controlled by Core. If it already has an
+incompatible snapshot, its old renderer can still interpret it offline; this patch does not claim to
+fix that code remotely. Deploy the Core guard before distributing new definitions, then capable Client,
+and verify already-open legacy tabs and old compatible offline copies. Do not use service-worker
+activation as proof of updating a running tab. After new queries have been cached, rollback must retain
+a feature-aware reader (the published 84ded489 already understands grouping); reverting to 80def725
+or another reader lacking these semantics requires a separately verified compatible recovery path.
+No automatic reload, storage reset, migration or Attendance change is introduced.
+
+The same advertisement accompanies V1/V2 manifest requests. Core removes only feature-incompatible
+PANEL views from the existing genericReuse offer, so a legacy running Client cannot bypass dataset
+admission using a current receipt. Compatible PANELs, other workflows and Attendance policy/allowlists
+keep their existing negotiation. The state/vector/epoch and writer protocol are unchanged; HTTP
+manifest responses also vary by Accept. Local validation must enable generic reuse in both laboratory
+artifacts to cover this path, while leaving production gates untouched.

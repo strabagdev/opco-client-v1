@@ -34,7 +34,7 @@ it("uses the PANEL read ID in the existing HTTP diagnostic header without changi
   let requestUrl = "", requestId = "";
   const api = createOpcoApi({ apiUrl: "https://synthetic.invalid", fetcher: async (url, init) => {
     requestUrl = String(url); requestId = new Headers(init?.headers).get("X-Opco-Request-Id") ?? "";
-    return Response.json({ ok: true, data: { configRevision: "a".repeat(64), datasets: [], filters: [], modules: [] } });
+    return Response.json({ ok: true, data: { schemaVersion: 1, configRevision: "a".repeat(64), datasets: [], filters: [], modules: [] } });
   } });
   await api.getPanel("synthetic", "contract", "view", { datasetId: "rows", page: 1, pageSize: 25 }, { diagnosticRequestId: "panel-read-synthetic" });
   expect(requestId).toBe("panel-read-synthetic"); expect(new URL(requestUrl).searchParams.toString()).toBe("datasetId=rows&page=1&pageSize=25");

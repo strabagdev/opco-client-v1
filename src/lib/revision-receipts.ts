@@ -1,3 +1,4 @@
+import { panelReadRepresentation } from "./panel-compatibility";
 /** Diagnostic protocol only. No result of this module permits read omission. */
 export class RevisionReceiptError extends Error {
   constructor(public readonly code:string) { super(code); }
@@ -64,8 +65,9 @@ export async function assertRevisionRequestBinding(contractId:string,resource:Re
   const entries=[...q.entries()].filter(([key])=>!["readRevisionVersion","expectedReadRevision"].includes(key)).sort(([a],[b])=>a<b?-1:a>b?1:0);
   const selection=entries.filter(([key])=>key!=="page"&&!(resource.kind==="state-update"&&key==="subjectRecordIds"));
   const descriptor={kind:resource.kind,contractId,...(resource.entityTypeId?{entityTypeId:resource.entityTypeId}:{}),...(resource.recordId?{recordId:resource.recordId}:{}),...(resource.appViewId?{appViewId:resource.appViewId}:{})};
-  const data=download.data as {date?:unknown;from?:unknown;to?:unknown};
-  const effectiveContext={date:typeof data?.date==="string"?data.date:null,from:typeof data?.from==="string"?data.from:null,to:typeof data?.to==="string"?data.to:null};
+  const data=download.data as Record<string,unknown>;
+  const representation=["panel","views"].includes(resource.kind)?panelReadRepresentation(data):undefined;
+  const effectiveContext={...(representation?{panelCompatibility:representation}:{}),date:typeof data?.date==="string"?data.date:null,from:typeof data?.from==="string"?data.from:null,to:typeof data?.to==="string"?data.to:null};
   const selectionFingerprint=await revisionHash({resource:descriptor,query:selection,effectiveContext});
   const requestFingerprint=await revisionHash({resource:descriptor,query:entries,effectiveContext});
   const revision=await revisionHash({manifestVectorRevision:download.readRevision.manifestVectorRevision,selectionFingerprint,representationVersion:1});

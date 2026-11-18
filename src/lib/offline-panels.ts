@@ -1,3 +1,4 @@
+import { assertLocalPanelDefinition, assertPanelResponseCompatibility, PanelCompatibilityError } from "./panel-compatibility";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
 import { createConsultationRevisionRead } from "./consultation-revision-read";
 import { LocalDatabase, PanelSnapshotScope } from "./local-db";
@@ -84,13 +85,14 @@ export async function loadPanelDatasetWithOfflineCache({
     try {
       const cached = await store.getPanelSnapshot(scope);
       assertActive();
+      if (cached) assertPanelResponseCompatibility(cached.panel, "cache", appView);
       recordPanelRead(diagnostic, "snapshot_read", cached ? "hit" : "miss", cached?.panel.configRevision, cached ? null : "PANEL_SNAPSHOT_MISSING", cached?.syncedAt);
       return cached;
     } catch (error) {
       const cancelled = error instanceof PanelReadCancelledError || Boolean(isActive && !isActive());
       recordPanelRead(diagnostic, "snapshot_read", cancelled ? "cancelled" : "failed", undefined, cancelled ? "PANEL_READ_CANCELLED" : "PANEL_LOCAL_READ_FAILED");
       assertActive();
-      if (error instanceof PanelReadCancelledError) throw error;
+      if (error instanceof PanelReadCancelledError || error instanceof PanelCompatibilityError) throw error;
       throw new PanelLocalReadError();
     }
   }
@@ -110,6 +112,7 @@ export async function loadPanelDatasetWithOfflineCache({
   }
 
   assertActive();
+  if (appView) assertLocalPanelDefinition(appView);
   if (knownOffline) {
     if (requireConfigRevision && !configRevision) throw new PanelSnapshotMissingError();
     const cached = await readCached();
@@ -122,12 +125,14 @@ export async function loadPanelDatasetWithOfflineCache({
     revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"panel",query,snapshotDatasetId,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
     if(revision.reused){
       assertActive();const panel=revision.reused.response as PanelResponse;
+      assertPanelResponseCompatibility(panel,"cache",revision.reused.appView as PanelAppView);
       recordPanelRead(diagnostic,"snapshot_read","hit",panel.configRevision,null,revision.reused.verifiedAt);
       return{fromCache:true,offline:false,panel,syncedAt:revision.reused.verifiedAt,definition:revision.reused.appView as PanelAppView};
     }
     const readApi=revision.api;
     const panel = await readApi.getPanel!(token, contractId, appViewId, query, { diagnosticRequestId: diagnostic.readId });
     assertActive();
+    assertPanelResponseCompatibility(panel, "online", appView);
     recordPanelRead(diagnostic, "response", "received", panel.configRevision);
     if (appView && panel.appView.id !== appViewId) throw new PanelDefinitionError("PANEL_DEFINITION_UNAVAILABLE");
     const syncedAt = new Date().toISOString();

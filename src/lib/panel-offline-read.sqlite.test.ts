@@ -1,3 +1,4 @@
+import { PanelCompatibilityError } from "./panel-compatibility";
 // Real PANEL reader/effect and SQLite file with reopen; transport is synthetic.
 // @ts-expect-error Node types are intentionally absent from Expo config.
 import { spawn } from "node:child_process";
@@ -100,7 +101,7 @@ function visit(n:ts.Node){if(ts.isCallExpression(n)&&n.expression.getText(ast)==
 const effectCode=ts.transpileModule(effect.getText(ast).replace("void loadDatasets();","captureTask(loadDatasets());"),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText.trim().replace(/^"use strict";\s*/, "").replace(/;$/,"");
 const pageCode=ts.transpileModule(pageFn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const configuredPageSize=new Function(pageCode+";return configuredPageSize;")();
-function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>,reconciled:null as any},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0},connectionRef:{current:{scopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),knownOffline:false}}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,PanelDefinitionError,adoptedScopeRef:{current:null},setReconciled:(value:any)=>{model.reconciled=value;},assignedScopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),
+function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>,reconciled:null as any},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0},connectionRef:{current:{scopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),knownOffline:false}}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,PanelDefinitionError,PanelCompatibilityError,OpcoApiError,adoptedScopeRef:{current:null},setReconciled:(value:any)=>{model.reconciled=value;},assignedScopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),
 setDatasetStates:(next:any)=>{model.datasetStates=typeof next==="function"?next(model.datasetStates):next;refs.datasetStatesRef.current=model.datasetStates;}};
 function run(changes:any={}){Object.assign(env,changes);env.knownOffline=env.connectivityStatus==="offline";env.datasetScopeKey=JSON.stringify([env.ownerKey,env.selectedContractId,env.appView.id,env.appView.configRevision??JSON.stringify(env.appView.config)]);let done!:Promise<void>;const active={...env,captureTask:(p:Promise<void>)=>{done=p;}};const cleanup=new Function(...Object.keys(active),"return ("+effectCode+")();")(...Object.values(active));return{done,cleanup};}
 function dependencies(){return new Function(...Object.keys(env),"return "+deps!.getText(ast))(...Object.values(env));}
@@ -288,6 +289,7 @@ it("grouped exact snapshots retain full members, historical differences and pend
   const before = { rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations") };
   const saved = panel("synthetic-complete");
   saved.datasets[0].rows.push({ ...saved.datasets[0].rows[0], id: "independent-second-event" });
+  saved.panelCompatibility = { version: 1, status: "compatible", required: ["groups-v1"], accepted: ["groups-v1"], definitionRevision: saved.configRevision };
   saved.datasets[0].grouping = { relationFieldId: "person", totalRecords: 2, groups: [{ key: "relation:worker", relationRecordId: "worker", displayName: "Ficticio", count: 2, recordIds: saved.datasets[0].rows.map(row => row.id) }] };
   saved.datasets[0].pagination = { page: 1, pageSize: 1, total: 1, hasMore: false, unit: "GROUP" };
   saved.datasets[0].coverage = { source: "SERVER", includesPending: false };
@@ -301,4 +303,18 @@ it("grouped exact snapshots retain full members, historical differences and pend
   expect(result.panel.datasets[0].rows[0].values["difference:historical"]).toBe(-2);
   expect({ rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations") }).toEqual(before);
   expect(api.getPanel).not.toHaveBeenCalled();
+});
+
+
+it("426 preserves the real SQLite consultation, conflict and outbox through close/reopen", async () => {
+  const local = await store.createLocalRecord({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "synthetic-target", values: { code: "pending-compatibility" } });
+  await db.runAsync("UPDATE entity_records SET sync_status='conflict' WHERE local_id=?", local.localId);
+  const original = panel("last-compatible"); await seed(original);
+  const before = { rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations"), snapshots: await db.getAllAsync("SELECT * FROM panel_snapshots") };
+  const api = { getPanel: vi.fn(async () => { throw new OpcoApiError("Esta experiencia requiere actualizar Opco Client.", "PANEL_CLIENT_UPDATE_REQUIRED", 426); }) };
+  await expect(loadPanelDatasetWithOfflineCache(options(api))).rejects.toMatchObject({ code: "PANEL_CLIENT_UPDATE_REQUIRED", status: 426 });
+  await reopen();
+  const cached = await loadPanelDatasetWithOfflineCache(options({ getPanel: vi.fn() }, { knownOffline: true }));
+  expect(cached.panel).toEqual(original);
+  expect({ rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations"), snapshots: await db.getAllAsync("SELECT * FROM panel_snapshots") }).toEqual(before);
 });
