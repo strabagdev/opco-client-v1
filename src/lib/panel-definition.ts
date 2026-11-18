@@ -26,7 +26,7 @@ function stable(value: unknown): unknown {
 export function panelContextSignature(view: PanelAppView) {
   return JSON.stringify(stable({
     datasets: view.config.datasets,
-    filters: view.config.filters?.map(({ id, required, valueType }) => ({ id, required: Boolean(required), valueType })),
+    filters: view.config.filters?.map(({ id, required, valueType, defaultValue }) => ({ id, required: Boolean(required), valueType, defaultValue })),
   }));
 }
 

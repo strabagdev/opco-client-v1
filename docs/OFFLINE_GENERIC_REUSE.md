@@ -79,3 +79,64 @@ including a query originally loaded from the server. It follows the ordinary loa
 negotiation; it need not download business data if the proof is still valid. An interrupted refresh is
 not treated as a completed result. Scope/revision/query guards remain effective, and an unrelated rerender
 or unchanged successful retry does not request another completed query.
+
+## Dynamic initial DATE filters — local option 2026-11-17
+
+A PANEL DATE filter may declare `defaultValue: { type: "TODAY", timeZone: "America/Santiago" }`.
+The zone is an explicit IANA setting, independent of the contract, field name and device zone.
+The Client resolves it once when the panel/scope opens, using the device clock and Intl timezone
+rules. It supplies the resulting `YYYY-MM-DD` to the existing shared dataset selection, so metrics,
+detail, pagination, revisions and snapshot keys receive the same concrete date. `TODAY` is never
+sent as a query date or used as a cache identity. Core does not fill omitted query parameters.
+
+Manual dates, an explicitly cleared field and Lote selections remain unchanged on rerenders,
+metadata refresh, reconnect or background/foreground. A new owner/contract/view/revision scope
+initializes its own values without reading inputs from the preceding scope. A compatible adopted
+definition retains the current values. Reopening calculates the current day again; keeping a view
+open across midnight does not silently replace the user's selected day. Invalid/unsupported cached
+zones leave manual selection available and never fall back to device time or another snapshot.
+
+No storage migration, queue, clock synchronization or new offline acquisition is introduced. Offline,
+a newly resolved day still requires its exact existing snapshot; yesterday's result is not a fallback
+for today's query. Native/Safari Intl coverage remains a separate physical-device validation.
+
+Deploy compatible Core before Client, then explicitly configure the relative default. Older Client
+code ignores the new optional property and retains manual selection; absent defaults preserve the
+legacy empty filter. Remove the descriptor through compatible Core before rolling Core back to a
+version whose strict config parser does not recognize it. No production configuration is activated
+by this local implementation.
+
+## PANEL relation groups and historical inverse counts — local 2026-11-17
+
+PANEL RECORDS datasets may opt into `groupBy` on a configured ONE relation. Core paginates whole
+identity groups: `pagination.unit=GROUP`, `pagination.total` counts groups and `grouping.totalRecords`
+counts all matching source records. `rows` contains every member of each returned group; a group
+may therefore contain more records than pageSize. Primary/secondary headings use configured direct
+related projections; identical labels never merge different relation IDs. The collapsed list exposes
+identity labels and counts, and its detail reuses ReadFieldList with configured column labels/values.
+
+The consultation response adapter validates this representation before accrediting an exact window:
+group descriptors must match the saved dataset, each member is present exactly once, row relation IDs
+match the group, counts agree and no page mixes group and record units. Existing record pagination
+remains unchanged. No schema, SQLite/OPFS, outbox, pending-operation or synchronization logic changes.
+The existing complete-collection inspector is deliberately conservative for grouped multi-row pages;
+this lot accredits exact visited group windows, not unvisited groups or arbitrary offline queries.
+
+`relationCounts` results are server-computed inverse counts over configured source entities and ONE
+relations, including zero for master records without matching rows. Optional fixed conditions define
+which existing rows count; interactive daily filters/search are never propagated to this historical
+count. `difference` projects numeric initial value minus that count with a configured empty label.
+Missing amounts remain null, negatives remain negative, and TEXT is never converted by the renderer.
+Core includes these sources in existing manifest dependency traversal via `sourceEntityTypeId`; the
+ordinary config revision, read binding and exact snapshot key continue to protect all results.
+
+These tables explicitly describe server/last-saved-server coverage and exclude unresolved local
+Attendance/STATE_UPDATE operations. They do not combine pending rows with ACK copies. After ACK,
+only a fresh/revalidated server result can change the count; an offline cached result retains its
+server calculation timestamp and does not claim current physical availability. No preparation is
+added for unvisited queries, no gates are activated and no stock exhaustion control is introduced.
+
+Publish compatible Core then Client before configuring these optional datasets. Core before this
+extension rejects unknown dataset properties; older Client cannot present grouped pages correctly.
+To roll back, remove the new descriptors/modules through compatible Core first, preserve all source
+records/initial values, and retain the existing storage. Do not clear OPFS to downgrade presentation.

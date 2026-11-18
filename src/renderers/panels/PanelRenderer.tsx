@@ -31,6 +31,8 @@ import { useExperienceOpeningTelemetry } from "@/renderers/experience-opening";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { useSession } from "@/state/session";
 import { PanelDefinitionError } from "@/lib/panel-definition";
+import { PanelGroupedRecords } from "./PanelGroupedRecords";
+import { usePanelFilterInputs } from "./use-panel-filter-inputs";
 
 import {
   buildPanelKpiModel,
@@ -91,7 +93,11 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
   const [pages, setPages] = useState<Record<string, number>>(() => Object.fromEntries(initialDatasetIds.map((id) => [id, 1])));
   const [retryVersion, setRetryVersion] = useState(0);
   const [searchByDataset, setSearchByDataset] = useState<Record<string, string>>({});
-  const [filterInputs, setFilterInputs] = useState<Record<string, string>>({});
+  const { values: filterInputs, onChange: changeFilterInput } = usePanelFilterInputs({
+    scopeKey: JSON.stringify([datasetScopeKey, appViewConfigKey]),
+    filters: configuredFilters,
+    preservePrevious: adoptedScopeRef.current === datasetScopeKey,
+  });
   const [filterFields, setFilterFields] = useState<Record<string, EntityField>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, { id: string; displayName: string }[]>>({});
   const [relationSearch, setRelationSearch] = useState<Record<string, string>>({});
@@ -127,7 +133,6 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
     setPages(Object.fromEntries(initialDatasetIds.map((id) => [id, 1])));
     setRetryVersion(0);
     setSearchByDataset({});
-    setFilterInputs({});
     setFilterFields({});
     setRelationOptions({});
     setRelationSearch({});
@@ -459,11 +464,15 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
           relationOptions={relationOptions}
           onRelationSearch={(target, search) => setRelationSearch((current) => ({ ...current, [target]: search }))}
           onChange={(filterId, value) => {
-            setFilterInputs((current) => ({ ...current, [filterId]: value }));
+            changeFilterInput(filterId, value);
             setPages(Object.fromEntries(datasetIds.map((datasetId) => [datasetId, 1])));
           }}
           values={filterInputs}
         />
+      ) : null}
+
+      {appView.config.datasets?.some(dataset => dataset.groupBy || dataset.relationCounts?.length) ? (
+        <Text style={styles.subtitle}>Datos del servidor. No incluye operaciones pendientes de sincronización.</Text>
       ) : null}
 
       <View style={[styles.grid, moduleLayoutPlan.containerStyle]}>
@@ -656,6 +665,9 @@ function PanelModule({
         </View>
       )}
 
+      {isTable && dataset?.coverage && currentState?.panel?.calculatedAt ? <Text style={tableStyles.scope}>
+        {offline ? "Consulta guardada. " : ""}Cálculo del servidor: {new Date(currentState.panel.calculatedAt).toLocaleString()} ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
+      </Text> : null}
       {tableConfig?.searchable ? (
         <PanelSearchField search={search} onSearch={onSearch} />
       ) : null}
@@ -808,6 +820,7 @@ function PanelKpi({
 function PanelTable({ table, module, dataset }: { table: NonNullable<ReturnType<typeof buildPanelTableModel>>; module: PanelModuleConfig; dataset: NonNullable<DatasetState["panel"]>["datasets"][number] }) {
   const [width, setWidth] = useState(0);
   const compact = width < table.minWidth;
+  if (dataset.grouping) return <PanelGroupedRecords module={module} dataset={dataset} />;
   const rows = panelReadRows(module, dataset, table);
   return <View testID="panel-table-content" style={tableStyles.table} onLayout={event => {
     const next = Math.floor(event.nativeEvent.layout.width);
@@ -1063,6 +1076,7 @@ const styles = createPanelStyles();
 
 export function createPanelTableStyles(p: ThemeColors = colors) {
   return StyleSheet.create({
+  scope: { color: p.textSecondary, fontSize: 13, lineHeight: 19 },
   moduleViewport: { padding: 0, minHeight: 0, minWidth: 0, backgroundColor: p.surface },
   moduleFlow: { padding: 12, gap: 12, flexGrow: 1, minWidth: 0 },
   moduleHeader: { marginBottom: 0, gap: 6 },

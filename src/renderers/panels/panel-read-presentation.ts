@@ -18,7 +18,7 @@ export function panelReadRows(module: PanelModuleConfig, dataset: PanelDataset, 
 
 function panelReadValue(field: PanelField, raw: EntityRecordValue | undefined, formatted: string, internal: boolean): ReadValue[] {
   if (raw === undefined) return [{ text: "Dato no disponible en esta consulta", status: "unavailable" }];
-  if (raw === null || raw === "" || (Array.isArray(raw) && !raw.length)) return [{ text: "Sin valor", status: "empty" }];
+  if (raw === null || raw === "" || (Array.isArray(raw) && !raw.length)) return [{ text: field.emptyLabel || "Sin valor", status: "empty" }];
   if (field.type === "BOOLEAN" && typeof raw === "boolean") return [{ text: raw ? "Sí" : "No", status: "value" }];
   if (field.type === "RELATION") return (Array.isArray(raw) ? raw : [raw]).map(value => {
     const ref = value && typeof value === "object" && !Array.isArray(value) ? value as { id?: unknown; displayName?: unknown } : null;

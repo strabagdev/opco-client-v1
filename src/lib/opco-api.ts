@@ -209,6 +209,7 @@ export type PanelFilterConfig = {
   label?: string;
   required?: boolean;
   valueType: PanelFilterValueType;
+  defaultValue?: { type: "TODAY"; timeZone: string };
 };
 
 export type PanelKpiFormat =
@@ -263,6 +264,15 @@ export type PanelMetricResult = {
 };
 
 export type PanelDatasetConfig = {
+  groupBy?: { relationFieldId: string; primaryFieldId?: string; secondaryFieldId?: string };
+  relationCounts?: {
+    id: string;
+    label: string;
+    sourceEntityTypeId: string;
+    relationFieldId: string;
+    filters?: { type: "FIELD_VALUE"; fieldId: string; operator: "EQ" | "IN" | "HAS_VALUE"; value?: unknown; values?: unknown[] }[];
+    difference?: { fieldId: string; label: string; emptyLabel: string };
+  }[];
   id: string;
   name?: string;
   relatedFields?: { relationFieldId: string; fieldId: string }[];
@@ -492,6 +502,7 @@ export type PanelQuery = {
 };
 
 export type PanelField = {
+  emptyLabel?: string;
   id: string;
   name: string;
   options?: {
@@ -503,8 +514,17 @@ export type PanelField = {
 };
 
 export type PanelDataset = {
+  coverage?: { source: "SERVER"; includesPending: false };
+  grouping?: {
+    relationFieldId: string;
+    primaryFieldId?: string;
+    secondaryFieldId?: string;
+    totalRecords: number;
+    groups: { key: string; relationRecordId: string | null; displayName: string; count: number; recordIds: string[] }[];
+  };
   id: string;
   pagination: {
+    unit?: "GROUP";
     hasMore: boolean;
     page: number;
     pageSize: number;

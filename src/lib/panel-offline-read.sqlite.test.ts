@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ts from "typescript";
 import * as consultationRead from "./consultation-revision-read";
+import { initialPanelFilterInputs } from "../renderers/panels/use-panel-filter-inputs";
 import { PanelDefinitionError, coherentCachedPanelViews } from "./panel-definition";
 import { getPanelReadEvents, panelReadRows } from "./panel-read-diagnostics";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
@@ -263,4 +264,41 @@ it("online-offline-online revalidates even when the first result came from the s
     attempt.cleanup();
   }
   expect(api.getPanel).toHaveBeenCalledTimes(2);
+});
+
+
+it("TODAY reopen uses the exact new DATE and never borrows yesterday's SQLite snapshot", async () => {
+  const relative = [{ id: "date", valueType: "DATE" as const, defaultValue: { type: "TODAY" as const, timeZone: "America/Santiago" } }];
+  const yesterday = initialPanelFilterInputs(relative, new Date("2026-11-18T01:00:00Z"));
+  const savedQuery = { ...query, filters: yesterday };
+  await seed(panel("saved-17"), savedQuery);
+  await reopen();
+  const api = { getPanel: vi.fn() };
+  const today = initialPanelFilterInputs(relative, new Date("2026-11-18T04:00:00Z"));
+  expect(today).toEqual({ date: "2026-11-18" });
+  await expect(loadPanelDatasetWithOfflineCache(options(api, { knownOffline: true, query: { ...query, filters: today } }))).rejects.toBeInstanceOf(PanelSnapshotMissingError);
+  const manual = await loadPanelDatasetWithOfflineCache(options(api, { knownOffline: true, query: savedQuery }));
+  expect(manual.panel.datasets[0].rows[0].values.code).toBe("saved-17");
+  expect(api.getPanel).not.toHaveBeenCalled();
+});
+
+it("grouped exact snapshots retain full members, historical differences and pending work on reopen", async () => {
+  const local = await store.createLocalRecord({ ownerKey: scope.ownerKey, contractId: scope.contractId, entityTypeId: "synthetic-target", values: { code: "pending" } });
+  await db.runAsync("UPDATE entity_records SET sync_status='conflict' WHERE local_id=?", local.localId);
+  const before = { rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations") };
+  const saved = panel("synthetic-complete");
+  saved.datasets[0].rows.push({ ...saved.datasets[0].rows[0], id: "independent-second-event" });
+  saved.datasets[0].grouping = { relationFieldId: "person", totalRecords: 2, groups: [{ key: "relation:worker", relationRecordId: "worker", displayName: "Ficticio", count: 2, recordIds: saved.datasets[0].rows.map(row => row.id) }] };
+  saved.datasets[0].pagination = { page: 1, pageSize: 1, total: 1, hasMore: false, unit: "GROUP" };
+  saved.datasets[0].coverage = { source: "SERVER", includesPending: false };
+  saved.datasets[0].rows[0].values["difference:historical"] = -2;
+  await seed(saved, { ...query, pageSize: 1 });
+  await reopen();
+  const api = { getPanel: vi.fn() };
+  const result = await loadPanelDatasetWithOfflineCache(options(api, { query: { ...query, pageSize: 1 }, knownOffline: true }));
+  expect(result.panel).toEqual(saved);
+  expect(result.panel.datasets[0].grouping?.groups[0].count).toBe(2);
+  expect(result.panel.datasets[0].rows[0].values["difference:historical"]).toBe(-2);
+  expect({ rows: await db.getAllAsync("SELECT * FROM entity_records"), outbox: await db.getAllAsync("SELECT * FROM pending_operations") }).toEqual(before);
+  expect(api.getPanel).not.toHaveBeenCalled();
 });

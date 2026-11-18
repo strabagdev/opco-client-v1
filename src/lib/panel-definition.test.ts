@@ -20,3 +20,12 @@ describe("PANEL definition reconciliation", () => {
     expect(parseCoherentPanelDefinition("{}", old.id)).toBeNull(); expect(parseCoherentPanelDefinition(JSON.stringify({ version: 1, appView: next }), "another-view")).toBeNull();
   });
 });
+
+
+it("requires reopening when a TODAY default or its IANA zone changes during reconciliation", async () => {
+  const today = { ...old, config: { ...old.config, filters: [{ id: "context", valueType: "DATE" as const, defaultValue: { type: "TODAY" as const, timeZone: "America/Santiago" } }] } };
+  const changed = { ...today, configRevision: "r2", config: { ...today.config, filters: [{ ...today.config.filters[0], defaultValue: { type: "TODAY" as const, timeZone: "UTC" } }] } };
+  const api = { getAppViews: vi.fn().mockResolvedValue({ views: [changed] }) };
+  await expect(reconcilePanelDefinition({ ...request(api), appView: today })).rejects.toMatchObject({ code: "PANEL_CONTEXT_CHANGED" });
+  expect(api.getAppViews).toHaveBeenCalledOnce();
+});

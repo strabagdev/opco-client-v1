@@ -22,7 +22,18 @@ export function assertConsultationResponse(request:ConsultationRequest,data:Pane
  if(request.resource.kind==="panel"){
   const p=data as PanelResponse;if(request.appView.type!=="PANEL"||p.configRevision!==request.appView.configRevision||p.datasets.length!==1)return fail();
   const d=p.datasets[0],q=request.resource.query??{},page=Number(q.page??1),size=Math.min(Number(q.pageSize??d.pagination.pageSize),100),n=d.pagination;
-  if(q.datasetId&&q.datasetId!==d.id||n.page!==page||n.pageSize!==size||!Number.isInteger(n.total)||n.total<0||n.hasMore!==(page*size<n.total)||d.rows.length!==Math.min(size,Math.max(0,n.total-(page-1)*size))||new Set(d.rows.map(r=>r.id)).size!==d.rows.length)return fail();
+  if(q.datasetId&&q.datasetId!==d.id||n.page!==page||n.pageSize!==size||!Number.isInteger(n.total)||n.total<0||n.hasMore!==(page*size<n.total)||new Set(d.rows.map(r=>r.id)).size!==d.rows.length)return fail();
+  const configured=request.appView.config.datasets?.find(dataset=>dataset.id===d.id)?.groupBy;
+  if(configured){
+   const g=d.grouping,expected=Math.min(size,Math.max(0,n.total-(page-1)*size));
+   if(!g||n.unit!=="GROUP"||g.relationFieldId!==configured.relationFieldId||g.primaryFieldId!==configured.primaryFieldId||g.secondaryFieldId!==configured.secondaryFieldId||!Number.isInteger(g.totalRecords)||g.totalRecords<n.total||g.groups.length!==expected||new Set(g.groups.map(group=>group.key)).size!==g.groups.length)return fail();
+   const ids=g.groups.flatMap(group=>group.recordIds);
+   if(ids.length!==d.rows.length||new Set(ids).size!==ids.length||d.rows.some(row=>!ids.includes(row.id))||d.rows.length>g.totalRecords||page===1&&!n.hasMore&&d.rows.length!==g.totalRecords)return fail();
+   for(const group of g.groups){
+    if(!Number.isInteger(group.count)||group.count<1||group.count!==group.recordIds.length||group.key!==(group.relationRecordId?`relation:${group.relationRecordId}`:`unrelated:${group.recordIds[0]}`))return fail();
+    for(const id of group.recordIds){const value=d.rows.find(row=>row.id===id)?.values[g.relationFieldId];const target=value&&typeof value==="object"&&!Array.isArray(value)&&"id"in value?value.id:null;if(target!==group.relationRecordId)return fail();}
+   }
+  }else if(d.grouping||n.unit||d.rows.length!==Math.min(size,Math.max(0,n.total-(page-1)*size)))return fail();
  }else{
   const r=data as ReportResponse,q=request.resource.query??{};
   if(request.appView.type!=="REPORT"||!["TABLE","MATRIX"].includes(r.config.presentationMode)||r.config.presentationMode!==request.appView.config.presentationMode||revisionCanonical(r.config)!==revisionCanonical(request.appView.config)||!q.from||!q.to||r.from!==q.from||r.to!==q.to||new Set(r.records.map(r=>r.id)).size!==r.records.length)return fail();

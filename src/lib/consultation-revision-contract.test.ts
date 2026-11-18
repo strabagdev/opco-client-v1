@@ -11,3 +11,15 @@ it.each([0,1,10,21])('validates exact %s total without claiming all pages were v
 it.each(['short','duplicate','revision','total','selector'])('rejects incompatible %s',kind=>{const r=request(),p=panel();if(kind==='short')p.datasets[0].rows.pop();if(kind==='duplicate')p.datasets[0].rows[1].id='0';if(kind==='revision')p.configRevision='r2';if(kind==='total')p.datasets[0].pagination.total=-1;if(kind==='selector')r.resource.query!.datasetId='other';expect(()=>assertConsultationResponse(r,p)).toThrow();});
 
 it('accepts the existing Core size cap while keeping the requested query distinct',()=>{const p=panel(31);p.datasets[0].pagination.pageSize=100;p.datasets[0].pagination.hasMore=false;p.datasets[0].rows=Array.from({length:31},(_,i)=>({id:String(i),values:{}}));expect(()=>assertConsultationResponse(request({page:'1',pageSize:'150'}),p)).not.toThrow();});
+
+function groupedConsultation() {
+ const config={relationFieldId:'person'};
+ const r=request({datasetId:'rows',page:'1',pageSize:'1'});
+ r.appView={...view,config:{...view.config,datasets:[{id:'rows',source:{type:'ENTITY',entityTypeId:'events'},groupBy:config,transformation:{type:'RECORDS',fieldIds:['person']}}]}};
+ const p=panel(1);p.datasets[0]={...p.datasets[0],pagination:{page:1,pageSize:1,total:1,hasMore:false,unit:'GROUP'},
+  rows:['event1','event2'].map(id=>({id,values:{person:{id:'person1',displayName:'Same label'}}})),
+  grouping:{...config,totalRecords:2,groups:[{key:'relation:person1',relationRecordId:'person1',displayName:'Same label',count:2,recordIds:['event1','event2']}]}};
+ return{r,p};
+}
+it('accredits a complete GROUP window with more rows than pageSize without treating it as one record',()=>{const{r,p}=groupedConsultation();expect(()=>assertConsultationResponse(r,p)).not.toThrow();});
+it.each(['missing-row','double-member','wrong-person','count','unconfigured','wrong-unit','wrong-label-binding'])('rejects incompatible group evidence: %s',kind=>{const{r,p}=groupedConsultation(),d=p.datasets[0];if(kind==='missing-row')d.rows.pop();if(kind==='double-member')d.grouping!.groups[0].recordIds=['event1','event1'];if(kind==='wrong-person')d.rows[0].values.person={id:'other',displayName:'Same label'};if(kind==='count')d.grouping!.groups[0].count=1;if(kind==='unconfigured')r.appView=view;if(kind==='wrong-unit')delete d.pagination.unit;if(kind==='wrong-label-binding')d.grouping!.primaryFieldId='unconfigured';expect(()=>assertConsultationResponse(r,p)).toThrow();});
