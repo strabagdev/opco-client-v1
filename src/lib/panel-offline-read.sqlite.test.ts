@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ts from "typescript";
+import * as consultationRead from "./consultation-revision-read";
 import { PanelDefinitionError, coherentCachedPanelViews } from "./panel-definition";
 import { getPanelReadEvents, panelReadRows } from "./panel-read-diagnostics";
 import { getLocalDatabase, __resetLocalDatabaseForTests } from "./local-db";
@@ -98,7 +99,7 @@ function visit(n:ts.Node){if(ts.isCallExpression(n)&&n.expression.getText(ast)==
 const effectCode=ts.transpileModule(effect.getText(ast).replace("void loadDatasets();","captureTask(loadDatasets());"),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText.trim().replace(/^"use strict";\s*/, "").replace(/;$/,"");
 const pageCode=ts.transpileModule(pageFn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const configuredPageSize=new Function(pageCode+";return configuredPageSize;")();
-function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>,reconciled:null as any},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,PanelDefinitionError,adoptedScopeRef:{current:null},setReconciled:(value:any)=>{model.reconciled=value;},assignedScopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),
+function rendererFixture(api:any){const model={datasetStates:{} as Record<string,any>,reconciled:null as any},refs={datasetStatesRef:{current:model.datasetStates},requestSeq:{current:0},connectionRef:{current:{scopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),knownOffline:false}}};const env:any={...refs,api,appView:view,ownerKey:scope.ownerKey,selectedContractId:scope.contractId,token:"synthetic",definitionCache:store,configuredFilters:view.config.filters,hasComposedKpi:false,datasetIdsKey:scope.datasetId,normalizedFiltersKey:JSON.stringify(query.filters),pages:{[scope.datasetId]:1},searchByDataset:{},retryVersion:0,connectivityStatus:"online",DATASET_KEY_SEPARATOR:"\u0000",PANEL_DISCOVERY_SNAPSHOT_DATASET_ID,panelDatasetQueryKey,configuredPageSize,missingRequiredPanelFilters,loadPanelDatasetWithOfflineCache,PanelLocalReadError,PanelSnapshotMissingError,PanelDefinitionError,adoptedScopeRef:{current:null},setReconciled:(value:any)=>{model.reconciled=value;},assignedScopeKey:JSON.stringify([scope.ownerKey,scope.contractId,view.id,view.configRevision]),
 setDatasetStates:(next:any)=>{model.datasetStates=typeof next==="function"?next(model.datasetStates):next;refs.datasetStatesRef.current=model.datasetStates;}};
 function run(changes:any={}){Object.assign(env,changes);env.knownOffline=env.connectivityStatus==="offline";env.datasetScopeKey=JSON.stringify([env.ownerKey,env.selectedContractId,env.appView.id,env.appView.configRevision??JSON.stringify(env.appView.config)]);let done!:Promise<void>;const active={...env,captureTask:(p:Promise<void>)=>{done=p;}};const cleanup=new Function(...Object.keys(active),"return ("+effectCode+")();")(...Object.values(active));return{done,cleanup};}
 function dependencies(){return new Function(...Object.keys(env),"return "+deps!.getText(ast))(...Object.values(env));}
@@ -200,4 +201,66 @@ it("a retired cached read is diagnosed as cancellation, not a storage failure",a
  await seed();const original=store.getPanelSnapshot.bind(store),entered=deferred(),release=deferred();let active=true;store.getPanelSnapshot=async input=>{entered.resolve();await release.promise;return original(input);};
  const pending=loadPanelDatasetWithOfflineCache(options({getPanel:vi.fn()},{knownOffline:true,isActive:()=>active}));const rejected=expect(pending).rejects.toBeInstanceOf(PanelReadCancelledError);await entered.promise;active=false;release.resolve();await rejected;store.getPanelSnapshot=original;
  const last=getPanelReadEvents().at(-1)!;expect(last).toMatchObject({phase:"snapshot_read",result:"cancelled",errorCode:"PANEL_READ_CANCELLED"});expect(last.errorCode).not.toBe("PANEL_LOCAL_READ_FAILED");
+});
+
+
+function renderedPanelOffline(f: ReturnType<typeof rendererFixture>) {
+  let expression: ts.Expression | undefined;
+  function read(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "isOffline") expression = node.initializer;
+    ts.forEachChild(node, read);
+  }
+  read(ast);
+  if (!expression) throw new Error("Actual panel offline expression missing");
+  return new Function("knownOffline", "datasetStates", "datasetScopeKey", "return " + expression.getText(ast))(
+    f.env.knownOffline, f.model.datasetStates, f.env.datasetScopeKey,
+  );
+}
+
+it("online revision-verified SQLite reuse does not label the panel offline", async () => {
+  await seed();
+  await reopen();
+  const api = { getPanel: vi.fn() };
+  const reuse = vi.spyOn(consultationRead, "createConsultationRevisionRead").mockResolvedValueOnce({
+    api, assertActive() {}, finish: async () => {},
+    reused: { response: panel("verified"), appView: view, verifiedAt: "2026-11-17T23:00:00.000Z" },
+  });
+  try {
+    const f = rendererFixture(api), attempt = f.run();
+    await attempt.done;
+    expect(f.model.datasetStates.reportes.fromCache).toBe(true);
+    expect(renderedPanelOffline(f)).toBe(false);
+    expect(f.model.datasetStates.reportes.offline).toBe(false);
+    expect(api.getPanel).not.toHaveBeenCalled();
+    attempt.cleanup();
+  } finally { reuse.mockRestore(); }
+});
+
+it("reconnection revalidates a loaded offline snapshot without replacing its query", async () => {
+  await seed(panel("saved"));
+  await reopen();
+  const api = { getPanel: vi.fn().mockResolvedValue(panel("remote")) }, f = rendererFixture(api);
+  let attempt = f.run({ connectivityStatus: "offline" });
+  await attempt.done;
+  expect(renderedPanelOffline(f)).toBe(true);
+  expect(api.getPanel).not.toHaveBeenCalled();
+  attempt.cleanup();
+  attempt = f.run({ connectivityStatus: "online" });
+  await attempt.done;
+  expect(api.getPanel).toHaveBeenCalledOnce();
+  expect(api.getPanel.mock.calls[0][3]).toMatchObject(query);
+  expect(f.model.datasetStates.reportes.panel.datasets[0].rows[0].values.code).toBe("remote");
+  expect(renderedPanelOffline(f)).toBe(false);
+  attempt.cleanup();
+});
+
+it("online-offline-online revalidates even when the first result came from the server", async () => {
+  const api = { getPanel: vi.fn().mockResolvedValue(panel("remote")) }, f = rendererFixture(api);
+  for (const connectivityStatus of ["online", "offline", "online"]) {
+    const attempt = f.run({ connectivityStatus });
+    await attempt.done;
+    expect(renderedPanelOffline(f)).toBe(connectivityStatus === "offline");
+    attempt.cleanup();
+  }
+  expect(api.getPanel).toHaveBeenCalledTimes(2);
 });

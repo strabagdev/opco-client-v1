@@ -50,6 +50,7 @@ type DatasetState = {
   error: string | null;
   errorCode: string | null;
   fromCache: boolean;
+  offline: boolean;
   isLoading: boolean;
   panel: PanelResponse | null;
   queryKey: string | null;
@@ -86,6 +87,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
   const initialDatasetIds = useMemo(() => datasetIdsForPanelModules(configuredModules), [configuredModules]);
   const [datasetStates, setDatasetStates] = useState<Record<string, DatasetState>>({});
   const datasetStatesRef = useRef<Record<string, DatasetState>>({});
+  const connectionRef = useRef({ scopeKey: datasetScopeKey, knownOffline });
   const [pages, setPages] = useState<Record<string, number>>(() => Object.fromEntries(initialDatasetIds.map((id) => [id, 1])));
   const [retryVersion, setRetryVersion] = useState(0);
   const [searchByDataset, setSearchByDataset] = useState<Record<string, string>>({});
@@ -228,6 +230,8 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
 
   useEffect(() => {
     const seq = ++requestSeq.current;
+    const reconnected = connectionRef.current.scopeKey === datasetScopeKey && connectionRef.current.knownOffline && !knownOffline;
+    connectionRef.current = { scopeKey: datasetScopeKey, knownOffline };
     let cancelled = false;
 
     async function loadDatasets() {
@@ -239,6 +243,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
           error: "Selecciona un contrato antes de abrir paneles.",
           errorCode: null,
           fromCache: false,
+          offline: false,
           isLoading: false,
           panel: null,
           queryKey: null,
@@ -266,12 +271,12 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
         if (missingFilters.length > 0) {
           setDatasetStates((current) => ({ ...current, [datasetId]: {
             error: `Selecciona ${missingFilters.map((filter) => filter.label || filter.id).join(", ")}.`,
-            errorCode: null, fromCache: false, isLoading: false, panel: null, queryKey, scopeKey: datasetScopeKey, syncedAt: null,
+            errorCode: null, fromCache: false, offline: false, isLoading: false, panel: null, queryKey, scopeKey: datasetScopeKey, syncedAt: null,
           } }));
           continue;
         }
 
-        if (previous?.panel && previous.queryKey === queryKey && !previous.error) {
+        if (previous?.panel && previous.queryKey === queryKey && !previous.error && !previous.isLoading && !reconnected && !(previous.offline && !knownOffline)) {
           continue;
         }
 
@@ -282,7 +287,8 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
           [datasetId]: {
             error: null,
             errorCode: null,
-            fromCache: false,
+            fromCache: hasCompatiblePanel ? previous?.fromCache ?? false : false,
+            offline: hasCompatiblePanel ? previous?.offline ?? false : false,
             isLoading: true,
             panel: hasCompatiblePanel ? previous?.panel ?? null : null,
             queryKey,
@@ -332,6 +338,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
               error: null,
               errorCode: null,
               fromCache: result.fromCache,
+              offline: result.offline,
               isLoading: false,
               panel: result.panel,
               queryKey,
@@ -344,6 +351,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
                     error: null,
                     errorCode: null,
                     fromCache: result.fromCache,
+                    offline: result.offline,
                     isLoading: false,
                     panel: result.panel,
                     queryKey,
@@ -366,6 +374,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
               error: error instanceof Error ? error.message : "No fue posible cargar el dataset.",
               errorCode: error instanceof PanelLocalReadError || error instanceof PanelSnapshotMissingError || error instanceof PanelDefinitionError ? error.code : "PANEL_READ_FAILED",
               fromCache: false,
+              offline: false,
               isLoading: false,
               panel: hasCompatiblePanel ? previous?.panel ?? null : null,
               queryKey,
@@ -407,7 +416,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
     modules,
     rowHeight: configuredRowHeight,
   }), [configuredColumns, configuredRowHeight, modules, width]);
-  const isOffline = knownOffline || Object.values(datasetStates).some((state) => state.scopeKey === datasetScopeKey && state.fromCache);
+  const isOffline = knownOffline || Object.values(datasetStates).some((state) => state.scopeKey === datasetScopeKey && state.offline);
   const liveDatasetStates = Object.values(datasetStates).filter((state) => state.scopeKey === datasetScopeKey);
   const liveFailedCount = liveDatasetStates.filter((state) => state.error).length;
   const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
@@ -468,6 +477,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
             ]}
           >
             <PanelModule
+              knownOffline={knownOffline}
               module={module}
               frameHeight={Number(moduleLayoutPlan.moduleStyles[module.id].height ?? moduleLayoutPlan.moduleStyles[module.id].minHeight) - 12}
               onNextPage={() => setPages((current) => ({ ...current, [module.datasetId]: (current[module.datasetId] ?? 1) + 1 }))}
@@ -562,12 +572,12 @@ function PanelSearchField({ search, onSearch }: { search: string; onSearch(value
   </View>;
 }
 
-function PanelTableHeading({ title, fromCache }: { title: string; fromCache: boolean }) {
+function PanelTableHeading({ title, offline }: { title: string; offline: boolean }) {
   const [width, setWidth] = useState(0);
   return <View onLayout={event => setWidth(Math.floor(event.nativeEvent.layout.width))}
     style={[styles.moduleHeader, tableStyles.moduleHeader]}>
     <Text style={[styles.moduleTitle, width > 0 && width < 280 && tableStyles.narrowTitle]}>{title}</Text>
-    {fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
+    {offline ? <Text style={styles.cacheLabel}>Offline</Text> : null}
   </View>;
 }
 
@@ -603,6 +613,7 @@ function PanelModuleFrame({ isTable, isKpi, frameHeight, children }: { isTable: 
 
 function PanelModule({
   currentQueryKey,
+  knownOffline,
   frameHeight,
   module,
   onNextPage,
@@ -614,6 +625,7 @@ function PanelModule({
   state,
 }: {
   currentQueryKey: string;
+  knownOffline: boolean;
   /** Existing configured module height minus its unchanged 6px outer padding per side. */
   frameHeight?: number;
   module: PanelModuleConfig;
@@ -626,6 +638,7 @@ function PanelModule({
   state: DatasetState | undefined;
 }) {
   const currentState = isPanelDatasetStateCurrent(state, currentQueryKey) ? state : undefined;
+  const offline = knownOffline || Boolean(currentState?.offline);
   const dataset = currentState?.panel?.datasets.find((item) => item.id === module.datasetId);
   const table = buildPanelTableModel(module, dataset);
   const kpi = buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults);
@@ -636,10 +649,10 @@ function PanelModule({
 
   return (
     <PanelModuleFrame isTable={isTable} isKpi={isKpi} frameHeight={frameHeight}>
-      {isTable ? <PanelTableHeading title={moduleTitle} fromCache={Boolean(currentState?.fromCache)} /> : (
+      {isTable ? <PanelTableHeading title={moduleTitle} offline={offline} /> : (
         <View style={[styles.moduleHeader, isKpi ? styles.kpiModuleHeader : null]}>
           <Text numberOfLines={2} style={[styles.moduleTitle, isKpi ? styles.kpiModuleTitle : null]}>{moduleTitle}</Text>
-          {currentState?.fromCache ? <Text style={styles.cacheLabel}>Offline</Text> : null}
+          {offline ? <Text style={styles.cacheLabel}>Offline</Text> : null}
         </View>
       )}
 
@@ -654,7 +667,7 @@ function PanelModule({
           error={currentState?.error ?? null}
           isLoading={!currentState || Boolean(currentState.isLoading)}
           kpi={kpi}
-          offline={Boolean(currentState?.fromCache)}
+          offline={offline}
           onRetry={onRetry}
           title={moduleTitle}
         />

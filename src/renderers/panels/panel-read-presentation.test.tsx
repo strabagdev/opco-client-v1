@@ -6,7 +6,7 @@ import { View, Text, ScrollView, TextInput, Pressable, Platform } from "react-na
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { panelReadRows } from "./panel-read-presentation";
-import { buildPanelTableModel, buildPanelKpiModel, isPanelDatasetStateCurrent, normalizePanelFilters } from "./panel-renderer-logic";
+import { buildPanelTableModel, buildPanelKpiModel, isPanelDatasetStateCurrent, normalizePanelFilters, panelKpiValueFontSize, panelKpiValueWebFontSize } from "./panel-renderer-logic";
 import type { PanelDataset, PanelModuleConfig } from "../../lib/opco-api";
 import { FieldFrame } from "../../components/field-frame";
 import { useFieldAccessibility } from "../../components/field-accessibility";
@@ -36,9 +36,9 @@ describe("PANEL-only read projection", () => {
 });
 const sourcePath = (globalThis as unknown as { process?: { env: Record<string, string | undefined> } }).process?.env.OPCO_PANEL_SOURCE_FILE ?? "src/renderers/panels/PanelRenderer.tsx";
 const sf = ts.createSourceFile(sourcePath, readFileSync(sourcePath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["PanelFilters", "PanelBooleanFilter", "PanelSearchField", "PanelTableHeading", "PanelTablePagination", "PanelModuleFrame", "PanelModule", "isPanelTableModule", "PanelTable", "PanelState"];
+const names = ["PanelFilters", "PanelBooleanFilter", "PanelSearchField", "PanelTableHeading", "PanelTablePagination", "PanelModuleFrame", "PanelModule", "PanelKpi", "isPanelTableModule", "PanelTable", "PanelState"];
 const code = names.map(name => sf.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === name)?.getText(sf) ?? "").join("\n");
-const deps = { React, View, Text, ScrollView, TextInput, Pressable, Platform, useState, CompactSelect, FieldFrame, useFieldAccessibility, FormAction, FormActions, RecordFieldInput, ReadLoadingState, panelReadRows, buildPanelTableModel, buildPanelKpiModel, isPanelDatasetStateCurrent, styles: {}, tableStyles: {}, stableTextInputStyle: {}, getRelationTargetEntityTypeId: () => null, PanelKpi: () => <Text>KPI unchanged</Text> };
+const deps = { React, View, Text, ScrollView, TextInput, Pressable, Platform, useState, CompactSelect, FieldFrame, useFieldAccessibility, FormAction, FormActions, RecordFieldInput, ReadLoadingState, panelReadRows, buildPanelTableModel, buildPanelKpiModel, isPanelDatasetStateCurrent, styles: {}, tableStyles: {}, stableTextInputStyle: {}, getRelationTargetEntityTypeId: () => null, panelKpiValueFontSize, panelKpiValueWebFontSize };
 const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
 const components = new Function(...Object.keys(deps), js + ";return {PanelModule,PanelFilters,PanelModuleFrame:typeof PanelModuleFrame==='undefined'?null:PanelModuleFrame,PanelTablePagination:typeof PanelTablePagination==='undefined'?null:PanelTablePagination};")(...Object.values(deps));
 const props = (changes = {}) => ({ module, currentQueryKey: "query", page: 1, search: "00001", onSearch: vi.fn(), onNextPage: vi.fn(), onPreviousPage: vi.fn(), onRetry: vi.fn(), state: { queryKey: "query", fromCache: true, isLoading: false, error: null, panel: { datasets: [dataset], metrics: [] } }, ...changes });
@@ -79,4 +79,25 @@ it("keeps pagination commands and disabled values in an accessible sticky footer
 });
 it("does not truncate the configured TABLE title or add editing actions", () => {
   const m={...module,title:"Título completo ".repeat(40)}; const html=renderToStaticMarkup(<components.PanelModule {...props({module:m})} />); expect(html).toContain(m.title); expect(html).not.toContain("Editar"); expect(html).not.toContain("Crear registro");
+});
+
+
+it.each([
+  { name: "online revision-verified local response", knownOffline: false, fromCache: true, offline: false, expected: false },
+  { name: "online server response", knownOffline: false, fromCache: false, offline: false, expected: false },
+  { name: "disconnected with an in-memory server response", knownOffline: true, fromCache: false, offline: false, expected: true },
+  { name: "network fallback to saved response", knownOffline: false, fromCache: true, offline: true, expected: true },
+])("actual TABLE/KPI labels describe connectivity for $name", ({ knownOffline, fromCache, offline, expected }) => {
+  const kpiModule: PanelModuleConfig = { ...module, visualization: { type: "KPI", config: { metricId: "count", label: "Entregas", format: "INTEGER" } } };
+  const state = { ...props().state, fromCache, offline, panel: { datasets: [dataset], metrics: [{ id: "count", datasetId: "rows", value: 98, valueType: "NUMBER", calculatedAt: "2026-11-17T23:00:00Z" }] } };
+  for (const configured of [module, kpiModule]) {
+    const p = props({ knownOffline, state, module: configured });
+    const html = renderToStaticMarkup(<components.PanelModule {...p} />);
+    expect(html.includes("Offline")).toBe(expected);
+    if (configured.visualization.type === "KPI") {
+      expect(html).toContain("98");
+      expect(html.includes("Datos guardados")).toBe(expected);
+    }
+    expect(p.onRetry).not.toHaveBeenCalled();
+  }
 });

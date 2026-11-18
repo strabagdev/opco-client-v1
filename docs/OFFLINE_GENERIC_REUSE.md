@@ -64,3 +64,18 @@ deletions, metadata and authorization. A changed vector never permits selective 
 No per-entity narrowing is claimed by this lot. Complete dependency recipes and local hashes remain required; direct
 catalog receipts cannot become transitive coverage. Restores/new handles/session changes need normal downloads.
 Pending/conflict overlays are retained and prevent incompatible certification; reconnect/ACK stay in the existing engine.
+
+## PANEL cache source and connectivity — local correction 2026-11-17
+
+`fromCache` describes where the response was read; it does not mean the device or query is offline.
+A consultation accepted by the existing V2 receipt consumer returns `fromCache=true, offline=false`.
+PANEL retains both flags and uses `offline` (or known disconnected connectivity) for its Offline
+heading, module badges and saved-data caption. Online verified reuse keeps its local telemetry source
+without being presented as an offline fallback. A network fallback or known offline read still shows
+Offline and preserves the exact saved response. No receipt, gate, storage or synchronization contract changes.
+
+The dataset effect revalidates its loaded exact query on an actual known-offline to online transition,
+including a query originally loaded from the server. It follows the ordinary loader and existing reuse
+negotiation; it need not download business data if the proof is still valid. An interrupted refresh is
+not treated as a completed result. Scope/revision/query guards remain effective, and an unrelated rerender
+or unchanged successful retry does not request another completed query.
