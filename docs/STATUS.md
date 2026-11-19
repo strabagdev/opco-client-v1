@@ -3936,3 +3936,11 @@ recibo mensual íntegro del mismo handle/sesión y consumo dentro de su transacc
 Rechazo conserva descarga normal; retirada final provoca una sola pasada ordinaria localizada.
 Catálogos y otros workflows continúan descargándose. Sin nueva migración, motores offline,
 comandos o sincronización; sin producción, commit/push/deploy.
+
+
+## Calendario operativo opcional — local 2026-11-19
+
+Definición Attendance opcional, DATE automático/manual, franjas SELECT sin sustitución y
+PANEL vinculado: [OPERATIONAL_CALENDAR.md](./OPERATIONAL_CALENDAR.md). Transporte único
+eventOccurredAt y ruta versionada; pendientes conservados. Sin migración, publicación ni
+configuración productiva. Activación captureTime sigue pendiente.

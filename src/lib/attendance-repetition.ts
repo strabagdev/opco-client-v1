@@ -1,7 +1,9 @@
+import {type OperationalDayCommand} from "./operational-calendar";
 import {captureTimeMetadata,type CaptureTimeCommand,type CaptureTimeRead} from "./capture-time";
 import type { AttendanceWorkflowConfig } from "./opco-api";
 export type AttendanceRepetitionPolicy = "ONE_PER_DAY" | "MULTIPLE_WITH_WARNING" | "MULTIPLE";
 export type AttendanceRepetitionCommand = {
+    operationalDay?: OperationalDayCommand;
     captureTime?: CaptureTimeCommand | CaptureTimeRead;
     eventOccurredAt?: string;
     repetitionPolicy?: AttendanceRepetitionPolicy;
@@ -18,6 +20,7 @@ export function attendanceHistoryMode(config: Pick<AttendanceWorkflowConfig, "re
 export function attendanceRepetitionMetadata(value: AttendanceRepetitionCommand): AttendanceRepetitionCommand {
     return {
         ...captureTimeMetadata(value),
+        ...(value.operationalDay ? {operationalDay:value.operationalDay} : {}),
         ...(value.eventOccurredAt ? { eventOccurredAt: value.eventOccurredAt } : {}),
         ...(value.repetitionPolicy !== undefined ? { repetitionPolicy: value.repetitionPolicy } : {}),
         ...(value.repetitionAcknowledged ? { repetitionAcknowledged: true } : {}),

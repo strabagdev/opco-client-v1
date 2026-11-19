@@ -1,3 +1,4 @@
+import {assertOperationalCommand,OperationalCalendarError,parseOperationalCalendar} from "./operational-calendar";
 import {assertCaptureAck,captureRead,asCaptureCommand,type CaptureTimeRead} from "./capture-time";
 import {createClientRequestId} from "./client-request-id";
 import {attendanceRepetitionMetadata} from "./attendance-repetition";
@@ -2966,11 +2967,21 @@ async function saveStateUpdateLocallyWithRecordId(
     const capture = pinnedPayload?.captureTime ?? input.captureTime;
     if (pinnedPayload && input.captureTime && !pinnedPayload.captureTime) throw new OpcoApiError("El pendiente anterior no tiene una captura acreditada. Se conserva para revisión.","CAPTURE_TIME_REVIEW_REQUIRED",409);
     if (pinnedPayload?.captureTime && input.captureTime && JSON.stringify(asCaptureCommand(pinnedPayload.captureTime))!==JSON.stringify(asCaptureCommand(input.captureTime))) throw new OpcoApiError("La configuración de captura del pendiente cambió.","CAPTURE_TIME_CONFIG_CHANGED",409);
+    const operationalDay = pinnedPayload?.operationalDay ?? input.operationalDay;
+    if(pinnedPayload && (!!pinnedPayload.operationalDay !== !!input.operationalDay || pinnedPayload.operationalDay && input.operationalDay && pinnedPayload.operationalDay.calendarKey!==input.operationalDay.calendarKey))throw new OperationalCalendarError("OPERATIONAL_DAY_REVIEW_REQUIRED","El pendiente anterior conserva su fecha e instante. Revisa su calendario antes de editarlo.");
     const storedCapture = existingRecord?.values.captureTime as CaptureTimeRead | undefined;
-    const originalInstant = existingOperation ? pinnedPayload?.eventOccurredAt : existingRecord ? storedCapture?.source === "DEVICE_CONFIRMATION" ? storedCapture.value ?? undefined : undefined : input.eventOccurredAt;
+    const originalInstant = existingOperation ? pinnedPayload?.eventOccurredAt : existingRecord ? storedCapture?.source === "DEVICE_CONFIRMATION" ? storedCapture.value ?? undefined : typeof existingRecord.values.eventOccurredAt === "string" ? existingRecord.values.eventOccurredAt : undefined : input.eventOccurredAt;
+    if(operationalDay) {
+      const definitionRow=await transaction.getFirstAsync<AppViewDefinitionRow>("SELECT * FROM app_view_definitions WHERE owner_key=? AND contract_id=? AND app_view_id=? LIMIT 1",input.ownerKey,input.contractId,input.appViewId);
+      const prepared=definitionRow?mapAppViewDefinitionRow(definitionRow):null;
+      const view=prepared?.definition.appView;
+      const calendar=view?.type==="WORKFLOW" && view.config.workflowKey==="attendance" ? view.config.operationalCalendar : undefined;
+      assertOperationalCommand(parseOperationalCalendar(calendar),{...input,operationalDay,eventOccurredAt:originalInstant});
+    }
     const values: OfflineStateUpdateValues = {
       ...(typeof existingRecord?.values.eventOccurredAt==="string"?{eventOccurredAt:existingRecord.values.eventOccurredAt}:{}),
       ...attendanceRepetitionMetadata(input),
+      ...(operationalDay?{operationalDay,eventOccurredAt:originalInstant}:{}),
       ...(capture?{captureTime:captureRead(capture,originalInstant),eventOccurredAt:originalInstant}:{}),
       ...writeMetadata,
       ...schedule,
@@ -2989,6 +3000,7 @@ async function saveStateUpdateLocallyWithRecordId(
     };
     const nextPayload: OfflineStateUpdatePayload = {
       ...attendanceRepetitionMetadata(input),
+      ...(operationalDay?{operationalDay,eventOccurredAt:originalInstant}:{}),
       ...(capture?{captureTime:asCaptureCommand(capture),eventOccurredAt:originalInstant}:{}),
       ...writeMetadata,
       ...schedule,

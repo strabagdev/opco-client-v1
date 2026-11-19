@@ -8,6 +8,7 @@ import { attendanceStatusesFromStateFields } from "../../../lib/attendance-offli
 const path = process.env.ATTENDANCE_CONTEXT_SOURCE ?? `${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`;
 const source = ts.createSourceFile(path, readFileSync(path,"utf8"),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 function actualLoad(context: Record<string,unknown>) {
+ context={calendar:undefined,...context};
  let load:ts.FunctionDeclaration|undefined;
  const visit=(node:ts.Node)=>{if(ts.isFunctionDeclaration(node)&&node.name?.text==='load')load=node;ts.forEachChild(node,visit);};visit(source);
  if(!load)throw Error('Missing actual Attendance load effect');
@@ -19,7 +20,7 @@ function fixture(){
  const definition={kind:'state-update',appView:{id:'view'},extraFields:[relation],stateFields:[{fieldId:'state',label:'Estado',type:'SELECT',required:true,options:[{optionId:'a',label:'A'}]}],captureTime:{version:1,fieldId:'capture',timeZone:'America/Santiago'}};
  const c={chronology,definition,token:'synthetic',ownerKey:'owner',selectedContractId:'contract',status:'offline',connectivityStatus:'online',isContractBootstrapPending:false,isMounted:true,date:'2026-11-18',writePolicyConfigured:false,writeContractRequiredRef:{current:false},requestSequenceRef:{current:0},appView:{id:'view',config:{sourceEntityTypeId:'source',statusFieldId:'state',defaultCheckInOptionId:'a',contextFieldIds:['reference']}},OpcoNetworkError,OpcoApiError,isAttendanceRequestCurrent,hasSuccessfulHydration:()=>true,attendanceContextFieldsFromPreparedDefinition,attendanceStatusesFromStateFields,
   definitionCache:{getAppViewDefinition:vi.fn(async()=>({status:'ready',definition})),getEntityDefinition:vi.fn(async()=>({definition:{}})),getSyncTelemetry:vi.fn(async()=>({lastFullRefreshCompletedAt:'2026-11-18T00:00:00Z'})),saveStateUpdateLocally:vi.fn()},
-  beginLoadingRequest:()=>++c.requestSequenceRef.current,finishLoadingRequest:vi.fn(),setError:vi.fn(),setRefreshError:vi.fn(),setSuccessMessage:vi.fn(),setItems:vi.fn(),setIsLoading:vi.fn(),setPresentationDefinition:vi.fn(),setWriteContract:vi.fn(),setCaptureContract:vi.fn(),setStatuses:vi.fn(),setContextFields:vi.fn((fields:unknown[])=>{chronology.push('contexts:'+fields.length);}),cacheAttendanceOnlineResponse:vi.fn(),refreshLocalDayState:vi.fn(async()=>{chronology.push('local-records');}),clearVisibleError:vi.fn(),recordVisibleError:vi.fn(),
+  beginLoadingRequest:()=>++c.requestSequenceRef.current,finishLoadingRequest:vi.fn(),setError:vi.fn(),setRefreshError:vi.fn(),setSuccessMessage:vi.fn(),setItems:vi.fn(),setIsLoading:vi.fn(),setPresentationDefinition:vi.fn(),setWriteContract:vi.fn(),setCaptureContract:vi.fn(),setOperationalContract:vi.fn(),setStatuses:vi.fn(),setContextFields:vi.fn((fields:unknown[])=>{chronology.push('contexts:'+fields.length);}),cacheAttendanceOnlineResponse:vi.fn(),refreshLocalDayState:vi.fn(async()=>{chronology.push('local-records');}),clearVisibleError:vi.fn(),recordVisibleError:vi.fn(),
   api:{getAttendanceWorkflow:vi.fn(async()=>{chronology.push('remote');throw new OpcoNetworkError('Core inaccesible');})},applyAttendanceResponse:vi.fn(),
  };
  return c;

@@ -94,6 +94,7 @@ for line in sys.stdin:
 const sourcePath = process.env.ATTENDANCE_CONFLICT_HANDLER_SOURCE ?? `${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`;
 const source = ts.createSourceFile(sourcePath, readFileSync(sourcePath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function handler(name: string, context: Record<string, unknown>) {
+  context={calendar:undefined,...context};
   let declaration: ts.FunctionDeclaration | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;

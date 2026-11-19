@@ -11,7 +11,7 @@ import type { AppViewPrewarmStore } from "./app-view-prewarm";
 import { attendanceDiagnosticOperation, stateUpdateReadDiagnosticOperation, type OpcoDiagnosticRequestOperation, type AppView, type AppViewsResponse, type AttendanceResponse, type AttendanceWorkflowConfig, type EntityDefinitionResponse, type EntityRecord, type EntityRecordsResponse, type OpcoApi, type StateUpdateResponse } from "./opco-api";
 import type { PreparedAppViewDefinition, UpsertAppViewDefinitionInput } from "./app-view-definitions-cache";
 import { normalizePreparedAppViewDefinition } from "./app-view-definitions-cache";
-import { currentMonthDateKeys } from "./attendance-snapshot-cache";
+import { currentMonthDateKeys,attendancePreparationPeriod } from "./attendance-snapshot-cache";
 import { attendanceLatestObservationIsBound, isAttendanceRemoteSnapshotComplete } from "../renderers/workflows/attendance/attendance-workflow-logic";
 import { workflowReceiptMaterialization } from "./revision-receipt-shadow";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
@@ -227,7 +227,7 @@ export async function createPreparationRevisionRun(input: Input) {
     if(!input.api.selectiveReuseEnabled||appView.type!=="WORKFLOW"||appView.config.workflowKey!=="attendance"||!store.inspectPreparationRevisionReceipts)return null;
     let accepted:PreparedAppViewDefinition|null=null;
     await store.inspectPreparationRevisionReceipts({scope:context.scope,manifest,isCurrent:current,
-      request:{appViewId:appView.id,kind:"attendance-month",dates:reuseDates,definition:appView},
+      request:{appViewId:appView.id,kind:"attendance-month",dates:appView.config.operationalCalendar?attendancePreparationPeriod(new Date(),(appView.config as AttendanceWorkflowConfig).operationalCalendar).dates:reuseDates,definition:appView},
       onVerified:async(receipt,storage,prepared)=>{
         if(receipt.coverage.businessDataIncluded && receipt.coverage.latest==="complete-snapshot" &&
            await canConsumeAttendanceReceipt({manifest,receipt,storage,isCurrent:current}))accepted=prepared;

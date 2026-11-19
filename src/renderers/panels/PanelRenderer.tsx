@@ -95,7 +95,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
   const [pages, setPages] = useState<Record<string, number>>(() => Object.fromEntries(initialDatasetIds.map((id) => [id, 1])));
   const [retryVersion, setRetryVersion] = useState(0);
   const [searchByDataset, setSearchByDataset] = useState<Record<string, string>>({});
-  const { values: filterInputs, onChange: changeFilterInput } = usePanelFilterInputs({
+  const { values: filterInputs, onChange: changeFilterInput, issue: calendarIssue } = usePanelFilterInputs({
     scopeKey: JSON.stringify([datasetScopeKey, appViewConfigKey]),
     filters: configuredFilters,
     preservePrevious: adoptedScopeRef.current === datasetScopeKey,
@@ -428,6 +428,7 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
   const liveFailedCount = liveDatasetStates.filter((state) => state.error).length;
   const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
   useExperienceActivityReporter(appView, {
+    notice: calendarIssue,
     activeCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readMode: liveLoadedCount > 0 ? "refresh" : "initial",

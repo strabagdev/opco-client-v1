@@ -1,3 +1,5 @@
+import {finalizeAttendanceDay} from "../../../lib/attendance-operational-day";
+import {operationalCalendarKey,type OperationalCalendar} from "../../../lib/operational-calendar";
 // @ts-expect-error Node types intentionally absent from Expo application config.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
@@ -5,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { attendanceDailyCount, attendanceHistoryMode } from "../../../lib/attendance-repetition";
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function actual<T = void>(name: string, c: Record<string, unknown>) {
+  c={calendar:undefined,...c};
     let node: ts.FunctionDeclaration | undefined;
     const visit = (n: ts.Node) => {
         if (ts.isFunctionDeclaration(n) && n.name?.text === name)
@@ -225,4 +228,23 @@ describe("configured automatic capture at the definitive confirmation",()=>{
  it("cancels a configured warning without creating an intention or capture",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"UTC"}});Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"UTC"}});c.eventCapturedAtRef.current=null as unknown as string;await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});await actual("cancelRepeatedRecord",c)();expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();});
  it("captures immediately without warning and retains that same instant on retry",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"UTC"}});Object.assign(c.appView.config,{repetitionPolicy:"MULTIPLE",captureTime:{fieldId:"capture",timeZone:"UTC"}});c.eventCapturedAtRef.current=null as unknown as string;await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});const first=c.saveEntry.mock.calls[0]?.[0] as unknown as {eventOccurredAt:string};await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry.mock.calls[1]?.[0]).toEqual(first);});
  it("shows a review error rather than queuing against an old Core",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:undefined});Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"UTC"}});await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry).not.toHaveBeenCalled();expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("intención anterior se conserva"));});
+});
+
+describe("operational calendar in actual warning handlers",()=>{
+ const calendar:OperationalCalendar={version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[{optionId:"a",start:"08:00",end:"20:00"},{optionId:"b",start:"20:00",end:"08:00"}]};
+ function configured(){
+  const c={...fixture(),calendar,operationalContract:{version:1 as const,calendarKey:operationalCalendarKey(calendar)},date:"2026-11-18",automaticDate:true,setTemporalNotice:vi.fn(),eventCapturedAtRef:{current:null as string|null}};
+  return {...c,finalizeTemporalEntry:actual("finalizeTemporalEntry",{...c,finalizeAttendanceDay})};
+ }
+ it("cancel has no timestamp or intention and the definitive warning click crosses the band safely",async()=>{
+  vi.useFakeTimers();try{
+   vi.setSystemTime(new Date("2026-11-18T22:59:59.000Z"));const c=configured();await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();
+   // Setters belong to the fixture closure; extract its captured warning rather than infer one.
+   const warning=c.setRepeatWarning.mock.calls.at(-1)?.[0];expect(warning).toBeTruthy();vi.setSystemTime(new Date("2026-11-18T23:00:00.000Z"));await actual("confirmRepeatedRecord",{...c,repeatWarning:warning})();
+   expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({eventOccurredAt:"2026-11-18T23:00:00.000Z",statusOptionId:"a",operationalDay:{version:1,calendarKey:operationalCalendarKey(calendar),mode:"AUTO"}}));expect(c.setTemporalNotice).toHaveBeenCalledWith(expect.stringContaining("conservó tu selección"));
+  }finally{vi.useRealTimers();}
+ });
+ it("cancelling an operational warning persists nothing",async()=>{
+  const c=configured();await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});await actual("cancelRepeatedRecord",c)();expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();
+ });
 });

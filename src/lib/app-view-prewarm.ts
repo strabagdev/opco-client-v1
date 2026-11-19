@@ -21,7 +21,7 @@ import {
 import { OfflineRecordStore, refreshEntityRecordsCache, type RecordsRefreshDiagnostics } from "./offline-records";
 import { SyncTelemetryStore } from "./sync-telemetry";
 import { attendanceStateFields } from "./attendance-offline";
-import { cacheAttendanceRemoteSnapshot, currentMonthDateKeys } from "./attendance-snapshot-cache";
+import { cacheAttendanceRemoteSnapshot, attendancePreparationPeriod } from "./attendance-snapshot-cache";
 import { isStateUpdateCompatibleWorkflow, StateUpdateOfflineStore, type StateUpdateCurrentCoverageScope } from "./state-update-offline";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
 import { compositeIdentityKey } from "./state-update-identity";
@@ -707,8 +707,7 @@ async function prewarmOneAppView({
       appView.config.workflowKey === "attendance"
     ) {
       const attendanceConfig = appView.config as AttendanceWorkflowConfig;
-      const today = formatLocalDateInput(new Date());
-      const monthDates = currentMonthDateKeys(new Date());
+      const {date:today,dates:monthDates}=attendancePreparationPeriod(new Date(),attendanceConfig.operationalCalendar);
       const { response, sourceDefinition } = await measurePrewarmStage(telemetry, "definitionLoad", async () => {
         const seed = await api.getAttendanceWorkflow(token, contractId, appView.id, {date:today});
         const {response:workflow} = await completeAttendanceDay({seed,ownerKey,contractId,appViewId:appView.id,isCurrent:()=>!signal?.aborted,
@@ -759,6 +758,7 @@ async function prewarmOneAppView({
             kind: "state-update",
             workflowWriteContract: response.workflowWriteContract,
             captureTime:response.captureTime,
+            operationalDayContract:response.operationalDayContract,
             ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
             ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),
@@ -1469,6 +1469,7 @@ function stateUpdatePreparedDefinition(appView: AppView, response: StateUpdateRe
     kind: "state-update",
     workflowWriteContract: response.workflowWriteContract,
             captureTime:response.captureTime,
+            operationalDayContract:response.operationalDayContract,
     ...(response.codeSearchField ? { codeSearchField: response.codeSearchField } : {}),
             ...(response.searchComparison ? { searchComparison: response.searchComparison } : {}),
             ...(response.subjectPresentation ? {subjectPresentation:response.subjectPresentation}:{}),

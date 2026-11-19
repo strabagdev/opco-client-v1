@@ -24,6 +24,7 @@ if (process.env.PANEL_RECONCILIATION_LEGACY) {
  new Function("require", "exports", code)((id: string) => { if (id === "./opco-api") return { OpcoNetworkError }; throw Error("Unexpected legacy dependency " + id); }, exports);
  reconciliationReader = exports.loadPanelDatasetWithOfflineCache as typeof reconciliationReader;
 }
+vi.mock("react-native",()=>({AppState:{addEventListener:()=>({remove(){}})}}));
 const sqlite=vi.hoisted(()=>({openDatabaseAsync:vi.fn()}));vi.mock("expo-sqlite",()=>sqlite);
 function sqliteFile(path: string) {
   const worker = spawn("python3", ["-u", "-c", `

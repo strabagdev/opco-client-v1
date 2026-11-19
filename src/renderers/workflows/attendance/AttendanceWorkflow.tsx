@@ -1,3 +1,5 @@
+import {finalizeAttendanceDay} from "../../../lib/attendance-operational-day";
+import {resolveOperationalDay,operationalCalendarKey,type OperationalDayContract} from "../../../lib/operational-calendar";
 import {captureTimeCommand,type CaptureTimeCommand} from "../../../lib/capture-time";
 import { AttendanceRecordList, type AttendanceGroupRead } from "./attendance-record-list";
 import {attendanceDailyCount, attendanceReadScope, attendanceHistoryMode, type AttendanceRepetitionPolicy} from "../../../lib/attendance-repetition";
@@ -146,28 +148,19 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   } = useSession();
   const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
   const targetDate = attentionDate(attentionParams.attentionDate);
-  const [today, setToday] = useState(() => formatLocalDateInput(new Date()));
-  useEffect(() => {
-    const clock = watchAttendanceLocalDay(setToday);
-    const resume = AppState.addEventListener("change", state => {
-      if (state === "active") clock.refresh();
-    });
-    const visible = () => {
-      if (document.visibilityState === "visible") clock.refresh();
-    };
-    if (typeof document !== "undefined") document.addEventListener("visibilitychange", visible);
-    return () => {
-      resume.remove();
-      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", visible);
-      clock.dispose();
-    };
-  }, []);
-  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? formatLocalDateInput(new Date()) });
-  const date = useMemo(() => constrainAttendanceDate(
-    dateSelection.routeDate === targetDate ? dateSelection.value : targetDate ?? dateSelection.value, today,
-  ), [dateSelection.routeDate, dateSelection.value, targetDate, today]);
-  function setDate(next: string | ((current: string) => string)) {
-    setDateSelection({ routeDate: targetDate, value: constrainAttendanceDate(typeof next === "function" ? next(date) : next, today) });
+  const calendar = appView.config.operationalCalendar;
+  const calendarKey = calendar ? operationalCalendarKey(calendar) : "";
+  const readClock=()=>{const now=new Date(),current=calendar?resolveOperationalDay(now,calendar):null;return{calendarKey,today:current?.date??formatLocalDateInput(now),civilToday:current?.calendarDate??formatLocalDateInput(now)};};
+  const [clockState,setClockState]=useState(readClock);
+  let activeClock=clockState;
+  if(clockState.calendarKey!==calendarKey){activeClock=readClock();setClockState(activeClock);}
+  const {today,civilToday}=activeClock;
+  const [dateSelection, setDateSelection] = useState({ routeDate: targetDate, value: targetDate ?? today, mode: targetDate ? "MANUAL" as const : "AUTO" as const });
+  const automaticDate = Boolean(calendar && dateSelection.mode==="AUTO" && dateSelection.routeDate===targetDate);
+  const chosenDate = dateSelection.routeDate===targetDate ? dateSelection.value : targetDate??dateSelection.value;
+  const date = automaticDate ? today : calendar ? chosenDate : constrainAttendanceDate(chosenDate,today);
+  function setDate(next:string|((current:string)=>string)) {
+    setDateSelection({routeDate:targetDate,value:calendar ? typeof next==="function"?next(date):next : constrainAttendanceDate(typeof next==="function"?next(date):next,today),mode:"MANUAL"});
   }
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
   const cameraIsActive = usePathname() === `/view/${appView.id}`;
@@ -187,6 +180,25 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
   const [contextFields, setContextFields] = useState<AttendanceContextField[]>([]);
   const writePolicyConfigured = Boolean(appView.config.workflowWritePolicy);
+  const [operationalContract,setOperationalContract]=useState<OperationalDayContract>();
+  const [temporalNotice,setTemporalNotice]=useState<string|null>(null);
+  const previousOperationalDateRef=useRef(today);
+  useEffect(() => {
+    const clock = watchAttendanceLocalDay((day,civil)=>{setClockState({calendarKey,today:day,civilToday:civil??day});if(calendar&&automaticDate&&day!==previousOperationalDateRef.current)setTemporalNotice("Cambió el día operativo. Revisa el día y confirma nuevamente; no se creó una intención automáticamente.");previousOperationalDateRef.current=day;},calendar,calendar?{day:today,calendarDate:civilToday}:undefined);
+    const resume = AppState.addEventListener("change", state => {
+      if (state === "active") clock.refresh();
+    });
+    const visible = () => {
+      if (document.visibilityState === "visible") clock.refresh();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", visible);
+    return () => {
+      resume.remove();
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", visible);
+      clock.dispose();
+    };
+  }, [calendar,calendarKey,automaticDate,today,civilToday]);
+
   const [captureContract,setCaptureContract] = useState<CaptureTimeCommand | undefined>();
   const [writeContract,setWriteContract] = useState<WorkflowWriteContract | null | undefined>();
   const writeContractRequiredRef = useRef(writePolicyConfigured);
@@ -235,6 +247,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     if (resolutionScopeRef.current !== resolutionScope) {
       setWriteContract(undefined);
       setCaptureContract(undefined);
+      setOperationalContract(undefined);
+      if(calendar)eventCapturedAtRef.current=null;
       writeContractRequiredRef.current=writePolicyConfigured;
       draftRevisionRef.current += 1;
       setSelectedItem(null);
@@ -243,7 +257,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setObservation("");
     }
     resolutionScopeRef.current = resolutionScope;
-  }, [resolutionScope, writePolicyConfigured]);
+  }, [resolutionScope, writePolicyConfigured, calendar]);
   useLayoutEffect(() => {
     resolutionMountedRef.current = true;
     return () => { resolutionMountedRef.current = false; };
@@ -322,6 +336,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ? "ATTENDANCE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
+    notice: temporalNotice,
     activeCount: Number(repeatChecking) + Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount + contextRelationReadCount,
     readCount: Number(repeatChecking) + Number(isLoading) + Number(isSearching) + recoveryReadCount + contextRelationReadCount,
     readMode: loadedDate === date ? "refresh" : "initial",
@@ -331,6 +346,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
   const applyAttendanceResponse = useCallback((response: {
     captureTime?: CaptureTimeCommand;
+    operationalDayContract?: OperationalDayContract;
     workflowWriteContract?: WorkflowWriteContract | null;
     subjectPresentation?:SubjectPresentationDefinition;
     contextFields?: AttendanceContextField[];
@@ -343,6 +359,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     if(response.workflowWriteContract===null) writeContractRequiredRef.current=false;
     setWriteContract(response.workflowWriteContract);
     setCaptureContract(response.captureTime);
+    setOperationalContract(response.operationalDayContract);
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
     setContextFields(response.contextFields ?? []);
 
@@ -583,6 +600,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
+    if(appView.config.operationalCalendar)eventCapturedAtRef.current=null;
     setEditingTarget(null);setPersonRecords([]);setRepeatWarning(null);
     draftRevisionRef.current += 1;
     setConfirmationError(null);
@@ -593,7 +611,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setObservation("");
     setObservationExpanded(false);
     setConflict(null);
-  }, []);
+  }, [appView.config.operationalCalendar]);
 
   const clearVisibleError = useCallback((resolution: StateUpdateVisibleErrorResolution = "cleared_after_success") => {
     setVisibleErrorDiagnostics(null);
@@ -921,6 +939,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           if (prepared?.definition.kind === "attendance" || prepared?.definition.kind === "state-update") {
             setWriteContract(prepared.definition.workflowWriteContract);
             setCaptureContract(prepared.definition.captureTime);
+            setOperationalContract(prepared.definition.operationalDayContract);
             writeContractRequiredRef.current=Boolean(prepared.definition.workflowWriteContract || writePolicyConfigured);
           }
           if (prepared?.definition.kind === "attendance") {
@@ -988,6 +1007,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               setContextFields([]);
               setWriteContract(undefined);
               setCaptureContract(undefined);
+      setOperationalContract(undefined);
+      if(calendar)eventCapturedAtRef.current=null;
             }
             setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
           }
@@ -1009,6 +1030,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       isMounted = false;
     };
   }, [
+    calendar,
     writePolicyConfigured,
     api,
     appView.config.defaultCheckInOptionId,
@@ -1179,6 +1201,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
   }
 
+  function finalizeTemporalEntry(entry:AttendanceBatchEntry,editing:boolean,instant=new Date().toISOString()) {
+    try {
+      const result=finalizeAttendanceDay(entry,{calendar,contract:operationalContract,date,mode:automaticDate?"AUTO":"MANUAL",editing,instant:editing?instant:eventCapturedAtRef.current??instant});
+      if(result.notice)setTemporalNotice(result.notice);else setTemporalNotice(null);
+      if(!editing&&result.entry.eventOccurredAt)eventCapturedAtRef.current=result.entry.eventOccurredAt;
+      return result.entry;
+    } catch(error){setTemporalNotice(error instanceof Error?error.message:"Revisa el calendario preparado.");return null;}
+  }
+
   async function saveRepeatedStatus(status: AttendanceStatusOption) {
       if (confirmationBasis !== confirmationBasisRef.current)
           return;
@@ -1201,8 +1232,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           setError(error instanceof Error ? error.message : "La autorización requiere revisión.");
           return;
       }
-      const confirmationInstant = automatic && !editingTarget ? new Date().toISOString() : undefined;
-      const entry: AttendanceBatchEntry = { ...writeMetadata, ...(automatic?{captureTime:automatic}:{}), ...(!editingTarget && !automatic ? { eventOccurredAt: eventCapturedAtRef.current ?? (eventCapturedAtRef.current = new Date().toISOString()) } : {}), repetitionPolicy: appView.config.repetitionPolicy as AttendanceRepetitionPolicy, ...editingTarget, personRecordId: selectedItem.person.id, statusOptionId: status.optionId, contextValues: { ...contextValues }, ...(supportsObservation ? { observation } : {}) };
+      const confirmationInstant = (automatic || calendar) && !editingTarget ? new Date().toISOString() : undefined;
+      let entry: AttendanceBatchEntry = { ...writeMetadata, ...(automatic?{captureTime:automatic}:{}), ...(!editingTarget && !automatic && !calendar ? { eventOccurredAt: eventCapturedAtRef.current ?? (eventCapturedAtRef.current = new Date().toISOString()) } : {}), repetitionPolicy: appView.config.repetitionPolicy as AttendanceRepetitionPolicy, ...editingTarget, personRecordId: selectedItem.person.id, statusOptionId: status.optionId, contextValues: { ...contextValues }, ...(supportsObservation ? { observation } : {}) };
+      if (calendar && editingTarget) { const final=finalizeTemporalEntry(entry,true);if(!final)return;entry=final; }
       if (editingTarget) {
           if (editingTarget.targetRecordId && selectedItem.attendance) {
               setConflict({ result: "CONFLICT", personRecordId: entry.personRecordId, personName: selectedItem.person.displayName, existing: selectedItem.attendance, requested: { statusOptionId: status.optionId, statusLabel: status.label }, confirmedEntry: entry, confirmationScope: scope, confirmationAttemptId: generation, confirmationRevision: revision, confirmationDraftKey: attendanceCommandKey(scope, appView.config, contextFields, entry) });
@@ -1218,7 +1250,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
       }
       if (appView.config.repetitionPolicy !== "MULTIPLE_WITH_WARNING") {
-          await saveEntry(automatic && !editingTarget ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)} : entry);
+          const final=calendar?finalizeTemporalEntry(entry,false,confirmationInstant):automatic && !editingTarget ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)}:entry;
+          if(final)await saveEntry(final);
           return;
       }
       repeatCheckingRef.current = true;
@@ -1234,7 +1267,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, personRecordId: entry.personRecordId });
               if (!current())
                   return;
-              if (response.appView.id !== appView.id || response.date !== date || response.repetitionPolicy !== entry.repetitionPolicy)
+              if (response.appView.id !== appView.id || response.date !== date || response.repetitionPolicy !== entry.repetitionPolicy || calendar && response.operationalDayContract?.calendarKey!==calendarKey)
                   throw Error("La política cambió. Vuelve a abrir la experiencia.");
               remoteCount = response.items.find(i => i.person.id === entry.personRecordId)?.dailyRecordCount;
               if (remoteCount === undefined)
@@ -1245,7 +1278,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               setRepeatWarning({ entry, localCount: local.length, remoteCount, scope, revision, generation });
               return;
           }
-          await saveEntry(automatic ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)} : entry);
+          const final=calendar?finalizeTemporalEntry(entry,false,confirmationInstant):automatic ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)}:entry;
+          if(final)await saveEntry(final);
       }
       catch (error) {
           if (current())
@@ -1268,7 +1302,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
       }
       setRepeatWarning(null);
-      await saveEntry({ ...warning.entry, ...(warning.entry.captureTime ? {eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=new Date().toISOString())}:{}), repetitionAcknowledged: true });
+      const final=calendar?finalizeTemporalEntry(warning.entry,false):{...warning.entry,...(warning.entry.captureTime?{eventOccurredAt:eventCapturedAtRef.current??(eventCapturedAtRef.current=new Date().toISOString())}:{})};
+      if(final)await saveEntry({...final,repetitionAcknowledged:true});
   }
 
   async function selectPerson(item: AttendanceItem) {
@@ -1344,7 +1379,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     let writeMetadata;
     try { writeMetadata={...captureWorkflowWriteCommand(writeContract,writeContractRequiredRef.current),...(appView.config.captureTime?{captureTime:captureTimeCommand(appView.config.captureTime,captureContract)}:{})}; }
     catch(error) { setError(error instanceof Error ? error.message : "Actualiza la experiencia antes de guardar.");return; }
-    const entry: AttendanceBatchEntry = {
+    let entry: AttendanceBatchEntry = {
       ...writeMetadata,
       ...(appView.config.captureTime && !selectedItem.attendance ? {eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=new Date().toISOString())}:{}),
       contextValues: { ...contextValues },
@@ -1352,6 +1387,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       personRecordId: selectedItem.person.id,
       statusOptionId: status.optionId,
     };
+    if(calendar){const final=finalizeTemporalEntry(entry,!!selectedItem.attendance);if(!final)return;entry=final;}
     const existing = selectedItem.attendance;
     const revision = draftRevisionRef.current;
     const confirmationAttemptId = ++confirmationSequenceRef.current;
@@ -1434,7 +1470,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       return;
     }
     setConfirmationError(null);
-    await saveEntry({ ...copyAttendanceEntry(captured), expectedUpdatedAt: conflict.existing.updatedAt, overwrite: true });
+    await saveEntry({ ...copyAttendanceEntry(captured), ...(calendar && captured.operationalDay ? {operationalDay:{...captured.operationalDay,mode:"PRESERVE" as const}} : {}), expectedUpdatedAt: conflict.existing.updatedAt, overwrite: true });
   }
 
   async function saveEntry(entry: AttendanceBatchEntry) {
@@ -1470,11 +1506,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setSuccessMessage(null);
 
     try {
-      if (entry.captureTime || !isOnline || (entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY") || (entry.targetLocalRecordId && !entry.targetRecordId)) {
+      if (entry.operationalDay || entry.captureTime || !isOnline || (entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY") || (entry.targetLocalRecordId && !entry.targetRecordId)) {
         const extraValues = attendanceEntryExtraValues(entry, appView.config, contextFields);
 
         const localIntent = await definitionCache.saveStateUpdateLocally({
           ...workflowWriteMetadata(capturedEntry),
+          ...(entry.operationalDay ? {operationalDay:entry.operationalDay} : {}),
           ...(entry.captureTime ? {captureTime:entry.captureTime} : {}),
           ...(entry.eventOccurredAt ? {eventOccurredAt:entry.eventOccurredAt} : {}),
           ...(entry.repetitionPolicy ? {repetitionPolicy:entry.repetitionPolicy} : {}),
@@ -1497,7 +1534,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           targetEntityTypeId: appView.config.targetEntityTypeId,
           uniqueness: "subject-date",
         });
-        const durableRepeat = Boolean(entry.captureTime || entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY");
+        const durableRepeat = Boolean(entry.operationalDay || entry.captureTime || entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY");
         if(durableRepeat){
           if(!isCurrent())return;
           clearPersonFlow();
@@ -1723,7 +1760,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   function changeDate(amount: number) {
-    if (amount > 0 && date >= today) return;
+    if (amount > 0 && date >= (calendar?civilToday:today)) return;
     clearPersonFlow();
     setDate((current) => shiftLocalDate(current, amount));
   }
@@ -1784,13 +1821,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       </View>
 
       <View testID="attendance-controls" style={styles.controlsGroup}>
+      {calendar ? <View><Text style={styles.meta}>Fecha {automaticDate?"automática (día operativo)":"manual"} · {calendar.timeZone}</Text>
+        {!automaticDate ? <Pressable style={styles.dateButton} accessibilityRole="button" onPress={()=>{clearPersonFlow();setDateSelection({routeDate:targetDate,value:today,mode:"AUTO"});}}><Text style={styles.dateButtonText}>Usar día operativo actual</Text></Pressable>:null}</View>:null}
       <View style={styles.dateSummary}>
       <View style={styles.dateBar}>
         <Pressable accessibilityRole="button" accessibilityLabel="Fecha anterior" onPress={() => changeDate(-1)} style={styles.dateButton}>
           <Text style={styles.dateButtonText}>Anterior</Text>
         </Pressable>
-        <View style={{ maxWidth: 220, flexShrink: 1 }}><DateFieldInput label="Fecha de asistencia" required value={date} max={today} onChange={value => { clearPersonFlow(); setDate(value); }} /></View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Fecha siguiente" accessibilityState={{ disabled: date >= today }} disabled={date >= today} onPress={() => changeDate(1)} style={[styles.dateButton, date >= today && styles.disabledButton]}>
+        <View style={{ maxWidth: 220, flexShrink: 1 }}><DateFieldInput label={calendar?"Fecha operativa":"Fecha de asistencia"} required value={date} max={calendar?civilToday:today} onChange={value => { clearPersonFlow(); setDate(value); }} /></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Fecha siguiente" accessibilityState={{ disabled: date >= (calendar?civilToday:today) }} disabled={date >= (calendar?civilToday:today)} onPress={() => changeDate(1)} style={[styles.dateButton, date >= (calendar?civilToday:today) && styles.disabledButton]}>
           <Text style={styles.dateButtonText}>Siguiente</Text>
         </Pressable>
       </View>

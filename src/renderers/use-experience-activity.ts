@@ -14,6 +14,7 @@ import type { AppView } from "@/lib/opco-api";
 import { useSession } from "@/state/session";
 
 type ActivityReport = {
+  notice?: string | null;
   stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeCount: number;
   readCount?: number;
@@ -37,10 +38,10 @@ function useVisibleActivity(scopeKey: string | null, identity: {
     reportExperienceActivity({ ...latest.current, scopeKey, reporterId });
     return () => leaveExperienceActivityScope(scopeKey, reporterId);
   }, [appViewId, appViewTitle, appViewType, reporterId, scopeKey]));
-  const { activeCount, errorCode, result, readCount, readMode, stateUpdateCoverage } = report;
+  const { activeCount, errorCode, result, readCount, readMode, stateUpdateCoverage, notice } = report;
   useEffect(() => {
-    if (scopeKey) reportExperienceActivity({ activeCount, errorCode, result, readCount, readMode, stateUpdateCoverage, scopeKey, reporterId });
-  }, [activeCount, errorCode, readCount, readMode, reporterId, result, scopeKey, stateUpdateCoverage]);
+    if (scopeKey) reportExperienceActivity({ activeCount, errorCode, result, readCount, readMode, stateUpdateCoverage, notice, scopeKey, reporterId });
+  }, [activeCount, errorCode, notice, readCount, readMode, reporterId, result, scopeKey, stateUpdateCoverage]);
 }
 
 export function useExperienceActivityReporter(appView: AppView, report: ActivityReport) {

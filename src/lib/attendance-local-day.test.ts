@@ -33,3 +33,21 @@ it("refreshes after suspended time, handles backwards calendar changes and ignor
   clock.refresh();
   expect(changed).toHaveBeenCalledTimes(2);
 });
+
+it("observes the configured operational boundary rather than midnight",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-19T10:59:59.000Z"));const changed=vi.fn();
+ const clock=watchAttendanceLocalDay(changed,{version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[]});
+ vi.advanceTimersByTime(1001);expect(changed).toHaveBeenCalledExactlyOnceWith("2026-11-19","2026-11-19");expect(vi.getTimerCount()).toBe(1);clock.dispose();
+});
+it("keeps the operational DATE across civil midnight and refreshes it after suspension",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-19T02:59:59.000Z"));const changed=vi.fn();
+ const clock=watchAttendanceLocalDay(changed,{version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[]});
+ vi.advanceTimersByTime(1001);expect(changed).toHaveBeenLastCalledWith("2026-11-18","2026-11-19");
+ vi.setSystemTime(new Date("2026-12-01T11:00:00.000Z"));clock.refresh();expect(changed).toHaveBeenLastCalledWith("2026-12-01","2026-12-01");clock.dispose();
+});
+
+it("refreshes a stale visible day when resubscribing after suspension",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-19T11:00:01.000Z"));const changed=vi.fn();
+ const clock=watchAttendanceLocalDay(changed,{version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[]},{day:"2026-11-18",calendarDate:"2026-11-19"});
+ expect(changed).toHaveBeenCalledExactlyOnceWith("2026-11-19","2026-11-19");clock.refresh();expect(changed).toHaveBeenCalledTimes(1);clock.dispose();
+});

@@ -66,6 +66,7 @@ export type AppShellVisibleErrorEvent = {
 };
 
 export function resolveAppShellPersistentFeedback({
+  experienceActivity,
   connectivityStatus,
   hasConflict,
   hasError,
@@ -117,6 +118,8 @@ export function resolveAppShellPersistentFeedback({
       visual: "loading",
     };
   }
+
+  if(experienceActivity?.notice)return {id:"experience-operational-notice",message:experienceActivity.notice,tone:"info",visual:"info"};
 
   if (isAuthSessionRestoring) {
     return {

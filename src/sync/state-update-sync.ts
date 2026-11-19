@@ -1,3 +1,4 @@
+import {assertOperationalCommand, OperationalCalendarError} from "../lib/operational-calendar";
 import type { AppViewDefinitionCache } from "../lib/app-view-definitions-cache";
 import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "../lib/attendance-repetition";
 import {workflowWriteMetadata,WorkflowWriteReviewError} from "../lib/workflow-write-contract";
@@ -112,6 +113,7 @@ async function runSync({
       if(cachedConfig && (cachedConfig.workflowKey??cachedConfig.workflow)==="attendance" && attendanceRepetitionPolicy(cachedConfig)!==(payload.repetitionPolicy??"ONE_PER_DAY")) {
         throw new OpcoApiError("La política preparada cambió desde esta captura. Revisa la intención conservada; no se reinterpretó.","ATTENDANCE_POLICY_CHANGED",409);
       }
+      if(cachedConfig?.operationalCalendar || payload.operationalDay)assertOperationalCommand(cachedConfig?.operationalCalendar,payload);
       if (cachedConfig?.captureTime && (!payload.captureTime || payload.captureTime.fieldId!==cachedConfig.captureTime.fieldId || payload.captureTime.timeZone!==cachedConfig.captureTime.timeZone)) throw new OpcoApiError("El pendiente anterior requiere revisión de captura; no se inventó una hora ni se modificó la intención.","CAPTURE_TIME_REVIEW_REQUIRED",409);
       if(payload.repetitionPolicy&&payload.repetitionPolicy!=="ONE_PER_DAY"){
         const key=JSON.stringify([operation.contractId,payload.appViewId,payload.date,payload.repetitionPolicy]);
@@ -289,7 +291,7 @@ function shouldAttemptRemoteStateUpdateReconcile(
   classification: ReturnType<typeof classifyStateUpdateSyncError>,
   payload: OfflineStateUpdatePayload,
 ) {
-  if (payload.writeCommand || payload.historyMode === "append" || payload.uniqueness === "none") {
+  if (payload.operationalDay || payload.writeCommand || payload.historyMode === "append" || payload.uniqueness === "none") {
     return false;
   }
 
@@ -298,6 +300,7 @@ function shouldAttemptRemoteStateUpdateReconcile(
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {
+  if(error instanceof OperationalCalendarError) return {action:"fail",code:error.code,message:error.message};
   if(error instanceof WorkflowWriteReviewError) return {action:"fail",code:error.code,message:error.message};
   if (error instanceof StateUpdateScheduleReviewError) {
     return { action: "fail", code: error.code, message: error.message };

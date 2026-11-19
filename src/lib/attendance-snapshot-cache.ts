@@ -1,3 +1,4 @@
+import {operationalCalendarKey,resolveOperationalDay,type OperationalCalendar} from "./operational-calendar";
 import { validCaptureInstant } from "./capture-time";
 import {attendanceHistoryMode} from "./attendance-repetition";
 import {completeAttendanceDay,assertVerifiedAttendanceDayScope} from "./attendance-day-pages";
@@ -10,7 +11,7 @@ export type AttendanceMonthStatus = "complete" | "partial" | "none";
 
 export type CacheAttendanceRemoteSnapshotInput = {
   appViewId: string;
-  config: Pick<AttendanceWorkflowConfig, "captureTime" | "repetitionPolicy" | "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
+  config: Pick<AttendanceWorkflowConfig, "operationalCalendar" | "captureTime" | "repetitionPolicy" | "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
   contractId: string;
   ownerKey: string;
   response: AttendanceResponse;
@@ -66,6 +67,7 @@ export async function cacheAttendanceRemoteSnapshot({
   store,
 }: CacheAttendanceRemoteSnapshotInput) {
   assertVerifiedAttendanceDayScope(response,{ownerKey,contractId,appViewId});
+  if(config.operationalCalendar && (response.operationalDayContract?.version!==1 || response.operationalDayContract.calendarKey!==operationalCalendarKey(config.operationalCalendar)))throw Error("La respuesta no acredita el calendario operativo. Se conserva la copia compatible.");
   if (config.captureTime) {
     const expected=config.captureTime;
     if(!response.captureTime || response.captureTime.version!==1 || response.captureTime.fieldId!==expected.fieldId || response.captureTime.timeZone!==expected.timeZone || [...response.items.flatMap(i=>i.attendance?[i.attendance]:[]),...response.latest].some(r=>!r.captureTime || r.captureTime.version!==1 || r.captureTime.fieldId!==expected.fieldId || r.captureTime.timeZone!==expected.timeZone || (r.captureTime.value===null ? r.captureTime.source!==null : !validCaptureInstant(r.captureTime.value) || r.captureTime.source!=="DEVICE_CONFIRMATION"))) throw new Error("La respuesta no acredita la captura automática. La copia compatible se conserva sin certificar esta descarga.");
@@ -169,4 +171,11 @@ function formatLocalDateInput(date: Date) {
   const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
+}
+
+/** Preparation and receipt admission must name the same month, including before a month boundary cutover. */
+export function attendancePreparationPeriod(now:Date,calendar?:OperationalCalendar){
+  if(!calendar)return{date:formatLocalDateInput(now),dates:currentMonthDateKeys(now)};
+  const date=resolveOperationalDay(now,calendar).date,[year,month]=date.split("-").map(Number);
+  return{date,dates:Array.from({length:new Date(Date.UTC(year,month,0)).getUTCDate()},(_,index)=>`${date.slice(0,7)}-${String(index+1).padStart(2,"0")}`)};
 }

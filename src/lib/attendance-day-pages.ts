@@ -23,7 +23,7 @@ function freeze<T>(value: T): T {
 function header(value: AttendanceResponse) {
   return revisionCanonical({appView:value.appView, date:value.date,source:value.sourceEntityType,target:value.targetEntityType,
     statuses:value.statuses,statusFieldId:value.statusFieldId,contextFields:value.contextFields,
-    observationProjection:value.observationProjection,subjectPresentation:value.subjectPresentation,summary:value.summary});
+    observationProjection:value.observationProjection,...(value.operationalDayContract?{operationalDayContract:value.operationalDayContract}:{}),subjectPresentation:value.subjectPresentation,summary:value.summary});
 }
 export async function completeAttendanceDay(input: {
   seed: AttendanceResponse; ownerKey:string;contractId:string;appViewId:string;isCurrent():boolean;

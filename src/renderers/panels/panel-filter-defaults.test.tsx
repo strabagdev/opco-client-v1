@@ -1,9 +1,12 @@
+import {operationalCalendarKey,type OperationalCalendar} from "../../lib/operational-calendar";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { PanelFilterConfig } from "../../lib/opco-api";
 import { missingRequiredPanelFilters, normalizePanelFilters } from "./panel-renderer-logic";
 import { initialPanelFilterInputs, usePanelFilterInputs } from "./use-panel-filter-inputs";
+
+vi.mock("react-native",()=>({AppState:{addEventListener:()=>({remove(){}})}}));
 
 const filters: PanelFilterConfig[] = [
   { id: "date", valueType: "DATE", required: true, defaultValue: { type: "TODAY", timeZone: "America/Santiago" } },
@@ -61,4 +64,19 @@ describe("PANEL dynamic TODAY", () => {
       expect(renderToStaticMarkup(<Probe />)).toContain('value="2026-11-17"');
     } finally { vi.useRealTimers(); }
   });
+});
+
+const operational:OperationalCalendar={version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[]};
+describe("PANEL shared operational Today",()=>{
+ const linked:PanelFilterConfig[]=[{id:"date",valueType:"DATE",required:true,defaultValue:{type:"OPERATIONAL_TODAY",calendarAppViewId:"attendance",calendar:operational,calendarKey:operationalCalendarKey(operational)}}];
+ it.each([["2026-11-19T10:59:59Z","2026-11-18"],["2026-11-19T11:00:00Z","2026-11-19"],["2027-01-01T05:00:00Z","2026-12-31"]])("resolves the linked operational date at %s",(at,date)=>expect(initialPanelFilterInputs(linked,new Date(at))).toEqual({date}));
+ it("does not invent a date for missing or stale linked metadata",()=>{
+  expect(initialPanelFilterInputs([{...linked[0],defaultValue:{type:"OPERATIONAL_TODAY",calendarAppViewId:"attendance"}}])).toEqual({});
+  expect(initialPanelFilterInputs([{...linked[0],defaultValue:{type:"OPERATIONAL_TODAY",calendarAppViewId:"attendance",calendar:operational,calendarKey:"old"}}])).toEqual({});
+ });
+ it("applies the date only to bound datasets, leaving historical balances independent",()=>{
+   const inputs=initialPanelFilterInputs(linked,new Date("2026-11-19T05:00:00Z"));
+   expect(normalizePanelFilters(linked,inputs)).toEqual({date:"2026-11-18"});
+   expect(missingRequiredPanelFilters(linked,{filters:[]}as never,{})).toEqual([]);
+ });
 });

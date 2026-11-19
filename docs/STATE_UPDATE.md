@@ -3908,3 +3908,11 @@ Si falla la lectura del día local, se muestra el error y no se da por lista la 
 El lector compartido de catálogos RELATION usa la caché existente, siempre owner+contrato+destino, únicamente ante OpcoNetworkError o Offline explícito. No en 401/403/500, errores de programación o errores de persistencia. No emite recibos ni declara completo un catálogo por leer una página. Sin opciones locales muestra el motivo, mantiene el campo obligatorio y no elige la primera opción. Una selección no acreditada por las opciones disponibles bloquea búsqueda/confirmación sin borrar su ID, los borradores, pendientes ni conflictos. Una selección anterior acreditada se conserva por el mecanismo existente; los registros seleccionados para edición mantienen sus valores. No se alteran comandos, políticas, timestamps, schema, outbox ni scheduler de sincronización.
 
 Regresión RED en base y candidato anterior: al arrancar con navigator online y Core inaccesible no se leía la definición local; con navigator offline sí. GREEN: preparación online, cierre de proceso, apertura offline, elección explícita, cancelación sin intención, alta y segunda reapertura con el mismo eventOccurredAt/clientRequestId/ID/contexto, y posterior ACK sin duplicados en Chromium/OPFS+Core/PostgreSQL aislados. El caso sin opciones usa exclusivamente una copia lateral sintética y comprueba el pendiente idéntico. Evidencia y controles de los vencimientos: backups/attendance-capture-blockers/2026-11-18/. Safari/native pendientes.
+
+
+## Calendario operativo opcional — local 2026-11-19
+
+Definición Attendance opcional, DATE automático/manual, franjas SELECT sin sustitución y
+PANEL vinculado: [OPERATIONAL_CALENDAR.md](./OPERATIONAL_CALENDAR.md). Transporte único
+eventOccurredAt y ruta versionada; pendientes conservados. Sin migración, publicación ni
+configuración productiva. Activación captureTime sigue pendiente.

@@ -14,6 +14,7 @@ export type StateUpdateVisibleCoverageContext = {
 };
 
 export type ExperienceActivitySnapshot = {
+  notice?: string | null;
   stateUpdateCoverage?: StateUpdateVisibleCoverageContext | null;
   activeRuns: ExperienceActivityRun[];
   readCount?: number;
@@ -72,6 +73,7 @@ export function activateExperienceActivityScope({
 
 export function reportExperienceActivity({
   activeCount,
+  notice = null,
   errorCode,
   result,
   scopeKey,
@@ -80,6 +82,7 @@ export function reportExperienceActivity({
   readCount,
   readMode,
 }: {
+  notice?: string | null;
   reporterId?: string;
   readCount?: number;
   readMode?: "initial" | "refresh";
@@ -101,6 +104,7 @@ export function reportExperienceActivity({
   const nextResult = nextCount > 0 ? "running" : errorCode ? "error" : result ?? snapshot.result;
   const nextErrorCode = errorCode ?? (nextCount === 0 && (result === "success" || result === "partial") ? null : snapshot.errorCode);
   if (
+    notice === (snapshot.notice??null) &&
     readCount === snapshot.readCount &&
     readMode === snapshot.readMode &&
     activeRuns.length === snapshot.activeRuns.length &&
@@ -111,6 +115,7 @@ export function reportExperienceActivity({
 
   setSnapshot({
     ...snapshot,
+    notice,
     stateUpdateCoverage,
     readCount,
     readMode,

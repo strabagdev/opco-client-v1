@@ -43,6 +43,7 @@ export type PreparedAppViewDefinition =
       appView: AppView;
       kind: "attendance";
       captureTime?: import("./capture-time").CaptureTimeCommand;
+      operationalDayContract?: import("./operational-calendar").OperationalDayContract;
       workflowWriteContract?: import("./workflow-write-contract").WorkflowWriteContract | null;
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
@@ -62,6 +63,7 @@ export type PreparedAppViewDefinition =
       historyMode: StateUpdateHistoryMode;
       kind: "state-update";
       captureTime?: import("./capture-time").CaptureTimeCommand;
+      operationalDayContract?: import("./operational-calendar").OperationalDayContract;
       workflowWriteContract?: import("./workflow-write-contract").WorkflowWriteContract | null;
       codeSearchField?: import("./opco-api").WorkflowCodeSearchField;
       subjectPresentation?:import("./subject-presentation").SubjectPresentationDefinition;
