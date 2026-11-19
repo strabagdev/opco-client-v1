@@ -1,3 +1,4 @@
+import {presentCaptureTime,type CaptureTimeRead} from "../../../lib/capture-time";
 import type { ReadField, ReadValue } from "../../../components/read-field-list";
 import type { LocalDatabase } from "../../../lib/local-db";
 import type { AttendanceContextField, AttendanceContextValues } from "../../../lib/opco-api";
@@ -14,6 +15,7 @@ export type AttendanceReadRecord = {
   statusOptionId: string | null;
   contextValues?: AttendanceContextValues;
   observation?: string | null;
+  captureTime?: CaptureTimeRead;
   eventOccurredAt?: string;
   updatedAt: string;
 };
@@ -26,6 +28,7 @@ export type AttendanceRecordPresentation = {
   referenceKind: "local" | "server" | "unknown";
   serverId?: string;
   fields: ReadField[];
+  capture?: {compact:string;detail:string};
   timestamps: { label: string; text: string }[];
   syncLabel?: string;
 };
@@ -122,11 +125,14 @@ export async function loadAttendanceRecordPresentation(store: AttendancePresenta
   const captureProven = localReference && physical!.values.__opcoStateUpdateIntent === 1 &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(creationSuffix);
   const captured = captureProven && validTime(physical!.values.eventOccurredAt) ? physical!.values.eventOccurredAt : undefined;
-  const referenceTime = attendanceTimestamp(captured ? "Hora de captura" : "Hora de referencia", captured ?? record.eventOccurredAt, timeZone);
+  const capture = record.captureTime ?? (physical?.values.captureTime as CaptureTimeRead | undefined);
+  const presentation = capture ? presentCaptureTime(capture.source === "DEVICE_CONFIRMATION" ? capture.value : null,capture.timeZone,scope.date) : undefined;
+  const referenceTime = capture ? null : attendanceTimestamp(captured ? "Hora de captura" : "Hora de referencia", captured ?? record.eventOccurredAt, timeZone);
   const modified = serverId || cached?.remoteUpdatedAt
     ? attendanceTimestamp("Última modificación", record.updatedAt || cached?.remoteUpdatedAt, timeZone) : null;
   const syncLabel = cached && cached.syncStatus !== "synced" ? ({ pending_create: "Guardado local · pendiente", pending_update: "Cambio local · pendiente", syncing: "Sincronizando", failed: "Error de sincronización", conflict: "Conflicto pendiente" }[cached.syncStatus]) : undefined;
   return { record, reference, referenceKind, serverId, fields: readFields,
+    ...(presentation?{capture:presentation}:{}),
     timestamps: [referenceTime, modified].filter((t): t is NonNullable<typeof t> => !!t), syncLabel };
 }
 

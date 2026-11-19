@@ -1,3 +1,4 @@
+import {captureTimeCommand,type CaptureTimeCommand} from "../../../lib/capture-time";
 import { AttendanceRecordList, type AttendanceGroupRead } from "./attendance-record-list";
 import {attendanceDailyCount, attendanceReadScope, attendanceHistoryMode, type AttendanceRepetitionPolicy} from "../../../lib/attendance-repetition";
 import { actionSurface } from "../../../theme/operational-presentation";
@@ -61,6 +62,7 @@ import {
   AttendanceStatusOption,
   AttendanceWorkflowConfig,
   OpcoApiError,
+  OpcoNetworkError,
   StateUpdateBatchResult,
   WorkflowAppView,
 } from "@/lib/opco-api";
@@ -68,7 +70,7 @@ import {
   ATTENDANCE_SEARCH_DEBOUNCE_MS,
   attendanceContextFieldsFromPreparedDefinition,
   attendanceRelationField,
-  attendanceContextValidationErrors,
+  attendanceContextValidationErrors as validateAttendanceContextValues,
   attendanceEntryExtraValues,
   attendanceEntryToStateUpdateEntry,
   attendanceConfigurationKey,
@@ -185,11 +187,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
   const [contextFields, setContextFields] = useState<AttendanceContextField[]>([]);
   const writePolicyConfigured = Boolean(appView.config.workflowWritePolicy);
+  const [captureContract,setCaptureContract] = useState<CaptureTimeCommand | undefined>();
   const [writeContract,setWriteContract] = useState<WorkflowWriteContract | null | undefined>();
   const writeContractRequiredRef = useRef(writePolicyConfigured);
   const [contextValues, setContextValues] = useState<Record<string, string | null>>({});
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
-  const requiredContextMissing = Boolean((appView.config.contextFieldIds?.length && contextFields.length===0) || attendanceContextValidationErrors(contextFields, contextValues).length>0);
   const [latest, setLatest] = useState<AttendanceLatestItem[]>([]);
   const [totalRegistered, setTotalRegistered] = useState(0);
   const [observationExpanded, setObservationExpanded] = useState(false);
@@ -232,6 +234,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   useLayoutEffect(() => {
     if (resolutionScopeRef.current !== resolutionScope) {
       setWriteContract(undefined);
+      setCaptureContract(undefined);
       writeContractRequiredRef.current=writePolicyConfigured;
       draftRevisionRef.current += 1;
       setSelectedItem(null);
@@ -259,6 +262,16 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const isOnline = connectivityStatus === "online";
   const contextRelations = useAttendanceContextRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
     fields: contextFields, values: contextValues, selectedItem, online: isOnline, scope: resolutionScope });
+  function attendanceContextValidationErrors(fields: AttendanceContextField[], values: Record<string, string | null>) {
+    const missing = (appView.config.contextFieldIds ?? []).filter(id => !fields.some(field => field.id === id));
+    return [...validateAttendanceContextValues(fields, values, contextRelations.catalogs),
+      ...missing.map(fieldId => ({ fieldId, message: "La definición local de los campos de contexto está incompleta. Conéctate para prepararla antes de confirmar." }))];
+  }
+  const requiredContextMissing = Boolean((appView.config.contextFieldIds?.length && contextFields.length === 0) || attendanceContextValidationErrors(contextFields, contextValues).length > 0);
+  const unavailableContextErrors = Object.fromEntries(attendanceContextValidationErrors(contextFields, contextValues)
+    .filter(error => contextValues[error.fieldId] && contextFields.some(field => field.id === error.fieldId && field.type === "RELATION") && !contextRelations.catalogs[error.fieldId]?.loading)
+    .map(error => [error.fieldId, error.message]));
+
   const contextRelationReadCount = Object.values(contextRelations.catalogs).filter(catalog => catalog.loading).length;
   const searchA11y = useFieldAccessibility("Buscar persona");
   const observationA11y = useFieldAccessibility("Observación");
@@ -317,6 +330,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   });
 
   const applyAttendanceResponse = useCallback((response: {
+    captureTime?: CaptureTimeCommand;
     workflowWriteContract?: WorkflowWriteContract | null;
     subjectPresentation?:SubjectPresentationDefinition;
     contextFields?: AttendanceContextField[];
@@ -328,6 +342,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     if(response.workflowWriteContract) writeContractRequiredRef.current=true;
     if(response.workflowWriteContract===null) writeContractRequiredRef.current=false;
     setWriteContract(response.workflowWriteContract);
+    setCaptureContract(response.captureTime);
     setStatuses((current) => mergeAttendanceStatuses(current, response.statuses));
     setContextFields(response.contextFields ?? []);
 
@@ -544,7 +559,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const prepared = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
       if (prepared && (prepared.definition.kind === "state-update" || prepared.definition.kind === "attendance")) {
         await definitionCache.upsertAppViewDefinition({ ...prepared, lastPreparedAt: new Date().toISOString(),
-          definition: { ...prepared.definition, ...(prepared.definition.kind==="state-update"?{historyMode:attendanceHistoryMode(appView.config)}:{}), workflowWriteContract:response.workflowWriteContract, appView, codeSearchField: response.codeSearchField, subjectPresentation:response.subjectPresentation, searchComparison:response.searchComparison } });
+          definition: { ...prepared.definition, ...(prepared.definition.kind==="state-update"?{historyMode:attendanceHistoryMode(appView.config)}:{}), workflowWriteContract:response.workflowWriteContract, captureTime:response.captureTime, appView, codeSearchField: response.codeSearchField, subjectPresentation:response.subjectPresentation, searchComparison:response.searchComparison } });
       }
     }
     await cacheAttendanceRemoteSnapshot({
@@ -882,65 +897,61 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       const requestId = beginLoadingRequest();
 
-      if (connectivityStatus !== "online") {
-        try {
-          if (ownerKey) {
-            const [prepared, sourceDefinition, sourceTelemetry] = await Promise.all([
-              definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id),
-              definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId),
-              definitionCache.getSyncTelemetry({
-                contractId: selectedContractId,
-                entityTypeId: appView.config.sourceEntityTypeId,
-                ownerKey,
-              }),
-            ]);
+      let localReady = false;
+      let localReason = "Abre esta experiencia con conexión para preparar los datos locales. Los registros y pendientes se conservan.";
+      try {
+        if (ownerKey) {
+          const [prepared, sourceDefinition, sourceTelemetry] = await Promise.all([
+            definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id),
+            definitionCache.getEntityDefinition(selectedContractId, appView.config.sourceEntityTypeId),
+            definitionCache.getSyncTelemetry({
+              contractId: selectedContractId,
+              entityTypeId: appView.config.sourceEntityTypeId,
+              ownerKey,
+            }),
+          ]);
 
-            if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
-              return;
-            }
-
-            const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
-            setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
-
-            if (prepared?.definition.kind === "attendance" || prepared?.definition.kind === "state-update") {
-              setWriteContract(prepared.definition.workflowWriteContract);
-              writeContractRequiredRef.current=Boolean(prepared.definition.workflowWriteContract || writePolicyConfigured);
-            }
-            if (prepared?.definition.kind === "attendance") {
-              setStatuses(prepared.definition.statuses);
-            }
-
-            if (prepared?.definition.kind === "state-update") {
-              setStatuses(attendanceStatusesFromStateFields(
-                prepared.definition.stateFields,
-                appView.config.statusFieldId,
-                appView.config.defaultCheckInOptionId,
-              ));
-              setContextFields(attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []));
-            }
-
-            if (!prepared || prepared.status !== "ready" || !sourceDefinition || !sourceHydrated) {
-              setError("Abre Registro de Asistencia con conexion para preparar su uso sin conexion.");
-            } else {
-              setError(null);
-            }
-
-            await refreshLocalDayState(undefined, requestId);
+          if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+            return;
           }
 
-          if (isMounted && isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
-            setItems([]);
+          const sourceHydrated = hasSuccessfulHydration(sourceTelemetry);
+          setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
+
+          if (prepared?.definition.kind === "attendance" || prepared?.definition.kind === "state-update") {
+            setWriteContract(prepared.definition.workflowWriteContract);
+            setCaptureContract(prepared.definition.captureTime);
+            writeContractRequiredRef.current=Boolean(prepared.definition.workflowWriteContract || writePolicyConfigured);
           }
-        } catch (nextError) {
-          if (isMounted && isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
-            setError(nextError instanceof Error ? nextError.message : "No fue posible leer la asistencia preparada.");
-            recordVisibleError({ error: nextError, operation: "load-day" });
+          if (prepared?.definition.kind === "attendance") {
+            setStatuses(prepared.definition.statuses);
           }
-        } finally {
-          if (isMounted) {
-            finishLoadingRequest(requestId);
+
+          if (prepared?.definition.kind === "state-update") {
+            setStatuses(attendanceStatusesFromStateFields(
+              prepared.definition.stateFields,
+              appView.config.statusFieldId,
+              appView.config.defaultCheckInOptionId,
+            ));
           }
+
+          const restoredContexts = prepared?.definition.kind === "state-update"
+            ? attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []) : [];
+          setContextFields(restoredContexts);
+          const contextsComplete = (appView.config.contextFieldIds ?? []).every(id => restoredContexts.some(field => field.id === id));
+          localReady = Boolean(prepared && prepared.status === "ready" && sourceDefinition && sourceHydrated && contextsComplete);
+          if (!contextsComplete) localReason = "La definición guardada no incluye todos los campos de contexto. Conéctate para prepararlos; los registros y pendientes se conservan.";
+          if (localReady) await refreshLocalDayState(undefined, requestId);
         }
+      } catch (localError) {
+        localReady = false;
+        localReason = localError instanceof Error ? localError.message : "No fue posible leer la definición local. Los pendientes se conservan.";
+      }
+      if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) return;
+      if (connectivityStatus !== "online") {
+        setError(localReady ? null : localReason);
+        setItems([]);
+        finishLoadingRequest(requestId);
         return;
       }
 
@@ -968,7 +979,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
-          setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
+          if (nextError instanceof OpcoNetworkError) {
+            setError(localReady ? null : localReason);
+            if (localReady) setRefreshError("No se pudo conectar con Opco. Se usan los datos guardados en este dispositivo; su vigencia no está verificada.");
+          } else {
+            if (nextError instanceof OpcoApiError && (nextError.status === 401 || nextError.status === 403)) {
+              // An explicit authorization rejection is not an offline permission grant.
+              setContextFields([]);
+              setWriteContract(undefined);
+              setCaptureContract(undefined);
+            }
+            setError(nextError instanceof Error ? nextError.message : "No fue posible cargar asistencia.");
+          }
           recordVisibleError({
             error: nextError,
             operation: "load-day",
@@ -1076,7 +1098,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           const local = await definitionCache.getAttendanceDailyRecords({ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, subjectRecordId: item.person.id });
           if (!current())
               return;
-          let records: AttendanceItem[] = local.map(r => stateUpdateItemToAttendanceItem({ subject: item.person, current: { ...(r.eventOccurredAt ? { eventOccurredAt: r.eventOccurredAt } : {}), recordId: r.serverRecordId ?? r.localRecordId, updatedAt: r.updatedAt ?? "", stateValues: r.stateValues, extraValues: r.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields));
+          let records: AttendanceItem[] = local.map(r => stateUpdateItemToAttendanceItem({ subject: item.person, current: { ...(r.captureTime ? {captureTime:r.captureTime as import("../../../lib/capture-time").CaptureTimeRead}:{}), ...(r.eventOccurredAt ? { eventOccurredAt: r.eventOccurredAt } : {}), recordId: r.serverRecordId ?? r.localRecordId, updatedAt: r.updatedAt ?? "", stateValues: r.stateValues, extraValues: r.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields));
           if (isOnline && token) {
               const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, personRecordId: item.person.id });
               if (!current())
@@ -1139,7 +1161,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               throw Error(isOnline ? "No se pudo preparar la copia local del registro seleccionado. Vuelve a abrir la experiencia antes de editarlo." : "Este registro no está disponible para editar sin conexión.");
           if (cached && (!isOnline || cached.syncStatus !== "synced")) {
               const selected = normalizeStateUpdateRecord(cached);
-              item = stateUpdateItemToAttendanceItem({ subject: selected.subject, current: { ...(selected.eventOccurredAt ? { eventOccurredAt: selected.eventOccurredAt } : {}), recordId: cached.serverId ?? cached.localId, updatedAt: selected.expectedUpdatedAt ?? selected.updatedAt ?? item.attendance!.updatedAt, stateValues: selected.stateValues, extraValues: selected.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields);
+              item = stateUpdateItemToAttendanceItem({ subject: selected.subject, current: { ...(selected.captureTime ? {captureTime:selected.captureTime as import("../../../lib/capture-time").CaptureTimeRead}:{}), ...(selected.eventOccurredAt ? { eventOccurredAt: selected.eventOccurredAt } : {}), recordId: cached.serverId ?? cached.localId, updatedAt: selected.expectedUpdatedAt ?? selected.updatedAt ?? item.attendance!.updatedAt, stateValues: selected.stateValues, extraValues: selected.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields);
           }
           setEditingTarget({ targetLocalRecordId: cached.localId, ...(cached.serverId ? { targetRecordId: cached.serverId } : {
               ...(typeof cached.values.eventOccurredAt === "string" ? { eventOccurredAt: cached.values.eventOccurredAt } : {}),
@@ -1170,14 +1192,17 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       const scope = resolutionScope, revision = draftRevisionRef.current, generation = ++confirmationSequenceRef.current;
       const current = () => resolutionMountedRef.current && resolutionScopeRef.current === scope && draftRevisionRef.current === revision && confirmationSequenceRef.current === generation;
       let writeMetadata;
+      let automatic:CaptureTimeCommand|undefined;
       try {
           writeMetadata = captureWorkflowWriteCommand(writeContract, writeContractRequiredRef.current);
+          automatic = appView.config.captureTime ? captureTimeCommand(appView.config.captureTime,captureContract) : undefined;
       }
       catch (error) {
           setError(error instanceof Error ? error.message : "La autorización requiere revisión.");
           return;
       }
-      const entry: AttendanceBatchEntry = { ...writeMetadata, ...(!editingTarget ? { eventOccurredAt: eventCapturedAtRef.current ?? (eventCapturedAtRef.current = new Date().toISOString()) } : {}), repetitionPolicy: appView.config.repetitionPolicy as AttendanceRepetitionPolicy, ...editingTarget, personRecordId: selectedItem.person.id, statusOptionId: status.optionId, contextValues: { ...contextValues }, ...(supportsObservation ? { observation } : {}) };
+      const confirmationInstant = automatic && !editingTarget ? new Date().toISOString() : undefined;
+      const entry: AttendanceBatchEntry = { ...writeMetadata, ...(automatic?{captureTime:automatic}:{}), ...(!editingTarget && !automatic ? { eventOccurredAt: eventCapturedAtRef.current ?? (eventCapturedAtRef.current = new Date().toISOString()) } : {}), repetitionPolicy: appView.config.repetitionPolicy as AttendanceRepetitionPolicy, ...editingTarget, personRecordId: selectedItem.person.id, statusOptionId: status.optionId, contextValues: { ...contextValues }, ...(supportsObservation ? { observation } : {}) };
       if (editingTarget) {
           if (editingTarget.targetRecordId && selectedItem.attendance) {
               setConflict({ result: "CONFLICT", personRecordId: entry.personRecordId, personName: selectedItem.person.displayName, existing: selectedItem.attendance, requested: { statusOptionId: status.optionId, statusLabel: status.label }, confirmedEntry: entry, confirmationScope: scope, confirmationAttemptId: generation, confirmationRevision: revision, confirmationDraftKey: attendanceCommandKey(scope, appView.config, contextFields, entry) });
@@ -1193,7 +1218,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
       }
       if (appView.config.repetitionPolicy !== "MULTIPLE_WITH_WARNING") {
-          await saveEntry(entry);
+          await saveEntry(automatic && !editingTarget ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)} : entry);
           return;
       }
       repeatCheckingRef.current = true;
@@ -1220,7 +1245,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               setRepeatWarning({ entry, localCount: local.length, remoteCount, scope, revision, generation });
               return;
           }
-          await saveEntry(entry);
+          await saveEntry(automatic ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)} : entry);
       }
       catch (error) {
           if (current())
@@ -1243,7 +1268,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
       }
       setRepeatWarning(null);
-      await saveEntry({ ...warning.entry, repetitionAcknowledged: true });
+      await saveEntry({ ...warning.entry, ...(warning.entry.captureTime ? {eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=new Date().toISOString())}:{}), repetitionAcknowledged: true });
   }
 
   async function selectPerson(item: AttendanceItem) {
@@ -1317,10 +1342,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
 
     let writeMetadata;
-    try { writeMetadata=captureWorkflowWriteCommand(writeContract,writeContractRequiredRef.current); }
+    try { writeMetadata={...captureWorkflowWriteCommand(writeContract,writeContractRequiredRef.current),...(appView.config.captureTime?{captureTime:captureTimeCommand(appView.config.captureTime,captureContract)}:{})}; }
     catch(error) { setError(error instanceof Error ? error.message : "Actualiza la experiencia antes de guardar.");return; }
     const entry: AttendanceBatchEntry = {
       ...writeMetadata,
+      ...(appView.config.captureTime && !selectedItem.attendance ? {eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=new Date().toISOString())}:{}),
       contextValues: { ...contextValues },
       observation: supportsObservation ? observation : undefined,
       personRecordId: selectedItem.person.id,
@@ -1444,11 +1470,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setSuccessMessage(null);
 
     try {
-      if (!isOnline || (entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY") || (entry.targetLocalRecordId && !entry.targetRecordId)) {
+      if (entry.captureTime || !isOnline || (entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY") || (entry.targetLocalRecordId && !entry.targetRecordId)) {
         const extraValues = attendanceEntryExtraValues(entry, appView.config, contextFields);
 
         const localIntent = await definitionCache.saveStateUpdateLocally({
           ...workflowWriteMetadata(capturedEntry),
+          ...(entry.captureTime ? {captureTime:entry.captureTime} : {}),
           ...(entry.eventOccurredAt ? {eventOccurredAt:entry.eventOccurredAt} : {}),
           ...(entry.repetitionPolicy ? {repetitionPolicy:entry.repetitionPolicy} : {}),
           ...(entry.repetitionAcknowledged ? {repetitionAcknowledged:true} : {}),
@@ -1470,7 +1497,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           targetEntityTypeId: appView.config.targetEntityTypeId,
           uniqueness: "subject-date",
         });
-        const durableRepeat = Boolean(entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY");
+        const durableRepeat = Boolean(entry.captureTime || entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY");
         if(durableRepeat){
           if(!isCurrent())return;
           clearPersonFlow();
@@ -1799,7 +1826,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       <AttendanceContextSelectors
         relations={contextRelations}
-        errors={contextErrors}
+        errors={{ ...contextErrors, ...unavailableContextErrors }}
         fields={contextFields}
         onChange={handleContextChange}
         values={contextValues}

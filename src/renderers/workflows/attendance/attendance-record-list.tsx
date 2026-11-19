@@ -145,15 +145,16 @@ export function AttendanceRecordRow({ row, selected = false, onEdit, compact = f
       {onEdit ? <FormAction label="Editar" accessibilityLabel={`Editar registro ${row.reference}`} onPress={onEdit} /> : null}
     </View>
     <ReadFieldList compact fields={compact ? row.fields.slice(1) : row.fields} />
-    <View style={s.times}>
+    {row.capture ? <Text selectable style={s.timeText}>{row.capture.compact === "Hora de captura no disponible" ? row.capture.compact : `Hora de captura: ${row.capture.compact}`}</Text> : <View style={s.times}>
       {row.timestamps.map(t => <View key={t.label} style={s.time}><Text style={s.label}>{t.label}</Text><Text selectable style={s.timeText}>{t.text}</Text></View>)}
-    </View>
+    </View>}
     <Pressable accessibilityRole="button" accessibilityState={{expanded: technical}}
       accessibilityLabel={`Detalle técnico de registro ${row.reference}`} onPress={() => setTechnical(!technical)}
       style={interaction => [s.technicalToggle, actionSurface(false, interaction, false)]}>
       <Text style={s.hint}>{technical ? "Ocultar detalle técnico" : "Detalle técnico"}</Text>
     </Pressable>
     {technical ? <View style={s.identification}>
+    {row.capture ? <><Text style={s.label}>Detalle de captura</Text><Text selectable style={s.timeText}>{row.capture.detail}</Text>{row.timestamps.map(t=><View key={t.label}><Text style={s.label}>{t.label}</Text><Text selectable style={s.timeText}>{t.text}</Text></View>)}</>:null}
     <Text style={s.label}>{row.referenceKind === "local" ? "Referencia local fija" : row.referenceKind === "server" ? "Referencia del servidor" : "Referencia del registro"}</Text>
     <Text selectable style={s.reference} accessibilityLabel={`Referencia completa: ${row.reference}`}>{row.reference}</Text>
     <View style={s.actions}>

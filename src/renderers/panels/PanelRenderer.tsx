@@ -1,3 +1,4 @@
+import {ReadValueDetail} from "../../components/read-field-list";
 import { PanelCompatibilityError } from "../../lib/panel-compatibility";
 import { metrics, type ThemeColors } from "../../theme/tokens";
 import { colors } from "../../theme/paint";
@@ -841,7 +842,7 @@ function PanelTable({ table, module, dataset }: { table: NonNullable<ReturnType<
           <Text style={[tableStyles.cellLabel, !compact && tableStyles.hidden]}>{column.name}</Text>
           {values.map((value, item) => <View key={item} style={tableStyles.valueGroup}>
             <Text selectable accessibilityLabel={`${column.name}: ${value.text}`} style={[tableStyles.value, value.status !== "value" && tableStyles.unavailable]}>{value.text}</Text>
-            {value.detail ? <Text selectable style={tableStyles.trace}>{value.detail}</Text> : null}
+            {value.detail ? value.detailCollapsed ? <ReadValueDetail detail={value.detail} collapsed/> : <Text selectable style={tableStyles.trace}>{value.detail}</Text> : null}
           </View>)}
         </View>;
       })}

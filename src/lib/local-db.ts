@@ -1,3 +1,4 @@
+import {assertCaptureAck,captureRead,asCaptureCommand,type CaptureTimeRead} from "./capture-time";
 import {createClientRequestId} from "./client-request-id";
 import {attendanceRepetitionMetadata} from "./attendance-repetition";
 import { createRevisionReceiptStorage, type RevisionReceiptStore } from "./revision-receipt-storage";
@@ -2962,9 +2963,15 @@ async function saveStateUpdateLocallyWithRecordId(
     const expectedUpdatedAt = (Object.keys(schedule).length || writeMetadata.writeCommand) && pinnedPayload && !resolvedLocalRecordId
       ? pinnedPayload.expectedUpdatedAt ?? null : input.expectedUpdatedAt ?? existingRecord?.remoteUpdatedAt ?? null;
     const stateValues = buildOfflineStateValues(input.stateFields, input.stateValues);
+    const capture = pinnedPayload?.captureTime ?? input.captureTime;
+    if (pinnedPayload && input.captureTime && !pinnedPayload.captureTime) throw new OpcoApiError("El pendiente anterior no tiene una captura acreditada. Se conserva para revisión.","CAPTURE_TIME_REVIEW_REQUIRED",409);
+    if (pinnedPayload?.captureTime && input.captureTime && JSON.stringify(asCaptureCommand(pinnedPayload.captureTime))!==JSON.stringify(asCaptureCommand(input.captureTime))) throw new OpcoApiError("La configuración de captura del pendiente cambió.","CAPTURE_TIME_CONFIG_CHANGED",409);
+    const storedCapture = existingRecord?.values.captureTime as CaptureTimeRead | undefined;
+    const originalInstant = existingOperation ? pinnedPayload?.eventOccurredAt : existingRecord ? storedCapture?.source === "DEVICE_CONFIRMATION" ? storedCapture.value ?? undefined : undefined : input.eventOccurredAt;
     const values: OfflineStateUpdateValues = {
       ...(typeof existingRecord?.values.eventOccurredAt==="string"?{eventOccurredAt:existingRecord.values.eventOccurredAt}:{}),
       ...attendanceRepetitionMetadata(input),
+      ...(capture?{captureTime:captureRead(capture,originalInstant),eventOccurredAt:originalInstant}:{}),
       ...writeMetadata,
       ...schedule,
       identity: input.identity,
@@ -2982,6 +2989,7 @@ async function saveStateUpdateLocallyWithRecordId(
     };
     const nextPayload: OfflineStateUpdatePayload = {
       ...attendanceRepetitionMetadata(input),
+      ...(capture?{captureTime:asCaptureCommand(capture),eventOccurredAt:originalInstant}:{}),
       ...writeMetadata,
       ...schedule,
       expectedRecordId: input.targetRecordId ?? (resolvedLocalRecordId
@@ -3187,7 +3195,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
     const previous = await stateUpdateSnapshots(transaction, scope);
     const events = new Map<string, { item: StateUpdateItem; eventDate?: string }>();
     for (const event of input.latest ?? []) events.set(event.recordId, {
-      item: { subject: event.subject, current: { ...attendanceRepetitionMetadata(event), ...stateUpdateScheduleMetadata(event), recordId: event.recordId, updatedAt: event.updatedAt,
+      item: { subject: event.subject, current: { ...attendanceRepetitionMetadata(event), captureTime:event.captureTime, ...stateUpdateScheduleMetadata(event), recordId: event.recordId, updatedAt: event.updatedAt,
         stateValues: event.stateValues ?? [], extraValues: event.extraValues, extraValuesFormat: event.extraValuesFormat } },
       eventDate: normalizeStateUpdateLogicalDate(event.date),
     });
@@ -3239,7 +3247,7 @@ async function upsertStateUpdateSnapshot(input: UpsertStateUpdateSnapshotInput):
                 !stateUpdateRemoteItemMatchesPayload(item, payload) ||
                 !await isCurrentStateUpdateOperation(transaction, pending)) continue;
             await completeStateUpdateOperationInTransaction(transaction, pending, {
-              result: "UNCHANGED", recordId: id, subjectRecordId: item.subject.id, updatedAt: current.updatedAt,
+              result: "UNCHANGED", recordId: id, subjectRecordId: item.subject.id, updatedAt: current.updatedAt, ...(current.captureTime?{captureTime:current.captureTime}:{}),
             });
             reconciledFromSnapshot = true;
           } else {
@@ -3316,7 +3324,10 @@ async function getAttendanceDailyRecords(input: StateUpdateScope & {
     input = { historyMode: "append", uniqueness: "subject-date", ...input };
     const db = await getDatabase();
     const date = normalizeStateUpdateLogicalDate(input.date);
-    return (await stateUpdateRows(db, input)).filter(row => { const v = JSON.parse(row.values_json); return v.subjectRecordId === input.subjectRecordId && normalizeStateUpdateLogicalDate(v.date) === date; }).map(row => ({
+    const prepared=await getAppViewDefinition(input.ownerKey,input.contractId,input.appViewId),view=prepared?.definition.appView;
+    const rows=(await stateUpdateRows(db, input)).filter(row => { const v = JSON.parse(row.values_json); return v.subjectRecordId === input.subjectRecordId && normalizeStateUpdateLogicalDate(v.date) === date; });
+    if(view?.type==="WORKFLOW" && view.config.workflowKey==="attendance" && view.config.captureTime) rows.sort((a,b)=>{const x=JSON.parse(a.values_json).captureTime?.value??"",y=JSON.parse(b.values_json).captureTime?.value??"";return x<y?1:x>y?-1:a.local_id.localeCompare(b.local_id);});
+    return rows.map(row => ({
         ...normalizeStateUpdateRecord(mapStateUpdateStorageRow(row)), serverRecordId: stateUpdateLogicalRemoteId(row) ?? undefined,
     }));
 }
@@ -3345,13 +3356,14 @@ async function listStateUpdateLatest(input: StateUpdateScope & { page?: number; 
       (matchingSubjects ? matchingSubjects.has(v.subjectRecordId) : (!input.search?.trim() || v.subjectDisplayName.toLowerCase().includes(input.search.trim().toLowerCase())));
   });
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-  rows.sort((a, b) => dated
+  const captureOrder=view?.type==="WORKFLOW" && view.config.workflowKey==="attendance" && !!view.config.captureTime;
+  rows.sort((a, b) => captureOrder ? compare(JSON.parse(b.values_json).captureTime?.value??"",JSON.parse(a.values_json).captureTime?.value??"") || compare(stateUpdateLogicalRemoteId(a)??a.local_id,stateUpdateLogicalRemoteId(b)??b.local_id) : dated
     ? compare(stateUpdateEventDate(b, input) ?? "", stateUpdateEventDate(a, input) ?? "") ||
       compare(stateUpdateLogicalRemoteId(a) ?? "", stateUpdateLogicalRemoteId(b) ?? "") || compare(a.local_id, b.local_id)
     : compare(b.cached_at, a.cached_at) || compare(a.local_id, b.local_id));
   return { items: rows.slice((page - 1) * pageSize, page * pageSize).map(row => {
     const record = normalizeStateUpdateRecord(mapStateUpdateStorageRow(row));
-    return { ...(record.eventOccurredAt?{eventOccurredAt:record.eventOccurredAt}:{}), ...stateUpdateScheduleMetadata(record), date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
+    return { ...(record.captureTime?{captureTime:record.captureTime as CaptureTimeRead}:{}), ...(record.eventOccurredAt?{eventOccurredAt:record.eventOccurredAt}:{}), ...stateUpdateScheduleMetadata(record), date: record.date ?? null, extraValues: record.extraValues, extraValuesFormat: record.extraValuesFormat, recordId: record.localRecordId,
       stateValues: record.stateValues.map(value => ({ ...value, label: record.syncStatus === "pending" && value.label ? `${value.label} (por sincronizar)` : value.label })),
       subject: record.subject, updatedAt: record.updatedAt ?? row.cached_at };
   }), pagination: { page, pageSize, total: rows.length, hasMore: page * pageSize < rows.length } };
@@ -3853,6 +3865,11 @@ async function completeStateUpdateOperationInTransaction(
     subjectRecordId: payload.subjectRecordId,
   };
 
+  if (payload.captureTime) {
+    assertCaptureAck(result,payload);
+    if (!result.captureTime || JSON.stringify(asCaptureCommand(result.captureTime))!==JSON.stringify(asCaptureCommand(payload.captureTime))) throw new OpcoApiError("El ACK no acredita la captura original.","CAPTURE_TIME_ACK_INCOMPATIBLE",409);
+    values.captureTime = result.captureTime; values.eventOccurredAt = result.captureTime.value ?? undefined;
+  }
   await persistStateUpdateReceipt(db, operation, result.recordId, values, result.updatedAt, true);
 }
 
@@ -3862,7 +3879,7 @@ async function persistStateUpdateReceipt(db: SQLite.SQLiteDatabase, operation: P
   const raw = await db.getFirstAsync<EntityRecordRow>("SELECT * FROM entity_records WHERE local_id=?", operation.localRecordId);
   if (!raw) throw new Error("La intencion seleccionada ya no existe.");
   const decoded = JSON.parse(raw.values_json) as OfflineStateUpdateValues;
-  if(!values.eventOccurredAt&&decoded.eventOccurredAt)values.eventOccurredAt=decoded.eventOccurredAt;
+  if(!values.captureTime && !values.eventOccurredAt&&decoded.eventOccurredAt)values.eventOccurredAt=decoded.eventOccurredAt;
   const scope = await stateUpdateV10Scope(db, { ownerKey: operation.ownerKey, contractId: operation.contractId,
     appViewId: payload.appViewId, targetEntityTypeId: operation.entityTypeId, date: payload.date,
     identity: payload.identity, dateFieldId: payload.snapshotDateFieldId, historyMode: payload.historyMode, uniqueness: payload.uniqueness });

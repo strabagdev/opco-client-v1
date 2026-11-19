@@ -1,6 +1,6 @@
 import type { PanelAppView, PanelResponse } from "./opco-api";
 
-export const PANEL_FEATURES = ["counts-v1", "difference-v1", "groups-v1", "today-v1"] as const;
+export const PANEL_FEATURES = ["capture-time-v1", "counts-v1", "difference-v1", "groups-v1", "today-v1"] as const;
 export type PanelCompatibility = { version: 1; status: "compatible" | "update-required"; required: string[]; accepted: string[]; definitionRevision: string };
 // Safelisted Accept: ASCII, no quoted/unsafe bytes, fewer than 128 bytes. Old Core ignores its parameters.
 export const PANEL_ACCEPT = `application/json;opco-panel=1;features=${PANEL_FEATURES.join(".")}`;
@@ -11,6 +11,7 @@ export class PanelCompatibilityError extends Error {
 const known = (required: readonly string[]) => required.every(feature => (PANEL_FEATURES as readonly string[]).includes(feature));
 export function requiredPanelFeatures(config: PanelAppView["config"]): string[] {
   const required = new Set<string>();
+  if(config.modules?.some(m=>m.visualization.type==="TABLE"&&m.visualization.config.columns?.some(c=>c.captureTime)))required.add("capture-time-v1");
   if (config.filters?.some(filter => filter.defaultValue?.type === "TODAY")) required.add("today-v1");
   for (const dataset of config.datasets ?? []) {
     if (dataset.groupBy) required.add("groups-v1");
@@ -43,6 +44,7 @@ export function assertPanelResponseCompatibility(panel: PanelResponse, mode: "on
     if (dataset.schema.fields.some(field => field.id.startsWith("count:"))) required.add("counts-v1");
     if (dataset.schema.fields.some(field => field.id.startsWith("difference:"))) required.add("difference-v1");
   }
+  if(panel.modules?.some(m=>m.visualization.type==="TABLE"&&m.visualization.config.columns?.some(c=>c.captureTime)))required.add("capture-time-v1");
   const ack = panel.panelCompatibility;
   if (panel.schemaVersion !== 1 || !known([...required])) throw new PanelCompatibilityError();
   if (ack && !verifiedAck(ack, panel.configRevision, [...required])) throw new PanelCompatibilityError();

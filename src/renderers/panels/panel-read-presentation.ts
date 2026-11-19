@@ -1,3 +1,4 @@
+import {presentCaptureTime} from "../../lib/capture-time";
 import type { EntityRecordValue, PanelDataset, PanelField, PanelModuleConfig } from "../../lib/opco-api";
 import type { ReadValue } from "../../components/read-field-list";
 import type { PanelTableModel } from "./panel-renderer-logic";
@@ -11,6 +12,12 @@ export function panelReadRows(module: PanelModuleConfig, dataset: PanelDataset, 
     const raw = records.get(row.id)?.values[column.fieldId];
     const policy = module.visualization.type === "TABLE"
       ? module.visualization.config.columns?.find(item => item.fieldId === column.fieldId)?.valueDisplay : undefined;
+    const captureColumn=module.visualization.type==="TABLE"?module.visualization.config.columns?.find(c=>c.fieldId===column.fieldId):undefined;
+    if(captureColumn?.captureTime){
+      const date=captureColumn.captureTime.operationalDateFieldId?records.get(row.id)?.values[captureColumn.captureTime.operationalDateFieldId]:undefined;
+      const value=presentCaptureTime(field?.captureTime?.source==="DEVICE_CONFIRMATION"?raw:null,captureColumn.captureTime.timeZone,typeof date==="string"?date:undefined);
+      return [{text:value.compact,status:raw&&field?.captureTime?"value" as const:"unavailable" as const,detail:value.detail,detailCollapsed:true}];
+    }
     return field ? panelReadValue(field, raw, row.values[index], policy === "INTERNAL_VALUE")
       : [{ text: "Dato no disponible", status: "unavailable" as const }];
   }) }));

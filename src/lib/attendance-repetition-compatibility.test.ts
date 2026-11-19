@@ -35,3 +35,9 @@ describe("Attendance command transport across Core versions",()=>{
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+describe("automatic capture compatibility boundary",()=>{
+ it.each(["ONE_PER_DAY","MULTIPLE_WITH_WARNING","MULTIPLE"] as const)("uses only the capture route for %s, preserves instant, and cannot fall back to old Core",async policy=>{
+  const calls:{path:string;body:Record<string,unknown>}[]=[];const api=createOpcoApi({apiUrl:"https://synthetic.invalid",fetcher:async(url,init)=>{calls.push({path:new URL(String(url)).pathname,body:JSON.parse(String(init?.body))});return new Response(JSON.stringify({ok:false,error:{code:"NOT_FOUND",message:"Older local Core"}}),{status:404,headers:{"Content-Type":"application/json"}});}});const request={...command(),repetitionPolicy:policy,captureTime:{version:1 as const,fieldId:"capture",timeZone:"America/Santiago"},eventOccurredAt:"2026-11-18T02:30:45.123Z"};await expect(api.saveStateUpdateWorkflow("synthetic","contract","view",request)).rejects.toMatchObject({code:"CAPTURE_TIME_UNSUPPORTED"});expect(calls).toHaveLength(1);expect(calls[0].path).toBe("/api/v1/contracts/contract/views/view/workflow/state-update/capture");expect(calls[0].body).toMatchObject({captureTime:request.captureTime,eventOccurredAt:request.eventOccurredAt});
+ });
+});

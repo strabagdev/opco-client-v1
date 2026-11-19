@@ -1,3 +1,4 @@
+import { validCaptureInstant } from "./capture-time";
 import {attendanceHistoryMode} from "./attendance-repetition";
 import {completeAttendanceDay,assertVerifiedAttendanceDayScope} from "./attendance-day-pages";
 import { attendanceStateFields } from "./attendance-offline";
@@ -9,7 +10,7 @@ export type AttendanceMonthStatus = "complete" | "partial" | "none";
 
 export type CacheAttendanceRemoteSnapshotInput = {
   appViewId: string;
-  config: Pick<AttendanceWorkflowConfig, "repetitionPolicy" | "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
+  config: Pick<AttendanceWorkflowConfig, "captureTime" | "repetitionPolicy" | "contextFieldIds" | "observationFieldId" | "statusFieldId"> & Partial<Pick<AttendanceWorkflowConfig, "personFieldId" | "dateFieldId">>;
   contractId: string;
   ownerKey: string;
   response: AttendanceResponse;
@@ -65,6 +66,10 @@ export async function cacheAttendanceRemoteSnapshot({
   store,
 }: CacheAttendanceRemoteSnapshotInput) {
   assertVerifiedAttendanceDayScope(response,{ownerKey,contractId,appViewId});
+  if (config.captureTime) {
+    const expected=config.captureTime;
+    if(!response.captureTime || response.captureTime.version!==1 || response.captureTime.fieldId!==expected.fieldId || response.captureTime.timeZone!==expected.timeZone || [...response.items.flatMap(i=>i.attendance?[i.attendance]:[]),...response.latest].some(r=>!r.captureTime || r.captureTime.version!==1 || r.captureTime.fieldId!==expected.fieldId || r.captureTime.timeZone!==expected.timeZone || (r.captureTime.value===null ? r.captureTime.source!==null : !validCaptureInstant(r.captureTime.value) || r.captureTime.source!=="DEVICE_CONFIRMATION"))) throw new Error("La respuesta no acredita la captura automática. La copia compatible se conserva sin certificar esta descarga.");
+  }
   const complete = snapshotComplete ?? isAttendanceRemoteSnapshotComplete(response);
   const refreshedAt = new Date().toISOString();
   const targetEntityTypeId = response.targetEntityType.id;

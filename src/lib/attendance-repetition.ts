@@ -1,6 +1,8 @@
+import {captureTimeMetadata,type CaptureTimeCommand,type CaptureTimeRead} from "./capture-time";
 import type { AttendanceWorkflowConfig } from "./opco-api";
 export type AttendanceRepetitionPolicy = "ONE_PER_DAY" | "MULTIPLE_WITH_WARNING" | "MULTIPLE";
 export type AttendanceRepetitionCommand = {
+    captureTime?: CaptureTimeCommand | CaptureTimeRead;
     eventOccurredAt?: string;
     repetitionPolicy?: AttendanceRepetitionPolicy;
     repetitionAcknowledged?: boolean;
@@ -15,6 +17,7 @@ export function attendanceRepetitionPolicy(config: Pick<AttendanceWorkflowConfig
 export function attendanceHistoryMode(config: Pick<AttendanceWorkflowConfig, "repetitionPolicy">): "append" | "update-current" { return attendanceRepetitionPolicy(config) === "ONE_PER_DAY" ? "update-current" : "append"; }
 export function attendanceRepetitionMetadata(value: AttendanceRepetitionCommand): AttendanceRepetitionCommand {
     return {
+        ...captureTimeMetadata(value),
         ...(value.eventOccurredAt ? { eventOccurredAt: value.eventOccurredAt } : {}),
         ...(value.repetitionPolicy !== undefined ? { repetitionPolicy: value.repetitionPolicy } : {}),
         ...(value.repetitionAcknowledged ? { repetitionAcknowledged: true } : {}),

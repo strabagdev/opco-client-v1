@@ -23,7 +23,7 @@ export function useExtraRelations(input: {
         try {
           const result = await loadStateUpdateRelationPage({ api, store, token, ownerKey, contractId, field, online, ...queries[field.id] });
           if (current) setState(previous => ({ scope, catalogs: { ...previous.catalogs, [field.id]: {
-            ...result, error: null, loading: false,
+            ...result, error: "notice" in result ? result.notice : null, loading: false,
             options: (queries[field.id]?.page ?? 1) > 1 ? [...new Map([...(previous.catalogs[field.id]?.options ?? []), ...result.options].map(option => [option.id, option])).values()] : result.options,
           } } }));
         } catch {

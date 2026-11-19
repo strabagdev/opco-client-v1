@@ -112,3 +112,5 @@ it("shows a configured subject name from the exact scoped offline source row", a
   expect(await readAttendancePresentedSubject(data,scope,record.person,config,definition)).toBe(record.person);
   expect(await readAttendancePresentedSubject(data,scope,record.person,config,{...definition,fingerprint:"incompatible"})).toBe(record.person);
 });
+
+it("keeps configured capture compact and puts seconds, provenance and full IDs behind details",async()=>{const captureTime={version:1 as const,fieldId:"capture",timeZone:"America/Santiago",value:"2026-11-04T02:30:45.123Z",source:"DEVICE_CONFIRMATION" as const};const row=await loadAttendanceRecordPresentation(store(),scope,{...record,captureTime},[]);const html=renderToStaticMarkup(<AttendanceRecordRow row={row} onEdit={vi.fn()}/>);expect(html).toContain("Hora de captura: 23:30");expect(html).not.toContain("23:30:45");expect(html).not.toContain("reloj del dispositivo");expect(html).not.toContain(">ID completo en servidor<");expect(html).toContain("Detalle técnico");});

@@ -1102,6 +1102,7 @@ export function stateUpdateRemoteItemMatchesPayload(
     return false;
   }
 
+  if(payload.captureTime && (!item.current.captureTime || item.current.captureTime.fieldId!==payload.captureTime.fieldId || item.current.captureTime.timeZone!==payload.captureTime.timeZone || (payload.eventOccurredAt!==undefined && item.current.captureTime.value!==payload.eventOccurredAt))) return false;
   const remoteStateValues = normalizeStateUpdateCurrentStateValues(item.current);
   const remoteExtraValues = item.current.extraValues ?? {};
 

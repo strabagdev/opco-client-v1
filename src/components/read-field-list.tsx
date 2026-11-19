@@ -1,8 +1,9 @@
+import {useState} from "react";
 import { type ThemeColors } from "../theme/tokens";
 import { colors } from "../theme/paint";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { FormGrid } from "./form-layout";
-export type ReadValue = { text: string; status: "value" | "empty" | "unavailable"; detail?: string };
+export type ReadValue = { text: string; status: "value" | "empty" | "unavailable"; detail?: string; detailCollapsed?: boolean };
 export type ReadField = { key: string; label: string; fullWidth: boolean; values: ReadValue[] };
 
 /** Read-only cells. Callers own field eligibility, labels, data, navigation and coverage. */
@@ -11,7 +12,7 @@ export function ReadFieldList({ fields, compact = false }: { fields: ReadField[]
     <Text style={s.label}>{field.label}</Text>
     {field.values.map((value, index) => <View key={index} style={s.valueGroup}>
       <Text selectable style={[s.value, compact && s.compactValue, value.status !== "value" && s.unavailable]}>{value.text}</Text>
-      {value.detail ? <Text selectable style={s.detail}>{value.detail}</Text> : null}
+      {value.detail ? value.detailCollapsed ? <ReadValueDetail detail={value.detail} collapsed/> : <Text selectable style={s.detail}>{value.detail}</Text> : null}
     </View>)}
   </View>;
   return compact ? <View style={s.compact}>{fields.map(field => <View key={field.key} style={[s.compactField, field.fullWidth && s.full]}>{cell(field)}</View>)}</View>
@@ -34,3 +35,8 @@ export function createReadFieldS(p: ThemeColors = colors) {
 });
 }
 const s = createReadFieldS();
+
+export function ReadValueDetail({detail,collapsed=false}:{detail:string;collapsed?:boolean}) {
+  const[open,setOpen]=useState(!collapsed);
+  return <View>{collapsed?<Pressable accessibilityRole="button" accessibilityState={{expanded:open}} onPress={()=>setOpen(!open)} style={{minHeight:44,justifyContent:"center"}}><Text style={s.detail}>{open?"Ocultar detalle de captura":"Ver detalle de captura"}</Text></Pressable>:null}{open?<Text selectable style={s.detail}>{detail}</Text>:null}</View>;
+}

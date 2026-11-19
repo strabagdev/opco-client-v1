@@ -112,6 +112,7 @@ async function runSync({
       if(cachedConfig && (cachedConfig.workflowKey??cachedConfig.workflow)==="attendance" && attendanceRepetitionPolicy(cachedConfig)!==(payload.repetitionPolicy??"ONE_PER_DAY")) {
         throw new OpcoApiError("La política preparada cambió desde esta captura. Revisa la intención conservada; no se reinterpretó.","ATTENDANCE_POLICY_CHANGED",409);
       }
+      if (cachedConfig?.captureTime && (!payload.captureTime || payload.captureTime.fieldId!==cachedConfig.captureTime.fieldId || payload.captureTime.timeZone!==cachedConfig.captureTime.timeZone)) throw new OpcoApiError("El pendiente anterior requiere revisión de captura; no se inventó una hora ni se modificó la intención.","CAPTURE_TIME_REVIEW_REQUIRED",409);
       if(payload.repetitionPolicy&&payload.repetitionPolicy!=="ONE_PER_DAY"){
         const key=JSON.stringify([operation.contractId,payload.appViewId,payload.date,payload.repetitionPolicy]);
         let compatible=repetitionChecks.get(key);
@@ -274,6 +275,7 @@ async function completeOperationIfRemoteStateMatches({
       result: "UNCHANGED",
       subjectRecordId: payload.subjectRecordId,
       updatedAt: item.current.updatedAt,
+      ...(item.current.captureTime?{captureTime:item.current.captureTime}:{}),
     });
 
     return true;

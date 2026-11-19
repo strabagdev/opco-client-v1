@@ -95,6 +95,7 @@ export function stateUpdateItemToAttendanceItem(
   return {
     attendance: item.current
       ? {
+          ...(item.current.captureTime ? {captureTime:item.current.captureTime}:{}),
           ...(item.current.eventOccurredAt ? {eventOccurredAt:item.current.eventOccurredAt} : {}),
           observation: readObservation(item.current.extraValues, observationFieldId),
           contextValues: readContextValues(item.current.extraValues, observationFieldId, contextFields),
@@ -117,6 +118,7 @@ export function stateUpdateLatestToAttendanceLatest(
 
   return {
     attendanceRecordId: item.recordId,
+    ...(item.captureTime?{captureTime:item.captureTime}:{}),
     ...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),
     ...(item.extraValues ? { contextValues: readContextValues(item.extraValues, undefined, contextFields) } : {}),
     person: item.subject,

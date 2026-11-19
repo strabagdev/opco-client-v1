@@ -3886,3 +3886,25 @@ Sin migraciones ni activación de experiencias. Contrato, límites y operación:
 ## Attendance repetition compatibility review — 2026-11-17
 
 Repeat intents use the dedicated workflow/state-update/repetition command address, delegating to the common engine. No fallback to legacy POST is allowed on 404/405, including a Core rollback after the compatibility GET. Legacy/default intents retain their request route/body; explicit ONE is semantically identical to an omitted policy. Before sync, a known cached Attendance policy mismatch retains the pending command/base/key with an explicit review error. No schema, outbox, namespace or synchronization scheduler change is introduced. See ATTENDANCE_REPETITION.md for upgrade and compatible rollback limits.
+
+## Attendance: captura automática opcional (candidato local 2026-11-18)
+
+`captureTime:{fieldId,timeZone}` es opcional; su ausencia conserva el flujo anterior. El campo de negocio DATE sigue siendo sólo el día operativo. El contrato de Core debe confirmar exactamente la versión 1, el DATETIME y la zona IANA antes de permitir nuevas altas con captura.
+
+Se reutilizan eventOccurredAt y el outbox STATE_UPDATE existentes. El alta de cualquier política se persiste antes de enviar; un único instante UTC de la confirmación definitiva sobrevive a reintentos, ACK perdido, reapertura y edición. La advertencia no persiste nada hasta confirmar el registro adicional; cancelar no crea intención. La ruta /state-update/capture falla cerrada contra Core antiguo, sin reenviar por rutas legacy. ACKs sin evidencia compatible no eliminan el pendiente. Ediciones conservan la captura original y los históricos null siguen null, incluido UNCHANGED.
+
+Si la opción se habilita con pendientes antiguos sin captura o de otra configuración, se conservan la clave/id/datos y se marcan para revisión explícita, sin envío ni hora fabricada. No hay reparación ni conversión automática. Una copia remota sin el contrato/cobertura de captura no se acredita como completa; se conserva la copia compatible.
+
+Attendance presenta “Hora de captura: HH:mm” y añade la fecha si difiere del DATE operativo. El detalle técnico cerrado contiene segundos, IANA, desplazamiento UTC, ISO original y “Captura del reloj del dispositivo”. Nunca se presenta como hora garantizada del hecho real ni como creación en servidor. Ausencia: “Hora de captura no disponible”. La zona procede de la definición; el motor no fija America/Santiago. Sincronización, identidad, permisos, estados y contextos no cambian.
+
+PANEL permite la proyección compacta en una columna DATETIME configurada por Core, con detalles desplegables. El ordenamiento es el existente sobre el campo DATETIME; no se cambia el formateador de REPORT/MATRIX. La capacidad capture-time-v1 evita interpretación parcial por consumidores anteriores. Sin migraciones locales, cambios de namespace o nuevas colas.
+
+## Cierre de contextos preparados Attendance — 18-11-2026 (local)
+
+La disponibilidad de red del navegador no acredita que Core sea accesible. Attendance hidrata primero la definición local del scope (estados, contextos y contrato de captura) y el día disponible; después conserva su revalidación remota habitual. Un fallo de transporte mantiene la copia local y muestra que su vigencia remota no está verificada. Un 401/403 no concede autorización offline ni habilita captura con metadata incompleta. El comportamiento era previo al DATETIME automático.
+
+Si falla la lectura del día local, se muestra el error y no se da por lista la copia: disponer de metadata no acredita una lectura de contenido fallida. Se conservan los pendientes sin intentar repararlos ni borrarlos.
+
+El lector compartido de catálogos RELATION usa la caché existente, siempre owner+contrato+destino, únicamente ante OpcoNetworkError o Offline explícito. No en 401/403/500, errores de programación o errores de persistencia. No emite recibos ni declara completo un catálogo por leer una página. Sin opciones locales muestra el motivo, mantiene el campo obligatorio y no elige la primera opción. Una selección no acreditada por las opciones disponibles bloquea búsqueda/confirmación sin borrar su ID, los borradores, pendientes ni conflictos. Una selección anterior acreditada se conserva por el mecanismo existente; los registros seleccionados para edición mantienen sus valores. No se alteran comandos, políticas, timestamps, schema, outbox ni scheduler de sincronización.
+
+Regresión RED en base y candidato anterior: al arrancar con navigator online y Core inaccesible no se leía la definición local; con navigator offline sí. GREEN: preparación online, cierre de proceso, apertura offline, elección explícita, cancelación sin intención, alta y segunda reapertura con el mismo eventOccurredAt/clientRequestId/ID/contexto, y posterior ACK sin duplicados en Chromium/OPFS+Core/PostgreSQL aislados. El caso sin opciones usa exclusivamente una copia lateral sintética y comprueba el pendiente idéntico. Evidencia y controles de los vencimientos: backups/attendance-capture-blockers/2026-11-18/. Safari/native pendientes.

@@ -255,6 +255,7 @@ export function attendanceResponseToStateUpdateItems(
               config.observationFieldId,
               item.attendance.observation,
             ),
+            ...(item.attendance.captureTime?{captureTime:item.attendance.captureTime}:{}),
             ...(item.attendance.eventOccurredAt?{eventOccurredAt:item.attendance.eventOccurredAt}:{}),
             recordId: item.attendance.recordId,
             stateValues: [{
@@ -276,7 +277,8 @@ export function attendanceResponseToStateUpdateItems(
     items.set(item.person.id, {
       current: {
         extraValues,
-        ...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),
+        ...(item.captureTime?{captureTime:item.captureTime}:{}),
+    ...(item.eventOccurredAt?{eventOccurredAt:item.eventOccurredAt}:{}),
         recordId: item.attendanceRecordId,
         stateValues: [{
           fieldId: config.statusFieldId,
@@ -327,6 +329,7 @@ export function sanitizeAttendanceContextSelections(
 export function attendanceContextValidationErrors(
   fields: AttendanceContextField[],
   values: Record<string, string | null | undefined>,
+  catalogs?: Record<string, { options: { id: string }[]; loading?: boolean; error?: string | null; offline?: boolean } | undefined>,
 ) {
   const errors: { fieldId: string; message: string }[] = [];
 
@@ -344,6 +347,12 @@ export function attendanceContextValidationErrors(
 
     if (field.type === "RELATION") {
       if (!getRelationTargetEntityTypeId(attendanceRelationField(field)) || isRelationFieldMultiple(attendanceRelationField(field))) errors.push({ fieldId: field.id, message: `${field.name} no tiene un catálogo simple disponible. Actualiza la definición con conexión.` });
+      const catalog = catalogs?.[field.id];
+      if (catalogs && (!catalog || catalog.loading)) {
+        errors.push({ fieldId: field.id, message: `Espera a que se carguen las opciones de ${field.name}.` });
+      } else if (catalogs && (catalog?.error && !catalog.offline || !catalog?.options.some(option => option.id === optionId))) {
+        errors.push({ fieldId: field.id, message: catalog?.error ?? `La selección de ${field.name} no está disponible en el catálogo guardado. Conéctate para cargar sus opciones o elige una disponible.` });
+      }
       continue;
     }
     const option = field.options.find((item) => item.optionId === optionId || item.value === optionId);

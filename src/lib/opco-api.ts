@@ -1,3 +1,4 @@
+import {asCaptureCommand,type CaptureTimeConfig,type CaptureTimeCommand,type CaptureTimeRead} from "./capture-time";
 import { PANEL_ACCEPT, assertPanelResponseCompatibility, type PanelCompatibility } from "./panel-compatibility";
 import type {AttendanceRepetitionCommand, AttendanceRepetitionPolicy} from "./attendance-repetition";
 import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "./attendance-repetition";
@@ -163,6 +164,7 @@ export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
 
 export type AttendanceWorkflowConfig = {
+  captureTime?: CaptureTimeConfig;
   repetitionPolicy?: AttendanceRepetitionPolicy;
   workflowWritePolicy?: unknown;
   subjectPresentation?: SubjectPresentationConfig;
@@ -295,6 +297,7 @@ export type PanelDatasetConfig = {
 export type PanelTableConfig = {
   columns: {
     fieldId: string;
+    captureTime?: {timeZone:string;operationalDateFieldId?:string};
     format?: string;
     label?: string;
     valueDisplay?: ReportSelectValueDisplay;
@@ -504,6 +507,7 @@ export type PanelQuery = {
 };
 
 export type PanelField = {
+  captureTime?: {source:"DEVICE_CONFIRMATION"};
   emptyLabel?: string;
   id: string;
   name: string;
@@ -643,6 +647,7 @@ export type AttendanceContextValues = Record<string, { label: string; optionId: 
 export type AttendanceItem = {
   dailyRecordCount?: number;
   attendance: {
+    captureTime?: CaptureTimeRead;
     eventOccurredAt?: string;
     contextValues?: AttendanceContextValues;
     observation: string | null;
@@ -659,6 +664,7 @@ export type AttendanceItem = {
 };
 
 export type AttendanceLatestItem = {
+  captureTime?: CaptureTimeRead;
   eventOccurredAt?: string;
   attendanceRecordId: string;
   observation?: string | null;
@@ -674,6 +680,7 @@ export type AttendanceLatestItem = {
 };
 
 export type AttendanceResponse = {
+  captureTime?: CaptureTimeCommand;
   repetitionPolicy?: AttendanceRepetitionPolicy;
   dailyRecords?: AttendanceItem[];
   daySnapshotCapabilities?: {version:1;maxPageSize:number};
@@ -832,6 +839,7 @@ export type StateUpdateConflictExtraValue = {
 };
 
 export type StateUpdateCurrent = StateUpdateScheduleMetadata & {
+  captureTime?: CaptureTimeRead;
   eventOccurredAt?:string;
   // Local read model only: an unsent scheduled intention can have no remote base.
   localExpectedUpdatedAt?: string | null;
@@ -849,6 +857,7 @@ export type StateUpdateItem = {
 };
 
 export type StateUpdateLatestItem = StateUpdateScheduleMetadata & {
+  captureTime?: CaptureTimeRead;
   eventOccurredAt?:string;
   extraValuesFormat?: "field-value";
   date?: string | null;
@@ -881,6 +890,7 @@ export type StateUpdateCurrentBatch = { version: 1; requestedSubjectIds: string[
   results: { subjectRecordId: string; status: "resolved" | "error"; code?: string }[] };
 
 export type StateUpdateResponse = {
+  captureTime?: CaptureTimeCommand;
   repetitionPolicy?: AttendanceRepetitionPolicy;
   workflowWriteContract?: WorkflowWriteContract | null;
   currentBatchCapabilities?: StateUpdateCurrentBatchCapabilities;
@@ -1022,7 +1032,7 @@ export type StateUpdateBatchResult = (
       message: string;
       result: "ERROR";
       subjectRecordId: string;
-    }) & {writeCommand?:WorkflowWriteCommand};
+    }) & {writeCommand?:WorkflowWriteCommand;captureTime?:CaptureTimeRead};
 
 export type StateUpdateBatchResponse = {
   identity?: CompositeStateIdentity;
@@ -1924,11 +1934,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       let policy;
       try { policy=attendanceRepetitionPolicy({repetitionPolicy:submitted.repetitionPolicy}); }
       catch { throw new OpcoApiError("La política del comando no es compatible. La intención se conserva.","ATTENDANCE_POLICY_UNVERIFIED",409); }
-      if(policy==="ONE_PER_DAY" && (submitted.targetRecordId!==undefined || submitted.eventOccurredAt!==undefined || submitted.repetitionAcknowledged!==undefined)) {
+      if(policy==="ONE_PER_DAY" && (submitted.targetRecordId!==undefined || (submitted.eventOccurredAt!==undefined && !submitted.captureTime) || submitted.repetitionAcknowledged!==undefined)) {
         throw new OpcoApiError("El comando conserva metadata de repetición sin una política compatible. Revisa la intención.","ATTENDANCE_POLICY_UNVERIFIED",409);
       }
       // Old Core has no handler for this path: even a rollback after the compatibility GET cannot run its update-current engine.
-      const commandPath=policy==="ONE_PER_DAY" ? "" : "/repetition";
+      const commandPath=submitted.captureTime ? "/capture" : policy==="ONE_PER_DAY" ? "" : "/repetition";
       return authenticatedRequest<StateUpdateApiResponse>(
         `/api/v1/contracts/${encodeURIComponent(contractId)}/views/${encodeURIComponent(appViewId)}/workflow/state-update${commandPath}`,
         token,
@@ -1939,6 +1949,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           method: "POST",
         },
       ).then(response => normalizeStateUpdateBatchResponse(response, submitted)).catch(error=>{
+        if(submitted.captureTime && error instanceof OpcoApiError && (error.status===404||error.status===405)) throw new OpcoApiError("Este servidor no admite la captura automática. La intención se conserva sin reenviarla a un endpoint antiguo.","CAPTURE_TIME_UNSUPPORTED",error.status);
         if(commandPath && error instanceof OpcoApiError && (error.status===404||error.status===405)) {
           throw new OpcoApiError("El servidor o la experiencia no admiten este comando de repetición. Actualiza y revisa la intención conservada.","ATTENDANCE_POLICY_UNVERIFIED",error.status);
         }
@@ -2289,6 +2300,7 @@ function serializeStateUpdateRequest(input: StateUpdateRequest) {
     ...workflowWriteMetadata(input),
     ...stateUpdateScheduleRequest(input),
     ...(input.identity ? { identity: input.identity } : {}),
+    ...(input.captureTime ? {captureTime:asCaptureCommand(input.captureTime)} : {}),
     clientRequestId: input.clientRequestId,
     date: input.date,
     expectedUpdatedAt: input.expectedUpdatedAt,

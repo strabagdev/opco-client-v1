@@ -1,3 +1,4 @@
+import { OpcoApiError, OpcoNetworkError } from "./opco-api";
 import { describe, expect, it, vi } from "vitest";
 import { loadStateUpdateRelationPage, relationValueLabels } from "./state-update-relations";
 import type { EntityField } from "./opco-api";
@@ -31,4 +32,8 @@ describe("STATE_UPDATE authorized relation catalog", () => {
     expect(params.store.listCachedRecords).not.toHaveBeenCalled();
     expect(relationValueLabels([{ id: "remote", displayName: "Patio" }, "unknown"])).toEqual([{ id: "remote", displayName: "Patio" }]);
   });
+  it("uses only same-owner/contract catalog data when the network is present but Core is unreachable",async()=>{const x=input();x.api.getEntityRecords.mockRejectedValue(new OpcoNetworkError());const r=await loadStateUpdateRelationPage(x);expect(r).toMatchObject({offline:true,options:[{id:"remote"}]});expect(x.store.listCachedRecords).toHaveBeenCalledWith(expect.objectContaining({ownerKey:"org:user",contractId:"contract",entityTypeId:"places"}));expect(x.store.upsertRemoteRecords).not.toHaveBeenCalled();});
+  it("reports an empty local catalog without creating or selecting a record",async()=>{const x=input();x.api.getEntityRecords.mockRejectedValue(new OpcoNetworkError());x.store.listCachedRecords.mockResolvedValue({records:[],pagination:{page:1,totalPages:1}});const r=await loadStateUpdateRelationPage(x);expect(r.options).toEqual([]);expect(r).toMatchObject({offline:true,notice:expect.stringContaining("No hay opciones guardadas")});expect(x.store.upsertRemoteRecords).not.toHaveBeenCalled();});
+  it.each([401,403,500])("does not hide HTTP %s with an offline permission fallback",async status=>{const x=input();x.api.getEntityRecords.mockRejectedValue(new OpcoApiError("Rechazado","HTTP_ERROR",status));await expect(loadStateUpdateRelationPage(x)).rejects.toMatchObject({status});expect(x.store.listCachedRecords).not.toHaveBeenCalled();});
+
 });
