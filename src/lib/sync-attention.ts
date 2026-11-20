@@ -40,7 +40,8 @@ export function buildSyncAttentionProblems(rows: AttentionRow[], definitions: Ap
     const supportedWorkflow = view?.type === "WORKFLOW" && ["attendance", "state-update"].includes(String(view.config.workflowKey));
     const href: SyncAttentionProblem["href"] = Boolean(row.values_json) && view && (!workflow || supportedWorkflow && (date || view.config.workflowKey === "state-update" && !view.config.dateFieldId))
       ? workflow
-        ? { pathname: "/view/[appViewId]", params: { appViewId: view.id, attentionRecordId: row.local_id, ...(date ? { attentionDate: date } : {}) } }
+        ? { pathname: "/view/[appViewId]", params: { appViewId: view.id, attentionRecordId: row.local_id, ...(date ? { attentionDate: date } : {}),
+            ...(view.type === "WORKFLOW" && view.config.workflowKey === "attendance" && state !== "conflict" ? { attentionMode: "read" } : {}) } }
         : state === "conflict"
           ? { pathname: "/view/[appViewId]/record/[recordId]/conflict", params: { appViewId: view.id, recordId: row.local_id } }
           : state === "pending"

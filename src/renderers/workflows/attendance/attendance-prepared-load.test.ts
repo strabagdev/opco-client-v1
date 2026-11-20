@@ -40,3 +40,45 @@ describe('required relation never picks a substitute when a local catalog is abs
  it('does not choose the first cached option and preserves required validation',()=>{const values={reference:null};expect(attendanceContextValidationErrors([relation as never],values,{reference:{options:[{id:'available'}],offline:true}})).toEqual([{fieldId:'reference',message:'Referencia configurable es obligatorio.'}]);expect(values.reference).toBeNull();});
  it('accepts an explicitly selected persisted option, keeps SELECT semantics and waits during loading',()=>{expect(attendanceContextValidationErrors([relation as never],{reference:'chosen'},{reference:{options:[{id:'chosen'}],offline:true}})).toEqual([]);expect(attendanceContextValidationErrors([relation as never],{reference:'chosen'},{reference:{options:[],loading:true}})[0].message).toContain('Espera');});
 });
+
+it('still reads already persisted records when offline context metadata is incomplete, without allowing a write',async()=>{
+ const c={...fixture(),connectivityStatus:'offline'};c.definition.extraFields=[];
+ await actualLoad(c)();
+ expect(c.refreshLocalDayState).toHaveBeenCalledTimes(1);
+ expect(c.setError).toHaveBeenLastCalledWith(expect.stringContaining('campos de contexto'));
+ expect(c.definitionCache.saveStateUpdateLocally).not.toHaveBeenCalled();
+});
+it('keeps the record read independent from a failed metadata read',async()=>{
+ const c={...fixture(),connectivityStatus:'offline'};
+ c.definitionCache.getAppViewDefinition.mockRejectedValue(new OpcoNetworkError('Metadata unavailable'));
+ await actualLoad(c)();expect(c.refreshLocalDayState).toHaveBeenCalledTimes(1);
+ expect(c.setError).toHaveBeenCalledWith('Metadata unavailable');expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
+ expect(c.definitionCache.saveStateUpdateLocally).not.toHaveBeenCalled();
+});
+
+it('reports a read failure in the existing communication notice even when pending readiness suppresses inline feedback',async()=>{
+ const {resolveStateUpdateOperationFeedback}=await import('../state-update/state-update-operation-feedback');
+ const message='La definición guardada no incluye todos los campos de contexto.';
+ const feedback=resolveStateUpdateOperationFeedback({connectivityStatus:'online',pendingCount:1,visibleError:message,lastActivity:{type:'ready_check',result:'ready_failed'}});
+ expect(feedback.message).not.toBe(message);
+ let notice:ts.Expression|undefined;
+ const visit=(n:ts.Node)=>{if(ts.isCallExpression(n)&&n.expression.getText(source)==='useExperienceActivityReporter'){
+  const report=n.arguments[1];if(report&&ts.isObjectLiteralExpression(report)){const field=report.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(source)==='notice');if(field&&ts.isPropertyAssignment(field))notice=field.initializer;}
+ }ts.forEachChild(n,visit);};visit(source);if(!notice)throw Error('Missing actual communication notice');
+ const evaluate=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`return ${notice.getText(source)};`);
+ const read=(temporalNotice:string|null,visibleError:string|null)=>evaluate(temporalNotice,visibleError,null,'online',true,[],()=>null);
+ expect(read(null,message)).toBe(message);expect(read('Aviso temporal',message)).toContain(message);expect(read(null,null)).toBeNull();
+});
+
+it('uses the same communication sector for a failed refresh or uncertified offline coverage',()=>{
+ let notice:ts.Expression|undefined;
+ const visit=(n:ts.Node)=>{if(ts.isCallExpression(n)&&n.expression.getText(source)==='useExperienceActivityReporter'){
+  const report=n.arguments[1];if(report&&ts.isObjectLiteralExpression(report)){const field=report.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(source)==='notice');if(field&&ts.isPropertyAssignment(field))notice=field.initializer;}
+ }ts.forEachChild(n,visit);};visit(source);if(!notice)throw Error('Missing actual communication notice');
+ const read=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`return ${notice.getText(source)};`);
+ const coverage=vi.fn(()=> 'Sólo registros disponibles; cobertura no acreditada.');
+ expect(read(null,null,'No se pudo actualizar; copia guardada.','offline',true,[],coverage)).toBe('No se pudo actualizar; copia guardada.');
+ expect(read(null,null,null,'offline',false,[],coverage)).toBe('Sólo registros disponibles; cobertura no acreditada.');
+ expect(read(null,'Motivo preciso','Otro aviso','offline',false,[],coverage)).toBe('Motivo preciso');
+ expect(read(null,null,null,'online',false,[],coverage)).toBeNull();
+});

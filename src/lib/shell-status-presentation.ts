@@ -48,6 +48,7 @@ export function resolveShellOperationalStatus(input: AppShellFeedbackInput & {
 
   // Reads/preparation are separate from sending pending changes. Keep their notices visible.
   const notice = input.localStorageRecoveryNotice ? "Revisar datos locales"
+    : input.experienceActivity?.notice ? input.experienceActivity.notice
     : input.experienceActivity?.errorCode ? "No se pudo actualizar la experiencia"
       : input.offlinePreparationDiagnosticWriteFailed ? "Diagnóstico de preparación sin guardar"
         : input.offlinePreparationRecoveryFailed ? "No se pudo recuperar la preparación offline"

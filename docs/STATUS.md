@@ -3944,3 +3944,66 @@ Definición Attendance opcional, DATE automático/manual, franjas SELECT sin sus
 PANEL vinculado: [OPERATIONAL_CALENDAR.md](./OPERATIONAL_CALENDAR.md). Transporte único
 eventOccurredAt y ruta versionada; pendientes conservados. Sin migración, publicación ni
 configuración productiva. Activación captureTime sigue pendiente.
+
+## Attendance: Revisar cambio de sólo lectura — 19-11-2026, local sin publicar
+
+Parche independiente sobre Client `77391f72406abac83429cd26337f394d77a4d2af`:
+la navegación de pendientes/fallidos abre su identidad local exacta y muestra captura, DATE,
+estado/contextos y sincronización sin montar el formulario de alta. Se preservan rutas de
+conflicto y consumidores STATE_UPDATE/RECORDS. Diagnóstico local optativo contrasta fila,
+operación activa, lectores por sujeto/día, página reciente e historial de lecturas en memoria.
+Mensajes por el canal único existente; sin nuevos guardados, reintentos o descartes.
+
+Contrato y límites en la sección «Attendance: revisión exacta del pendiente y diagnóstico local»
+de STATE_UPDATE.md. La omisión del grupo en el dispositivo real continúa pendiente de diagnóstico:
+no se da por resuelta con el laboratorio. Misceláneos y su transición permanecen sin cambios.
+Sin Core, producción, commit, push o deploy. Índices habituales y pendientes ajenos preservados.
+
+
+## Attendance: visibilidad local y grupo diario — 20-11-2026 (sin publicar)
+
+La lista agrupada lee toda la colección local de la fecha seleccionada mediante el lector
+existente, en lugar de su página predeterminada de 20. El SQL ya reunía las filas antes del
+corte en memoria; no se cambia su scope, filtros, reconciliación, persistencia ni outbox.
+La reproducción SQLite acredita una alta antigua fuera de la primera página y conservada
+tras reabrir; no demuestra que ésa sea la causa del dispositivo del usuario, con dos filas
+visibles. La agrupación sigue por ID de sujeto y la deduplicación por identidad/alias, nunca
+por igualdad de fecha, hora, estado o contextos.
+
+La lectura del día es independiente del éxito de la metadata. Una definición/contexto
+incompleto no oculta filas locales existentes ni concede permiso para buscar/confirmar:
+se mantiene el motivo en el canal único, la obligatoriedad y el pendiente original. Tener
+filas disponibles permite mostrarlas; no certifica cobertura remota ni marca hidratación.
+El resumen y los grupos distinguen registros disponibles de una preparación completa.
+Los errores de lectura/presentación de las listas se comunican en el sector único existente.
+
+El diagnóstico de sólo lectura distingue ahora `dayListing` (colección local usada en el
+grupo), `recent` (primera página de 20), `daily`/`personSelection` y las etapas de presentación,
+incluido el detalle expandido. No exporta las identidades de otras personas desde dayListing.
+Un ACK durante la inspección mantiene la advertencia de comparación no atómica.
+
+No se recupera, reconstruye, sustituye ni modifica el pendiente real: fila y outbox ya estaban
+acreditados. La omisión de su grupo sigue sin causa demostrada hasta contar con evidencia del
+runtime afectado. El lector exacto de «Revisar cambio» conserva el lote local independiente.
+Actualizar el dispositivo requiere reconexión y puede disparar sincronización automática,
+cambiando el estado de la operación y la evidencia antes de consultarla. No hay pausa soportada
+ni garantía de que siga pending. El respaldo del perfil de Chrome está cancelado; no reanudar,
+limpiar, restaurar ni alterar el original o las copias parciales.
+
+Misceláneos y su transición siguen pendientes. Sin Core, producción, commit, push o deploy.
+Safari/native no acreditados. La suite completa anterior tenía un timeout reproducido en base;
+las pruebas nuevas se registran por separado y no convierten esa ejecución anterior en verde.
+
+La prueba de metadata incompleta con pendientes mostró un motivo oculto por el feedback de
+readiness. Los errores visibles de Attendance se entregan ahora al notice del sector único,
+conservando su texto y el aviso temporal; no se repite ese mismo error en el feedback inline.
+No se cambia la clasificación de sync ni se presupone pérdida de la operación.
+
+El motivo llegaba al snapshot de actividad pero la proyección de la cabecera no consumía
+notice. Se conecta ese campo existente, sin crear canales ni alterar conexión/sync. Se conserva
+la prioridad de atención de almacenamiento; el ensayo y una regresión específica acreditan
+la propagación del aviso. Este punto no explica por sí mismo la omisión del grupo real.
+
+El aviso de actualización fallida y el alcance offline sin cobertura se presentan también en
+el mismo notice, en lugar de repetirlos bajo el resumen del día. Se prioriza el motivo preciso
+y se conserva el alcance local disponible; las acciones y los estados de sync no cambian.

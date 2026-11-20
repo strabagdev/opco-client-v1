@@ -127,3 +127,11 @@ describe("independent connection and pending-write presentation", () => {
     expect(JSON.stringify(sequence)).toBe(original);
   });
 });
+
+it('relays the existing experience notice to the single visible status sector without changing connection or pending counts',()=>{
+ const notice='La definición guardada no incluye todos los campos de contexto.';
+ const input=baseInput({connectivityStatus:'offline',pendingCount:1,experienceActivity:{notice,errorCode:null,activeRuns:[]} as never});
+ const result=resolveShellOperationalStatus(input);
+ expect(result.notice).toBe(notice);expect(result.connection.kind).toBe('offline');expect(result.sync.label).toBe('1 pendiente');
+ expect(resolveShellOperationalStatus({...input,localStorageRecoveryNotice:'Local storage requires attention'}).notice).toBe('Revisar datos locales');
+});

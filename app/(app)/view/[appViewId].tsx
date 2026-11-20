@@ -9,10 +9,13 @@ import { ExperienceOpeningProvider, monotonicNow } from "@/renderers/experience-
 import { renderAppView } from "@/renderers/registry";
 import { useAppView } from "@/renderers/use-app-view";
 import { useExperienceBootstrapActivity } from "@/renderers/use-experience-activity";
+import { AttendanceLocalRecordScreen } from "@/renderers/workflows/attendance/AttendanceLocalRecordScreen";
 
 export default function AppViewScreen() {
   const [routeStartedAt] = useState(monotonicNow);
-  const { appViewId } = useLocalSearchParams<{ appViewId: string }>();
+  const { appViewId, attentionMode, attentionRecordId, attentionDate } = useLocalSearchParams<{
+    appViewId: string; attentionMode?: string; attentionRecordId?: string; attentionDate?: string;
+  }>();
   const { appView, error, isLoading, retry } = useAppView(appViewId);
   useExperienceBootstrapActivity(appViewId, {
     enabled: !appView,
@@ -39,7 +42,13 @@ export default function AppViewScreen() {
     );
   }
 
-  return <ExperienceOpeningProvider routeStartedAt={routeStartedAt}>{renderAppView(appView)}</ExperienceOpeningProvider>;
+  return <ExperienceOpeningProvider routeStartedAt={routeStartedAt}>{
+    appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance" && attentionMode === "read"
+      ? <AttendanceLocalRecordScreen appView={appView as Parameters<typeof AttendanceLocalRecordScreen>[0]["appView"]}
+          recordId={typeof attentionRecordId === "string" ? attentionRecordId : ""}
+          requestedDate={typeof attentionDate === "string" ? attentionDate : undefined} />
+      : renderAppView(appView)
+  }</ExperienceOpeningProvider>;
 }
 
 const styles = StyleSheet.create({

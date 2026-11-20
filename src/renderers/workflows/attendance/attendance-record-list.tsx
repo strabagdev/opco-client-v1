@@ -4,6 +4,7 @@ import { FormAction } from "../../../components/form-actions";
 import { SubjectIdentity } from "../../../components/subject-identity";
 import type { SubjectPresentationDefinition } from "../../../lib/subject-presentation";
 import { actionSurface } from "../../../theme/operational-presentation";
+import { recordAttendanceLocalRead } from "./attendance-local-read-trace";
 import { ReadFieldList } from "../../../components/read-field-list";
 import type { AttendanceContextField } from "../../../lib/opco-api";
 import { colors as p } from "../../../theme/paint";
@@ -32,13 +33,14 @@ export async function copyAttendanceReference(id: string) {
 
 export type AttendanceGroupRead = { records: AttendanceReadRecord[]; complete: boolean };
 export function AttendanceRecordList({ records, fields, statuses = [], scope, store, selectedRecordId, onEdit,
-  grouped = false, totalCount, onLoadGroup, subjectConfig, subjectDefinition }: {
+  grouped = false, totalCount, onLoadGroup, subjectConfig, subjectDefinition, onReadError }: {
   records: AttendanceReadRecord[]; fields: AttendanceContextField[]; statuses?: {optionId: string; label: string}[];
   scope: AttendancePresentationScope | null; store: AttendancePresentationStore;
   selectedRecordId?: string; onEdit?(record: AttendanceReadRecord): void;
   grouped?: boolean; totalCount?: number;
   onLoadGroup?(subjectId: string): Promise<AttendanceGroupRead>;
   subjectConfig?: unknown; subjectDefinition?: SubjectPresentationDefinition;
+  onReadError?(message: string): void;
 }) {
   const key = JSON.stringify([scope, records, fields, statuses, subjectConfig, subjectDefinition]);
   const [state, setState] = useState<{ key: string; rows: AttendanceRecordPresentation[]; error?: string }>();
@@ -54,10 +56,18 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
     };
     void Promise.all(capturedRecords.map(async record => loadAttendanceRecordPresentation(reader, capturedScope,
       {...record, person: await readAttendancePresentedSubject(reader, capturedScope, record.person, capturedConfig ?? undefined, capturedDefinition)}, capturedFields, capturedStatuses)))
-      .then(rows => { if (active) setState({ key, rows: distinctAttendancePresentations(rows) }); })
-      .catch(() => { if (active) setState({ key, rows: [], error: "No pudimos leer las referencias y etiquetas locales. Conserva los datos y vuelve a abrir la experiencia." }); });
+      .then(rows => { if (active) {
+        const distinct = distinctAttendancePresentations(rows);
+        recordAttendanceLocalRead(capturedScope, grouped ? "grouped-list/presented" : "person-list/presented", distinct.flatMap(row => [row.record.recordId, row.reference, ...(row.serverId ? [row.serverId] : [])]), true, distinct.length);
+        setState({ key, rows: distinct });
+      } })
+      .catch(() => { if (active) {
+        const error = "No pudimos leer las referencias y etiquetas locales. Los cambios siguen guardados; consulta Revisar cambio para leer su identidad exacta.";
+        setState({ key, rows: [], error });
+        onReadError?.(error);
+      } });
     return () => { active = false; };
-  }, [key, store]);
+  }, [key, store, grouped, onReadError]);
   const current = state?.key === key ? state : undefined;
   if (records.length === 0) return null;
   const rowProps = (row: AttendanceRecordPresentation) => ({ row,
@@ -65,22 +75,23 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
     onEdit: onEdit ? () => onEdit(row.record) : undefined });
   return <View style={s.list}>
     {!current ? <Text accessibilityLiveRegion="polite" style={s.hint}>Leyendo registros…</Text> : null}
-    {current?.error ? <Text accessibilityRole="alert" style={s.hint}>{current.error}</Text> : null}
+    {current?.error && !onReadError ? <Text accessibilityRole="alert" style={s.hint}>{current.error}</Text> : null}
     {grouped ? groupAttendancePresentations(current?.rows ?? []).map(group => <AttendanceRecordGroup
       key={JSON.stringify([scope, group.subject.id])} group={group} complete={current?.rows.length === totalCount}
       fields={fields} statuses={statuses} scope={scope} store={store} rowProps={rowProps}
-      onLoad={onLoadGroup} subjectConfig={subjectConfig} subjectDefinition={subjectDefinition} />)
+      onLoad={onLoadGroup} subjectConfig={subjectConfig} subjectDefinition={subjectDefinition} onReadError={onReadError} />)
       : current?.rows.map(row => <AttendanceRecordRow key={JSON.stringify([row.referenceKind, row.reference])} {...rowProps(row)} />)}
   </View>;
 }
 
-function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store, rowProps, onLoad, subjectConfig, subjectDefinition }: {
+function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store, rowProps, onLoad, subjectConfig, subjectDefinition, onReadError }: {
   group: ReturnType<typeof groupAttendancePresentations>[number]; complete: boolean;
   fields: AttendanceContextField[]; statuses: {optionId: string; label: string}[];
   scope: AttendancePresentationScope | null; store: AttendancePresentationStore;
   rowProps(row: AttendanceRecordPresentation): Parameters<typeof AttendanceRecordRow>[0];
   onLoad?(subjectId: string): Promise<AttendanceGroupRead>;
   subjectConfig?: unknown; subjectDefinition?: SubjectPresentationDefinition;
+  onReadError?(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const dataKey = JSON.stringify(group.rows);
@@ -99,10 +110,18 @@ function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store
       const result = await onLoad(group.subject.id);
       if (request !== generation.current) return;
       const loaded = await Promise.all(result.records.map(record => loadAttendanceRecordPresentation(store, scope, record, fields, statuses)));
-      if (request === generation.current) setRead({key: dataKey,
-        rows: distinctAttendancePresentations(result.complete ? loaded : [...group.rows, ...loaded]), complete: result.complete});
+      if (request === generation.current) {
+        const rows = distinctAttendancePresentations(result.complete ? loaded : [...group.rows, ...loaded]);
+        if (scope) recordAttendanceLocalRead({ ...scope, subjectRecordId: group.subject.id }, "group/presented-detail",
+          rows.flatMap(row => [row.record.recordId, row.reference, ...(row.serverId ? [row.serverId] : [])]), true, rows.length);
+        setRead({key: dataKey, rows, complete: result.complete});
+      }
     } catch (error) {
-      if (request === generation.current) setRead({key: dataKey, error: error instanceof Error ? error.message : "No pudimos actualizar el detalle. Se conservan los registros disponibles."});
+      if (request === generation.current) {
+        const message = error instanceof Error ? error.message : "No pudimos actualizar el detalle. Se conservan los registros disponibles.";
+        setRead({key: dataKey, error: message});
+        onReadError?.(message);
+      }
     }
   }
   return <View style={s.group} testID="attendance-record-group">
@@ -118,7 +137,7 @@ function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store
     </View>
     {expanded ? <View style={s.list}>
       {current?.loading ? <Text accessibilityLiveRegion="polite" style={s.hint}>Actualizando detalle…</Text> : null}
-      {current?.error ? <Text accessibilityRole="alert" style={s.hint}>{current.error}</Text> : null}
+      {current?.error && !onReadError ? <Text accessibilityRole="alert" style={s.hint}>{current.error}</Text> : null}
       {!exact ? <Text style={s.hint}>Se muestran los registros disponibles en esta lectura; la cobertura del día puede ser parcial.</Text> : null}
       <Text style={s.hint}>Las marcas de tiempo son referencias; no forman parte del campo Fecha.</Text>
       {rows.map(row => <AttendanceRecordRow key={JSON.stringify([row.referenceKind, row.reference])} {...rowProps(row)} compact />)}

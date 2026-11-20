@@ -13,3 +13,12 @@ describe("attention metadata and navigation",()=>{
  it("known orphan operation remains visible but cannot pretend its local row can be resolved",()=>{const p=buildSyncAttentionProblems([{...row,values_json:null,payload_json:row.values_json}],[view],scope)[0];expect(p.state).toBe("conflict");expect(p.href).toBeNull()});
 
 });
+
+describe("read-only Attendance attention destination",()=>{
+ it("pending and failed links carry the exact local identity and read mode; conflicts keep explicit resolution",()=>{
+  for(const sync_status of ["pending_create","pending_update","syncing","failed"]){
+   expect(buildSyncAttentionProblems([{...row,sync_status}],[view],scope)[0].href).toEqual({pathname:"/view/[appViewId]",params:{appViewId:"view",attentionRecordId:"local",attentionDate:"2026-10-09",attentionMode:"read"}});
+  }
+  expect(buildSyncAttentionProblems([row],[view],scope)[0].href?.params.attentionMode).toBeUndefined();
+ });
+});
