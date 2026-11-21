@@ -7,7 +7,7 @@ import {attendanceDailyCount, attendanceReadScope, attendanceHistoryMode, type A
 import { actionSurface } from "../../../theme/operational-presentation";
 import { metrics, type ThemeColors } from "../../../theme/tokens";
 import { colors } from "../../../theme/paint";
-import { attendanceConfirmationRows, type ConfirmationRow } from "./attendance-confirmation";
+import { attendanceConfirmationRows, attendanceRepeatConfirmationPresentation, type ConfirmationRow } from "./attendance-confirmation";
 import { useFieldAccessibility } from "../../../components/field-accessibility";
 import { FormLayout, FormGrid } from "../../../components/form-layout";
 import { FieldFrame } from "../../../components/field-frame";
@@ -1832,6 +1832,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     setSuccessMessage(null);
   }
 
+  const repeatConfirmation = repeatWarning
+    ? attendanceRepeatConfirmationPresentation({ ...repeatWarning, dateLabel: formatDisplayDate(date) }) : null;
+
   return (
     <ScrollView testID={isDesktop ? "desktop-attendance" : "compact-attendance"} contentContainerStyle={styles.content} style={styles.screen}>
       <View style={styles.header}>
@@ -2046,12 +2049,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       <Modal animationType="fade" transparent visible={!!repeatWarning} onRequestClose={cancelRepeatedRecord}>
         <View style={styles.modalBackdrop}><View accessibilityViewIsModal style={styles.modalPanel}>
-          <Text accessibilityRole="header" style={styles.modalTitle}>Confirmar registro adicional</Text>
-          <Text style={styles.modalMessage}>{repeatWarning?.remoteCount===undefined ? `Este dispositivo tiene ${repeatWarning?.localCount??0} registro(s) disponibles de esta persona para ${formatDisplayDate(date)}, incluidos los pendientes o con incidencias. Sin conexión, el conteo sólo incluye la información disponible en este dispositivo.` : `Opco informa ${repeatWarning.remoteCount} registro(s) de esta persona para ${formatDisplayDate(date)}. Hay ${repeatWarning.localCount} registro(s) disponibles localmente; pueden incluir pendientes aún sin confirmar.`}</Text>
-          <Text style={styles.modalMessage}>Se creará un registro independiente. Los anteriores se conservarán.</Text>
+          <Text accessibilityRole="header" style={styles.modalTitle}>{repeatConfirmation?.title}</Text>
+          <Text style={styles.modalMessage}>{repeatConfirmation?.message}</Text>
+          <Text style={styles.modalMessage}>{repeatConfirmation?.consequence}</Text>
           <View style={styles.modalActions}>
             <Pressable accessibilityRole="button" onPress={cancelRepeatedRecord} style={styles.modalSecondaryButton}><Text style={styles.modalSecondaryText}>Cancelar</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>void confirmRepeatedRecord()} style={styles.modalPrimaryButton}><Text style={styles.modalPrimaryText}>Confirmar uno adicional</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={isSaving} onPress={()=>void confirmRepeatedRecord()} style={styles.modalPrimaryButton}><Text style={styles.modalPrimaryText}>{repeatConfirmation?.confirmLabel}</Text></Pressable>
           </View>
         </View></View>
       </Modal>

@@ -225,8 +225,47 @@ it("reads default one-per-day groups using their update-current storage projecti
 });
 
 describe("configured automatic capture at the definitive confirmation",()=>{
- it("does not stamp or persist before the warning, captures the later explicit confirmation",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"America/Santiago"}});Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"America/Santiago"}});c.eventCapturedAtRef.current=null as unknown as string;vi.useFakeTimers();try{vi.setSystemTime(new Date("2026-11-18T02:30:00.000Z"));await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.repeatWarning).not.toBeNull();expect(c.eventCapturedAtRef.current).toBeNull();expect(c.saveEntry).not.toHaveBeenCalled();vi.setSystemTime(new Date("2026-11-18T02:31:00.000Z"));await actual("confirmRepeatedRecord",c)();expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({eventOccurredAt:"2026-11-18T02:31:00.000Z",captureTime:c.captureContract,repetitionAcknowledged:true}));}finally{vi.useRealTimers();}});
- it("cancels a configured warning without creating an intention or capture",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"UTC"}});Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"UTC"}});c.eventCapturedAtRef.current=null as unknown as string;await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});await actual("cancelRepeatedRecord",c)();expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();});
+ it.each([0,1,3])("keeps %s local records unchanged and captures only the later explicit confirmation",async localCount=>{
+  const {captureTimeCommand}=await import("../../../lib/capture-time");
+  const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"America/Santiago"}});
+  Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"America/Santiago"}});
+  c.definitionCache.getAttendanceDailyRecords.mockResolvedValue(Array.from({length:localCount},()=>({syncStatus:"pending"})));
+  c.eventCapturedAtRef.current=null as unknown as string;
+  vi.useFakeTimers();
+  try{
+   vi.setSystemTime(new Date("2026-11-18T02:30:00.000Z"));
+   await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});
+   expect(c.repeatWarning).toMatchObject({localCount,remoteCount:undefined});
+   expect(c.eventCapturedAtRef.current).toBeNull();expect(c.saveEntry).not.toHaveBeenCalled();
+   vi.setSystemTime(new Date("2026-11-18T02:31:00.000Z"));
+   await actual("confirmRepeatedRecord",c)();
+   expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    eventOccurredAt:"2026-11-18T02:31:00.000Z",captureTime:c.captureContract,
+    repetitionPolicy:"MULTIPLE_WITH_WARNING",repetitionAcknowledged:true,contextValues:{relation:"lot"},
+   }));
+   expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
+  }finally{vi.useRealTimers();}
+ });
+ it.each([0,2])("cancels with %s local records without an intention, capture or late confirmation",async localCount=>{
+  const {captureTimeCommand}=await import("../../../lib/capture-time");
+  const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"UTC"}});
+  Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"UTC"}});
+  c.definitionCache.getAttendanceDailyRecords.mockResolvedValue(Array.from({length:localCount},()=>({syncStatus:"pending"})));
+  c.eventCapturedAtRef.current=null as unknown as string;
+  await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});
+  const warning=c.repeatWarning;
+  await actual("cancelRepeatedRecord",c)();
+  expect(c.repeatWarning).toBeNull();expect(c.saveEntry).not.toHaveBeenCalled();
+  expect(c.eventCapturedAtRef.current).toBeNull();
+  await actual("confirmRepeatedRecord",{...c,repeatWarning:warning})();
+  expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();
+ });
+ it("keeps the online first-record policy without adding a warning",async()=>{
+  const c=fixture(true);c.definitionCache.getAttendanceDailyRecords.mockResolvedValue([]);
+  c.api.getAttendanceWorkflow.mockResolvedValue({appView:{id:"view"},date:c.date,repetitionPolicy:"MULTIPLE_WITH_WARNING",items:[{person:{id:"person"},dailyRecordCount:0}]});
+  await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});
+  expect(c.setRepeatWarning).not.toHaveBeenCalled();expect(c.saveEntry).toHaveBeenCalledOnce();
+ });
  it("captures immediately without warning and retains that same instant on retry",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:{version:1 as const,fieldId:"capture",timeZone:"UTC"}});Object.assign(c.appView.config,{repetitionPolicy:"MULTIPLE",captureTime:{fieldId:"capture",timeZone:"UTC"}});c.eventCapturedAtRef.current=null as unknown as string;await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});const first=c.saveEntry.mock.calls[0]?.[0] as unknown as {eventOccurredAt:string};await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry.mock.calls[1]?.[0]).toEqual(first);});
  it("shows a review error rather than queuing against an old Core",async()=>{const {captureTimeCommand}=await import("../../../lib/capture-time");const c=Object.assign(fixture(),{captureTimeCommand,captureContract:undefined});Object.assign(c.appView.config,{captureTime:{fieldId:"capture",timeZone:"UTC"}});await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry).not.toHaveBeenCalled();expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("intención anterior se conserva"));});
 });

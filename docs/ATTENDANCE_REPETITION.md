@@ -82,3 +82,23 @@ Una edición no se abre con sólo el ID remoto si falta su copia local: se infor
 Validación local: reproducción del fallo original en la aplicación publicada de Pruebas sólo mediante lecturas; regresiones de aliases/ausencia/permisos y agrupación; renderer real con Core Next.js sin cambios, PostgreSQL sintético y Chromium/OPFS. Se comprueban edición independiente, creación pendiente, ACK, reintento idéntico, cierre/reapertura offline y los cuatro anchos. No se realizaron escrituras productivas ni cambios de políticas. Safari/native y lectores de pantalla físicos siguen pendientes. El listado conserva su ventana de recientes existente; «disponibles» indica conteo parcial hasta acreditar el detalle del sujeto.
 
 El detalle agrupado solicita explícitamente el modo de historial de su política: `update-current` para ONE/política omitida y `append` para múltiples, ambos con la fecha seleccionada. No interpreta una proyección ONE como historial append ni convierte un detalle existente en vacío por ese desajuste. La regresión del handler verifica también la lectura offline de la política predeterminada.
+
+
+## Confirmación offline según evidencia disponible — 21-11-2026 (local)
+
+En MULTIPLE_WITH_WARNING, el diálogo de confirmación existente usa «Confirmar registro»
+como título y acción cuando no hay registros locales y no se comprobó el servidor. Explica
+que cero en el dispositivo no acredita ausencia remota y que sin conexión no se puede
+comprobar si existen otros registros en el servidor. Con registros locales disponibles
+conserva la cantidad conocida y la confirmación de uno adicional. Los conteos local y
+remoto se mantienen separados cuando hay respuesta autenticada de Core.
+
+Es una proyección de texto: no cambia cuándo se requiere confirmar ni las tres políticas.
+La captura automática sigue fijándose en la confirmación definitiva, con los contextos y
+DATE existentes. Cancelar no crea intención ni captura; invalida una confirmación anterior.
+La edición conserva la captura y las identidades originales. Se reutiliza el único diálogo
+de confirmación de esta acción, sin banners, toast, avisos por fila ni réplica del mensaje
+en la cabecera. El sector de comunicaciones conserva sus estados y errores existentes.
+
+Sin Core, API, persistencia, outbox, sincronización, migraciones o configuración productiva.
+Misceláneos continúa sin activar. C-01 sigue separado y sin implementar. Sin commit/push/deploy.

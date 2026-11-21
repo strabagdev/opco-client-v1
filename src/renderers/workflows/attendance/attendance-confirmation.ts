@@ -5,6 +5,27 @@ export type ConfirmationRow = { label: string; current: string; requested: strin
 const unavailable = "No disponible en esta lectura";
 const empty = "Sin valor";
 
+/** Wording for the existing confirmation only; zero local never proves zero remote. */
+export function attendanceRepeatConfirmationPresentation({ localCount, remoteCount, dateLabel }: {
+  readonly localCount: number;
+  readonly remoteCount?: number;
+  readonly dateLabel: string;
+}) {
+  const additional = localCount > 0 || (remoteCount ?? 0) > 0;
+  const localRecords = `${localCount} ${localCount === 1 ? "registro disponible" : "registros disponibles"}`;
+  const message = remoteCount === undefined
+    ? `${localCount === 0
+      ? `No hay registros de esta persona para ${dateLabel} guardados en este dispositivo.`
+      : `Este dispositivo tiene ${localRecords} de esta persona para ${dateLabel}, incluidos los pendientes o con incidencias.`} Sin conexión no se puede comprobar si existen otros registros en el servidor.`
+    : `Opco informa ${remoteCount} ${remoteCount === 1 ? "registro" : "registros"} de esta persona para ${dateLabel}. Hay ${localRecords} localmente; pueden incluir pendientes aún sin confirmar.`;
+  return {
+    title: additional ? "Confirmar registro adicional" : "Confirmar registro",
+    confirmLabel: additional ? "Confirmar uno adicional" : "Confirmar registro",
+    message,
+    consequence: additional ? "Se creará un registro independiente. Los anteriores se conservarán." : "Se creará un registro independiente.",
+  };
+}
+
 /** Read-only presentation of the captured command. Never constructs or authorizes a write. */
 export function attendanceConfirmationRows({ config, fields, entry, current, currentExtras, currentStatus, currentStatusOptionId, requestedStatus, relationLabel }: {
   config: AttendanceWorkflowConfig;
