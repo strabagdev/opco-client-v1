@@ -1,3 +1,4 @@
+import { activeTransitionNotice } from "./transition-notice";
 import {operationalCalendarKey,type OperationalCalendar} from "./operational-calendar";
 import { loadAttendanceRecordPresentation } from "../renderers/workflows/attendance/attendance-record-presentation";
 import { OpcoNetworkError } from "./opco-api";
@@ -138,4 +139,19 @@ describe("operational DATE and original event in the existing durable outbox",()
  it("rejects a changed definition before persistence without deleting the pending",async()=>{
   await prepared("MULTIPLE",true);await store.saveStateUpdateLocally(command());await expect(store.saveStateUpdateLocally({...command(),operationalDay:{...calendarContract,calendarKey:"changed",mode:"AUTO"}})).rejects.toThrow("calendario");expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toHaveLength(1);
  });
+});
+
+it("persists Attendance and PANEL notices across SQLite reopen without changing a pending row or intent",async()=>{
+ await prepared();const saved=await store.saveStateUpdateLocally(captured());
+ const n={version:1 as const,text:"Aviso de prueba",startsAt:"2027-01-03T05:00:00.000Z",endsAt:"2027-01-05T05:00:00.000Z"};
+ const definition=await store.getAppViewDefinition(scope.ownerKey,scope.contractId,scope.appViewId);if(!definition||definition.definition.kind!=="attendance"||definition.definition.appView.type!=="WORKFLOW")throw Error("Expected cached definition");
+ const attendance={...definition.definition.appView,config:{...definition.definition.appView.config,transitionNotice:n}};
+ await store.upsertAppViewDefinition({...definition,definition:{...definition.definition,appView:attendance}});
+ const panel: import("./opco-api").AppView={id:"notice-panel",name:"Panel",slug:"panel",icon:null,sortOrder:1,type:"PANEL" as const,config:{schemaVersion:1 as const,layout:{columns:12,rowHeight:8},filters:[],datasets:[],modules:[],metrics:[],calculatedFields:[],transitionNotice:n}};
+ await store.upsertAppViews(scope.ownerKey,scope.contractId,[attendance,panel],"2027-01-03T05:00:00.000Z");
+ const rows=await harness.db.getAllAsync("SELECT * FROM entity_records WHERE local_id=?",saved.localRecordId),ops=await harness.db.getAllAsync("SELECT * FROM pending_operations");
+ await reopen();const cached=await store.getAppViews(scope.ownerKey,scope.contractId);expect(cached?.views).toHaveLength(2);
+ for(const v of cached!.views)expect(activeTransitionNotice((v.config as {transitionNotice?:unknown}).transitionNotice,Date.parse(n.startsAt))).toBe(n.text);
+ expect((await store.getAppViewDefinition(scope.ownerKey,scope.contractId,scope.appViewId))?.definition.appView.config).toMatchObject({transitionNotice:n});
+ expect(await harness.db.getAllAsync("SELECT * FROM entity_records WHERE local_id=?",saved.localRecordId)).toEqual(rows);expect(await harness.db.getAllAsync("SELECT * FROM pending_operations")).toEqual(ops);
 });

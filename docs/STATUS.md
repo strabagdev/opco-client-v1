@@ -4027,3 +4027,11 @@ en la cabecera. El sector de comunicaciones conserva sus estados y errores exist
 
 Sin Core, API, persistencia, outbox, sincronización, migraciones o configuración productiva.
 Misceláneos continúa sin activar. C-01 sigue separado y sin implementar. Sin commit/push/deploy.
+
+
+## Aviso de transición configurable — 21-11-2026 (local sin publicar)
+
+[TRANSITION_NOTICES.md](./TRANSITION_NOTICES.md): texto y vigencia por AppView Attendance/PANEL,
+conservados en el JSON/caché existente y mostrados en el sector único de comunicaciones.
+Sin cambios en negocio, calendario o pendientes. No activa Misceláneos ni certifica las
+comprobaciones operativas pendientes de sus dispositivos.

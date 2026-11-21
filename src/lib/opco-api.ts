@@ -165,6 +165,7 @@ export type ReportSelectValueDisplay = "LABEL" | "INTERNAL_VALUE";
 export type WorkflowCodeSearchField = { id: string; key: string; name: string; type: "TEXT" | "TEXTAREA" };
 
 export type AttendanceWorkflowConfig = {
+  transitionNotice?: import("./transition-notice").TransitionNotice;
   captureTime?: CaptureTimeConfig;
   operationalCalendar?: OperationalCalendar;
   repetitionPolicy?: AttendanceRepetitionPolicy;
@@ -336,6 +337,7 @@ export type PanelModuleConfig = PanelModuleBase & (
 );
 
 export type PanelAppViewConfig = {
+  transitionNotice?: import("./transition-notice").TransitionNotice;
   calculatedFields?: [];
   datasets?: PanelDatasetConfig[];
   filters?: PanelFilterConfig[];

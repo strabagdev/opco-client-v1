@@ -1,3 +1,4 @@
+import { useTransitionNotice, mergeExperienceNotices } from "./use-transition-notice";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useFocusEffect } from "expo-router";
 
@@ -47,7 +48,13 @@ function useVisibleActivity(scopeKey: string | null, identity: {
 export function useExperienceActivityReporter(appView: AppView, report: ActivityReport) {
   const { ownerKey, selectedContractId } = useSession();
   const scopeKey = ownerKey && selectedContractId ? `${ownerKey}\u0000${selectedContractId}\u0000${appView.id}` : null;
-  useVisibleActivity(scopeKey, { appViewId: appView.id, appViewTitle: appView.name, appViewType: appView.type }, report);
+  const configuredNotice = useTransitionNotice(
+    appView.type === "PANEL" || appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance"
+      ? (appView.config as { transitionNotice?: unknown }).transitionNotice : undefined,
+  );
+  useVisibleActivity(scopeKey, { appViewId: appView.id, appViewTitle: appView.name, appViewType: appView.type }, {
+    ...report, notice: mergeExperienceNotices(report.notice, configuredNotice),
+  });
 }
 
 export function useHomeReadActivity({ isLoading, hasContent, error }: { isLoading: boolean; hasContent: boolean; error: string | null }) {
