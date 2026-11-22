@@ -1,3 +1,13 @@
+## C-01 RECORDS syncing — corrección local, sin publicar — 2026-11-22
+
+Se verificó que el hallazgo del commit fe376189da510ea4886bdb24e72c85e40bbee7e5
+permanece en HEAD/publicado fbbc8481da81d7b1eadb483a4d3f2f665fdc7495. El parche
+local incluye RECORDS syncing en selección y conteo sin cambiar STATE_UPDATE,
+identidades, comandos, idempotencia, esquema o namespace. Reproducción base →
+candidato mediante SIGKILL, SQLite real y HTTP sintético: ocho regresiones pasan
+en el candidato. Alcance y límites en [RECORDS_SYNC_RECOVERY.md](RECORDS_SYNC_RECOVERY.md).
+No se investigan C-08/C-11/C-13 ni se modifica producción; sin commit/push/deploy.
+
 ## Cierre Técnico current Por Fecha — LOTE DELIMITADO, SIN PUBLICAR — 2026-10-04
 
 Cierre exclusivo de la corrección de subjects[].current; ambos repositorios siguen en main con HEAD

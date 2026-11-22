@@ -2283,7 +2283,7 @@ async function listPendingOperations(ownerKey: string) {
       FROM pending_operations
       INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
       WHERE pending_operations.owner_key = ?
-        AND entity_records.sync_status IN ('pending_create', 'pending_update')
+        AND entity_records.sync_status IN ('pending_create', 'pending_update', 'syncing')
         AND pending_operations.operation IN ('CREATE', 'UPDATE')
       ORDER BY
         pending_operations.local_record_id ASC,
@@ -2304,7 +2304,10 @@ async function countPendingOperations(ownerKey: string) {
       FROM pending_operations
       INNER JOIN entity_records ON entity_records.local_id = pending_operations.local_record_id
       WHERE pending_operations.owner_key = ?
-        AND entity_records.sync_status IN ('pending_create', 'pending_update')
+        AND (
+          entity_records.sync_status IN ('pending_create', 'pending_update')
+          OR (pending_operations.operation IN ('CREATE', 'UPDATE') AND entity_records.sync_status = 'syncing')
+        )
     `,
     ownerKey,
   );
