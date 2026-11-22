@@ -22,6 +22,7 @@ import { CodeReader } from "../../../components/code-reader";
 import { CompactSelect } from "@/components/compact-select";
 import { DateFieldInput } from "@/renderers/records/temporal-input";
 import { APP_SHELL_WIDE_BREAKPOINT } from "@/lib/app-shell-layout";
+import { manualSearchControlsStyle, manualSearchInputLayout } from "@/lib/visual-stability";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
 import { usePathname, useLocalSearchParams } from "expo-router";
 import { attentionDate } from "@/lib/sync-attention";
@@ -1919,7 +1920,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      <View testID="attendance-search" style={{ gap: 8, maxWidth: isDesktop ? 560 : "100%" }}>
+      <View testID="attendance-search" style={{ gap: 8, width: "100%", maxWidth: isDesktop ? 560 : "100%" }}>
         <Text nativeID={searchA11y.labelId} style={styles.searchLabel}>Buscar persona</Text>
         {requiredContextMissing ? <Text style={styles.statusMeta}>Selecciona los campos de contexto obligatorios antes de buscar.</Text> : null}
         <View style={styles.searchBlock}>
@@ -2515,11 +2516,8 @@ export function createAttendanceBaseStyles(p: ThemeColors = colors) {
     flex: 1,
   },
   searchBlock: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
+    ...manualSearchControlsStyle,
     maxWidth: "100%",
-    minWidth: 0,
   },
   searchInput: {
     backgroundColor: p.surface,
@@ -2527,10 +2525,9 @@ export function createAttendanceBaseStyles(p: ThemeColors = colors) {
     borderRadius: 8,
     borderWidth: 1,
     color: p.text,
-    flex: 1,
+    ...manualSearchInputLayout,
     fontSize: 16,
     minHeight: 44,
-    minWidth: 0,
     paddingHorizontal: 12,
   },
   secondaryStatusButton: {

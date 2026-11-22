@@ -5,7 +5,7 @@ import { StyleSheet } from "react-native";
 import { describe, expect, it, vi } from "vitest";
 import { colors, metrics, themes, type ThemeColors } from "./tokens";
 import { desktopStyleColors } from "../lib/desktop-presentation";
-import { stableTextInputStyle, stableSubmitButtonStyle, STABLE_LOAD_MORE_BUTTON_MIN_WIDTH } from "../lib/visual-stability";
+import { manualSearchControlsStyle, manualSearchInputLayout, stableTextInputStyle, stableSubmitButtonStyle, STABLE_LOAD_MORE_BUTTON_MIN_WIDTH } from "../lib/visual-stability";
 vi.mock("react-native", async () => import("react-native-web"));
 
 /** Exercise actual paint factories without starting renderers, requests or session effects. */
@@ -14,8 +14,8 @@ function style(file: string, name: string, p: ThemeColors) {
   const code = source.statements.filter(n => ts.isFunctionDeclaration(n) && n.name?.text.startsWith("create") && (/Styles$/.test(n.name.text) || ["createReadFieldS", "createStateReadS"].includes(n.name.text)))
     .map(n => n.getText(source).replace(/^export /, "")).join("\n");
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function("StyleSheet", "colors", "metrics", "Platform", "desktopStyleColors", "stableTextInputStyle", "stableSubmitButtonStyle", "STABLE_LOAD_MORE_BUTTON_MIN_WIDTH", js + `; return ${name};`)
-    (StyleSheet, colors, metrics, { OS: "web" }, desktopStyleColors, stableTextInputStyle, stableSubmitButtonStyle, STABLE_LOAD_MORE_BUTTON_MIN_WIDTH)(p);
+  return new Function("StyleSheet", "colors", "metrics", "Platform", "desktopStyleColors", "stableTextInputStyle", "stableSubmitButtonStyle", "STABLE_LOAD_MORE_BUTTON_MIN_WIDTH", "manualSearchControlsStyle", "manualSearchInputLayout", js + `; return ${name};`)
+    (StyleSheet, colors, metrics, { OS: "web" }, desktopStyleColors, stableTextInputStyle, stableSubmitButtonStyle, STABLE_LOAD_MORE_BUTTON_MIN_WIDTH, manualSearchControlsStyle, manualSearchInputLayout)(p);
 }
 function contrast(a: string, b: string) {
   const lum = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)

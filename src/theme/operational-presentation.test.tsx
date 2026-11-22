@@ -6,7 +6,7 @@ import { StyleSheet } from "react-native";
 import { actionSurface, operationalPaint, recordStatusPaint } from "./operational-presentation";
 import { colors, metrics, themes } from "./tokens";
 import { APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER } from "../lib/app-shell-layout";
-import { stableSubmitButtonStyle, stableTextInputStyle } from "../lib/visual-stability";
+import { manualSearchControlsStyle, manualSearchInputLayout, stableSubmitButtonStyle, stableTextInputStyle } from "../lib/visual-stability";
 import { desktopPalette, desktopStyleColors } from "../lib/desktop-presentation";
 vi.mock("react-native", async () => import("react-native-web"));
 
@@ -17,7 +17,7 @@ function factory(file: string, name: string) {
   const factoryNames = ["createShellHeaderS", "createNavigationMenuS", "createConflictValuesS"];
   for (const n of source.statements) if (ts.isFunctionDeclaration(n) && factoryNames.includes(n.name?.text ?? "")) nodes.push(n);
   const js = ts.transpileModule(nodes.map(n => n.getText(source).replace(/^export /, "")).join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function("StyleSheet", "colors", "metrics", "desktopStyleColors", "desktopPalette", "Platform", "APP_SHELL_DESKTOP_GUTTER", "APP_SHELL_HORIZONTAL_GUTTER", "stableTextInputStyle", "stableSubmitButtonStyle", js + `;return ${name};`)(StyleSheet, colors, metrics, desktopStyleColors, desktopPalette, { OS: "web" }, APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, stableTextInputStyle, stableSubmitButtonStyle);
+  return new Function("StyleSheet", "colors", "metrics", "desktopStyleColors", "desktopPalette", "Platform", "APP_SHELL_DESKTOP_GUTTER", "APP_SHELL_HORIZONTAL_GUTTER", "stableTextInputStyle", "stableSubmitButtonStyle", "manualSearchControlsStyle", "manualSearchInputLayout", js + `;return ${name};`)(StyleSheet, colors, metrics, desktopStyleColors, desktopPalette, { OS: "web" }, APP_SHELL_DESKTOP_GUTTER, APP_SHELL_HORIZONTAL_GUTTER, stableTextInputStyle, stableSubmitButtonStyle, manualSearchControlsStyle, manualSearchInputLayout);
 }
 const fixtures = [
   ["app/(app)/_layout.tsx", "createShellBaseStyles", "modalPanel", "modalTitle", "primaryModalButton", "primaryModalButtonText"],

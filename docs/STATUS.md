@@ -4035,3 +4035,24 @@ Misceláneos continúa sin activar. C-01 sigue separado y sin implementar. Sin c
 conservados en el JSON/caché existente y mostrados en el sector único de comunicaciones.
 Sin cambios en negocio, calendario o pendientes. No activa Misceláneos ni certifica las
 comprobaciones operativas pendientes de sus dispositivos.
+
+
+## Búsqueda manual y escaneo en móvil — ajuste local — 2026-11-22
+
+Attendance y STATE_UPDATE comparten una disposición de ancho explícito para el campo manual
+y el lector opcional. Sin cambios en handlers, normalización, permisos, contexto obligatorio,
+consultas, captura o persistencia. La base permite escribir a 390 px en Chromium; se comprobó
+la compresión en espacios estrechos, sin atribuirle todavía el fallo de teclado del iPhone
+físico. Ver [alcance y comprobación por plataforma](MANUAL_SEARCH_AND_SCAN.md).
+
+Pruebas: 2307 aprobadas y 100 opt-in omitidas en la suite final; 80 focalizadas y 21 de
+presentación/contraste. El vencimiento inicial de una prueba prewarm no modificada no se
+reprodujo en las ejecuciones dirigidas de base/candidato; causa de esa latencia sin demostrar.
+Chromium/Expo Web con API ficticia y OPFS real: toque, texto, pegado, búsqueda/selección,
+cámara ficticia/cancelación y búsqueda offline; 320/360/390/768/1024/1440 px. Sin escrituras
+de negocio ni nuevas intenciones. La recarga totalmente offline adicional no completó el
+arranque en el plazo del arnés; no se declara aprobada ni corregida aquí. Safari/iPhone,
+Android y native físicos siguen pendientes; viewport/UA móvil no equivale a dispositivo.
+
+Sólo parche local independiente, sin commit/push/deploy ni acceso productivo. Core y
+configuraciones de Misceláneos intactos; su activación continúa separada y pendiente.

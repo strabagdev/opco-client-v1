@@ -49,7 +49,7 @@ import {
   RecordFormValues,
   validateFormFields,
 } from "@/lib/record-form";
-import { stableSubmitButtonStyle, stableTextInputStyle } from "@/lib/visual-stability";
+import { manualSearchControlsStyle, manualSearchInputLayout, stableSubmitButtonStyle, stableTextInputStyle } from "@/lib/visual-stability";
 import {
   EntityDefinition,
   OpcoNetworkError,
@@ -1336,14 +1336,14 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
       </View></FormLayout> : null}
       {!isOnline && normalizedSearch && !visibleResponse?.searchComparison ? <Text>La copia usa la comparación anterior; las reglas actuales necesitan verificarse con conexión.</Text> : null}
       <Text nativeID={searchA11y.labelId} style={styles.label}>Buscar</Text>
-      <View style={[styles.searchBlock, appView.config.codeSearch && { flexWrap: "wrap" }]}>
+      <View style={styles.searchBlock}>
         <TextInput
           {...searchA11y.controlProps}
           autoCapitalize="words"
           onChangeText={value => changeSearchText(value)}
           editable={contextReady}
           placeholder="Buscar"
-          style={[styles.searchInput, appView.config.codeSearch && { minWidth: 160, flexBasis: 240 }]}
+          style={styles.searchInput}
           value={searchText}
         />
         {appView.config.codeSearch ? <CodeReader scopeKey={JSON.stringify([readScope, appView.config.sourceEntityTypeId, appView.config.codeSearch.fieldId])}
@@ -1953,9 +1953,7 @@ export function createStateUpdateBaseStyles(p: ThemeColors = colors) {
     flex: 1,
   },
   searchBlock: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
+    ...manualSearchControlsStyle,
   },
   searchInput: {
     backgroundColor: p.surface,
@@ -1963,7 +1961,7 @@ export function createStateUpdateBaseStyles(p: ThemeColors = colors) {
     borderRadius: 8,
     borderWidth: 1,
     color: p.text,
-    flex: 1,
+    ...manualSearchInputLayout,
     ...stableTextInputStyle,
     minHeight: 46,
     paddingHorizontal: 12,
