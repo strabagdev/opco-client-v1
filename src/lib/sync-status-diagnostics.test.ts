@@ -169,6 +169,25 @@ describe("sync status diagnostics", () => {
     expect(copied).not.toMatch(/token|payload|field value/i);
   });
 
+  it("copies primary and secondary SQLite codes once in the existing diagnostics section", () => {
+    const copied = formatSyncStatusDiagnosticsCopy(buildSyncStatusDiagnostics(baseInput), { events: [], scopeKey: "safe-scope" }, {
+      active: null, hasDatabasePromise: true, hasMigrationPromise: false, storageStatus: "ready",
+      waiting: [], waitingByName: {}, waitingOmitted: 0, waitingTotal: 0,
+      recent: [{
+        id: "sqlite-1", name: "write:entity_records", status: "error", durationMs: 1,
+        enqueuedAt: "2026-11-22T00:00:00Z", startedAt: "2026-11-22T00:00:00Z", completedAt: "2026-11-22T00:00:00Z",
+        statementError: {
+          primary: { phase: "execute", code: "SQLITE_CONSTRAINT_UNIQUE", sqliteCode: 19 },
+          secondary: [{ phase: "finalize", code: "STATEMENT_FINALIZATION_FAILED", sqliteCode: null }],
+        },
+      }],
+    });
+    expect(copied.match(/error principal=execute\/SQLITE_CONSTRAINT_UNIQUE\/19/g)).toHaveLength(1);
+    expect(copied).toContain("secundario=finalize/STATEMENT_FINALIZATION_FAILED/sin código");
+    expect(copied.match(/Coordinador SQLite/g)).toHaveLength(1);
+    expect(copied).not.toMatch(/SELECT|INSERT|payload|token|stack/i);
+  });
+
   it("copies the live SQLite operation and waiters without SQL or values", () => {
     const diagnostics = buildSyncStatusDiagnostics(baseInput);
     const copied = formatSyncStatusDiagnosticsCopy(diagnostics, { events: [], scopeKey: "safe-scope" }, {

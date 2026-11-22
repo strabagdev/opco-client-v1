@@ -209,7 +209,7 @@ export function formatSyncStatusDiagnosticsCopy(
 function sqliteCoordinatorCopyLines(diagnostics?: SQLiteCoordinatorDiagnostics) {
   if (!diagnostics) return ["Sin información"];
   const operation = (item: SQLiteCoordinatorDiagnostics["active"]) => item
-    ? `${item.id}; nombre=${item.name}; estado=${item.status}; encolada=${item.enqueuedAt}; inicio=${item.startedAt ?? "Sin información"}; duración=${item.durationMs}ms`
+    ? `${item.id}; nombre=${item.name}; estado=${item.status}; encolada=${item.enqueuedAt}; inicio=${item.startedAt ?? "Sin información"}; duración=${item.durationMs}ms${item.statementError ? `; error principal=${item.statementError.primary.phase}/${item.statementError.primary.code}/${item.statementError.primary.sqliteCode ?? "sin código"}; secundario=${item.statementError.secondary.map((error) => `${error.phase}/${error.code}/${error.sqliteCode ?? "sin código"}`).join(", ") || "ninguno"}` : ""}`
     : "Ninguna";
 
   return [

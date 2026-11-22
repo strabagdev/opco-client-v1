@@ -20,6 +20,7 @@ import { stateUpdateV10Scope, stateUpdateRows, stateUpdateSnapshots, stateUpdate
 } from "./state-update-v10-storage";
 import { buildSyncAttentionProblems, type AttentionRow, type SyncAttentionProblem } from "./sync-attention";
 import * as SQLite from "expo-sqlite";
+import { getSQLiteStatementErrorDiagnostic, preserveSQLiteStatementErrors, type SQLiteStatementErrorDiagnostic } from "./sqlite-statement-errors";
 
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
 import {
@@ -151,6 +152,7 @@ export type SQLiteCoordinatorOperationDiagnostics = {
   name: SQLiteCoordinatorOperationName;
   startedAt: string | null;
   status: "waiting" | "running" | "completed" | "error";
+  statementError?: SQLiteStatementErrorDiagnostic;
 };
 
 export type SQLiteCoordinatorDiagnostics = {
@@ -391,7 +393,7 @@ async function openAndMigrate() {
   let db: SQLite.SQLiteDatabase;
 
   try {
-    db = state.database ?? await SQLite.openDatabaseAsync(DATABASE_NAME);
+    db = state.database ?? preserveSQLiteStatementErrors(await SQLite.openDatabaseAsync(DATABASE_NAME));
     registerWebDatabaseLifecycleClose(state);
   } catch (error) {
     const unavailable = toLocalDatabaseUnavailableError(error, "OPEN_FAILED");
@@ -690,6 +692,8 @@ function enqueueDatabaseOperation<T>(
       completeSQLiteCoordinatorOperation(state, diagnostic, startedAtMs, "completed");
       return value;
     } catch (error) {
+      const statementError = getSQLiteStatementErrorDiagnostic(error);
+      if (statementError) diagnostic.statementError = statementError;
       completeSQLiteCoordinatorOperation(state, diagnostic, startedAtMs, "error");
       throw error;
     }
@@ -749,7 +753,9 @@ function getSQLiteCoordinatorDiagnostics(): SQLiteCoordinatorDiagnostics {
     active: state.coordinatorActive ? current(state.coordinatorActive) : null,
     hasDatabasePromise: Boolean(state.databasePromise),
     hasMigrationPromise: Boolean(state.migrationPromise),
-    recent: state.coordinatorRecent.map((item) => ({ ...item })),
+    recent: state.coordinatorRecent.map((item) => ({ ...item, ...(item.statementError ? {
+      statementError: { primary: { ...item.statementError.primary }, secondary: item.statementError.secondary.map((error) => ({ ...error })) },
+    } : {}) })),
     storageStatus: state.storageState.status,
     waiting: state.coordinatorWaiting.slice(0, waitingSampleSize).map(current),
     waitingByName: state.coordinatorWaiting.reduce<Partial<Record<SQLiteCoordinatorOperationName, number>>>((counts, item) => {

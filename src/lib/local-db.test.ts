@@ -17,6 +17,7 @@ import {
 import { PendingOperation } from "./offline-records";
 import { EntityDefinition, EntityField } from "./opco-api";
 import { normalizeStateUpdateRecord, STATE_UPDATE_REQUEST_HISTORY_LIMIT, StateUpdateRequestHistoryEvent } from "./state-update-offline";
+import { preserveSQLiteStatementErrors } from "./sqlite-statement-errors";
 
 const sqliteMock = vi.hoisted(() => ({
   deleteDatabaseAsync: vi.fn(),
@@ -50,6 +51,29 @@ beforeEach(() => {
 });
 
 describe("local database singleton", () => {
+  it("associates safe primary/secondary statement errors with the existing coordinator and continues", async () => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const primary = new Error("Error code 19: UNIQUE constraint failed: PRIVATE_TABLE.PRIVATE_VALUE");
+    const failing = preserveSQLiteStatementErrors({ prepareAsync: async () => ({
+      executeAsync: async () => { throw primary; },
+      finalizeAsync: async () => { throw new Error("Error finalizing statement PRIVATE_TOKEN"); },
+    }) } as unknown as import("expo-sqlite").SQLiteDatabase);
+    await expect(failing.runAsync("PRIVATE_QUERY", "PRIVATE_BIND")).rejects.toBe(primary);
+    db.getFirstAsync.mockRejectedValueOnce(primary);
+    await expect(store.getSelectedContractId()).rejects.toBe(primary);
+    const recent = store.getSQLiteCoordinatorDiagnostics().recent;
+    expect(recent.at(-1)).toMatchObject({ status: "error", statementError: {
+      primary: { phase: "execute", code: "SQLITE_CONSTRAINT_UNIQUE", sqliteCode: 19 },
+      secondary: [{ phase: "finalize", code: "STATEMENT_FINALIZATION_FAILED", sqliteCode: null }],
+    } });
+    expect(JSON.stringify(recent)).not.toMatch(/PRIVATE/);
+    recent.at(-1)!.statementError!.primary.sqliteCode = 0;
+    expect(store.getSQLiteCoordinatorDiagnostics().recent.at(-1)?.statementError?.primary.sqliteCode).toBe(19);
+    await expect(store.getSelectedContractId()).resolves.toBeNull();
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({ active: null, waitingTotal: 0 });
+  });
+
   it("shares one SQLite open promise across concurrent operations", async () => {
     let resolveOpen: (database: MockDatabase) => void = () => undefined;
     const opening = new Promise<MockDatabase>((resolve) => {
