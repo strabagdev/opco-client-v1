@@ -3999,3 +3999,31 @@ la propagación del aviso. Este punto no explica por sí mismo la omisión del g
 El aviso de actualización fallida y el alcance offline sin cobertura se presentan también en
 el mismo notice, en lugar de repetirlos bajo el resumen del día. Se prioriza el motivo preciso
 y se conserva el alcance local disponible; las acciones y los estados de sync no cambian.
+
+## C-05 — durable current checkpoints and bounded Home refresh work (2026-11-22)
+
+Current preparation still persists every verified/failed subject checkpoint after that
+subject's snapshot transaction. These persisted proofs are recovery/availability data,
+not disposable visual progress. No checkpoint, snapshot transaction, partial marker,
+terminal completeness check, receipt or remote request is removed or deferred to the HTTP batch.
+`retainCoverageUntilComplete` keeps its existing behavior.
+
+Only the cache-change notification from `setStateUpdateCurrentCoverage` can be deferred
+by its internal `notifyCacheChange: false` argument. Preparation notifies at each existing
+HTTP batch boundary and at initial/error/terminal writes; the default for all other callers
+remains immediate notification. A cancellation inside a batch retains every committed
+checkpoint and publishes the terminal partial result. An abrupt exit can leave the UI
+unnotified, but reopening reads that same durable partial proof. The per-subject failure
+isolation, SQLite coordinator, transaction order and outbox are unchanged.
+
+Home shares source telemetry and Attendance day hydration promises only inside one
+availability pass with exact owner/contract/entity or AppView/target/date keys. Today's
+hydration can also serve its occurrence in that pass's month. No promise survives the pass.
+The existing refresh coordinator's `canUpdate` guard rejects shared values after cache or
+scope invalidation; the existing trailing pass performs fresh reads. The month/per-view
+coverage rules, remote revalidation and offline eligibility checks remain unchanged.
+
+This is a local C-05 optimization, independent of C-01 recovery and C-04 error preservation.
+It does not restrict offline analysis, add a queue, change parallelism, or change SQLite
+schema/namespace. Benchmarks and limitations are recorded separately in
+`backups/sqlite-contention-c05-optimization/2026-11-22/REPORT.md`.

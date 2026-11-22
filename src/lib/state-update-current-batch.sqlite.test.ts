@@ -3,8 +3,8 @@ import { spawn } from "node:child_process";
 // @ts-expect-error Node types absent from Expo config.
 import { mkdtempSync,rmSync } from "node:fs";
 import { beforeEach,afterEach,it,expect,vi } from "vitest";
-import { createOpcoApi, type StateUpdateCurrentBatchCapabilities } from "./opco-api";
-import { getLocalDatabase,__resetLocalDatabaseForTests } from "./local-db";
+import { createOpcoApi, type StateUpdateCurrentBatchCapabilities, type AppView } from "./opco-api";
+import { getLocalDatabase,__resetLocalDatabaseForTests,subscribeLocalDatabaseCacheChanges } from "./local-db";
 import { prewarmAssignedAppViewsOnce,runWithConcurrency } from "./app-view-prewarm";
 import { refreshEntityRecordsCache } from "./offline-records";
 import { prepareStateUpdateCurrent } from "./state-update-current-prewarm";
@@ -66,7 +66,7 @@ c.close()
 const cap:StateUpdateCurrentBatchCapabilities={version:1,maxSubjects:100,configurationFingerprint:"a".repeat(64)};
 const scope={ownerKey:"synthetic-owner",contractId:"synthetic-contract",appViewId:"synthetic-view",sourceEntityTypeId:"synthetic-source",targetEntityTypeId:"synthetic-target",date:"2026-10-29",dateFieldId:"date",uniqueness:"subject"as const,historyMode:"append"as const};
 const subjects=Array.from({length:217},(_,i)=>({id:"subject-"+String(i).padStart(3,"0"),displayName:"Synthetic "+String(i).padStart(3,"0")}));
-const view={id:scope.appViewId,name:"Synthetic workflow",slug:"synthetic",type:"WORKFLOW",config:{workflowKey:"state-update",dateFieldId:"date"},icon:null,sortOrder:0};
+const view:AppView={id:scope.appViewId,name:"Synthetic workflow",slug:"synthetic",type:"WORKFLOW",config:{workflowKey:"state-update",dateFieldId:"date"},icon:null,sortOrder:0};
 let directory:string,db:ReturnType<typeof sqliteFile>,store:ReturnType<typeof getLocalDatabase>;
 async function open(){__resetLocalDatabaseForTests();db=sqliteFile(directory+"/opco-client-v10-epoch2.db");sqlite.openDatabaseAsync.mockResolvedValue(db);store=getLocalDatabase();await store.getSelectedContractId();}
 async function reopen(){await db.closeAsync();await open();}
@@ -133,4 +133,71 @@ it("rejects a late response attributed to another contract without publishing it
  const write=vi.spyOn(store,"upsertStateUpdateSnapshot");
  await expect(prepareStateUpdateCurrent({api,token:"synthetic",scope,store,sourceRemoteTotal:217,sourceFetched:217,sourceCacheTotal:217,currentBatchCapabilities:cap,runWithConcurrency,concurrency:4})).rejects.toThrow("STATE_UPDATE_CURRENT_PREPARATION_FAILED");
  expect(write).not.toHaveBeenCalled();expect((await store.getStateUpdateCurrentCoverage(scope))?.status).toBe("partial");expect(await store.getStateUpdateCurrentCoverage({...scope,contractId:"other-contract"})).toBeNull();expect(await store.listPendingStateUpdateOperations(scope.ownerKey)).toEqual([]);
+});
+
+async function seedCurrentDefinition(f:ReturnType<typeof fixture>) {
+ await refreshEntityRecordsCache({api:f.api,store,ownerKey:scope.ownerKey,contractId:scope.contractId,entityTypeId:scope.sourceEntityTypeId,token:"synthetic"});
+ const response=await f.api.getStateUpdateWorkflow("synthetic",scope.contractId,scope.appViewId,{date:scope.date});
+ await store.upsertAppViewDefinition({ownerKey:scope.ownerKey,contractId:scope.contractId,appViewId:scope.appViewId,appViewType:"WORKFLOW",workflowKey:"state-update",lastPreparedAt:"2026-10-29T10:00:00Z",status:"ready",definition:{kind:"state-update",appView:view,sourceEntityTypeId:response.sourceEntityType.id,targetEntityTypeId:response.targetEntityType.id,subjectFieldId:response.subjectFieldId,dateFieldId:response.dateFieldId,stateFields:response.stateFields,extraFields:response.extraFields,historyMode:response.historyMode,uniqueness:response.uniqueness}});
+}
+
+it("persists each current checkpoint but notifies availability only at existing batch boundaries", async () => {
+ const f=fixture(true,5);
+ await seedCurrentDefinition(f);
+ const writes=vi.spyOn(store,"setStateUpdateCurrentCoverage");
+ const published=vi.fn(),stop=subscribeLocalDatabaseCacheChanges(published);
+ try {
+  await prepareStateUpdateCurrent({api:f.api,token:"synthetic",scope,store,sourceRemoteTotal:5,sourceFetched:5,sourceCacheTotal:5,currentBatchCapabilities:{...cap,maxSubjects:2},runWithConcurrency,concurrency:1});
+  expect(writes.mock.calls.map(([input])=>input.notifyCacheChange)).toEqual([true,true,false,true,false,true,true,true]);
+  expect(writes.mock.calls.map(([input])=>Object.keys(input.coverage.subjects).length)).toEqual([0,0,1,2,3,4,5,5]);
+  expect(published).toHaveBeenCalledTimes(6); // two initial, three batches, terminal
+  const proof=await store.getStateUpdateCurrentCoverage(scope);
+  expect(proof).toMatchObject({status:"complete",totalSubjects:5,requestCount:3});
+  await reopen();expect(await store.getStateUpdateCurrentCoverage(scope)).toEqual(proof);
+  expect(await store.getStateUpdateCurrentCoverage({...scope,ownerKey:"another-owner"})).toBeNull();
+  expect(await store.getStateUpdateCurrentCoverage({...scope,contractId:"another-contract"})).toBeNull();
+ } finally {stop();}
+});
+
+it("retains a per-subject durable checkpoint before its visual notification and reopens cancelled preparation", async () => {
+ const f=fixture(true,3);
+ await seedCurrentDefinition(f);
+ let entered=()=>{},release=()=>{};
+ const held=new Promise<void>(r=>{release=r;}),checkpoint=new Promise<void>(r=>{entered=r;});
+ const write=store.setStateUpdateCurrentCoverage.bind(store);
+ vi.spyOn(store,"setStateUpdateCurrentCoverage").mockImplementation(async input=>{
+  await write(input);
+  if(input.notifyCacheChange===false&&Object.keys(input.coverage.subjects).length===1){entered();await held;}
+ });
+ const published=vi.fn(),stop=subscribeLocalDatabaseCacheChanges(published),controller=new AbortController();
+ const preparation=prepareStateUpdateCurrent({api:f.api,token:"synthetic",scope,store,sourceRemoteTotal:3,sourceFetched:3,sourceCacheTotal:3,currentBatchCapabilities:cap,runWithConcurrency,concurrency:1,signal:controller.signal});
+ try {
+  await checkpoint;
+  expect(published).toHaveBeenCalledTimes(2);
+  const partial=await store.getStateUpdateCurrentCoverage(scope);
+  expect(partial).toMatchObject({status:"partial",subjects:{[subjects[0].id]:{status:"verified",remoteRecordId:"event-"+subjects[0].id}}});
+  expect(Object.keys(partial!.subjects)).toHaveLength(1);
+  const localCurrent=(await read(0))[0].current!;
+  expect(localCurrent.stateValues.find(value=>value.fieldId==="revision")?.value).toBe("R1");
+  controller.abort();release();await preparation;
+  expect(published).toHaveBeenCalledTimes(3); // final partial still wakes readers
+  const cancelled=await store.getStateUpdateCurrentCoverage(scope);
+  await reopen();expect(await store.getStateUpdateCurrentCoverage(scope)).toEqual(cancelled);
+  expect((await read(0))[0].current?.recordId).toBe(localCurrent.recordId);
+  expect(cancelled?.subjects[subjects[1].id]).toBeUndefined();
+  vi.restoreAllMocks();await warm(f);
+  expect((await store.getStateUpdateCurrentCoverage(scope))?.status).toBe("complete");
+ } finally {release();await preparation;stop();}
+});
+
+it("keeps failed subjects durable and publishes the failed batch without hiding verified siblings", async () => {
+ const f=fixture(true,4);f.unavailable(subjects[1].id);
+ await seedCurrentDefinition(f);
+ const calls=vi.spyOn(store,"setStateUpdateCurrentCoverage");
+ await expect(prepareStateUpdateCurrent({api:f.api,token:"synthetic",scope,store,sourceRemoteTotal:4,sourceFetched:4,sourceCacheTotal:4,currentBatchCapabilities:cap,runWithConcurrency,concurrency:1})).rejects.toThrow("STATE_UPDATE_CURRENT_PREPARATION_FAILED");
+ const failure=calls.mock.calls.find(([input])=>Object.keys(input.coverage.subjects).length===2)![0];
+ expect(failure.notifyCacheChange).toBe(false);expect(failure.coverage.subjects[subjects[1].id]).toEqual({status:"failed"});
+ expect(calls.mock.calls.at(-1)![0]).toMatchObject({notifyCacheChange:true,coverage:{status:"partial"}});
+ const proof=await store.getStateUpdateCurrentCoverage(scope);await reopen();expect(await store.getStateUpdateCurrentCoverage(scope)).toEqual(proof);
+ expect(proof?.subjects[subjects[0].id].status).toBe("verified");expect(proof?.subjects[subjects[1].id].status).toBe("failed");expect(proof?.subjects[subjects[3].id].status).toBe("verified");
 });

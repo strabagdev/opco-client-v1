@@ -114,15 +114,38 @@ export default function HomeScreen() {
       return;
     }
 
+    // These promises live only for this pass. A cache/scope invalidation makes
+    // them ineligible; the existing refresh coordinator schedules the next pass.
+    const telemetryReads = new Map<string, ReturnType<typeof definitionCache.getSyncTelemetry>>();
+    const hydrationReads = new Map<string, ReturnType<typeof definitionCache.getAttendanceDaySnapshotHydration>>();
+    const readTelemetry = async (entityTypeId: string) => {
+      if (!canUpdate()) return null;
+      const key = JSON.stringify([ownerKey, selectedContractId, entityTypeId]);
+      let reading = telemetryReads.get(key);
+      if (!reading) {
+        reading = definitionCache.getSyncTelemetry({ ownerKey, contractId: selectedContractId, entityTypeId });
+        telemetryReads.set(key, reading);
+      }
+      const value = await reading;
+      return canUpdate() ? value : null;
+    };
+    const readHydration = async (appViewId: string, targetEntityTypeId: string, date: string) => {
+      if (!canUpdate()) return null;
+      const key = JSON.stringify([ownerKey, selectedContractId, appViewId, targetEntityTypeId, date]);
+      let reading = hydrationReads.get(key);
+      if (!reading) {
+        reading = definitionCache.getAttendanceDaySnapshotHydration({ ownerKey, contractId: selectedContractId, appViewId, targetEntityTypeId, date });
+        hydrationReads.set(key, reading);
+      }
+      const value = await reading;
+      return canUpdate() ? value : null;
+    };
+
     try {
       const entries = await Promise.all(nextViews.map(async (appView) => {
         const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
         const recordsTelemetry = appView.type === "RECORDS"
-          ? await definitionCache.getSyncTelemetry({
-              contractId: selectedContractId,
-              entityTypeId: appView.config.entityTypeId,
-              ownerKey,
-            })
+          ? await readTelemetry(appView.config.entityTypeId)
           : null;
         const sourceEntityTypeId = definition?.definition.kind === "state-update"
           ? definition.definition.sourceEntityTypeId
@@ -135,35 +158,19 @@ export default function HomeScreen() {
             ? definition.definition.targetEntityTypeId
             : null;
         const sourceTelemetry = sourceEntityTypeId
-          ? await definitionCache.getSyncTelemetry({
-              contractId: selectedContractId,
-              entityTypeId: sourceEntityTypeId,
-              ownerKey,
-            })
+          ? await readTelemetry(sourceEntityTypeId)
           : null;
         const isAttendanceWorkflow = appView.type === "WORKFLOW" &&
           appView.config.workflowKey === "attendance";
         const attendanceDayHydration = isAttendanceWorkflow &&
           targetEntityTypeId
-          ? await definitionCache.getAttendanceDaySnapshotHydration({
-              appViewId: appView.id,
-              contractId: selectedContractId,
-              date: today,
-              ownerKey,
-              targetEntityTypeId,
-            })
+          ? await readHydration(appView.id, targetEntityTypeId, today)
           : null;
         const attendanceMonthStatus = isAttendanceWorkflow &&
           appView.config.workflowKey === "attendance" &&
           targetEntityTypeId
           ? deriveAttendanceMonthStatus(await Promise.all(currentMonthDates.map((date) =>
-              definitionCache.getAttendanceDaySnapshotHydration({
-                appViewId: appView.id,
-                contractId: selectedContractId,
-                date,
-                ownerKey,
-                targetEntityTypeId,
-              })
+              readHydration(appView.id, targetEntityTypeId, date)
             )))
           : undefined;
         const stateUpdateCoverage = appView.type === "WORKFLOW" &&

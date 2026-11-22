@@ -5749,13 +5749,16 @@ async function getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageSc
       Object.keys(subjects).length === coverage.totalSubjects && coverage.requestCount * requestBatchSize >= verified ? "complete" : "partial" };
 }
 
-async function setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }) {
+async function setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & {
+  coverage: StateUpdateCurrentCoverage;
+  notifyCacheChange?: boolean;
+}) {
   const db = await getDatabase();
   await db.runAsync(
     "INSERT INTO app_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     stateUpdateCurrentCoverageKey(input), JSON.stringify(input.coverage),
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  if (input.notifyCacheChange !== false) notifyLocalDatabaseCacheChangeListeners();
 }
 
 async function getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null> {

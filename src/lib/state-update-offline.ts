@@ -909,7 +909,11 @@ export type StateUpdateOfflineStore = {
   reviewStateUpdateSchedule?(input:ReviewStateUpdateScheduleInput):Promise<void>;
   getStateUpdateScheduleContext?(input: StateUpdateScope & {policy: import("./state-update-schedule").StateUpdateSchedulePolicy}): Promise<import("./state-update-schedule").CachedStateUpdateScheduleContext | null>;
   getStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope): Promise<StateUpdateCurrentCoverage | null>;
-  setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & { coverage: StateUpdateCurrentCoverage }): Promise<void>;
+  setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageScope & {
+    coverage: StateUpdateCurrentCoverage;
+    /** Persist every checkpoint; defer only its visual invalidation until the batch boundary. */
+    notifyCacheChange?: boolean;
+  }): Promise<void>;
   completeStateUpdateOperation(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CREATED" | "UNCHANGED" | "UPDATED" }>): Promise<void>;
   discardStateUpdateLocalChange(input: DiscardStateUpdateConflictInput): Promise<void>;
   failStateUpdateOperation(operation: PendingOperation, code: string, message: string, details?: unknown, httpStatus?: number | null): Promise<void>;

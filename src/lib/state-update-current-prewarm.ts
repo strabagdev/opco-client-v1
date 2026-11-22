@@ -30,10 +30,10 @@ export async function prepareStateUpdateCurrent({
     status: "partial", sourceComplete: false, totalSubjects: sourceCacheTotal,
     subjects: {}, requestCount: 0, durationMs: 0, refreshedAt: new Date().toISOString(),
   };
-  const writeCoverage = () => retainCoverageUntilComplete && coverage.status !== "complete"
+  const writeCoverage = (notifyCacheChange = true) => retainCoverageUntilComplete && coverage.status !== "complete"
     ? Promise.resolve() : store.setStateUpdateCurrentCoverage({ ...scope, coverage: {
     ...coverage, subjects: { ...coverage.subjects }, durationMs: Date.now() - started,
-  } });
+  }, notifyCacheChange });
   await writeCoverage();
   if (scope.scheduleBindingId) {
     const response=await api.getStateUpdateWorkflow(token,scope.contractId,scope.appViewId,{date:scope.date,identity:scope.identity,pageSize:1});
@@ -107,7 +107,9 @@ export async function prepareStateUpdateCurrent({
         if(result.contentVerified!==true || result.persistedRemoteEventCount!==(item.current?1:0)) throw new Error("STATE_UPDATE_CURRENT_CONTENT_UNVERIFIED");
         coverage.subjects[subjectRecordId]={status:"verified",remoteRecordId:item.current?.recordId??null};
       } catch { failed=true; coverage.subjects[subjectRecordId]={status:"failed"}; }
-      await writeCoverage();
+      // Keep each durable checkpoint, including failures. Only wake visual readers
+      // at the existing batch boundary; cancellation still publishes the final partial proof.
+      await writeCoverage(subjectRecordId === batch[batch.length - 1]);
     }
   });
   const verified = Object.values(coverage.subjects).filter(subject => subject.status === "verified").length;
