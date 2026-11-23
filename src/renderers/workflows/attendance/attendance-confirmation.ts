@@ -6,10 +6,11 @@ const unavailable = "No disponible en esta lectura";
 const empty = "Sin valor";
 
 /** Wording for the existing confirmation only; zero local never proves zero remote. */
-export function attendanceRepeatConfirmationPresentation({ localCount, remoteCount, dateLabel }: {
+export function attendanceRepeatConfirmationPresentation({ localCount, remoteCount, dateLabel, registration }: {
   readonly localCount: number;
   readonly remoteCount?: number;
   readonly dateLabel: string;
+  readonly registration?: { date: string; timeZone: string };
 }) {
   const additional = localCount > 0 || (remoteCount ?? 0) > 0;
   const localRecords = `${localCount} ${localCount === 1 ? "registro disponible" : "registros disponibles"}`;
@@ -22,6 +23,7 @@ export function attendanceRepeatConfirmationPresentation({ localCount, remoteCou
     title: additional ? "Confirmar registro adicional" : "Confirmar registro",
     confirmLabel: additional ? "Confirmar uno adicional" : "Confirmar registro",
     message,
+    dateSummary: registration ? `Fecha operativa del registro: ${registration.date.split("-").reverse().join("/")} · ${registration.timeZone}. Se calcula al confirmar.` : null,
     consequence: additional ? "Se creará un registro independiente. Los anteriores se conservarán." : "Se creará un registro independiente.",
   };
 }

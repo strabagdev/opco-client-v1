@@ -13,9 +13,14 @@ describe("Definitive Attendance operational confirmation",()=>{
   const r=finalizeAttendanceDay(entry,{...input,instant:"2026-11-18T23:00:00.000Z"});
   expect(r.entry.eventOccurredAt).toBe("2026-11-18T23:00:00.000Z");expect(r.notice).toContain("franja");
  });
- it("requires a new explicit confirmation when an automatic warning crosses the day boundary",()=>{expect(()=>finalizeAttendanceDay({statusOptionId:"option-b"},{...input,instant:"2026-11-19T11:00:00.000Z"})).toThrow("Cambió el día operativo");});
- it("keeps a retrospective manual DATE and never infers its historical band",()=>{const r=finalizeAttendanceDay({statusOptionId:"option-a"},{...input,date:"2026-10-01",mode:"MANUAL"});expect(r.entry.operationalDay?.mode).toBe("MANUAL");expect(r.notice).toContain("no se dedujo");});
+ it("derives the new operational day from the definitive instant regardless of the consulted DATE",()=>{const r=finalizeAttendanceDay({statusOptionId:"option-b"},{...input,date:"2026-10-01",instant:"2026-11-19T11:00:00.000Z"});expect(r.date).toBe("2026-11-19");expect(r.entry.operationalDay?.mode).toBe("AUTO");});
+ it("a historical or MANUAL consultation cannot assign a new creation DATE",()=>{const r=finalizeAttendanceDay({statusOptionId:"option-a"},{...input,date:"2026-10-01",mode:"MANUAL"});expect(r.date).toBe("2026-11-18");expect(r.entry.operationalDay?.mode).toBe("AUTO");expect(r.notice).not.toContain("fecha manual");});
  it("editing a historical row preserves absent capture and does not infer a band",()=>{const r=finalizeAttendanceDay({statusOptionId:"option-a"},{...input,editing:true});expect(r.entry).not.toHaveProperty("eventOccurredAt");expect(r.entry.operationalDay?.mode).toBe("PRESERVE");expect(r.notice).toBeNull();});
  it("retains the existing original instant on retry",()=>{const r=finalizeAttendanceDay({statusOptionId:"option-b",eventOccurredAt:input.instant},{...input,instant:"2026-11-20T15:00:00.000Z"});expect(r.entry.eventOccurredAt).toBe(input.instant);});
  it.each([undefined,{version:1 as const,calendarKey:"old"}])("never creates with an unconfirmed calendar",contract=>{expect(()=>finalizeAttendanceDay({statusOptionId:"option-b"},{...input,contract})).toThrow("no está confirmado");});
+ it.each([
+  ["2026-11-19T10:59:59.000Z","2026-11-18"],["2026-11-19T11:00:00.000Z","2026-11-19"],
+  ["2027-01-01T05:00:00.000Z","2026-12-31"],["2026-12-01T05:00:00.000Z","2026-11-30"],
+ ])("pairs capture and operational DATE at %s",(instant,date)=>{const r=finalizeAttendanceDay({statusOptionId:"option-b"},{...input,date:"1999-01-01",instant});expect(r.date).toBe(date);expect(r.entry.eventOccurredAt).toBe(instant);expect(r.entry.operationalDay?.mode).toBe("AUTO");});
+ it("uses the configured zone and start rather than a contract-specific rule",()=>{const other:OperationalCalendar={version:1,timeZone:"Europe/Madrid",dayStart:"06:30",bands:[]};const r=finalizeAttendanceDay({statusOptionId:"arbitrary"},{...input,calendar:other,contract:{version:1,calendarKey:operationalCalendarKey(other)},instant:"2026-11-19T05:29:59.000Z"});expect(r.date).toBe("2026-11-18");});
 });

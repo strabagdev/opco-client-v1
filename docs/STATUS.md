@@ -1,3 +1,14 @@
+## Attendance: altas por día operativo, consulta independiente — local, sin publicar — 2026-11-23
+
+Sustituye el candidato manual 529f11e, cuya publicación se detuvo antes de commit/push/deploy.
+Con calendario, las altas nuevas usan AUTO y el mismo instante definitivo para DATE y captura;
+selector, históricos y attentionDate sólo consultan. Conteos y current se verifican para el día
+operativo de registro. Si cambia mientras una confirmación está abierta, se exige revisar de nuevo
+sin guardar automáticamente. Ediciones y pendientes existentes conservan fecha e identidad.
+Sin calendario no cambia el comportamiento. A/B manual, contexto y repetición intactos.
+Alcance en [ATTENDANCE_OPERATIONAL_REGISTRATION.md](ATTENDANCE_OPERATIONAL_REGISTRATION.md).
+C-06/C-02 y las 27 filas productivas quedan fuera. Sin commit/push/deploy.
+
 ## C-01 RECORDS syncing — corrección local, sin publicar — 2026-11-22
 
 Se verificó que el hallazgo del commit fe376189da510ea4886bdb24e72c85e40bbee7e5
