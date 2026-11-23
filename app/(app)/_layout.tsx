@@ -5,6 +5,7 @@ import { AppShellHeader } from "@/components/app-shell-header";
 import { AppNavigationMenu } from "@/components/app-navigation-menu";
 import { coreConnectionSince, resolveShellOperationalStatus } from "@/lib/shell-status-presentation";
 import { ShellOperationalStatusIndicator } from "@/components/shell-operational-status";
+import { BrowserStorageDiagnostics } from "@/components/browser-storage-diagnostics";
 import { offlinePreparationFailureRows } from "@/lib/offline-preparation-diagnostic";
 import { DesktopNavigationProvider, DesktopSidebar } from "@/components/desktop-navigation";
 import { desktopStyleColors } from "@/lib/desktop-presentation";
@@ -709,6 +710,7 @@ function PwaDiagnostics({
   return (
     <View style={styles.diagnostics}>
       {showTitle ? <Text style={styles.diagnosticsTitle}>Diagnostico PWA</Text> : null}
+      <BrowserStorageDiagnostics />
       {rows.map(([label, value]) => (
         <View key={label} style={styles.diagnosticsRow}>
           <Text style={styles.diagnosticsLabel}>{label}</Text>
