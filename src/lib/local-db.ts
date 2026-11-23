@@ -175,6 +175,7 @@ type LocalDatabaseGlobalState = {
   coordinatorSequence: number;
   coordinatorWaiting: SQLiteCoordinatorOperationDiagnostics[];
   connectionOperationPromise: Promise<void> | null;
+  closePromise: Promise<void> | null;
   database: SQLite.SQLiteDatabase | null;
   databasePromise: Promise<CoordinatedDatabase> | null;
   lifecycleCloseRegistered: boolean;
@@ -356,6 +357,14 @@ export function getLocalDatabase(): LocalDatabase {
 
 async function getDatabase() {
   const state = getLocalDatabaseGlobalState();
+
+  if (state.lastUnavailableError?.causeCode === "CLOSE_FAILED") {
+    throw state.lastUnavailableError;
+  }
+  if (state.closePromise) {
+    await state.closePromise.catch(error => { throw state.lastUnavailableError ?? error; });
+    return getDatabase();
+  }
 
   if (state.storageState.status === "unavailable" && !state.databasePromise) {
     throw state.lastUnavailableError ?? new LocalDatabaseUnavailableError("UNKNOWN");
@@ -598,6 +607,7 @@ function getLocalDatabaseGlobalState() {
       coordinatorSequence: 0,
       coordinatorWaiting: [],
       connectionOperationPromise: null,
+      closePromise: null,
       lifecycleCloseRegistered: false,
       hasReachedReady: false,
       lastUnavailableError: null,
@@ -637,21 +647,26 @@ function createCoordinatedDatabase(
         return (
           task: (transaction: SQLite.SQLiteDatabase) => Promise<void>,
           diagnosticName: SQLiteCoordinatorOperationName = "transaction:unlabeled",
-        ) => enqueueDatabaseOperation(
-          state,
-          diagnosticName,
-          () => target.withTransactionAsync(() => task(target)),
-        );
+        ) => {
+          // A caller may retain this facade across a close between two SQL calls.
+          if (state.closePromise || state.lastUnavailableError?.causeCode === "CLOSE_FAILED" || state.database !== target) {
+            return getDatabase().then((db) => db.withTransactionAsync(task, diagnosticName));
+          }
+          return enqueueDatabaseOperation(state, diagnosticName,
+            () => target.withTransactionAsync(() => task(target)));
+        };
       }
 
       const value = Reflect.get(target, property, target);
 
       if (typeof property === "string" && coordinatedMethods.has(property) && typeof value === "function") {
-        return (...args: unknown[]) => enqueueDatabaseOperation(
-          state,
-          sqliteOperationName(property, args[0]),
-          () => Promise.resolve(Reflect.apply(value, target, args)),
-        );
+        return (...args: unknown[]) => {
+          if (state.closePromise || state.lastUnavailableError?.causeCode === "CLOSE_FAILED" || state.database !== target) {
+            return getDatabase().then((db) => Reflect.apply(Reflect.get(db, property), db, args));
+          }
+          return enqueueDatabaseOperation(state, sqliteOperationName(property, args[0]),
+            () => Promise.resolve(Reflect.apply(value, target, args)));
+        };
       }
 
       return typeof value === "function" ? value.bind(target) : value;
@@ -791,10 +806,11 @@ function markLocalDatabaseUnavailable(state: LocalDatabaseGlobalState, error: Lo
   state.lastUnavailableError = error;
   setLocalDatabaseStorageState(state, {
     cause: error.causeCode,
-    destructiveRecoveryAvailable: error.causeCode !== "ACCESS_HANDLE_BUSY",
+    destructiveRecoveryAvailable: error.causeCode !== "ACCESS_HANDLE_BUSY" && error.causeCode !== "CLOSE_FAILED",
     errorCode: "SQLITE_UNAVAILABLE",
-    technicalMessage: sanitizeLocalDatabaseErrorMessage(error.originalError),
-    ...(error.retryRequiresReload && state.hasReachedReady === false ? { retryRequiresReload: true as const } : {}),
+    technicalMessage: error.causeCode === "CLOSE_FAILED" ? "SQLITE_CLOSE_OUTCOME_UNCONFIRMED" : sanitizeLocalDatabaseErrorMessage(error.originalError),
+    ...(error.retryRequiresReload && (state.hasReachedReady === false || error.causeCode === "CLOSE_FAILED")
+      ? { retryRequiresReload: true as const } : {}),
     retryable: true,
     status: "unavailable",
   });
@@ -847,29 +863,67 @@ function classifyLocalDatabaseFailureCause(
   return fallbackCause;
 }
 
-function registerWebDatabaseLifecycleClose(state: LocalDatabaseGlobalState) {
-  if (state.lifecycleCloseRegistered || typeof window === "undefined") {
-    return;
+/** Non-destructive close. Only work already admitted to the coordinator drains here. */
+export function closeLocalDatabase(): Promise<void> {
+  return closeDatabaseConnection();
+}
+
+function closeDatabaseConnection(afterClose?: () => Promise<void>): Promise<void> {
+  const state = getLocalDatabaseGlobalState();
+  if (state.lastUnavailableError?.causeCode === "CLOSE_FAILED") {
+    return Promise.reject(state.lastUnavailableError);
   }
-
-  const closeCurrentDatabase = () => {
-    const currentDatabase = state.database;
-
-    if (!currentDatabase) {
-      return;
+  if (state.closePromise) {
+    return afterClose ? state.closePromise.then(() => closeDatabaseConnection(afterClose)) : state.closePromise;
+  }
+  const opening = state.databasePromise;
+  // Install the fence before waiting for initialization or admitting the close.
+  const closing = Promise.resolve().then(async () => {
+    // Initialization owns disposal of a handle whose migration failed.
+    if (opening) await opening.catch(() => undefined);
+    const database = state.database;
+    if (database) {
+      await enqueueDatabaseOperation(state, "exec:close", async () => {
+        try {
+          await database.closeAsync();
+        } catch (error) {
+          // A rejection does not prove whether the physical handle was released.
+          // Quarantine it until a new runtime, instead of probing/replaying SQL or
+          // opening a competing connection in this worker.
+          const unavailable = new LocalDatabaseUnavailableError("CLOSE_FAILED", error);
+          unavailable.destructiveRecoveryAvailable = false;
+          if (typeof window !== "undefined" && typeof window.location?.reload === "function") {
+            unavailable.retryRequiresReload = true;
+          }
+          markLocalDatabaseUnavailable(state, unavailable);
+          throw error;
+        }
+        state.database = null;
+        state.databasePromise = null;
+        state.coordinatedDatabase = null;
+        state.migrationPromise = null;
+        state.migratedSchemaVersion = null;
+      });
     }
+    // Explicitly confirmed recovery keeps the same fence until deletion finishes.
+    await afterClose?.();
+  });
+  const completed = closing.finally(() => {
+    if (state.closePromise === completed) state.closePromise = null;
+  });
+  state.closePromise = completed;
+  return completed;
+}
 
-    state.database = null;
-    state.databasePromise = null;
-    state.coordinatedDatabase = null;
-    state.connectionOperationPromise = null;
-    state.migrationPromise = null;
-    state.migratedSchemaVersion = null;
-    void closeDatabaseQuietly(currentDatabase);
-  };
-
-  window.addEventListener("pagehide", closeCurrentDatabase);
-  window.addEventListener("beforeunload", closeCurrentDatabase);
+function registerWebDatabaseLifecycleClose(state: LocalDatabaseGlobalState) {
+  if (state.lifecycleCloseRegistered || typeof window === "undefined") return;
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    // BFCache suspends this runtime; it must retain its connection and queue.
+    if (event.persisted) return;
+    // Best effort only. Browser termination may prevent this promise from completing.
+    void closeLocalDatabase().catch(() => undefined);
+  });
+  // beforeunload is cancelable: it must never dispose the live database.
   state.lifecycleCloseRegistered = true;
 }
 
@@ -885,6 +939,7 @@ export function __getLocalDatabaseDebugStateForTests() {
   return {
     hasDatabase: Boolean(state.database),
     hasDatabasePromise: Boolean(state.databasePromise),
+    hasClosePromise: Boolean(state.closePromise),
     hasMigrationPromise: Boolean(state.migrationPromise),
     lastUnavailableCause: state.lastUnavailableError?.causeCode ?? null,
     migratedSchemaVersion: state.migratedSchemaVersion,
@@ -918,6 +973,8 @@ export function subscribeLocalDatabaseCacheChanges(listener: () => void) {
 
 export async function retryLocalDatabaseInitialization() {
   const state = getLocalDatabaseGlobalState();
+  if (state.lastUnavailableError?.causeCode === "CLOSE_FAILED") throw state.lastUnavailableError;
+  if (state.closePromise) await state.closePromise.catch(error => { throw state.lastUnavailableError ?? error; });
   // Another explicit retry (or a normal caller) may already be opening the singleton.
   // Never discard that promise or its operation queue while it is in use.
   if (state.storageState.status !== "unavailable" && state.databasePromise) {
@@ -949,8 +1006,12 @@ export async function getLocalDatabaseRecoverySummary(): Promise<LocalDatabaseRe
   try {
     const state = getLocalDatabaseGlobalState();
 
-    db = state.coordinatedDatabase ?? state.database;
-    if (!db) {
+    if (state.closePromise) await state.closePromise;
+    if (state.lastUnavailableError?.causeCode === "CLOSE_FAILED") return emptyLocalDatabaseRecoverySummary(false);
+    if (state.storageState.status !== "unavailable" || state.databasePromise) {
+      db = await getDatabase();
+    } else {
+      // Only failed initialization requires the private, read-only recovery handle.
       db = await SQLite.openDatabaseAsync(DATABASE_NAME);
       shouldClose = true;
     }
@@ -994,26 +1055,17 @@ export async function resetLocalDatabaseAfterConfirmation({ confirmed }: { confi
 
   const state = getLocalDatabaseGlobalState();
 
-  if (state.database) {
-    await closeDatabaseQuietly(state.database);
-  }
-
-  state.database = null;
-  state.databasePromise = null;
-  state.coordinatedDatabase = null;
-  state.connectionOperationPromise = null;
-  state.migrationPromise = null;
-  state.migratedSchemaVersion = null;
-  state.lastUnavailableError = null;
-  setLocalDatabaseStorageState(state, {
-    destructiveRecoveryAvailable: false,
-    errorCode: null,
-    retryable: false,
-    status: "initializing",
-  });
-
   try {
-    await SQLite.deleteDatabaseAsync(DATABASE_NAME);
+    await closeDatabaseConnection(async () => {
+      await SQLite.deleteDatabaseAsync(DATABASE_NAME);
+      state.lastUnavailableError = null;
+      setLocalDatabaseStorageState(state, {
+        destructiveRecoveryAvailable: false,
+        errorCode: null,
+        retryable: false,
+        status: "initializing",
+      });
+    });
 
     return await getDatabase();
   } catch (error) {

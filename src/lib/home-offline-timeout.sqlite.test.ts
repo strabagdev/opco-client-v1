@@ -8,7 +8,7 @@ import { AppViewsUnavailableError, loadAppViewsWithCache } from "./app-navigatio
 import { prewarmAssignedAppViewsOnce } from "./app-view-prewarm";
 import { getHomeNavigationEvents, homeNavigationRows, recordHomeNavigationTransport } from "./home-navigation-diagnostics";
 import { getHomeExperienceCards, getHomeExperienceSections } from "./home-experiences";
-import { __resetLocalDatabaseForTests, getLocalDatabase, getLocalDatabaseStorageState } from "./local-db";
+import { __resetLocalDatabaseForTests, closeLocalDatabase, getLocalDatabase, getLocalDatabaseStorageState } from "./local-db";
 import { createOpcoApi, DEFAULT_REQUEST_TIMEOUT_MS, OpcoNetworkError, type AppView, type OpcoNetworkDiagnostics } from "./opco-api";
 import { restoreSession } from "./session-logic";
 import { isStateUpdateDiagnosticPath } from "./state-update-offline";
@@ -82,12 +82,12 @@ c.close()
 let directory: string;
 let db: ReturnType<typeof sqliteFile>;
 let store: ReturnType<typeof getLocalDatabase>;
-let pageListeners: Map<string, () => void>;
+let pageListeners: Map<string, (event: { persisted: boolean }) => void>;
 
 async function open() {
   __resetLocalDatabaseForTests();
   pageListeners = new Map();
-  vi.stubGlobal("window", { addEventListener: (name: string, listener: () => void) => pageListeners.set(name, listener) });
+  vi.stubGlobal("window", { addEventListener: (name: string, listener: (event: { persisted: boolean }) => void) => pageListeners.set(name, listener) });
   db = sqliteFile(directory + "/opco-client-v10-epoch2.db");
   sqlite.openDatabaseAsync.mockResolvedValue(db);
   store = getLocalDatabase();
@@ -98,8 +98,8 @@ async function reopen() {
   // Exercise the runtime's pagehide close handler, then a new singleton over the
   // same file. Only this test's temporary storage is used or removed.
   expect(pageListeners.has("pagehide")).toBe(true);
-  pageListeners.get("pagehide")!();
-  await db.closeAsync();
+  pageListeners.get("pagehide")!({ persisted: false });
+  await closeLocalDatabase();
   await open();
 }
 

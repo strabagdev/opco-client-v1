@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __getLocalDatabaseDebugStateForTests,
   __resetLocalDatabaseForTests,
+  closeLocalDatabase,
   getLocalDatabaseRecoverySummary,
   getLocalDatabaseStorageState,
   getLocalDatabase,
@@ -197,17 +198,18 @@ describe("local database singleton", () => {
   });
 
   it("closes the web SQLite handle on pagehide so a later runtime can reopen it", async () => {
-    const listeners = new Map<string, () => void>();
+    const listeners = new Map<string, (event: { persisted: boolean }) => void>();
 
     vi.stubGlobal("window", {
-      addEventListener: vi.fn((eventName: string, listener: () => void) => {
+      addEventListener: vi.fn((eventName: string, listener: (event: { persisted: boolean }) => void) => {
         listeners.set(eventName, listener);
       }),
     });
     const store = getLocalDatabase();
 
     await store.getSelectedContractId();
-    listeners.get("pagehide")?.();
+    listeners.get("pagehide")?.({ persisted: false });
+    await closeLocalDatabase();
 
     expect(db.closeAsync).toHaveBeenCalledOnce();
     expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
@@ -215,6 +217,177 @@ describe("local database singleton", () => {
       hasDatabasePromise: false,
       migratedSchemaVersion: null,
     });
+  });
+
+  it("does not close on cancelable beforeunload or BFCache suspension and can keep reading", async () => {
+    const listeners = new Map<string, (event: { persisted: boolean }) => void>();
+    vi.stubGlobal("window", { addEventListener: vi.fn((name, listener) => listeners.set(name, listener)) });
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+
+    expect(listeners.has("beforeunload")).toBe(false);
+    listeners.get("pagehide")!({ persisted: true });
+    await expect(store.getSelectedContractId()).resolves.toBeNull();
+    expect(db.closeAsync).not.toHaveBeenCalled();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({ hasDatabase: true, hasClosePromise: false });
+  });
+
+  it("drains active and waiting work before closing once and fences reads/retries until close resolves", async () => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const nextDb = createMockDatabase();
+    sqliteMock.openDatabaseAsync.mockResolvedValue(nextDb);
+    const active = deferred<void>(), close = deferred<void>();
+    const order: string[] = [];
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
+      order.push("transaction-start"); await task(); await active.promise; order.push("commit");
+    });
+    db.getFirstAsync.mockImplementation(async () => { order.push("waiting-read"); return null; });
+    db.closeAsync.mockImplementation(async () => { order.push("close-start"); await close.promise; order.push("close-end"); });
+    nextDb.getFirstAsync.mockImplementation(async () => { order.push("reopened-read"); return null; });
+    const transaction = store.markPendingOperationSyncing("synthetic-operation");
+    await vi.waitFor(() => expect(order).toContain("transaction-start"));
+    const waiting = store.getSelectedContractId();
+    await vi.waitFor(() => expect(store.getSQLiteCoordinatorDiagnostics().waitingTotal).toBe(1));
+    const closing = closeLocalDatabase();
+    expect(closeLocalDatabase()).toBe(closing);
+    const readAfterCloseRequested = store.getSelectedContractId();
+    const retryAfterCloseRequested = retryLocalDatabaseInitialization();
+    expect(db.closeAsync).not.toHaveBeenCalled();
+    active.resolve();
+    await vi.waitFor(() => expect(db.closeAsync).toHaveBeenCalledOnce());
+    expect(order.indexOf("commit")).toBeLessThan(order.indexOf("waiting-read"));
+    expect(order.indexOf("waiting-read")).toBeLessThan(order.indexOf("close-start"));
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({ hasDatabase: true, hasClosePromise: true });
+    close.resolve();
+    await Promise.all([transaction, waiting, closing, readAfterCloseRequested, retryAfterCloseRequested]);
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+    expect(order.indexOf("close-end")).toBeLessThan(order.lastIndexOf("reopened-read"));
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({ active: null, waitingTotal: 0 });
+  });
+
+  it("reacquires a retained facade when close falls between two SQL calls of one store method", async () => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const inserted = deferred<void>();
+    db.runAsync.mockImplementationOnce(() => inserted.promise);
+    const telemetry = store.markSyncPhase({ ownerKey: "owner_a", contractId: "contract", entityTypeId: "records", phase: "pushing" });
+    await vi.waitFor(() => expect(store.getSQLiteCoordinatorDiagnostics().active).not.toBeNull());
+    const closing = closeLocalDatabase();
+    const nextDb = createMockDatabase();
+    sqliteMock.openDatabaseAsync.mockResolvedValue(nextDb);
+    inserted.resolve();
+    await Promise.all([telemetry, closing]);
+    expect(db.closeAsync).toHaveBeenCalledOnce();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+    expect(nextDb.runAsync.mock.calls.some(([sql]) => String(sql).includes("UPDATE sync_telemetry"))).toBe(true);
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({ active: null, waitingTotal: 0 });
+  });
+
+  it("waits for an opening/migration before closing and never opens another handle during close", async () => {
+    const opening = deferred<MockDatabase>();
+    const close = deferred<void>();
+    sqliteMock.openDatabaseAsync.mockReturnValueOnce(opening.promise);
+    db.closeAsync.mockImplementation(() => close.promise);
+    const first = getLocalDatabase().getSelectedContractId();
+    const closing = closeLocalDatabase();
+    const second = getLocalDatabase().getSelectedContractId();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(db.closeAsync).not.toHaveBeenCalled();
+    opening.resolve(db);
+    await vi.waitFor(() => expect(db.closeAsync).toHaveBeenCalledOnce());
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({ migratedSchemaVersion: "10", hasClosePromise: true });
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    close.resolve();
+    await Promise.all([first, second, closing]);
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues the coordinator after a failed transaction and then performs the explicit close", async () => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const failure = new Error("synthetic rollback");
+    const release = deferred<void>();
+    db.withTransactionAsync.mockImplementationOnce(async () => { await release.promise; throw failure; });
+    const transaction = store.markPendingOperationSyncing("synthetic-operation");
+    const rejected = expect(transaction).rejects.toBe(failure);
+    await vi.waitFor(() => expect(db.withTransactionAsync).toHaveBeenCalledOnce());
+    const closing = closeLocalDatabase();
+    release.resolve();
+    await Promise.all([rejected, closing]);
+    expect(db.closeAsync).toHaveBeenCalledOnce();
+    await expect(store.getSelectedContractId()).resolves.toBeNull();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["open", "closed"])("quarantines a rejected close when the physical handle is %s", async (physical) => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const failure = new Error("synthetic close failure PRIVATE_SQL PRIVATE_VALUE PRIVATE_TOKEN");
+    let physicallyClosed = false;
+    db.closeAsync.mockImplementationOnce(async () => { physicallyClosed = physical === "closed"; throw failure; });
+    const closes = Array.from({ length: 20 }, () => closeLocalDatabase());
+    expect(closes.every(promise => promise === closes[0])).toBe(true);
+    await Promise.all(closes.map(promise => expect(promise).rejects.toBe(failure)));
+    expect(physicallyClosed).toBe(physical === "closed");
+    db.getFirstAsync.mockClear();
+    const writesBefore = db.runAsync.mock.calls.length;
+    expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({ hasDatabase: true, hasDatabasePromise: true, hasClosePromise: false });
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    await expect(store.setSelectedContractId("do-not-replay")).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    await Promise.all(Array.from({ length: 20 }, () => expect(retryLocalDatabaseInitialization()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" })));
+    await expect(closeLocalDatabase()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    await expect(resetLocalDatabaseAfterConfirmation({ confirmed: true })).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    await expect(getLocalDatabaseRecoverySummary()).resolves.toMatchObject({ canCount: false });
+    expect(db.getFirstAsync).not.toHaveBeenCalled();
+    expect(db.runAsync).toHaveBeenCalledTimes(writesBefore);
+    expect(db.closeAsync).toHaveBeenCalledOnce();
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(getLocalDatabaseStorageState()).toMatchObject({ status: "unavailable", cause: "CLOSE_FAILED", destructiveRecoveryAvailable: false, technicalMessage: "SQLITE_CLOSE_OUTCOME_UNCONFIRMED" });
+    expect(JSON.stringify(getLocalDatabaseStorageState())).not.toMatch(/PRIVATE/);
+    expect(store.getSQLiteCoordinatorDiagnostics()).toMatchObject({ active: null, waitingTotal: 0 });
+  });
+
+  it("rejects readers waiting behind a failed close and does not reopen until a fresh runtime", async () => {
+    const store = getLocalDatabase();
+    await store.getSelectedContractId();
+    const gate = deferred<void>(), failure = new Error("synthetic interrupted close");
+    db.closeAsync.mockImplementationOnce(async () => { await gate.promise; throw failure; });
+    const close = closeLocalDatabase();
+    const rejectedClose = expect(close).rejects.toBe(failure);
+    await vi.waitFor(() => expect(db.closeAsync).toHaveBeenCalledOnce());
+    const reads = Array.from({ length: 10 }, () => expect(store.getSelectedContractId()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" }));
+    const recovering = expect(retryLocalDatabaseInitialization()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    gate.resolve();
+    await Promise.all([rejectedClose, recovering, ...reads]);
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    // Model a new document only. Actual document/OPFS persistence is tested in Chromium.
+    __resetLocalDatabaseForTests();
+    sqliteMock.openDatabaseAsync.mockRejectedValueOnce(new Error("synthetic reopen failure"));
+    await expect(store.getSelectedContractId()).rejects.toMatchObject({ causeCode: "OPEN_FAILED" });
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
+    await retryLocalDatabaseInitialization();
+    await expect(store.getSelectedContractId()).resolves.toBeNull();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(3);
+    expect(sqliteMock.deleteDatabaseAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen for recovery diagnostics or reads while confirmed deletion is still in progress", async () => {
+    await getLocalDatabase().getSelectedContractId();
+    const deleting = deferred<void>();
+    sqliteMock.deleteDatabaseAsync.mockReturnValueOnce(deleting.promise);
+    const resetting = resetLocalDatabaseAfterConfirmation({ confirmed: true });
+    await vi.waitFor(() => expect(sqliteMock.deleteDatabaseAsync).toHaveBeenCalledOnce());
+    const summary = getLocalDatabaseRecoverySummary();
+    const read = getLocalDatabase().getSelectedContractId();
+    await Promise.resolve();
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    deleting.resolve();
+    await Promise.all([resetting, summary, read]);
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledTimes(2);
   });
 
   it("restores sync telemetry by owner and contract", async () => {
@@ -3282,6 +3455,12 @@ describe("local database singleton", () => {
     expect(getLocalDatabaseStorageState()).toMatchObject({ status: "ready" });
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function createMockDatabase(): MockDatabase {
   return {

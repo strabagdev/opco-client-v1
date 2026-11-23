@@ -1,6 +1,7 @@
 import { actionSurface } from "../theme/operational-presentation";
 import { metrics, type ThemeColors } from "../theme/tokens";
 import { colors } from "../theme/paint";
+import { FormAction, FormActions } from "../components/form-actions";
 import {useOfflinePreparationRecovery} from "./use-offline-preparation-recovery";
 import { copyStateUpdateDiagnosticsWithCoverage } from "./state-update-coverage-copy";
 import { recordHomeNavigationTransport } from "@/lib/home-navigation-diagnostics";
@@ -723,6 +724,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
         token,
       }}
     >
+      <View style={{ flex: 1, display: localDatabaseStorageState.status === "unavailable" ? "none" : "flex" }}>
+        {localDatabaseStorageState.status !== "unavailable" ||
+          getLocalDatabaseRecoveryGuidance(localDatabaseStorageState).preserveMountedContent ? children : null}
+      </View>
       {localDatabaseStorageState.status === "unavailable" ? (
         <LocalStorageRecoveryScreen
           automaticRecovery={automaticRecovery}
@@ -730,11 +735,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
           onResetConfirmed={resetLocalStorage}
           onRetry={retryLocalStorage}
         />
-      ) : (
-        <>
-          {children}
-        </>
-      )}
+      ) : null}
     </SessionContext.Provider>
   );
 }
@@ -770,9 +771,11 @@ function LocalStorageRecoveryScreen({
   const [error, setError] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [confirmReload, setConfirmReload] = useState(false);
   const [summary, setSummary] = useState<LocalDatabaseRecoverySummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const guidance = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState, automaticRecovery);
+  const confirmation = confirmReload ? guidance.reloadConfirmation : null;
   const showDiagnostics = shouldShowLocalStorageDiagnostics();
 
   const refreshSummary = useCallback(async () => {
@@ -831,6 +834,14 @@ function LocalStorageRecoveryScreen({
     }
   }
 
+  function requestRetry() {
+    if (guidance.reloadConfirmation) {
+      setConfirmReload(true);
+      return;
+    }
+    void retry();
+  }
+
   async function requestReset() {
     setError(null);
     const summary = await getRecoverySummary();
@@ -864,18 +875,23 @@ function LocalStorageRecoveryScreen({
     <View style={storageStyles.screen}>
       <View style={storageStyles.panel}>
         <Text style={storageStyles.title}>
-          {guidance.title}
+          {confirmation?.title ?? guidance.title}
         </Text>
         <Text style={storageStyles.body}>
-          {guidance.body}
+          {confirmation?.body ?? guidance.body}
         </Text>
         {error ? <Text style={storageStyles.error}>{error}</Text> : null}
         {showDiagnostics ? (
           <LocalStorageDiagnostics summary={summary} summaryError={summaryError} />
         ) : null}
-        <Pressable disabled={isRetrying || isResetting} onPress={retry} style={interaction => [storageStyles.primaryButton, actionSurface(true, interaction, Boolean(isRetrying || isResetting))]}>
+        {confirmation ? <FormActions>
+          <FormAction label="Cancelar" variant="secondary" disabled={isRetrying || isResetting}
+            onPress={() => setConfirmReload(false)} />
+          <FormAction label="Recargar página" busyLabel="Recargando" busy={isRetrying}
+            disabled={isRetrying || isResetting} onPress={() => void retry()} />
+        </FormActions> : <Pressable accessibilityRole="button" disabled={isRetrying || isResetting} onPress={requestRetry} style={interaction => [storageStyles.primaryButton, actionSurface(true, interaction, Boolean(isRetrying || isResetting))]}>
           {isRetrying ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={[storageStyles.primaryText, Boolean(isRetrying || isResetting) && { color: colors.onDisabled }]}>Reintentar</Text>}
-        </Pressable>
+        </Pressable>}
         {guidance.canRequestDestructiveReset ? (
           <Pressable disabled={isRetrying || isResetting} onPress={requestReset} style={storageStyles.dangerButton}>
             {isResetting ? (

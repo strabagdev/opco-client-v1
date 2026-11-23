@@ -1,4 +1,5 @@
 export type LocalDatabaseUnavailableCause =
+  | "CLOSE_FAILED"
   | "ACCESS_HANDLE_BUSY"
   | "OPEN_FAILED"
   | "MIGRATION_FAILED"

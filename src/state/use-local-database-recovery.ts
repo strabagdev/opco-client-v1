@@ -56,12 +56,17 @@ export function useLocalDatabaseRecovery({
     [],
   );
 
-  const canRecoverOpening = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState).reloadOnRetry;
+  const guidance = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState);
+  // Close failures require an explicit user reload, not the automatic OPFS probe.
+  const canRecoverOpening = guidance.isAccessHandleBusy && guidance.reloadOnRetry;
   useEffect(() => {
     if (localDatabaseStorageState.status === "ready") clearOpfsOpeningRecoveryBudget();
     if (!canRecoverOpening) return;
     return startOpfsOpeningRecovery({
-      isEligible: () => getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState()).reloadOnRetry && !reloadRequested.current,
+      isEligible: () => {
+        const current = getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState());
+        return current.isAccessHandleBusy && current.reloadOnRetry && !reloadRequested.current;
+      },
       onStatus: setAutomaticRecovery,
       reload: () => {
         reloadRequested.current = true;
@@ -75,7 +80,7 @@ export function useLocalDatabaseRecovery({
     const displayedReload = getLocalDatabaseRecoveryGuidance(localDatabaseStorageState).reloadOnRetry;
     const currentReload = getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState()).reloadOnRetry;
     if (displayedReload || currentReload) {
-      // Reload only the blocked initial document whose warning was actually presented.
+      // Reload only the unavailable document whose warning was actually presented.
       // A late click must not restart a runtime that has since become operational.
       if (!displayedReload || !currentReload || reloadRequested.current) return;
       reloadRequested.current = true;

@@ -1,6 +1,8 @@
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
+import { EventEmitter } from "node:events";
+// @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { mkdtempSync, rmSync } from "node:fs";
 import { formatStateValueLabel, resolveStateUpdateOfflineHistoryState } from "../renderers/workflows/state-update/state-update-workflow-logic";
 import { comparisonFingerprint } from "./search-comparison";
@@ -12,6 +14,38 @@ const sqlite = vi.hoisted(() => ({
   openDatabaseAsync: vi.fn()
 }));
 vi.mock("expo-sqlite", () => sqlite);
+
+type FixtureWorker = {
+  on(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "close", listener: (code: number | null, signal: string | null) => void): unknown;
+  removeListener(event: "error", listener: (error: Error) => void): unknown;
+  kill(): boolean;
+};
+
+function stopAfterWorkerClose(worker: FixtureWorker) {
+  let failure: Error | undefined;
+  const onError = (error: Error) => { failure ??= error; };
+  // Register before kill: exit/killed alone do not guarantee closed stdio.
+  const closed = new Promise<void>(resolve => {
+    worker.on("error", onError);
+    worker.once("close", (code, signal) => {
+      worker.removeListener("error", onError);
+      if (code !== 0 && signal !== "SIGTERM") {
+        failure ??= new Error(`SQLite fixture worker closed unexpectedly (${code}, ${signal})`);
+      }
+      resolve();
+    });
+  });
+  let stopping: Promise<void> | undefined;
+  return () => {
+    if (!stopping) {
+      stopping = closed.then(() => { if (failure) throw failure; });
+      worker.kill();
+    }
+    return stopping;
+  };
+}
+
 function sqliteHarness(databasePath = ":memory:") {
   const worker = spawn("python3", ["-u", "-c", `
 import sqlite3,json,sys
@@ -30,6 +64,7 @@ for line in sys.stdin:
   print(json.dumps({'result':result}))
  except Exception as e: print(json.dumps({'error':str(e),'sqliteCode':getattr(e,'sqlite_errorcode',None),'sqliteName':getattr(e,'sqlite_errorname',None)}))
 `, databasePath]);
+  const stop = stopAfterWorkerClose(worker);
   let buffer = "";
   const queue: {
     resolve: (value: any) => void;
@@ -74,13 +109,12 @@ for line in sys.stdin:
         throw error;
       }
     },
-    closeAsync: async () => {
-      worker.kill();
-    }
+    closeAsync: stop
   };
   return {
     db,
-    stop: () => worker.kill()
+    worker,
+    stop
   };
 }
 
@@ -90,7 +124,7 @@ const subjects = Array.from({length:130}, (_, n) => ({id: "subject-"+String(n).p
 const view = {id:scope.appViewId,name:"Versionado",slug:"versions",icon:null,sortOrder:0,type:"WORKFLOW",config:{workflowKey:"state-update",dateFieldId:scope.dateFieldId,sourceEntityTypeId:"audit-subjects"}};
 let harness: ReturnType<typeof sqliteHarness>, store: ReturnType<typeof getLocalDatabase>, directory: string;
 beforeEach(async()=>{__resetLocalDatabaseForTests();directory=mkdtempSync("/tmp/opco-prewarm-current-");harness=sqliteHarness(directory+"/cache.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();await store.getSelectedContractId();});
-afterEach(()=>{harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});});
+afterEach(async()=>{await harness.stop();__resetLocalDatabaseForTests();rmSync(directory,{recursive:true,force:true});});
 function fixture(dateValue="2026-08-13T00:00:00.000Z") {
  const stateFields=[{fieldId:"revision",label:"Revisión",type:"TEXT",required:false,options:[]},{fieldId:scope.dateFieldId,label:"Fecha",type:"DATE",required:false,options:[]}];
  const event=(id:string,n:number,revision:string,date:string)=>({recordId:id,date:date.slice(0,10),updatedAt:"2026-10-06T08:00:00.000Z",subject:subjects[n],states:{revision,[scope.dateFieldId]:date}});
@@ -107,7 +141,7 @@ function fixture(dateValue="2026-08-13T00:00:00.000Z") {
 }
 async function prepare(f:ReturnType<typeof fixture>, signal?:AbortSignal){await prewarmAssignedAppViewsOnce({api:f.api as any,appViews:[view] as any,ownerKey:scope.ownerKey,contractId:scope.contractId,store,token:"synthetic",signal});}
 async function find(n:number){return (await store.searchStateUpdateSubjects({...scope,sourceEntityTypeId:"audit-subjects",search:"TOLVA "+String(n).padStart(3,"0")}))[0];}
-async function reopen(){harness.stop();__resetLocalDatabaseForTests();harness=sqliteHarness(directory+"/cache.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();}
+async function reopen(){await harness.stop();__resetLocalDatabaseForTests();harness=sqliteHarness(directory+"/cache.sqlite");sqlite.openDatabaseAsync.mockResolvedValue(harness.db);store=getLocalDatabase();}
 describe("characterization: prewarm current proof is separate from latest",()=>{
  it("prepares all 130 subjects including current outside latest page one, and survives disk reopen",async()=>{
   const f=fixture();await prepare(f);expect(f.sourcePages).toEqual([1,2]);expect(f.workflowQueries).toHaveLength(131);expect(f.workflowQueries.filter(q=>q.subjectRecordId)).toHaveLength(130);expect(f.workflowQueries.filter(q=>q.subjectRecordId).every(q=>q.pageSize===1)).toBe(true);
@@ -236,4 +270,72 @@ it.each(["pending_create","conflict"])("keeps %s overlay and durable outbox over
  await reopen();expect((await find(129)).current?.recordId).toBe(intent.localRecordId);expect((await harness.db.getFirstAsync("SELECT sync_status FROM entity_records WHERE local_id=?",intent.localRecordId)).sync_status).toBe(status);
  expect(await harness.db.getAllAsync("SELECT * FROM entity_records WHERE sync_status!='synced' ORDER BY local_id")).toEqual(before);expect(await harness.db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")).toEqual(outbox);
  expect((await harness.db.getFirstAsync("SELECT COUNT(*) AS n FROM app_metadata WHERE key LIKE 'state_update_v10_snapshot:%' AND json_extract(value,'$.row.server_id')='obsolete-129'")).n).toBe(1);
+});
+
+describe("SQLite fixture worker termination", () => {
+  it("reopens only after the previous real worker and its stdio have closed", async () => {
+    await store.setSelectedContractId("fixture-close-proof");
+    const previous = harness;
+    let closed = false;
+    previous.worker.once("close", () => { closed = true; });
+
+    await reopen();
+
+    expect(closed).toBe(true);
+    expect(previous.worker.exitCode !== null || previous.worker.signalCode !== null).toBe(true);
+    expect(previous.worker.stdout.destroyed).toBe(true);
+    expect(previous.worker.stderr.destroyed).toBe(true);
+    expect(harness.worker).not.toBe(previous.worker);
+    expect(await store.getSelectedContractId()).toBe("fixture-close-proof");
+  });
+
+  it("shares one stop and waits for close rather than just exit", async () => {
+    const worker = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    const stop = stopAfterWorkerClose(worker);
+    const first = stop();
+    let settled = false;
+    void first.then(() => { settled = true; });
+    expect(stop()).toBe(first);
+    expect(worker.kill).toHaveBeenCalledTimes(1);
+
+    worker.emit("exit", null, "SIGTERM");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    worker.emit("close", null, "SIGTERM");
+    await first;
+    expect(settled).toBe(true);
+    expect(stop()).toBe(first);
+    expect(worker.kill).toHaveBeenCalledTimes(1);
+    expect(worker.listenerCount("close")).toBe(0);
+    expect(worker.listenerCount("error")).toBe(0);
+  });
+
+  it("observes close even when termination occurs inside kill", async () => {
+    const worker = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => { worker.emit("close", null, "SIGTERM"); return true; })
+    });
+    const stop = stopAfterWorkerClose(worker);
+    await stop();
+    expect(worker.kill).toHaveBeenCalledTimes(1);
+    expect(worker.listenerCount("close")).toBe(0);
+    expect(worker.listenerCount("error")).toBe(0);
+  });
+
+  it("reports worker errors after observing close instead of advancing cleanup early", async () => {
+    const worker = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    const stop = stopAfterWorkerClose(worker);
+    const failure = new Error("SYNTHETIC_WORKER_FAILURE");
+    worker.emit("error", failure);
+    const stopped = stop();
+    let settled = false;
+    const observed = stopped.then(() => { settled = true; }, error => { settled = true; throw error; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const rejection = expect(observed).rejects.toBe(failure);
+    worker.emit("close", 1, null);
+    await rejection;
+    expect(settled).toBe(true);
+    expect(worker.listenerCount("error")).toBe(0);
+  });
 });

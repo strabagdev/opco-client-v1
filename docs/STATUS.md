@@ -9,6 +9,23 @@ Sin calendario no cambia el comportamiento. A/B manual, contexto y repetición i
 Alcance en [ATTENDANCE_OPERATIONAL_REGISTRATION.md](ATTENDANCE_OPERATIONAL_REGISTRATION.md).
 C-06/C-02 y las 27 filas productivas quedan fuera. Sin commit/push/deploy.
 
+## C-06 SQLite lifecycle — integración local sobre 62280d6, sin publicar — 2026-11-23
+
+Base publicada: 62280d6be0f98a50331c884a02795cc9617d16bf. Se conserva el registro
+obligatorio por día operativo y C-01/C-04/C-05. Los nueve archivos de código y pruebas
+C-06 mantienen el contenido acreditado del candidato 556aebf; sólo se actualiza el
+contexto documental. Se retira el cierre de beforeunload, se coordina el cierre
+explícito y CLOSE_FAILED mantiene el handle en cuarentena y el formulario montado.
+Reintentar solicita confirmar la recarga y advierte la pérdida de cambios sin guardar;
+Cancelar conserva el borrador y no habilita SQL ni repite escrituras inciertas.
+La suspensión BFCache conserva conexión y cola; la salida definitiva no presume que
+el navegador espere promesas. Se reutiliza la evidencia Chromium/OPFS acreditada.
+Los timeouts históricos siguen sin causa demostrada: NO-GO para publicar mientras
+esa incertidumbre continúe. Comparación acotada predefinida sobre esta nueva base,
+sin cambiar límites, workers ni fixtures; una ejecución verde no resuelve su causa.
+Sin commit/push/deploy, cambios Core/Misceláneos ni acceso a colas reales. C-02 y las
+27 filas quedan fuera. Contrato y límites en [SQLITE_LIFECYCLE.md](SQLITE_LIFECYCLE.md).
+
 ## C-01 RECORDS syncing — corrección local, sin publicar — 2026-11-22
 
 Se verificó que el hallazgo del commit fe376189da510ea4886bdb24e72c85e40bbee7e5

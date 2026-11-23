@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __resetLocalDatabaseForTests,
+  closeLocalDatabase,
   getLocalDatabase,
   getLocalDatabaseStorageState,
   retryLocalDatabaseInitialization,
@@ -28,7 +29,7 @@ const db = {
   runAsync: vi.fn(async () => undefined),
 };
 let reload: ReturnType<typeof vi.fn>;
-let listeners: Map<string, () => void>;
+let listeners: Map<string, (event: { persisted: boolean }) => void>;
 
 function RecoveryHarness() {
   const input = {
@@ -55,13 +56,94 @@ beforeEach(() => {
   reload = vi.fn();
   listeners = new Map();
   vi.stubGlobal("window", {
-    addEventListener: (name: string, callback: () => void) => listeners.set(name, callback),
+    addEventListener: (name: string, callback: (event: { persisted: boolean }) => void) => listeners.set(name, callback),
     location: { reload },
   });
 });
 afterEach(() => { __resetLocalDatabaseForTests(); vi.unstubAllGlobals(); });
 
 describe("explicit retry of an OPFS-blocked initial opening", () => {
+  it("reloads explicitly once after an indeterminate close, without probing, resetting or reopening", async () => {
+    await getLocalDatabase().getSelectedContractId();
+    db.closeAsync.mockRejectedValueOnce(new Error("synthetic close outcome"));
+    await expect(closeLocalDatabase()).rejects.toThrow("synthetic close outcome");
+    const worker = vi.fn();
+    vi.stubGlobal("Worker", worker);
+    Object.assign(window, { Worker: worker });
+    const recovery = RecoveryHarness();
+    const cleanup = effects.map(effect => effect());
+    const guidance = getLocalDatabaseRecoveryGuidance(recovery.localDatabaseStorageState);
+    expect(guidance.reloadOnRetry).toBe(true);
+    expect(guidance.canRequestDestructiveReset).toBe(false);
+    expect(guidance.body).toContain("misma base");
+    expect(guidance.body).not.toContain("Otra pestaña");
+    expect(worker).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    await Promise.all(Array.from({ length: 20 }, () => recovery.retryLocalStorage()));
+    expect(reload).toHaveBeenCalledOnce();
+    expect(sqlite.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sqlite.deleteDatabaseAsync).not.toHaveBeenCalled();
+    expect(recovery.input.setBootstrapAttempt).not.toHaveBeenCalled();
+    for (const dispose of cleanup) dispose?.();
+  });
+
+  it("does not reload for a close failure until its warning was presented and retries a refused reload only on click", async () => {
+    await getLocalDatabase().getSelectedContractId();
+    const stale = RecoveryHarness();
+    db.closeAsync.mockRejectedValueOnce(new Error("synthetic close outcome"));
+    await expect(closeLocalDatabase()).rejects.toThrow();
+    await stale.retryLocalStorage();
+    expect(reload).not.toHaveBeenCalled();
+    const current = RecoveryHarness();
+    reload.mockImplementationOnce(() => { throw new Error("synthetic reload refused"); });
+    await expect(current.retryLocalStorage()).rejects.toThrow("synthetic reload refused");
+    expect(sqlite.openDatabaseAsync).toHaveBeenCalledOnce();
+    await current.retryLocalStorage();
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(sqlite.deleteDatabaseAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not invent a reload API on native after a close failure", async () => {
+    vi.unstubAllGlobals();
+    await getLocalDatabase().getSelectedContractId();
+    db.closeAsync.mockRejectedValueOnce(new Error("synthetic native close outcome"));
+    await expect(closeLocalDatabase()).rejects.toThrow();
+    const guidance = getLocalDatabaseRecoveryGuidance(getLocalDatabaseStorageState());
+    expect(guidance.reloadOnRetry).toBe(false);
+    expect(guidance.canRequestDestructiveReset).toBe(false);
+    expect(guidance.body).toContain("vuelve a abrir la aplicación");
+    await expect(retryLocalDatabaseInitialization()).rejects.toMatchObject({ causeCode: "CLOSE_FAILED" });
+    expect(sqlite.openDatabaseAsync).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a late initial-opening probe after the runtime becomes quarantined by a close failure", async () => {
+    let probe: { onmessage?: (event: { data: string }) => void } = {};
+    const postMessage = vi.fn(), terminate = vi.fn();
+    vi.stubGlobal("Worker", class {
+      constructor() { probe = this; }
+      onmessage?: (event: { data: string }) => void;
+      postMessage = postMessage;
+      terminate = terminate;
+    });
+    const saved = new Map();
+    Object.assign(window, { Worker, location: { reload, href: "https://local.example/" }, sessionStorage: {
+      getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value), removeItem: (key: string) => saved.delete(key),
+    } });
+    sqlite.openDatabaseAsync.mockRejectedValueOnce(busy());
+    await expect(getLocalDatabase().getSelectedContractId()).rejects.toThrow();
+    RecoveryHarness();
+    const cleanup = effects.map(effect => effect());
+    try {
+      expect(postMessage).toHaveBeenCalledOnce();
+      await retryLocalDatabaseInitialization();
+      db.closeAsync.mockRejectedValueOnce(new Error("synthetic close failure"));
+      await expect(closeLocalDatabase()).rejects.toThrow();
+      probe.onmessage!({ data: "free" });
+      expect(reload).not.toHaveBeenCalled();
+      expect(getLocalDatabaseStorageState()).toMatchObject({ cause: "CLOSE_FAILED", retryRequiresReload: true });
+    } finally { for (const dispose of cleanup) dispose?.(); }
+  });
+
   it("starts an availability check automatically and reloads without a Retry click after release", async () => {
     const postMessage = vi.fn(), terminate = vi.fn();
     let probe: { onmessage?: (e: { data: string }) => void } = {};
@@ -153,7 +235,8 @@ describe("explicit retry of an OPFS-blocked initial opening", () => {
   it("does not reload a previously operational runtime after pagehide and another blocked open", async () => {
     const store = getLocalDatabase();
     await store.getSelectedContractId();
-    listeners.get("pagehide")!();
+    listeners.get("pagehide")!({ persisted: false });
+    await closeLocalDatabase();
     sqlite.openDatabaseAsync.mockRejectedValueOnce(busy());
     await expect(store.getSelectedContractId()).rejects.toThrow();
     await RecoveryHarness().retryLocalStorage();
