@@ -1,4 +1,11 @@
 import { operationalCalendarKey, resolveOperationalDay, OperationalCalendarError, type OperationalCalendar, type OperationalDayCommand, type OperationalDayContract } from "./operational-calendar";
+import type { WriteFeedbackKind } from "./write-feedback";
+
+/** A band warning describes one confirmation; persistence is reported separately. */
+export function savedAttendanceBandNotice(notice: string, kind: WriteFeedbackKind) {
+  const result = kind === "server-confirmed" ? "Guardado confirmado por Opco." : "Guardado en este dispositivo.";
+  return `${result} Aviso de esa confirmación: ${notice}`;
+}
 
 /** New commands derive DATE from their original definitive instant, never the consultation.
  * Existing persisted commands are replayed by the outbox unchanged; edits preserve DATE. */

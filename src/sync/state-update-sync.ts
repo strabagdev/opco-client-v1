@@ -1,5 +1,6 @@
-import {assertOperationalCommand, OperationalCalendarError} from "../lib/operational-calendar";
+import {assertOperationalCommand, operationalCalendarKey, OperationalCalendarError} from "../lib/operational-calendar";
 import type { AppViewDefinitionCache } from "../lib/app-view-definitions-cache";
+import { loadAppViewsWithCache, type AppNavigationCache } from "../lib/app-navigation-cache";
 import {attendanceRepetitionMetadata,attendanceRepetitionPolicy} from "../lib/attendance-repetition";
 import {workflowWriteMetadata,WorkflowWriteReviewError} from "../lib/workflow-write-contract";
 import { StateUpdateScheduleReviewError, stateUpdateScheduleMetadata } from "../lib/state-update-schedule";
@@ -23,7 +24,7 @@ export type StateUpdateSyncStore = {
   markStateUpdateOperationConflict(operation: PendingOperation, result: Extract<StateUpdateBatchResult, { result: "CONFLICT" }>): Promise<void>;
   markStateUpdateOperationSyncing(operationId: string, expectedRequestId?: string): Promise<boolean | void>;
   retryStateUpdateOperation(operation: PendingOperation, code: string, message: string): Promise<void>;
-} & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">> & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
+} & Partial<Pick<AppViewDefinitionCache,"getAppViewDefinition">> & Partial<Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">> & Partial<Pick<SyncTelemetryStore, "markSyncError" | "markSyncPhase" | "markSyncPhaseCompleted">>;
 
 export type StateUpdateSyncResult = {
   completed: number;
@@ -41,7 +42,7 @@ let syncPromise: Promise<StateUpdateSyncResult> | null = null;
 let syncScope: { ownerKey: string; token: string; generation: number | undefined; store: StateUpdateSyncStore } | null = null;
 
 export function syncPendingStateUpdatesOnce(params: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration">>;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration" | "getAppViews">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   syncRunId?: string | null;
@@ -74,7 +75,7 @@ async function runSync({
   syncRunId = null,
   token,
 }: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration">>;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration" | "getAppViews">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   syncRunId?: string | null;
@@ -108,6 +109,7 @@ async function runSync({
   // A retained command must not be reinterpreted by a Core that only understands one-per-day.
   // Share this authenticated compatibility read inside this run, never across owners or reconnects.
   const repetitionChecks=new Map<string,Promise<void>>();
+  const definitionRecoveries = new Map<string, Promise<AttendanceWorkflowConfig>>();
   for (const operation of operations) {
     if (api.getAuthSessionGeneration?.() !== generation) {
       for (const scope of scopes) scopesWithErrors.add(stateUpdateScopeKey(scope, scope.contractId));
@@ -123,9 +125,25 @@ async function runSync({
       if (await store.markStateUpdateOperationSyncing(operation.id, operation.clientRequestId) === false) continue;
       result.operationsAttempted += 1;
 
-      const prepared = await store.getAppViewDefinition?.(ownerKey,operation.contractId,payload.appViewId);
+      let prepared: Awaited<ReturnType<NonNullable<StateUpdateSyncStore["getAppViewDefinition"]>>> | undefined;
+      try { prepared = await store.getAppViewDefinition?.(ownerKey,operation.contractId,payload.appViewId); }
+      catch (error) { if (!payload.operationalDay) throw error; }
+      if (api.getAuthSessionGeneration?.() !== generation) throw new OpcoAuthSessionChangedError();
       const view = prepared?.definition.appView;
-      const cachedConfig=view?.type==="WORKFLOW" ? view.config as AttendanceWorkflowConfig & {workflow?:string} : null;
+      let cachedConfig=view?.type==="WORKFLOW" ? view.config as AttendanceWorkflowConfig & {workflow?:string} : null;
+      if (payload.operationalDay && (!prepared ||
+          prepared.ownerKey !== ownerKey || prepared.contractId !== operation.contractId || prepared.appViewId !== payload.appViewId ||
+          !["attendance", "state-update"].includes(prepared.definition.kind) || view?.id !== payload.appViewId ||
+          !cachedConfig || cachedConfig.targetEntityTypeId !== operation.entityTypeId ||
+          !matchesOperationalDefinition(cachedConfig, payload))) {
+        const key = JSON.stringify([operation.contractId, payload.appViewId, operation.entityTypeId]);
+        let recovering = definitionRecoveries.get(key);
+        if (!recovering) {
+          recovering = recoverOperationalDefinition({ api, store, ownerKey, token, operation, payload, generation });
+          definitionRecoveries.set(key, recovering);
+        }
+        cachedConfig = await recovering;
+      }
       if(cachedConfig && (cachedConfig.workflowKey??cachedConfig.workflow)==="attendance" && attendanceRepetitionPolicy(cachedConfig)!==(payload.repetitionPolicy??"ONE_PER_DAY")) {
         throw new OpcoApiError("La política preparada cambió desde esta captura. Revisa la intención conservada; no se reinterpretó.","ATTENDANCE_POLICY_CHANGED",409);
       }
@@ -143,6 +161,7 @@ async function runSync({
         }
         await compatible;
       }
+      if (api.getAuthSessionGeneration?.() !== generation) throw new OpcoAuthSessionChangedError();
       const response = await api.saveStateUpdateWorkflow(token, operation.contractId, payload.appViewId, {
         ...attendanceRepetitionMetadata(payload),
         ...workflowWriteMetadata(payload),
@@ -256,6 +275,54 @@ async function runSync({
   ));
 
   return result;
+}
+
+async function recoverOperationalDefinition({ api, store, ownerKey, token, operation, payload, generation }: {
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getAppViews" | "getAuthSessionGeneration">>;
+  store: StateUpdateSyncStore;
+  ownerKey: string;
+  token: string;
+  operation: PendingOperation;
+  payload: OfflineStateUpdatePayload;
+  generation: number | undefined;
+}): Promise<AttendanceWorkflowConfig> {
+  const isCurrent = () => api.getAuthSessionGeneration?.() === generation;
+  const assertCurrent = () => { if (!isCurrent()) throw new OpcoAuthSessionChangedError(); };
+  const unavailable = () => new OpcoApiError(
+    "No se pudo comprobar la definición vigente. La intención original se conserva para reintentar con conexión.",
+    "STATE_UPDATE_DEFINITION_UNAVAILABLE", 503,
+  );
+  try {
+    assertCurrent();
+    if (!api.getAppViews || !store.getAppViews || !store.upsertAppViews) throw unavailable();
+    // Reuse authenticated assigned-view loading and its existing in-flight/cache
+    // machinery. Offline fallback is useful for consultation, not write authority.
+    const recovered = await loadAppViewsWithCache({
+      api: api as Pick<OpcoApi, "getAppViews">,
+      cache: store as Pick<AppNavigationCache, "getAppViews" | "upsertAppViews">,
+      invalidationKey: `state-update-definition:${generation}`,
+      ownerKey, contractId: operation.contractId, token, isCurrent,
+    });
+    assertCurrent();
+    if (recovered.fromCache || recovered.offline) throw unavailable();
+    const assigned = recovered.views.find(candidate => candidate.id === payload.appViewId);
+    if (assigned?.type !== "WORKFLOW" || assigned.config.workflowKey !== "attendance" ||
+        assigned.config.targetEntityTypeId !== operation.entityTypeId) throw unavailable();
+    // This config attests only compatibility for this run. Ordinary preparation
+    // still owns the complete persisted workflow definition and data coverage.
+    return assigned.config as AttendanceWorkflowConfig;
+  } catch (error) {
+    assertCurrent();
+    if (error instanceof OpcoAuthSessionChangedError) throw error;
+    throw unavailable();
+  }
+}
+
+function matchesOperationalDefinition(config: AttendanceWorkflowConfig, payload: OfflineStateUpdatePayload) {
+  try {
+    return Boolean(config.operationalCalendar &&
+      operationalCalendarKey(config.operationalCalendar) === payload.operationalDay?.calendarKey);
+  } catch { return false; }
 }
 
 async function completeOperationIfRemoteStateMatches({

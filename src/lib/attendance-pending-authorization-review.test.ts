@@ -94,7 +94,7 @@ for line in sys.stdin:
 const sourcePath = process.env.ATTENDANCE_CONFLICT_HANDLER_SOURCE ?? `${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`;
 const source = ts.createSourceFile(sourcePath, readFileSync(sourcePath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function handler(name: string, context: Record<string, unknown>) {
-  context={calendar:undefined,...context};
+  context={calendar:undefined,authGeneration:0,...context,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(context.api as object??{})}};
   let declaration: ts.FunctionDeclaration | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
@@ -116,7 +116,7 @@ async function reopen(){await harness.db.closeAsync();__resetLocalDatabaseForTes
 function input(overwrite?:boolean){return {...scope,subjectRecordId:"person",subjectDisplayName:"Synthetic",historyMode:"update-current" as const,uniqueness:"subject-date" as const,stateFields:fields,stateValues:[{fieldId:"status",optionId:"present"}],expectedUpdatedAt:base,overwrite};}
 function rendererContext(before:any){
   const c:any={captureWorkflowWriteCommand,workflowWriteMetadata,writeContract:undefined,writeContractRequiredRef:{current:false},attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,copyAttendanceEntry,OpcoApiError,draftRevisionRef:{current:0},saveInFlightRef:{current:false},onlineAttemptsRef:{current:new Map()},setConfirmationError:vi.fn(),conflict:null,buildOfflineStateValues,stateUpdateIntentsEqual,resolutionMountedRef:{current:true},requestSequenceRef:{current:0},confirmationSequenceRef:{current:0},resolutionScope:"scope",resolutionScopeRef:{current:"scope"},selectedContractId:scope.contractId,selectedItem:{person:{id:"person",displayName:"Synthetic"},attendance:{recordId:before.localRecordId,statusOptionId:"present",statusLabel:"Present",updatedAt:base}},ownerKey:scope.ownerKey,isSaving:false,isOnline:false,date:scope.date,appView:{id:scope.appViewId,config:{statusFieldId:"status",targetEntityTypeId:scope.targetEntityTypeId}},contextFields:[],contextValues:{},supportsObservation:false,observation:"",statuses:fields[0].options,definitionCache:store,attendanceContextValidationErrors:()=>[],attendanceStateFields,attendanceEntryExtraValues,attendanceEntryToStateUpdateEntry};
-  for(const name of ["setContextErrors","setIsSaving","setError","setRefreshError","setSuccessMessage","clearPersonFlow","refreshLocalDayState","refreshRecordsSyncSummary","clearVisibleError","reportWriteFeedback","recordVisibleError","setConflict"]) c[name]=vi.fn();
+  for(const name of ["setTemporalNotice","setContextErrors","setIsSaving","setError","setRefreshError","setSuccessMessage","clearPersonFlow","refreshLocalDayState","refreshRecordsSyncSummary","clearVisibleError","reportWriteFeedback","recordVisibleError","setConflict"]) c[name]=vi.fn();
   c.saveEntry=handler("saveEntry",c);return c;
 }
 describe("review of already-confirmed pending Attendance",()=>{

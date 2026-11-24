@@ -1,3 +1,12 @@
+## Attendance: vigencia del aviso de franja — local, sin publicar — 2026-11-24
+
+El aviso se retira al iniciar otro flujo, buscar/cambiar persona o contexto, cancelar
+o entrar en edición. Tras el commit identifica el resultado local o confirmado por
+Opco sin cambiar DATE, captura, A/B manual, predeterminado ni outbox. La nota viaja
+sólo dentro de la llamada de UI y reutiliza el sector único de comunicaciones.
+Contrato y validación en [ATTENDANCE_BAND_NOTICE.md](ATTENDANCE_BAND_NOTICE.md).
+C-09 permanece pausado; nombre/cargo y configuración productiva quedan separados.
+
 ## Attendance: altas por día operativo, consulta independiente — local, sin publicar — 2026-11-23
 
 Sustituye el candidato manual 529f11e, cuya publicación se detuvo antes de commit/push/deploy.

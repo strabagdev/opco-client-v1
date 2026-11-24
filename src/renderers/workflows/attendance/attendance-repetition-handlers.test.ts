@@ -8,7 +8,7 @@ import { attendanceDailyCount, attendanceHistoryMode } from "../../../lib/attend
 import { recordAttendanceLocalRead } from "./attendance-local-read-trace";
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function actual<T = void>(name: string, c: Record<string, unknown>) {
-  c={calendar:undefined,recordAttendanceLocalRead,...c};
+  c={calendar:undefined,recordAttendanceLocalRead,setTemporalNotice:vi.fn(),authGeneration:0,...c,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(c.api as object??{})}};
     let node: ts.FunctionDeclaration | undefined;
     const visit = (n: ts.Node) => {
         if (ts.isFunctionDeclaration(n) && n.name?.text === name)
@@ -73,7 +73,7 @@ it("commits and clears a multi-record draft before attempting delivery, retainin
     expect(c.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();
     expect(c.reportWriteFeedback).not.toHaveBeenCalled();
     expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("guardado localmente"));
-    expect(c.saveInFlightRef.current).toBe(false);
+    expect(c.saveInFlightRef.current).toBeNull();
 });
 it("resolves exact daily edits through the AppView/date projection, including after ACK", async () => {
   const c = fixture(true) as unknown as Record<string,any>;
@@ -281,7 +281,7 @@ describe("operational calendar in actual warning handlers",()=>{
    vi.setSystemTime(new Date("2026-11-18T22:59:59.000Z"));const c=configured();await actual("saveRepeatedStatus",c)({optionId:"a",label:"A"});expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();
    // Setters belong to the fixture closure; extract its captured warning rather than infer one.
    const warning=c.setRepeatWarning.mock.calls.at(-1)?.[0];expect(warning).toBeTruthy();vi.setSystemTime(new Date("2026-11-18T23:00:00.000Z"));await actual("confirmRepeatedRecord",{...c,repeatWarning:warning})();
-   expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({eventOccurredAt:"2026-11-18T23:00:00.000Z",statusOptionId:"a",operationalDay:{version:1,calendarKey:operationalCalendarKey(calendar),mode:"AUTO"}}),"2026-11-18");expect(c.setTemporalNotice).toHaveBeenCalledWith(expect.stringContaining("conservó tu selección"));
+   expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({eventOccurredAt:"2026-11-18T23:00:00.000Z",statusOptionId:"a",operationalDay:{version:1,calendarKey:operationalCalendarKey(calendar),mode:"AUTO"}}),"2026-11-18",expect.stringContaining("franja"));expect(c.setTemporalNotice).toHaveBeenCalledWith(expect.stringContaining("conservó tu selección"));
   }finally{vi.useRealTimers();}
  });
  it("cancelling an operational warning persists nothing",async()=>{

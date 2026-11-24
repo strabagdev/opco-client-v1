@@ -49,7 +49,7 @@ function fixture() {
     writePolicyConfigured: false, writeContract: null as WorkflowWriteContract | null | undefined, writeContractRequiredRef: { current: false },
     requestSequenceRef: { current: 0 }, confirmationSequenceRef: { current: 0 }, confirmationBasisRef: { current: "" }, draftRevisionRef: { current: 0 }, resolutionScope: "scope", resolutionScopeRef: { current: "scope" }, resolutionMountedRef: { current: true },
     saveInFlightRef: { current: false }, onlineAttemptsRef: { current: new Map() },
-    setConflict: vi.fn(), setConfirmationError: vi.fn(), setError: vi.fn(), setContextErrors: vi.fn(), recordVisibleError: vi.fn(), saveEntry: vi.fn(),
+    setTemporalNotice: vi.fn(), setConflict: vi.fn(), setConfirmationError: vi.fn(), setError: vi.fn(), setContextErrors: vi.fn(), recordVisibleError: vi.fn(), saveEntry: vi.fn(),
     definitionCache: { getCachedRecord: vi.fn(async () => cached), listPendingStateUpdateOperations: vi.fn(async (): Promise<unknown[]> => []) }, cached,
   };
   commitInputs(c); return c;

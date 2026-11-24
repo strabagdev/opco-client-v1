@@ -15,6 +15,7 @@ import { attendanceRepeatConfirmationPresentation } from "./attendance-confirmat
 
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function handler(name: string, context: Record<string, unknown>) {
+  context={authGeneration:0,...context,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(context.api as object??{})}};
   let declaration: ts.FunctionDeclaration | undefined;
   function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node; ts.forEachChild(node, visit); }
   visit(source);
@@ -54,7 +55,7 @@ describe("Operational registration is independent of consultation (actual handle
     it.each([true, false])(`${policy}: historical query/attentionDate never sets a new DATE, online=%s`, async online => {
       clock(); const c = fixture(policy, online);
       await save(c);
-      expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ personRecordId: "person", statusOptionId: "b", contextValues: { context: "required-value" }, eventOccurredAt: "2026-11-23T03:15:00.123Z", operationalDay: { version: 1, calendarKey: c.calendarKey, mode: "AUTO" } }), "2026-11-22");
+      expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ personRecordId: "person", statusOptionId: "b", contextValues: { context: "required-value" }, eventOccurredAt: "2026-11-23T03:15:00.123Z", operationalDay: { version: 1, calendarKey: c.calendarKey, mode: "AUTO" } }), "2026-11-22", null);
       expect(c.date).toBe("2026-10-01");
       for (const calls of [c.definitionCache.getAttendanceDailyRecords.mock.calls, c.api.getAttendanceWorkflow.mock.calls]) for (const args of calls) expect((args.length === 1 ? args[0] : args[3]).date).toBe("2026-11-22");
     });
@@ -88,14 +89,14 @@ describe("Operational registration is independent of consultation (actual handle
   it("warning uses its final click across midnight, not its opening instant", async () => {
     clock("2026-11-23T02:59:59.000Z"); const c = fixture(); await c.saveRepeatedStatus({ optionId: "b" }); expect(c.eventCapturedAtRef.current).toBeNull();
     vi.setSystemTime(new Date("2026-11-23T03:00:00.001Z")); await handler("confirmRepeatedRecord", c)();
-    expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T03:00:00.001Z" }), "2026-11-22");
+    expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T03:00:00.001Z" }), "2026-11-22", null);
   });
   it("an open warning crossing the operational start cannot reuse yesterday's count", async () => {
     clock("2026-11-23T10:59:59.000Z"); const c = fixture(); await c.saveRepeatedStatus({ optionId: "b" });
     vi.setSystemTime(new Date("2026-11-23T11:00:00.000Z")); await handler("confirmRepeatedRecord", c)();
     expect(c.saveEntry).not.toHaveBeenCalled(); expect(c.eventCapturedAtRef.current).toBeNull(); expect(c.clearPersonFlow).toHaveBeenCalledOnce();
     c.repeatWarning = null; c.registrationReadDateRef.current = "2026-11-23";
-    await save(c); expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T11:00:00.000Z", statusOptionId: "b" }), "2026-11-23");
+    await save(c); expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T11:00:00.000Z", statusOptionId: "b" }), "2026-11-23", expect.stringContaining("franja"));
   });
   it("a count response after the day boundary does not authorize a stale-day creation", async () => {
     clock("2026-11-23T10:59:59.000Z"); const c = fixture("MULTIPLE_WITH_WARNING", true);
@@ -110,7 +111,7 @@ describe("Operational registration is independent of consultation (actual handle
   it("ONE_PER_DAY explicit historical edit keeps its DATE and never invents a capture", async () => {
     clock(); const c = fixture("ONE_PER_DAY"); c.editingTarget = {}; c.editingDateRef.current = "2026-10-01";
     c.selectedItem.attendance = { recordId: "existing", updatedAt: "base" }; c.isOnline = true;
-    await save(c); expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationalDay: expect.objectContaining({ mode: "PRESERVE" }) }), "2026-10-01");
+    await save(c); expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationalDay: expect.objectContaining({ mode: "PRESERVE" }) }), "2026-10-01", null);
     expect(c.saveEntry.mock.calls[0][0]).not.toHaveProperty("eventOccurredAt");
   });
   it("unsent multiple edit keeps selected identity, original DATE/capture and acknowledgement", async () => {

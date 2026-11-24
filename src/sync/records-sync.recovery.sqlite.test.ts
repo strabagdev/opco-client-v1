@@ -85,6 +85,20 @@ class Runtime {
   }
 }
 
+function listenFixtureServer(server: ReturnType<typeof createServer>) {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      server.removeListener("error", onError);
+      server.removeListener("listening", onListening);
+    };
+    const onError = (error: Error) => { cleanup(); reject(error); };
+    const onListening = () => { cleanup(); resolve(); };
+    server.once("error", onError);
+    try { server.listen(0, "127.0.0.1", onListening); }
+    catch (error) { cleanup(); reject(error); }
+  });
+}
+
 beforeAll(async () => {
   directory = mkdtempSync("/tmp/opco-c01-tests-");
   cache = directory + "/compiled";
@@ -114,7 +128,7 @@ beforeAll(async () => {
       arrived.resolve(command);
     });
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenFixtureServer(server);
   apiUrl = "http://127.0.0.1:" + server.address().port + "/api/v1";
 });
 

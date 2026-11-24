@@ -21,7 +21,7 @@ function actualHandler(kind: string, name: string, context: Record<string, unkno
 
 describe.each(["attendance", "state-update"])("%s actual search input handler", kind => {
  it("one accepted read changes only the search, preserving textual data and never calling selection or a write", async () => {
-  const context = Object.fromEntries(["setSearchText", "setSearchFieldId", "setSearchReadId", "setItems", "setIsSearching", "setSelectedItem", "setConflict", "setSuccessMessage", "setResolutionFeedback", "save", "selectPerson", "selectSubject", "confirmConflict"].map(key => [key, vi.fn()]));
+  const context = Object.fromEntries(["setTemporalNotice", "setSearchText", "setSearchFieldId", "setSearchReadId", "setItems", "setIsSearching", "setSelectedItem", "setConflict", "setSuccessMessage", "setResolutionFeedback", "save", "selectPerson", "selectSubject", "confirmConflict"].map(key => [key, vi.fn()]));
   Object.assign(context, { draftRevisionRef:{current:0}, setConfirmationError:vi.fn(), requestSequenceRef: { current: 0 }, normalizeAttendanceSearch: (value: string) => value.trim(), normalizeStateUpdateSearch: (value: string) => value.trim() });
   const handler = actualHandler(kind, "changeSearchText", context); const stop = vi.fn();
   const session = createCodeReaderSession({ requestCamera: async () => ({ getTracks: () => [{ stop }] }), attach: async () => {}, detach() {}, createDecoder: async () => ({ decode: async () => ["00.123.450-K"], close() {} }), capture: () => ({ width: 1, height: 1, data: new Uint8ClampedArray(4) }), schedule: vi.fn(), cancelScheduled() {}, onState() {}, onRead: value => handler(value, "stable-source-id") });

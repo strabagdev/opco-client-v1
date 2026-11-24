@@ -1,4 +1,4 @@
-import {finalizeAttendanceDay} from "../../../lib/attendance-operational-day";
+import {finalizeAttendanceDay, savedAttendanceBandNotice} from "../../../lib/attendance-operational-day";
 import {resolveOperationalDay,operationalCalendarKey,type OperationalDayContract} from "../../../lib/operational-calendar";
 import {captureTimeCommand,type CaptureTimeCommand} from "../../../lib/capture-time";
 import { AttendanceRecordList, type AttendanceGroupRead } from "./attendance-record-list";
@@ -149,6 +149,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     syncPendingRecords,
     token,
   } = useSession();
+  const authGeneration = api.getAuthSessionGeneration();
   const attentionParams = useLocalSearchParams<{ attentionDate?: string; attentionRecordId?: string }>();
   const targetDate = attentionDate(attentionParams.attentionDate);
   const calendar = appView.config.operationalCalendar;
@@ -218,7 +219,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const draftRevisionRef = useRef(0);
   const confirmationSequenceRef = useRef(0);
-  const saveInFlightRef = useRef(false);
+  const saveInFlightRef = useRef<{ generation: number; scope: string } | null>(null);
   const onlineAttemptsRef = useRef(new Map<string, { clientRequestId: string; uncertain: boolean }>());
   const [localConflicts, setLocalConflicts] = useState<CachedAttendanceRecord[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -247,10 +248,15 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   useLayoutEffect(()=>{if(repeatedScopeRef.current!==resolutionScope){repeatedScopeRef.current=resolutionScope;setRepeatWarning(null);setEditingTarget(null);setPersonRecords([]);}},[resolutionScope]);
   const confirmationBasisRef = useRef(confirmationBasis);
   const resolutionScopeRef = useRef(resolutionScope);
+  const resolutionSessionRef = useRef(authGeneration);
   const resolutionInFlightRef = useRef(false);
   const resolutionMountedRef = useRef(false);
   useLayoutEffect(() => {
-    if (resolutionScopeRef.current !== resolutionScope) {
+    if (!api.isAuthSessionCurrent(authGeneration)) return;
+    if (resolutionScopeRef.current !== resolutionScope || resolutionSessionRef.current !== authGeneration) {
+      saveInFlightRef.current = null;
+      setIsSaving(false);
+      setTemporalNotice(null);
       setWriteContract(undefined);
       setCaptureContract(undefined);
       setOperationalContract(undefined);
@@ -262,8 +268,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setConfirmationError(null);
       setObservation("");
     }
+    resolutionSessionRef.current = authGeneration;
     resolutionScopeRef.current = resolutionScope;
-  }, [resolutionScope, writePolicyConfigured, calendar]);
+  }, [api, authGeneration, resolutionScope, writePolicyConfigured, calendar]);
   useLayoutEffect(() => {
     resolutionMountedRef.current = true;
     return () => { resolutionMountedRef.current = false; };
@@ -450,7 +457,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const refreshLocalDayState = useCallback(async (remoteSnapshot?: {
     latest: AttendanceLatestItem[];
     totalRegistered: number;
-  }, requestId?: number) => {
+  }, requestId?: number, mayPublish: () => boolean = () => true) => {
     if (!ownerKey || !selectedContractId) {
       return;
     }
@@ -499,6 +506,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         targetEntityTypeId: appView.config.targetEntityTypeId,
       }),
     ]);
+
+    if (!mayPublish()) return;
 
     const snapshotHydrated = hasSuccessfulAttendanceDayHydration(dayHydration);
     // Local visibility is independent from remote completeness. This never marks
@@ -613,6 +622,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
+    setTemporalNotice(null);
     if(appView.config.operationalCalendar){eventCapturedAtRef.current=null;registrationReadDateRef.current=null;editingDateRef.current=null;setPersonRecordDate(null);}
     setEditingTarget(null);setPersonRecords([]);setRepeatWarning(null);
     draftRevisionRef.current += 1;
@@ -657,7 +667,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     }
   }, [currentStateUpdateSyncRunId, definitionCache, ownerKey]);
 
-  const loadDay = useCallback(async (options: { operation?: "load-day" | "refresh" } = {}) => {
+  const loadDay = useCallback(async (options: { operation?: "load-day" | "refresh"; isCurrent?: () => boolean } = {}) => {
+    const mayPublish = options.isCurrent ?? (() => true);
+    if (!mayPublish()) return;
     if (!token || !selectedContractId) {
       setError((status === "authenticated" || status === "offline") && !isContractBootstrapPending ? "Selecciona un contrato antes de abrir asistencia." : null);
       setIsLoading(isContractBootstrapPending);
@@ -678,24 +690,25 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     try {
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date });
 
-      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+      if (!mayPublish() || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
 
       await cacheAttendanceOnlineResponse(response);
-      if (!isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+      if (!mayPublish() || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
         return;
       }
       applyAttendanceResponse(response, { updateLatest: false });
       await refreshLocalDayState({
         latest: response.latest,
         totalRegistered: response.summary.totalRegistered,
-      }, requestId);
+      }, requestId, mayPublish);
+      if (!mayPublish() || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) return;
       setRefreshError(null);
       clearVisibleError();
       setItems([]);
     } catch (nextError) {
-      if (requestId === requestSequenceRef.current) {
+      if (mayPublish() && requestId === requestSequenceRef.current) {
         if (operation === "refresh") {
           setRefreshError(stateUpdateRefreshErrorMessage(nextError));
         } else {
@@ -708,7 +721,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
-      finishLoadingRequest(requestId);
+      if (mayPublish()) finishLoadingRequest(requestId);
     }
   }, [api, appView.id, applyAttendanceResponse, beginLoadingRequest, cacheAttendanceOnlineResponse, clearVisibleError, date, finishLoadingRequest, isContractBootstrapPending, recordVisibleError, refreshLocalDayState, selectedContractId, status, token]);
 
@@ -1133,6 +1146,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function selectRepeatedPerson(item: AttendanceItem) {
+      setTemporalNotice(null);
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
       confirmationSequenceRef.current++;
       eventCapturedAtRef.current = null;
@@ -1202,6 +1216,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   async function editRepeatedRecord(item: AttendanceItem, recordDate = date) {
       if (!item.attendance || !ownerKey || !selectedContractId || saveInFlightRef.current)
           return;
+      setTemporalNotice(null);
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
       confirmationSequenceRef.current++;
       setRepeatWarning(null);
@@ -1275,6 +1290,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           return;
       if (!selectedItem || !ownerKey || !selectedContractId || isSaving || saveInFlightRef.current || repeatCheckingRef.current || repeatWarning)
           return;
+      setTemporalNotice(null);
       const errors = attendanceContextValidationErrors(contextFields, contextValues);
       if (errors.length) {
           setContextErrors(Object.fromEntries(errors.map(e => [e.fieldId, e.message])));
@@ -1318,7 +1334,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
       if (appView.config.repetitionPolicy !== "MULTIPLE_WITH_WARNING") {
           const final=calendar?finalizeTemporalEntry(entry,false,confirmationInstant):automatic && !editingTarget ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)}:entry;
-          if(final) { if ("entry" in final) await saveEntry(final.entry, final.date); else await saveEntry(final); }
+          if(final) { if ("entry" in final) await saveEntry(final.entry, final.date, final.notice); else await saveEntry(final); }
           return;
       }
       repeatCheckingRef.current = true;
@@ -1351,7 +1367,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               return;
           }
           const final=calendar?finalizeTemporalEntry(entry,false,confirmationInstant):automatic ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)}:entry;
-          if(final) { if ("entry" in final) await saveEntry(final.entry, final.date); else await saveEntry(final); }
+          if(final) { if ("entry" in final) await saveEntry(final.entry, final.date, final.notice); else await saveEntry(final); }
       }
       catch (error) {
           if (current())
@@ -1363,7 +1379,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
   }
 
-  function cancelRepeatedRecord() { confirmationSequenceRef.current++; eventCapturedAtRef.current = null; setRepeatWarning(null); }
+  function cancelRepeatedRecord() { confirmationSequenceRef.current++; eventCapturedAtRef.current = null; setRepeatWarning(null); setTemporalNotice(null); }
 
   async function confirmRepeatedRecord() {
       const warning = repeatWarning;
@@ -1383,7 +1399,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setRepeatWarning(null);
       const final=calendar?finalizeTemporalEntry(warning.entry,false,confirmationInstant):{...warning.entry,...(warning.entry.captureTime?{eventOccurredAt:eventCapturedAtRef.current??(eventCapturedAtRef.current=new Date().toISOString())}:{})};
       if(final) {
-          if ("entry" in final) await saveEntry({ ...final.entry, repetitionAcknowledged: true }, final.date);
+          if ("entry" in final) await saveEntry({ ...final.entry, repetitionAcknowledged: true }, final.date, final.notice);
           else await saveEntry({ ...final, repetitionAcknowledged: true });
       }
   }
@@ -1451,6 +1467,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     if (!selectedContractId || !selectedItem || isSaving || saveInFlightRef.current) {
       return;
     }
+    setTemporalNotice(null);
 
     const validationErrors = attendanceContextValidationErrors(contextFields, contextValues);
     if (validationErrors.length > 0) {
@@ -1478,7 +1495,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       personRecordId: selectedItem.person.id,
       statusOptionId: status.optionId,
     };
-    if(calendar){const final=finalizeTemporalEntry(entry,!!selectedItem.attendance,confirmationInstant,writeDate);if(!final)return;entry=final.entry;writeDate=final.date;}
+    let confirmationNotice: string | null = null;
+    if(calendar){const final=finalizeTemporalEntry(entry,!!selectedItem.attendance,confirmationInstant,writeDate);if(!final)return;entry=final.entry;writeDate=final.date;confirmationNotice=final.notice;}
     const existing = selectedItem.attendance;
     const revision = draftRevisionRef.current;
     const confirmationAttemptId = ++confirmationSequenceRef.current;
@@ -1534,7 +1552,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         return;
       }
     }
-    if (calendar) await saveEntry(entry, writeDate);
+    if (calendar) await saveEntry(entry, writeDate, confirmationNotice);
     else await saveEntry(entry);
   }
 
@@ -1569,15 +1587,18 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     else await saveEntry(entry);
   }
 
-  async function saveEntry(entry: AttendanceBatchEntry, writeDate = date) {
-    if (!selectedContractId || !selectedItem || !ownerKey || isSaving || saveInFlightRef.current || entry.personRecordId !== selectedItem.person.id) {
+  async function saveEntry(entry: AttendanceBatchEntry, writeDate = date, confirmationNotice?: string | null) {
+    if (!api.isAuthSessionCurrent(authGeneration) || !selectedContractId || !selectedItem || !ownerKey || isSaving || saveInFlightRef.current || entry.personRecordId !== selectedItem.person.id) {
       return;
     }
 
     const requestedScope = resolutionScope;
+    const action = { generation: authGeneration, scope: requestedScope };
+    const ownsAction = () => saveInFlightRef.current === action;
+    const currentScope = () => api.isAuthSessionCurrent(action.generation) && resolutionMountedRef.current && resolutionScopeRef.current === requestedScope;
     const revision = draftRevisionRef.current;
     const confirmationAttemptId = confirmationSequenceRef.current;
-    const isCurrent = () => resolutionMountedRef.current && resolutionScopeRef.current === requestedScope &&
+    const isCurrent = () => currentScope() && ownsAction() &&
       draftRevisionRef.current === revision && confirmationSequenceRef.current === confirmationAttemptId;
     const capturedEntry = copyAttendanceEntry(entry);
     let wireEntry: ReturnType<typeof attendanceEntryToStateUpdateEntry>;
@@ -1595,12 +1616,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if (conflict) setConfirmationError(message);
       return;
     }
-    saveInFlightRef.current = true;
+    saveInFlightRef.current = action;
     setIsSaving(true);
     setError(null);
     setRefreshError(null);
     setSuccessMessage(null);
 
+    let directAttempt: { clientRequestId: string; uncertain: boolean } | undefined;
     try {
       if (entry.operationalDay || entry.captureTime || !isOnline || (entry.repetitionPolicy && entry.repetitionPolicy!=="ONE_PER_DAY") || (entry.targetLocalRecordId && !entry.targetRecordId)) {
         const extraValues = attendanceEntryExtraValues(entry, appView.config, contextFields);
@@ -1646,27 +1668,33 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         if(durableRepeat){
           if(!isCurrent())return;
           clearPersonFlow();
+          if (confirmationNotice) setTemporalNotice(savedAttendanceBandNotice(confirmationNotice, "local-saved"));
           const committedRevision=draftRevisionRef.current;
-          const mayPublish=()=>resolutionMountedRef.current&&resolutionScopeRef.current===requestedScope&&draftRevisionRef.current===committedRevision;
+          const mayPublish=()=>currentScope()&&ownsAction()&&draftRevisionRef.current===committedRevision;
           let syncFailure:unknown;
           if(isOnline){try{await syncPendingRecords();}catch(error){syncFailure=error;}}
           if(!mayPublish())return;
           const delivery=isOnline ? await definitionCache.getStateUpdateResolutionOutcome({ownerKey,contractId:selectedContractId,appViewId:appView.id,targetEntityTypeId:appView.config.targetEntityTypeId,date:writeDate,localRecordId:localIntent.localRecordId,clientRequestId:localIntent.clientRequestId!}) : "pending";
           if(!mayPublish())return;
-          await refreshLocalDayState();await refreshRecordsSyncSummary();
+          await refreshLocalDayState(undefined, undefined, mayPublish);
+          if(!mayPublish())return;
+          await refreshRecordsSyncSummary();
           if(!mayPublish())return;
           if(delivery==="failed"||delivery==="conflict"||delivery==="superseded"){setError(stateUpdateResolutionFeedback(delivery).message);return;}
           if(syncFailure){setError("El registro quedó guardado localmente y su envío sigue pendiente. Revisa la sincronización antes de repetirlo.");return;}
           clearVisibleError();
+          if (confirmationNotice) setTemporalNotice(savedAttendanceBandNotice(confirmationNotice, delivery === "confirmed" ? "server-confirmed" : "local-saved"));
           reportWriteFeedback({appViewId:appView.id,appViewTitle:appView.name,contractId:selectedContractId,kind:delivery==="confirmed"?"server-confirmed":"local-saved",ownerKey});
           return;
         }
         if (!isCurrent()) return;
         clearPersonFlow();
         const clearedRevision = draftRevisionRef.current;
-        await refreshLocalDayState();
+        const mayPublish = () => currentScope() && ownsAction() && draftRevisionRef.current === clearedRevision;
+        await refreshLocalDayState(undefined, undefined, mayPublish);
+        if (!mayPublish()) return;
         await refreshRecordsSyncSummary();
-        if (!resolutionMountedRef.current || resolutionScopeRef.current !== requestedScope || draftRevisionRef.current !== clearedRevision) return;
+        if (!mayPublish()) return;
         clearVisibleError();
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "local-saved", ownerKey });
         return;
@@ -1681,6 +1709,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         attempt = { clientRequestId: createClientRequestId(), uncertain: false };
         onlineAttemptsRef.current.set(commandKey, attempt);
       }
+      directAttempt = attempt;
       attempt.uncertain = true;
       const response = await api.saveStateUpdateWorkflow(token, selectedContractId, appView.id, {
         clientRequestId: attempt.clientRequestId, date: writeDate, ...wireEntry,
@@ -1715,16 +1744,17 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if (hasSuccessfulAttendanceResult(attendanceResults)) {
         clearPersonFlow();
         const clearedRevision = draftRevisionRef.current;
-        await loadDay({ operation: "refresh" });
+        const mayPublish = () => currentScope() && ownsAction() && draftRevisionRef.current === clearedRevision;
+        await loadDay({ operation: "refresh", isCurrent: mayPublish });
+        if (!mayPublish()) return;
         await refreshRecordsSyncSummary();
-        if (!resolutionMountedRef.current || resolutionScopeRef.current !== requestedScope || draftRevisionRef.current !== clearedRevision) return;
+        if (!mayPublish()) return;
         clearVisibleError();
         reportWriteFeedback({ appViewId: appView.id, appViewTitle: appView.name, contractId: selectedContractId, kind: "server-confirmed", ownerKey });
       }
     } catch (nextError) {
       if (nextError instanceof OpcoApiError && nextError.status >= 400 && nextError.status < 500 && nextError.code !== "INVALID_API_ENVELOPE") {
-        const attempt = onlineAttemptsRef.current.get(commandKey);
-        if (attempt) attempt.uncertain = false;
+        if (directAttempt) directAttempt.uncertain = false;
       }
       if (!isCurrent()) return;
       const message = nextError instanceof Error ? nextError.message : "No fue posible registrar asistencia.";
@@ -1735,8 +1765,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         operation: "save",
       });
     } finally {
-      saveInFlightRef.current = false;
-      if (resolutionMountedRef.current) setIsSaving(false);
+      if (ownsAction()) {
+        saveInFlightRef.current = null;
+        if (currentScope()) setIsSaving(false);
+      }
     }
   }
 
@@ -1875,6 +1907,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   function handleContextChange(fieldId: string, optionId: string | null) {
+    setTemporalNotice(null);
     draftRevisionRef.current += 1;
     if (!ownerKey || !selectedContractId) {
       return;
@@ -1904,6 +1937,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
   function changeSearchText(value: string, fieldId?: string) {
+    setTemporalNotice(null);
     draftRevisionRef.current += 1;
     setConfirmationError(null);
     setSearchText(value);
