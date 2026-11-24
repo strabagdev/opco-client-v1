@@ -6,7 +6,7 @@ import { StateUpdateScheduleReviewError, stateUpdateScheduleMetadata } from "../
 import { compositeIdentityKey } from "../lib/state-update-identity";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
 import { PendingOperation } from "../lib/offline-records";
-import { type AttendanceWorkflowConfig, OpcoApi, OpcoApiError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
+import { type AttendanceWorkflowConfig, OpcoApi, OpcoApiError, OpcoAuthSessionChangedError, OpcoNetworkError, StateUpdateBatchResult } from "../lib/opco-api";
 import {
   OfflineStateUpdatePayload,
   STATE_UPDATE_OPERATION,
@@ -38,17 +38,29 @@ export type StateUpdateSyncResult = {
 };
 
 let syncPromise: Promise<StateUpdateSyncResult> | null = null;
+let syncScope: { ownerKey: string; token: string; generation: number | undefined; store: StateUpdateSyncStore } | null = null;
 
 export function syncPendingStateUpdatesOnce(params: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   syncRunId?: string | null;
   token: string;
-}) {
+}): Promise<StateUpdateSyncResult> {
+  const generation = params.api.getAuthSessionGeneration?.();
+  if (syncPromise && syncScope && (syncScope.ownerKey !== params.ownerKey || syncScope.token !== params.token || syncScope.store !== params.store || syncScope.generation !== generation)) {
+    // Keep one existing engine. A later session waits, then runs its own scope;
+    // it must not consume another login's result as its own acknowledgement.
+    return syncPromise.catch(() => undefined).then(() => {
+      if (params.api.getAuthSessionGeneration?.() !== generation) return { completed: 0, conflicts: 0, failed: 0, lastRequestDiagnostics: null, operationsAttempted: 0, operationsSelected: 0, reconciledAfterTimeout: false, retriable: 0, timeoutOccurred: false };
+      return syncPendingStateUpdatesOnce(params);
+    });
+  }
   if (!syncPromise) {
-    syncPromise = runSync(params).finally(() => {
+    syncScope = { ownerKey: params.ownerKey, token: params.token, generation, store: params.store };
+    syncPromise = runSync(params, generation).finally(() => {
       syncPromise = null;
+      syncScope = null;
     });
   }
 
@@ -62,12 +74,12 @@ async function runSync({
   syncRunId = null,
   token,
 }: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration">>;
   ownerKey: string;
   store: StateUpdateSyncStore;
   syncRunId?: string | null;
   token: string;
-}) {
+}, generation: number | undefined) {
   const operations = await store.listPendingStateUpdateOperations(ownerKey);
   const scopes = uniqueStateUpdateScopes(operations);
   const scopesWithErrors = new Set<string>();
@@ -97,6 +109,10 @@ async function runSync({
   // Share this authenticated compatibility read inside this run, never across owners or reconnects.
   const repetitionChecks=new Map<string,Promise<void>>();
   for (const operation of operations) {
+    if (api.getAuthSessionGeneration?.() !== generation) {
+      for (const scope of scopes) scopesWithErrors.add(stateUpdateScopeKey(scope, scope.contractId));
+      break;
+    }
     const payload = operation.payload as OfflineStateUpdatePayload;
 
     try {
@@ -212,6 +228,10 @@ async function runSync({
       if (classification.action === "retry") {
         await store.retryStateUpdateOperation(operation, classification.code, classification.message);
         result.retriable += 1;
+        if (error instanceof OpcoAuthSessionChangedError) {
+          for (const scope of scopes) scopesWithErrors.add(stateUpdateScopeKey(scope, scope.contractId));
+          break;
+        }
         continue;
       }
 
@@ -246,7 +266,7 @@ async function completeOperationIfRemoteStateMatches({
   syncRunId,
   token,
 }: {
-  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow">>;
+  api: Pick<OpcoApi, "saveStateUpdateWorkflow"> & Partial<Pick<OpcoApi, "getStateUpdateWorkflow" | "getAuthSessionGeneration">>;
   operation: PendingOperation;
   payload: OfflineStateUpdatePayload;
   store: StateUpdateSyncStore;
@@ -300,6 +320,7 @@ function shouldAttemptRemoteStateUpdateReconcile(
 }
 
 function classifyStateUpdateSyncError(error: unknown): { action: "fail" | "retry"; code: string; message: string } {
+  if (error instanceof OpcoAuthSessionChangedError) return { action: "retry", code: error.code, message: error.message };
   if(error instanceof OperationalCalendarError) return {action:"fail",code:error.code,message:error.message};
   if(error instanceof WorkflowWriteReviewError) return {action:"fail",code:error.code,message:error.message};
   if (error instanceof StateUpdateScheduleReviewError) {

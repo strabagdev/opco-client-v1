@@ -119,19 +119,24 @@ export function usePendingWorkLifecycle({
   const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
   const [isAuthSessionRestoring, setIsAuthSessionRestoring] = useState(false);
   const [isOperationalCoreReadinessChecking, setIsOperationalCoreReadinessChecking] = useState(false);
+  const authGeneration = api.getAuthSessionGeneration?.();
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
+    authGeneration,
     ownerKey,
     selectedContractId: selectedContractIdState,
     token,
   });
 
+  const readCurrentScope = useCallback(() => ({ ...latestSessionScopeRef.current, authGeneration: api.getAuthSessionGeneration?.() }), [api]);
+
   useEffect(() => {
     latestSessionScopeRef.current = {
+      authGeneration,
       ownerKey,
       selectedContractId: selectedContractIdState,
       token,
     };
-  }, [ownerKey, selectedContractIdState, token]);
+  }, [authGeneration, ownerKey, selectedContractIdState, token]);
 
   useEffect(() => {
     persistStateUpdateReconnectDiagnosticsRef.current = persistStateUpdateReconnectDiagnostics;
@@ -139,13 +144,13 @@ export function usePendingWorkLifecycle({
 
   useEffect(() => {
     reconnectDiagnosticsQueueActiveRef.current = true;
-    reconnectDiagnosticsQueueScopeRef.current = `${ownerKey ?? "none"}:${selectedContractIdState ?? "none"}:${token ?? "none"}`;
+    reconnectDiagnosticsQueueScopeRef.current = `${ownerKey ?? "none"}:${selectedContractIdState ?? "none"}:${token ?? "none"}:${authGeneration ?? "legacy"}`;
 
     return () => {
       reconnectDiagnosticsQueueActiveRef.current = false;
       reconnectDiagnosticsWriteQueueRef.current = Promise.resolve();
     };
-  }, [ownerKey, selectedContractIdState, token]);
+  }, [authGeneration, ownerKey, selectedContractIdState, token]);
 
   useEffect(() => {
     setRecordsReconnectRefreshKeyRef.current = setRecordsReconnectRefreshKey;
@@ -292,7 +297,7 @@ export function usePendingWorkLifecycle({
 
   const scheduleReadinessRecovery = useCallback((runScope: SessionLifecycleScope) => {
     const isScopeCurrent = Boolean(runScope.ownerKey && runScope.selectedContractId && runScope.token) &&
-      isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current);
+      isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
     const current = readinessRecoveryRef.current;
 
     if (current?.timer) {
@@ -311,7 +316,7 @@ export function usePendingWorkLifecycle({
       return;
     }
 
-    const scopeKey = `${runScope.ownerKey}:${runScope.selectedContractId}:${runScope.token}`;
+    const scopeKey = `${runScope.ownerKey}:${runScope.selectedContractId}:${runScope.token}:${runScope.authGeneration ?? "legacy"}`;
     const attempts = current?.scopeKey === scopeKey ? current.attempts : 0;
 
     const delayMs = getOperationalCoreReadyRecoveryDelayMs(attempts);
@@ -320,7 +325,7 @@ export function usePendingWorkLifecycle({
       return;
     }
     const timer = setTimeout(() => {
-      const latestScope = latestSessionScopeRef.current;
+      const latestScope = readCurrentScope();
 
       readinessRecoveryRef.current = {
         attempts: attempts + 1,
@@ -373,7 +378,7 @@ export function usePendingWorkLifecycle({
       scopeKey,
       timer,
     };
-  }, [clearReadinessRecoveryTimer, connectivityStatus, updateReconnectPreflight]);
+  }, [clearReadinessRecoveryTimer, connectivityStatus, readCurrentScope, updateReconnectPreflight]);
 
   const runPendingWorkAfterReadiness = useCallback(async ({
     ownerKey: runOwnerKey,
@@ -388,7 +393,7 @@ export function usePendingWorkLifecycle({
     token: string;
     trigger: StateUpdateSyncTrigger;
   }) => {
-    const runKey = `${runOwnerKey}:${runScope.selectedContractId ?? "none"}:${runToken}`;
+    const runKey = `${runOwnerKey}:${runScope.selectedContractId ?? "none"}:${runToken}:${runScope.authGeneration ?? "legacy"}`;
 
     if (activePendingWorkRunKeyRef.current === runKey) {
       return "already-running";
@@ -413,10 +418,10 @@ export function usePendingWorkLifecycle({
           type: "ready_check",
         });
 
-        if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+        if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
           await updateReconnectPreflight(syncRunId, (current) => ({
             ...current,
-            scopeCheckAfterReadiness: getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current),
+            scopeCheckAfterReadiness: getSessionLifecycleScopeMismatchReason(runScope, readCurrentScope()),
           }));
           await markStateUpdateActivity({
             result: "cancelled_scope_changed",
@@ -480,7 +485,7 @@ export function usePendingWorkLifecycle({
           type: "ready_check",
         });
         const postReadinessPlan = planPostReadinessPendingWork({
-          currentScope: latestSessionScopeRef.current,
+          currentScope: readCurrentScope(),
           runScope,
           token: syncToken,
         });
@@ -566,7 +571,7 @@ export function usePendingWorkLifecycle({
           }
         }
 
-        const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, latestSessionScopeRef.current);
+        const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, readCurrentScope());
         await updateReconnectPreflight(syncRunId, (current) => ({
           ...current,
           scopeCheckAfterReadiness,
@@ -644,7 +649,7 @@ export function usePendingWorkLifecycle({
         activePendingWorkRunKeyRef.current = null;
       }
     }
-  }, [api, clearReadinessRecoveryTimer, definitionCache, markStateUpdateActivity, setToken, syncPendingStateUpdatesWithTelemetry, updateReconnectPreflight]);
+  }, [api, clearReadinessRecoveryTimer, definitionCache, markStateUpdateActivity, readCurrentScope, setToken, syncPendingStateUpdatesWithTelemetry, updateReconnectPreflight]);
 
   const syncPendingRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "manual-retry") => {
     if (!token || !ownerKey) {
@@ -652,6 +657,7 @@ export function usePendingWorkLifecycle({
     }
 
     const runScope = {
+      authGeneration,
       ownerKey,
       selectedContractId: selectedContractIdState,
       token,
@@ -666,19 +672,21 @@ export function usePendingWorkLifecycle({
         token,
         trigger,
       });
-      if (syncResult === "completed" && isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+      if (syncResult === "completed" && isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
         setRecordsReconnectRefreshKeyRef.current((key) => key + 1);
       }
 
-      if (isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current) && shouldShowStateUpdateDiagnostics) {
+      if (isSessionLifecycleScopeCurrent(runScope, readCurrentScope()) && shouldShowStateUpdateDiagnostics) {
         await refreshStateUpdateDiagnostics();
       }
     } finally {
-      if (isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+      if (isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
         await refreshPendingRecordsCount();
       }
     }
   }, [
+    authGeneration,
+    readCurrentScope,
     ownerKey,
     refreshPendingRecordsCount,
     refreshStateUpdateDiagnostics,
@@ -703,6 +711,7 @@ export function usePendingWorkLifecycle({
       runSyncStartedAt: new Date().toISOString(),
     }));
     const runScope = {
+      authGeneration,
       ownerKey,
       selectedContractId: selectedContractIdState,
       token,
@@ -732,32 +741,33 @@ export function usePendingWorkLifecycle({
     }
 
     if ((trigger === "reconnect" || trigger === "foreground/resume") && runScope.ownerKey && runScope.selectedContractId &&
-      isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+      isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
       invalidateHomePreparation({ store: definitionCache, ownerKey: runScope.ownerKey, contractId: runScope.selectedContractId, token: nextToken });
     }
     const nextMe = await api.getMe(nextToken);
     const nextContext = await api.getContext(nextToken);
     const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
 
-    if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+    if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
       return false;
     }
-
-    await tokenStorage.setSessionOwnerKey(nextOwnerKey);
-    await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
-    setMe(nextMe);
-    setContext(nextContext);
-    setStatus("authenticated");
 
     const nextContractId = selectContractId(
       nextContext.contracts,
       selectedContractIdState ?? await readPersistedContractId(definitionCache, nextOwnerKey),
     );
 
+    await api.commitAuthSession(authGeneration ?? api.getAuthSessionGeneration(), async () => {
+      await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+      await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
+    });
+    if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return false;
+    setMe(nextMe); setContext(nextContext); setStatus("authenticated");
     setSelectedContractIdState(nextContractId);
     runScope.ownerKey = nextOwnerKey;
     runScope.selectedContractId = nextContractId;
     latestSessionScopeRef.current = {
+      authGeneration,
       ownerKey: nextOwnerKey,
       selectedContractId: nextContractId,
       token: nextToken,
@@ -779,7 +789,7 @@ export function usePendingWorkLifecycle({
       });
 
       if (!appViewsResult.offline) {
-        if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) return false;
+        if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return false;
         try { onViewsRevalidated?.(readEvent); } catch { /* Read observers never control pending-work execution. */ }
         void prewarmAssignedAppViewsOnce({
           homeListWrite: appViewsResult.cacheWrite ?? undefined,
@@ -797,7 +807,7 @@ export function usePendingWorkLifecycle({
       }
     }
 
-    if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+    if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
       return false;
     }
 
@@ -814,7 +824,7 @@ export function usePendingWorkLifecycle({
         scheduleReadinessRecovery(runScope);
       }
     }
-    if (!isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
+    if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
       return false;
     }
 
@@ -824,6 +834,8 @@ export function usePendingWorkLifecycle({
     await refreshPendingRecordsCount();
   }, [
     api,
+    authGeneration,
+    readCurrentScope,
     definitionCache,
     ownerKey,
     recordOfflinePreparationDiagnostics,
@@ -897,7 +909,7 @@ export function usePendingWorkLifecycle({
 
   useEffect(() => {
     const scopeKey = ownerKey && selectedContractIdState && token
-      ? `${ownerKey}:${selectedContractIdState}:${token}`
+      ? `${ownerKey}:${selectedContractIdState}:${token}:${authGeneration ?? "legacy"}`
       : null;
 
     if (!shouldRunOnlinePendingSyncForReadyScope({
@@ -912,13 +924,15 @@ export function usePendingWorkLifecycle({
     }
 
     const runScope = {
+      authGeneration,
       ownerKey,
       selectedContractId: selectedContractIdState,
       token,
     };
 
-    onlineReadyScopeSyncPromiseRef.current = reconnectShouldSyncRef.current()
+    const flight = reconnectShouldSyncRef.current()
       .then((shouldSync) => {
+        if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
         if (!shouldSync) {
           return undefined;
         }
@@ -926,11 +940,10 @@ export function usePendingWorkLifecycle({
       })
       .catch(() => undefined)
       .finally(() => {
-        if (isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) {
-          onlineReadyScopeSyncPromiseRef.current = null;
-        }
+        if (onlineReadyScopeSyncPromiseRef.current === flight) onlineReadyScopeSyncPromiseRef.current = null;
       });
-  }, [connectivityStatus, ownerKey, selectedContractIdState, status, token]);
+    onlineReadyScopeSyncPromiseRef.current = flight;
+  }, [authGeneration, connectivityStatus, ownerKey, readCurrentScope, selectedContractIdState, status, token]);
 
   useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {
@@ -959,25 +972,27 @@ export function usePendingWorkLifecycle({
         return;
       }
 
-      const runScope = { ...latestSessionScopeRef.current };
-      foregroundResumeSyncPromiseRef.current = reconnectShouldSyncRef.current()
+      const runScope = readCurrentScope();
+      const flight = reconnectShouldSyncRef.current()
         .then((shouldSync) => {
+          if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
           if (!shouldRevalidateAssignedPreparation("foreground/resume", shouldSync)) return undefined;
           let readEvent: AppViewsReadEvent | undefined;
           return reconnectSessionAndRecordsRef.current("foreground/resume", event => { readEvent = event; }).then(result => {
-            if (result !== false && isSessionLifecycleScopeCurrent(runScope, latestSessionScopeRef.current)) setRecordsReconnectRefreshKeyRef.current(key => key + 1, readEvent);
+            if (result !== false && isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) setRecordsReconnectRefreshKeyRef.current(key => key + 1, readEvent);
           });
         })
         .catch(() => undefined)
         .finally(() => {
-          foregroundResumeSyncPromiseRef.current = null;
+          if (foregroundResumeSyncPromiseRef.current === flight) foregroundResumeSyncPromiseRef.current = null;
         });
+      foregroundResumeSyncPromiseRef.current = flight;
     });
 
     return () => {
       subscription.remove();
     };
-  }, [clearReadinessRecoveryTimer, connectivityStatus, status]);
+  }, [clearReadinessRecoveryTimer, connectivityStatus, readCurrentScope, status]);
 
   useEffect(() => {
     let readEvent: AppViewsReadEvent | undefined;

@@ -1220,6 +1220,15 @@ export class OpcoNetworkError extends Error {
   }
 }
 
+/** Authentication from a retired login; not a business rejection or a missing ACK. */
+export class OpcoAuthSessionChangedError extends Error {
+  readonly code = "AUTH_SESSION_CHANGED";
+  constructor() {
+    super("La sesión cambió. El cambio local se conserva para su usuario.");
+    this.name = "OpcoAuthSessionChangedError";
+  }
+}
+
 type FetchLike = typeof fetch;
 
 type ApiClientOptions = {
@@ -1297,9 +1306,53 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   const platformOS = options.platformOS ?? getDefaultPlatformOS();
   const tokenStore = options.tokenStore;
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  let refreshPromise: Promise<RefreshResponse> | null = null;
+  let generation = 0;
+  let sessionTokens = new Set<string>();
+  let refreshFlight: { generation: number; promise: Promise<RefreshResponse> } | null = null;
+  // Serialize only credential mutations (including async native storage). No business queue,
+  // retries, durable state or second session store; a newer login commits after older writes.
+  let credentialWrite: Promise<unknown> | null = null;
+  const authRequests = new Map<AbortController, () => void>();
+  const isAuthSessionCurrent = (expected: number) => expected === generation;
+  function assertAuthSessionCurrent(expected: number) {
+    if (!isAuthSessionCurrent(expected)) throw new OpcoAuthSessionChangedError();
+  }
+  function beginAuthSession() {
+    generation += 1;
+    sessionTokens = new Set();
+    refreshFlight = null;
+    for (const [controller, reject] of authRequests) { controller.abort(); reject(); }
+    authRequests.clear();
+    return generation;
+  }
+  async function commitAuthSession<T>(expected: number, write: () => Promise<T>): Promise<T> {
+    const previous = credentialWrite;
+    const current = (async () => {
+      await previous?.catch(() => undefined);
+      assertAuthSessionCurrent(expected);
+      const result = await write();
+      assertAuthSessionCurrent(expected);
+      return result;
+    })();
+    credentialWrite = current;
+    try { return await current; }
+    finally { if (credentialWrite === current) credentialWrite = null; }
+  }
+  async function loginRequest(init: OpcoRequestInit) {
+    const previousTokens = sessionTokens;
+    const expected = beginAuthSession();
+    try {
+      const result = await request<LoginResult>("/api/v1/auth/login", init, parseApiEnvelope, { generation: expected, authentication: true });
+      assertAuthSessionCurrent(expected);
+      if ("accessToken" in result) sessionTokens.add(result.accessToken);
+      return result;
+    } catch (error) {
+      if (isAuthSessionCurrent(expected)) sessionTokens = previousTokens;
+      throw error;
+    }
+  }
 
-  async function request<T>(path: string, init: OpcoRequestInit = {}, parser: OpcoResponseParser<T> = parseApiEnvelope<T>) {
+  async function request<T>(path: string, init: OpcoRequestInit = {}, parser: OpcoResponseParser<T> = parseApiEnvelope<T>, scope?: { generation: number; authentication?: boolean }) {
     let response: Response;
     let abortControllerTriggered = false;
     let fetchResolvedAt: Date | null = null;
@@ -1316,6 +1369,15 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     const diagnosticSyncRunId = init.diagnosticSyncRunId ?? null;
     const requestTimeoutMs = init.timeoutMs ?? timeoutMs;
     const controller = new AbortController();
+    let rejectRetired!: (reason: unknown) => void;
+    const retired = new Promise<never>((_resolve, reject) => { rejectRetired = reject; });
+    if (scope?.authentication) {
+      assertAuthSessionCurrent(scope.generation);
+      authRequests.set(controller, () => rejectRetired(new OpcoAuthSessionChangedError()));
+    }
+    const emitDiagnostics = (diagnostics: OpcoNetworkDiagnostics) => {
+      if (!scope || isAuthSessionCurrent(scope.generation)) safeRequestDiagnostics(options.onRequestDiagnostics, diagnostics);
+    };
     let timeoutId: ReturnType<typeof setTimeout>;
     const deadline = new Promise<never>((_resolve, reject) => {
       timeoutId = setTimeout(() => {
@@ -1355,7 +1417,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
         serverTiming,
         timeoutMs: requestTimeoutMs,
       });
-      safeRequestDiagnostics(options.onRequestDiagnostics, diagnostics);
+      emitDiagnostics(diagnostics);
 
       return new OpcoNetworkError(timedOut
         ? "La solicitud a Opco agoto el tiempo de espera."
@@ -1372,13 +1434,15 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
           ...fetchInit.headers,
           [OPCO_REQUEST_ID_HEADER]: diagnosticRequestId,
         },
-      }), deadline]);
+      }), deadline, retired]);
       responseStarted = true;
       fetchResolvedAt = new Date();
       responseRequestId = sanitizeDiagnosticRequestId(response.headers.get(OPCO_REQUEST_ID_HEADER));
       serverTiming = parseServerTimingHeader(response.headers.get("Server-Timing"));
     } catch (error) {
       clearTimeout(timeoutId!);
+      authRequests.delete(controller);
+      if (scope?.authentication && !isAuthSessionCurrent(scope.generation)) throw new OpcoAuthSessionChangedError();
       throw networkFailure(error);
     }
 
@@ -1387,13 +1451,16 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     let responseParseFailed = false;
 
     try {
-      body = await Promise.race([response.json(), deadline]);
+      body = await Promise.race([response.json(), deadline, retired]);
     } catch (error) {
+      if (scope?.authentication && !isAuthSessionCurrent(scope.generation)) throw new OpcoAuthSessionChangedError();
       if (abortControllerTriggered || isAbortError(error)) throw networkFailure(error);
       responseParseFailed = true;
     } finally {
       clearTimeout(timeoutId!);
+      authRequests.delete(controller);
     }
+    if (scope?.authentication) assertAuthSessionCurrent(scope.generation);
 
     responseParsedAt = new Date();
     const errorCode = apiEnvelopeErrorCode(body);
@@ -1402,7 +1469,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       const parsed = responseParseFailed
         ? parseApiEnvelope<T>(body, response.status, diagnosticRequestId)
         : parser(body, response.status, diagnosticRequestId);
-      safeRequestDiagnostics(options.onRequestDiagnostics, requestDiagnostics({
+      emitDiagnostics(requestDiagnostics({
         abortControllerTriggered,
         attemptNumber: diagnosticAttemptNumber,
         diagnosticOperation,
@@ -1426,7 +1493,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
 
       return parsed;
     } catch (error) {
-      safeRequestDiagnostics(options.onRequestDiagnostics, requestDiagnostics({
+      emitDiagnostics(requestDiagnostics({
         abortControllerTriggered,
         attemptNumber: diagnosticAttemptNumber,
         diagnosticOperation,
@@ -1453,81 +1520,81 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   }
 
   async function authenticatedRequest<T>(path: string, token: string, init: OpcoRequestInit = {}, parser: OpcoResponseParser<T> = parseApiEnvelope<T>) {
+    const expected = generation;
+    // Runtime bootstrap (generation zero) restores its existing opaque/JWT token normally.
+    // Once a login/logout happened, tokens from a retired login cannot start new requests.
+    if (expected !== 0 && !sessionTokens.has(token)) throw new OpcoAuthSessionChangedError();
+    sessionTokens.add(token);
+    const scope = { generation: expected };
     try {
-      return await request<T>(path, withAuthHeaders(init, token), parser);
+      // A valid business response/ACK belongs to this command even after a session change.
+      return await request<T>(path, withAuthHeaders(init, token), parser, scope);
     } catch (error) {
+      if (error instanceof OpcoApiError && (error.status === 401 || error.status === 403)) assertAuthSessionCurrent(expected);
       if (!shouldRefresh(error)) {
-        await clearInvalidSession(error);
+        await clearInvalidSession(error, expected);
         throw error;
       }
     }
-
-    const refreshed = await refreshSession({
-      diagnosticSyncRunId: init.diagnosticSyncRunId,
-    });
-
+    const refreshed = await recoverSession(expected, { diagnosticSyncRunId: init.diagnosticSyncRunId });
+    assertAuthSessionCurrent(expected);
     try {
-      return await request<T>(path, withAuthHeaders(init, refreshed.accessToken), parser);
+      return await request<T>(path, withAuthHeaders(init, refreshed.accessToken), parser, scope);
     } catch (error) {
-      await clearInvalidSession(error);
+      if (error instanceof OpcoApiError && (error.status === 401 || error.status === 403)) assertAuthSessionCurrent(expected);
+      await clearInvalidSession(error, expected);
       throw error;
     }
   }
 
-  async function refreshSession(refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
-    if (!refreshPromise) {
-      refreshPromise = performRefresh(refreshOptions)
-        .then(async (tokens) => {
-          await tokenStore?.setSession(tokens);
+  function refreshSession(refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
+    return recoverSession(generation, refreshOptions);
+  }
+  function recoverSession(expected: number, refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number }) {
+    assertAuthSessionCurrent(expected);
+    if (expected !== 0 && sessionTokens.size === 0) throw new OpcoAuthSessionChangedError();
+    if (!refreshFlight || refreshFlight.generation !== expected) {
+      const promise = performRefresh(expected, refreshOptions)
+        .then(async tokens => {
+          await commitAuthSession(expected, async () => { await tokenStore?.setSession(tokens); });
+          assertAuthSessionCurrent(expected);
+          sessionTokens.add(tokens.accessToken);
           options.onSessionRefreshed?.(tokens);
           return tokens;
         })
-        .catch(async (error) => {
+        .catch(async error => {
+          assertAuthSessionCurrent(expected);
           if (isInvalidRefreshError(error)) {
-            await tokenStore?.clearSession();
-            options.onSessionInvalid?.(sessionTerminationDiagnostics({
-              error,
-              requestId: null,
-              reason: "refresh_invalid",
-              source: "AUTH_REFRESH",
-            }));
+            await commitAuthSession(expected, async () => { await tokenStore?.clearSession(); });
+            assertAuthSessionCurrent(expected);
+            beginAuthSession();
+            options.onSessionInvalid?.(sessionTerminationDiagnostics({ error, requestId: null, reason: "refresh_invalid", source: "AUTH_REFRESH" }));
           }
-
           throw error;
         })
-        .finally(() => {
-          refreshPromise = null;
-        });
+        .finally(() => { if (refreshFlight?.promise === promise) refreshFlight = null; });
+      refreshFlight = { generation: expected, promise };
     }
-
-    return refreshPromise;
+    return refreshFlight.promise;
   }
 
-  async function performRefresh(refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
+  async function performRefresh(expected: number, refreshOptions: { diagnosticSyncRunId?: string | null; timeoutMs?: number } = {}) {
+    const scope = { generation: expected, authentication: true };
     if (platformOS === "web") {
       return request<RefreshResponse>("/api/v1/auth/refresh", {
-        credentials: "include",
-        diagnosticOperation: "AUTH_REFRESH",
-        diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId,
-        method: "POST",
+        credentials: "include", diagnosticOperation: "AUTH_REFRESH",
+        diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId, method: "POST",
         timeoutMs: refreshOptions.timeoutMs ?? AUTH_REFRESH_TIMEOUT_MS,
-      });
+      }, parseApiEnvelope, scope);
     }
-
     const refreshToken = await tokenStore?.getRefreshToken();
-
-    if (!refreshToken) {
-      throw new OpcoApiError("La sesion local no tiene refresh token.", "REFRESH_TOKEN_MISSING", 401);
-    }
-
+    assertAuthSessionCurrent(expected);
+    if (!refreshToken) throw new OpcoApiError("La sesion local no tiene refresh token.", "REFRESH_TOKEN_MISSING", 401);
     return request<RefreshResponse>("/api/v1/auth/refresh", {
-      body: JSON.stringify({ refreshToken }),
-      diagnosticOperation: "AUTH_REFRESH",
-      diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId,
-      headers: nativePlatformHeaders(),
-      method: "POST",
-      timeoutMs: refreshOptions.timeoutMs ?? AUTH_REFRESH_TIMEOUT_MS,
-    });
+      body: JSON.stringify({ refreshToken }), diagnosticOperation: "AUTH_REFRESH",
+      diagnosticSyncRunId: refreshOptions.diagnosticSyncRunId, headers: nativePlatformHeaders(),
+      method: "POST", timeoutMs: refreshOptions.timeoutMs ?? AUTH_REFRESH_TIMEOUT_MS,
+    }, parseApiEnvelope, scope);
   }
 
   function authHeaders(token: string) {
@@ -1556,9 +1623,11 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     };
   }
 
-  async function clearInvalidSession(error: unknown) {
+  async function clearInvalidSession(error: unknown, expected: number) {
     if (error instanceof OpcoApiError && error.status === 401 && error.code === TOKEN_INVALID_CODE) {
-      await tokenStore?.clearSession();
+      await commitAuthSession(expected, async () => { await tokenStore?.clearSession(); });
+      assertAuthSessionCurrent(expected);
+      beginAuthSession();
       options.onSessionInvalid?.(sessionTerminationDiagnostics({
         error,
         requestId: null,
@@ -1569,6 +1638,10 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
   }
 
   return {
+    getAuthSessionGeneration: () => generation,
+    isAuthSessionCurrent,
+    assertAuthSessionCurrent,
+    commitAuthSession,
     selectiveReuseEnabled: options.selectiveReuse ?? config.offlineReusePolicy,
     genericReuseEnabled: options.genericReuse ?? config.offlineGenericReusePolicy,
     async getOfflineRevisionManifest(token:string,contractId:string,input:{ownerKey?:string;expected?:RevisionManifest;isCurrent?:()=>boolean;date?:string;month?:string;appViewIds?:string[];selectiveReuse?:boolean;genericReuse?:boolean}={}):Promise<RevisionManifest> {
@@ -1625,7 +1698,7 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
     },
     refreshSession,
     login(email: string, password: string, options: { preferredOrganizationId?: string | null } = {}) {
-      return request<LoginResult>("/api/v1/auth/login", {
+      return loginRequest({
         body: JSON.stringify({
           email,
           password,
@@ -1643,20 +1716,24 @@ export function createOpcoApi(options: ApiClientOptions = {}) {
       challengeNonce?: string;
       selectionId: string;
     }) {
-      return request<LoginResponse>("/api/v1/auth/login", {
+      return loginRequest({
         body: JSON.stringify(input),
         credentials: platformOS === "web" ? "include" : undefined,
         headers: nativePlatformHeaders(),
         method: "POST",
-      });
+      }) as Promise<LoginResponse>;
     },
     logout(refreshToken?: string | null) {
-      return request<void>("/api/v1/auth/logout", {
-        body: platformOS === "web" || !refreshToken ? undefined : JSON.stringify({ refreshToken }),
-        credentials: platformOS === "web" ? "include" : undefined,
-        headers: nativePlatformHeaders(),
-        method: "POST",
-      });
+      const expected = beginAuthSession();
+      return (async () => {
+        const nativeRefresh = platformOS === "web" ? null : refreshToken ?? await tokenStore?.getRefreshToken();
+        assertAuthSessionCurrent(expected);
+        return request<void>("/api/v1/auth/logout", {
+          body: nativeRefresh ? JSON.stringify({ refreshToken: nativeRefresh }) : undefined,
+          credentials: platformOS === "web" ? "include" : undefined,
+          headers: nativePlatformHeaders(), method: "POST",
+        }, parseApiEnvelope, { generation: expected, authentication: true });
+      })();
     },
     getMe(token: string) {
       return authenticatedRequest<MeResponse>("/api/v1/me", token);

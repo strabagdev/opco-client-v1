@@ -53,6 +53,7 @@ import {
   MeResponse,
   OpcoApi,
   OpcoApiError,
+  OpcoAuthSessionChangedError,
   OpcoNetworkError,
 } from "@/lib/opco-api";
 import { getStateUpdateErrorDiagnosticRows } from "@/lib/pending-sync-errors";
@@ -228,6 +229,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     [clearOfflinePreparationRuntime],
   );
 
+  const authGeneration = api.getAuthSessionGeneration();
+
   const {
     automaticRecovery,
     getRecoverySummary,
@@ -250,17 +253,22 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const loadContext = useCallback(
     async (accessToken: string, currentMe: MeResponse) => {
+      const generation = api.getAuthSessionGeneration();
       try {
         const nextContext = await api.getContext(accessToken);
         const nextOwnerKey = buildOwnerKey(currentMe, nextContext);
         const persistedContractId = await readPersistedContractId(definitionCache, nextOwnerKey);
         const nextContractId = selectContractId(nextContext.contracts, persistedContractId);
 
-        await tokenStorage.setSessionOwnerKey(nextOwnerKey);
-        await definitionCache.upsertContextSnapshot(nextOwnerKey, currentMe, nextContext, new Date().toISOString());
+        await api.commitAuthSession(generation, async () => {
+          await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+          await definitionCache.upsertContextSnapshot(nextOwnerKey, currentMe, nextContext, new Date().toISOString());
+        });
+        api.assertAuthSessionCurrent(generation);
         setContext(nextContext);
         setSelectedContractIdState(nextContractId);
       } catch (error) {
+        if (!api.isAuthSessionCurrent(generation)) return;
         if (!(error instanceof OpcoNetworkError)) {
           return;
         }
@@ -268,6 +276,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         const cachedOwnerKey = await tokenStorage.getSessionOwnerKey();
         const cached = cachedOwnerKey ? await definitionCache.getContextSnapshot(cachedOwnerKey) : null;
 
+        if (!api.isAuthSessionCurrent(generation)) return;
         if (cached && cached.me.user.id === currentMe.user.id) {
           setMe(cached.me);
           setContext(cached.context);
@@ -280,6 +289,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const refreshPendingRecordsCount = useCallback(async () => {
+    if (!api.isAuthSessionCurrent(authGeneration)) return;
+    const isCurrent = () => api.isAuthSessionCurrent(authGeneration) && preparationSession.current.ownerKey === ownerKey && preparationSession.current.contractId === selectedContractIdState;
     if (!ownerKey || !selectedContractIdState) {
       setPendingRecordsCount(0);
       setRecordsFailedOperations([]);
@@ -300,15 +311,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }),
       ]);
 
+      if (!isCurrent()) return;
       setPendingRecordsCount(count);
       setRecordsFailedOperations(failedOperations);
       setRecordsSyncSummary(summary);
     } catch {
+      if (!isCurrent()) return;
       setPendingRecordsCount(0);
       setRecordsFailedOperations([]);
       setRecordsSyncSummary(emptyRecordsSyncSummary);
     }
-  }, [definitionCache, ownerKey, selectedContractIdState]);
+  }, [api, authGeneration, definitionCache, ownerKey, selectedContractIdState]);
 
   const recordOfflinePreparationDiagnostics = useCallback((diagnostics: OfflinePreparationDiagnostics) => {
     const scope = preparationSession.current;
@@ -472,10 +485,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
 
     async function bootstrap() {
+      const generation = api.getAuthSessionGeneration();
       try {
         const restored = await restoreSession(tokenStorage, api, definitionCache);
 
-        if (!isMounted) {
+        if (!isMounted || !api.isAuthSessionCurrent(generation)) {
           return;
         }
 
@@ -488,11 +502,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }
 
         if (restored.status === "offline") {
+          const selected = restored.snapshot ? await readPersistedContractId(definitionCache, restored.snapshot.ownerKey) : null;
+          if (!isMounted || !api.isAuthSessionCurrent(generation)) return;
           setToken(restored.token);
           if (restored.snapshot) {
             setMe(restored.snapshot.me);
             setContext(restored.snapshot.context);
-            setSelectedContractIdState(await readPersistedContractId(definitionCache, restored.snapshot.ownerKey));
+            setSelectedContractIdState(selected);
           }
           setStatus("offline");
           return;
@@ -500,7 +516,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
         setStatus("anonymous");
       } catch (error) {
-        if (isMounted) {
+        if (isMounted && api.isAuthSessionCurrent(generation)) {
           if (isLocalDatabaseUnavailableError(error)) {
             return;
           }
@@ -528,16 +544,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   async function signIn(email: string, password: string) {
     const preferredOrganizationId = await tokenStorage.getPreferredOrganizationId();
-    const loginResponse = await api.login(email, password, {
-      preferredOrganizationId,
-    });
+    const pending = api.login(email, password, { preferredOrganizationId });
+    const generation = api.getAuthSessionGeneration();
+    const loginResponse = await pending;
+    api.assertAuthSessionCurrent(generation);
 
     if (isLoginSelectionRequired(loginResponse)) {
       setPendingLoginSelection(loginResponse);
       return;
     }
 
-    await finalizeSignIn(loginResponse);
+    await finalizeSignIn(loginResponse, generation);
   }
 
   async function completeSignInSelection(selectionId: string) {
@@ -546,16 +563,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
 
     let loginResponse: LoginResponse;
+    let generation = api.getAuthSessionGeneration();
 
     try {
-      loginResponse = await api.completeLoginSelection({
+      const pending = api.completeLoginSelection({
         challenge: pendingLoginSelection.challenge,
         challengeNonce: pendingLoginSelection.challengeNonce,
         selectionId,
       });
+      generation = api.getAuthSessionGeneration();
+      loginResponse = await pending;
+      api.assertAuthSessionCurrent(generation);
     } catch (error) {
       if (
-        error instanceof OpcoApiError &&
+        api.isAuthSessionCurrent(generation) && error instanceof OpcoApiError &&
         (error.code === "LOGIN_SELECTION_EXPIRED" || error.code === "LOGIN_SELECTION_INVALID")
       ) {
         setPendingLoginSelection(null);
@@ -564,33 +585,32 @@ export function SessionProvider({ children }: PropsWithChildren) {
       throw error;
     }
 
-    await finalizeSignIn(loginResponse);
+    await finalizeSignIn(loginResponse, generation);
   }
 
-  async function finalizeSignIn(loginResponse: LoginResponse) {
+  async function finalizeSignIn(loginResponse: LoginResponse, generation: number) {
     const previousOwnerKey = ownerKey;
 
     if (Platform.OS !== "web" && !loginResponse.refreshToken) {
       throw new Error("Opco no devolvio refresh token para la sesion nativa.");
     }
 
-    await tokenStorage.setSession({
-      accessToken: loginResponse.accessToken,
-      refreshToken: loginResponse.refreshToken,
-    });
-
+    api.assertAuthSessionCurrent(generation);
     const nextMe = await api.getMe(loginResponse.accessToken);
     const nextContext = await api.getContext(loginResponse.accessToken);
     const nextOwnerKey = buildOwnerKey(nextMe, nextContext);
     const nextContractId = selectContractId(nextContext.contracts, await readPersistedContractId(definitionCache, nextOwnerKey));
 
-    if (previousOwnerKey && previousOwnerKey !== nextOwnerKey) {
-      void persistSelectedContractId(definitionCache, null, previousOwnerKey);
-    }
-
-    await tokenStorage.setSessionOwnerKey(nextOwnerKey);
-    await tokenStorage.setPreferredOrganizationId(nextContext.organization.id);
-    await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
+    await api.commitAuthSession(generation, async () => {
+      await tokenStorage.setSession({ accessToken: loginResponse.accessToken, refreshToken: loginResponse.refreshToken });
+      if (previousOwnerKey && previousOwnerKey !== nextOwnerKey) {
+        await persistSelectedContractId(definitionCache, null, previousOwnerKey);
+      }
+      await tokenStorage.setSessionOwnerKey(nextOwnerKey);
+      await tokenStorage.setPreferredOrganizationId(nextContext.organization.id);
+      await definitionCache.upsertContextSnapshot(nextOwnerKey, nextMe, nextContext, new Date().toISOString());
+    });
+    api.assertAuthSessionCurrent(generation);
 
     setToken(loginResponse.accessToken);
     setMe(nextMe);
@@ -610,42 +630,37 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }
 
   async function signOut() {
-    const refreshToken = await tokenStorage.getRefreshToken();
     const manualSignOutOwnerKey = ownerKey;
-
-    try {
-      await api.logout(refreshToken);
-    } catch {
-      // Local logout must not be blocked by network or remote revocation failures.
+    const pending = api.logout(); // Retire the login immediately, before native storage/network awaits.
+    const generation = api.getAuthSessionGeneration();
+    try { await pending; }
+    catch (error) {
+      if (error instanceof OpcoAuthSessionChangedError || !api.isAuthSessionCurrent(generation)) return;
+      // Current local logout remains available after a network/revocation failure.
     }
-
+    if (!api.isAuthSessionCurrent(generation)) return;
     if (manualSignOutOwnerKey) {
       await recordStateUpdateSessionTerminationDiagnostics({
-        errorCode: "USER_SIGN_OUT",
-        reason: "user_sign_out",
-        requestId: null,
-        source: "USER",
-        timestamp: new Date().toISOString(),
+        errorCode: "USER_SIGN_OUT", reason: "user_sign_out", requestId: null,
+        source: "USER", timestamp: new Date().toISOString(),
       }, manualSignOutOwnerKey);
-
-      try {
-        await definitionCache.clearRecordsOpeningHistory(manualSignOutOwnerKey);
-      } catch {
-        // Diagnostic cleanup failure must not block local logout.
-      }
     }
-
-    await tokenStorage.clearSession();
-    clearRecordsOpeningHistorySnapshot(manualSignOutOwnerKey);
+    try {
+      await api.commitAuthSession(generation, async () => {
+        if (manualSignOutOwnerKey) await definitionCache.clearRecordsOpeningHistory(manualSignOutOwnerKey).catch(() => undefined);
+        await tokenStorage.clearSession();
+        clearRecordsOpeningHistorySnapshot(manualSignOutOwnerKey);
+        await persistSelectedContractId(definitionCache, null);
+        await definitionCache.clearNavigationCache().catch(() => undefined);
+      });
+    } catch (error) {
+      if (error instanceof OpcoAuthSessionChangedError) return;
+      throw error;
+    }
+    if (!api.isAuthSessionCurrent(generation)) return;
     clearOfflinePreparationRuntime();
-    void persistSelectedContractId(definitionCache, null);
-    void definitionCache.clearNavigationCache();
-    setToken(null);
-    setMe(null);
-    setContext(null);
-    setPendingLoginSelection(null);
-    setSelectedContractIdState(null);
-    setStatus("anonymous");
+    setToken(null); setMe(null); setContext(null); setPendingLoginSelection(null);
+    setSelectedContractIdState(null); setStatus("anonymous");
   }
 
   async function setSelectedContractId(contractId: string | null) {

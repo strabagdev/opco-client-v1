@@ -188,10 +188,32 @@ export function useSessionDiagnostics({
   showStateUpdateDiagnostics,
   token,
 }: UseSessionDiagnosticsInput) {
-  const [stateUpdateDiagnostics, setStateUpdateDiagnostics] = useState<StateUpdateOutboxDiagnostics | null>(null);
-  const [stateUpdateDiagnosticsError, setStateUpdateDiagnosticsError] = useState<string | null>(null);
-  const [stateUpdateDiagnosticRun, setStateUpdateDiagnosticRun] = useState<StateUpdateDiagnosticRun | null>(null);
-  const [isStateUpdateDiagnosticSyncing, setIsStateUpdateDiagnosticSyncing] = useState(false);
+  const readAuthGeneration = api.getAuthSessionGeneration;
+  const authGeneration = readAuthGeneration?.();
+  const isCurrentAuth = useCallback(() => readAuthGeneration?.() === authGeneration, [readAuthGeneration, authGeneration]);
+  type ScopedDiagnostic<T> = { generation: number | undefined; ownerKey: string | null; value: T };
+  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState<ScopedDiagnostic<StateUpdateOutboxDiagnostics | null> | null>(null);
+  const [errorSnapshot, setErrorSnapshot] = useState<ScopedDiagnostic<string | null> | null>(null);
+  const [runSnapshot, setRunSnapshot] = useState<ScopedDiagnostic<StateUpdateDiagnosticRun> | null>(null);
+  const currentValue = <T,>(snapshot: ScopedDiagnostic<T> | null): T | null =>
+    snapshot !== null && snapshot.generation === authGeneration && snapshot.ownerKey === ownerKey ? snapshot.value : null;
+  const stateUpdateDiagnostics = currentValue(diagnosticsSnapshot);
+  const stateUpdateDiagnosticsError = currentValue(errorSnapshot);
+  const stateUpdateDiagnosticRun = currentValue(runSnapshot);
+  const setStateUpdateDiagnostics = useCallback((value: StateUpdateOutboxDiagnostics | null) => {
+    if (isCurrentAuth()) setDiagnosticsSnapshot({ generation: authGeneration, ownerKey, value });
+  }, [authGeneration, isCurrentAuth, ownerKey]);
+  const setStateUpdateDiagnosticsError = useCallback((value: string | null) => {
+    if (isCurrentAuth()) setErrorSnapshot({ generation: authGeneration, ownerKey, value });
+  }, [authGeneration, isCurrentAuth, ownerKey]);
+  const setStateUpdateDiagnosticRun = useCallback((value: StateUpdateDiagnosticRun) => {
+    if (isCurrentAuth()) setRunSnapshot({ generation: authGeneration, ownerKey, value });
+  }, [authGeneration, isCurrentAuth, ownerKey]);
+  type ManualDiagnosticAction = { generation: number | undefined; ownerKey: string };
+  const manualDiagnosticActionRef = useRef<ManualDiagnosticAction | null>(null);
+  const [manualDiagnosticAction, setManualDiagnosticAction] = useState<ManualDiagnosticAction | null>(null);
+  const isStateUpdateDiagnosticSyncing = manualDiagnosticAction !== null &&
+    manualDiagnosticAction.generation === authGeneration && manualDiagnosticAction.ownerKey === ownerKey;
   const [stateUpdateReconnectDiagnostics, setStateUpdateReconnectDiagnostics] =
     useState<StateUpdateReconnectDiagnostics>(emptyStateUpdateReconnectDiagnostics);
   const stateUpdateReconnectDiagnosticsRef = useRef(stateUpdateReconnectDiagnostics);
@@ -202,6 +224,7 @@ export function useSessionDiagnostics({
   }, []);
 
   const refreshStateUpdateDiagnostics = useCallback(async () => {
+    if (!isCurrentAuth()) return;
     if (!ownerKey) {
       setStateUpdateDiagnostics(null);
       setStateUpdateDiagnosticsError(ownerKey ? null : "owner unavailable");
@@ -210,22 +233,20 @@ export function useSessionDiagnostics({
 
     try {
       const diagnostics = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
-
+      if (!isCurrentAuth()) return;
       setStateUpdateDiagnostics(diagnostics);
       setStateUpdateDiagnosticsError(null);
     } catch {
+      if (!isCurrentAuth()) return;
       setStateUpdateDiagnostics(null);
       setStateUpdateDiagnosticsError("diagnostics unavailable");
     }
-  }, [definitionCache, ownerKey]);
+  }, [definitionCache, isCurrentAuth, ownerKey, setStateUpdateDiagnostics, setStateUpdateDiagnosticsError]);
 
   const persistStateUpdateReconnectDiagnostics = useCallback(async (
     updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,
   ) => {
-    if (!ownerKey) {
-      return;
-    }
-
+    if (!ownerKey || !isCurrentAuth()) return;
     try {
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey).catch(() => null);
       const next = mergeStateUpdateReconnectDiagnosticsForPersistence({
@@ -234,12 +255,12 @@ export function useSessionDiagnostics({
         updater,
       });
 
-      commitStateUpdateReconnectDiagnostics(next);
+      if (isCurrentAuth()) commitStateUpdateReconnectDiagnostics(next);
       await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(ownerKey, next);
     } catch {
       return;
     }
-  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, isCurrentAuth, ownerKey]);
 
   const recordStateUpdateSyncRun = useCallback(async ({
     completedAt = new Date().toISOString(),
@@ -268,7 +289,7 @@ export function useSessionDiagnostics({
     const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey);
     const next = mergeStateUpdateSyncDiagnosticsTelemetry({
       completedAt,
-      current: persisted ?? stateUpdateReconnectDiagnosticsRef.current,
+      current: persisted ?? (isCurrentAuth() ? stateUpdateReconnectDiagnosticsRef.current : emptyStateUpdateReconnectDiagnostics),
       currentConnectivityStatus: connectivityStatus,
       lastRequestDiagnostics: result.lastRequestDiagnostics,
       operationsAttempted: result.operationsAttempted,
@@ -282,9 +303,9 @@ export function useSessionDiagnostics({
       trigger,
     });
 
-    commitStateUpdateReconnectDiagnostics(next);
+    if (isCurrentAuth() && telemetryOwnerKey === ownerKey) commitStateUpdateReconnectDiagnostics(next);
     await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(telemetryOwnerKey, next);
-  }, [commitStateUpdateReconnectDiagnostics, connectivityStatus, definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, connectivityStatus, definitionCache, isCurrentAuth, ownerKey]);
 
   const recordStateUpdateRequestDiagnostics = useCallback(async (
     diagnostics: OpcoNetworkDiagnostics,
@@ -302,19 +323,19 @@ export function useSessionDiagnostics({
       }
 
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
-      const current = persisted ?? stateUpdateReconnectDiagnosticsRef.current;
+      const current = persisted ?? (isCurrentAuth() ? stateUpdateReconnectDiagnosticsRef.current : emptyStateUpdateReconnectDiagnostics);
       const next = appendStateUpdateRequestHistory(current, event);
 
       if (next === current) {
         return;
       }
 
-      commitStateUpdateReconnectDiagnostics(next);
+      if (isCurrentAuth() && runOwnerKey === ownerKey) commitStateUpdateReconnectDiagnostics(next);
       await definitionCache.setStateUpdateSyncDiagnosticsTelemetry(runOwnerKey, next);
     } catch {
       return;
     }
-  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, isCurrentAuth, ownerKey]);
 
   const recordStateUpdateSessionTerminationDiagnostics = useCallback(async (
     event: StateUpdateSessionTerminationTelemetry,
@@ -328,13 +349,13 @@ export function useSessionDiagnostics({
       await definitionCache.recordStateUpdateSessionTermination(runOwnerKey, event);
       const persisted = await definitionCache.getStateUpdateSyncDiagnosticsTelemetry(runOwnerKey);
 
-      if (persisted) {
+      if (persisted && isCurrentAuth() && runOwnerKey === ownerKey) {
         commitStateUpdateReconnectDiagnostics(persisted);
       }
     } catch {
       return;
     }
-  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, isCurrentAuth, ownerKey]);
 
   const syncPendingStateUpdatesWithTelemetry = useCallback(async ({
     api: stateUpdateApi = api,
@@ -360,7 +381,7 @@ export function useSessionDiagnostics({
     const completedAt = new Date().toISOString();
     const operationsSelected = selectedStateUpdates.length;
 
-    if (shouldEmitStateUpdateRefresh({ result, selectedOperations: operationsSelected })) {
+    if (isCurrentAuth() && runOwnerKey === ownerKey && shouldEmitStateUpdateRefresh({ result, selectedOperations: operationsSelected })) {
       setStateUpdateReconnectRefreshKey((key) => key + 1);
     }
     await recordStateUpdateSyncRun({
@@ -380,19 +401,24 @@ export function useSessionDiagnostics({
       startedAt,
       syncRunId,
     };
-  }, [api, definitionCache, ownerKey, recordStateUpdateSyncRun, setStateUpdateReconnectRefreshKey, token]);
+  }, [api, definitionCache, isCurrentAuth, ownerKey, recordStateUpdateSyncRun, setStateUpdateReconnectRefreshKey, token]);
 
   const runStateUpdateDiagnosticSync = useCallback(async () => {
+    if (!isCurrentAuth()) return;
     if (!token || !ownerKey) {
       setStateUpdateDiagnosticsError("session unavailable");
       return;
     }
-
-    const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
-    const events = createStateUpdateDiagnosticEvents(beforeRun);
-
-    setIsStateUpdateDiagnosticSyncing(true);
+    const active = manualDiagnosticActionRef.current;
+    if (active?.generation === authGeneration && active.ownerKey === ownerKey) return;
+    const action: ManualDiagnosticAction = { generation: authGeneration, ownerKey };
+    const isCurrentAction = () => isCurrentAuth() && manualDiagnosticActionRef.current === action;
+    manualDiagnosticActionRef.current = action;
+    setManualDiagnosticAction(action);
     try {
+      const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
+      if (!isCurrentAction()) return;
+      const events = createStateUpdateDiagnosticEvents(beforeRun);
       const diagnosticStore = createStateUpdateDiagnosticStore(definitionCache, events);
       const diagnosticApi = createStateUpdateDiagnosticApi(api, events);
       const runResult = await syncPendingStateUpdatesWithTelemetry({
@@ -402,7 +428,9 @@ export function useSessionDiagnostics({
         token,
         trigger: "manual-retry",
       });
-
+      // The existing engine has already reconciled a valid ACK for its owner.
+      // Retire only this action's UI publication, never that durable receipt.
+      if (!isCurrentAction()) return;
       if (!runResult) {
         setStateUpdateDiagnosticsError("session unavailable");
         return;
@@ -410,6 +438,7 @@ export function useSessionDiagnostics({
 
       const { completedAt, result } = runResult;
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
+      if (!isCurrentAction()) return;
 
       for (const operation of refreshed.operations) {
         const event = [...events.values()].find((item) => item.clientRequestId === operation.clientRequestId);
@@ -430,14 +459,19 @@ export function useSessionDiagnostics({
       setStateUpdateDiagnostics(refreshed);
       setStateUpdateDiagnosticsError(null);
     } catch {
+      if (!isCurrentAction()) return;
       setStateUpdateDiagnosticsError("diagnostic sync failed");
       await refreshStateUpdateDiagnostics();
     } finally {
-      setIsStateUpdateDiagnosticSyncing(false);
+      if (manualDiagnosticActionRef.current === action) {
+        manualDiagnosticActionRef.current = null;
+        if (isCurrentAuth()) setManualDiagnosticAction(null);
+      }
     }
-  }, [api, definitionCache, ownerKey, refreshStateUpdateDiagnostics, syncPendingStateUpdatesWithTelemetry, token]);
+  }, [api, authGeneration, definitionCache, isCurrentAuth, ownerKey, refreshStateUpdateDiagnostics, setStateUpdateDiagnosticRun, setStateUpdateDiagnostics, setStateUpdateDiagnosticsError, syncPendingStateUpdatesWithTelemetry, token]);
 
   const retryFailedStateUpdateDiagnostics = useCallback(async (manualRetryToken?: string | null) => {
+    if (!isCurrentAuth()) return;
     if (!token || !ownerKey) {
       setStateUpdateDiagnosticsError("session unavailable");
       return;
@@ -448,6 +482,7 @@ export function useSessionDiagnostics({
         manualRetryToken,
         ownerKey,
       });
+      if (!isCurrentAuth()) return;
 
       if (!retried) {
         await refreshStateUpdateDiagnostics();
@@ -456,10 +491,11 @@ export function useSessionDiagnostics({
 
       await runStateUpdateDiagnosticSync();
     } catch {
+      if (!isCurrentAuth()) return;
       setStateUpdateDiagnosticsError("retry unavailable");
       await refreshStateUpdateDiagnostics();
     }
-  }, [definitionCache, ownerKey, refreshStateUpdateDiagnostics, runStateUpdateDiagnosticSync, token]);
+  }, [definitionCache, isCurrentAuth, ownerKey, refreshStateUpdateDiagnostics, runStateUpdateDiagnosticSync, setStateUpdateDiagnosticsError, token]);
 
   useEffect(() => {
     if (!ownerKey) {
@@ -476,7 +512,7 @@ export function useSessionDiagnostics({
 
     definitionCache.getStateUpdateSyncDiagnosticsTelemetry(ownerKey)
       .then((telemetry) => {
-        if (isMounted && telemetry) {
+        if (isMounted && isCurrentAuth() && telemetry) {
           const next = markInterruptedReadinessActivity(telemetry);
 
           commitStateUpdateReconnectDiagnostics(next);
@@ -490,7 +526,7 @@ export function useSessionDiagnostics({
     return () => {
       isMounted = false;
     };
-  }, [commitStateUpdateReconnectDiagnostics, definitionCache, ownerKey]);
+  }, [commitStateUpdateReconnectDiagnostics, definitionCache, isCurrentAuth, ownerKey]);
 
   useEffect(() => {
     if (!showStateUpdateDiagnostics) {

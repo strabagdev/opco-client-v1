@@ -7,9 +7,6 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import {
   AttendanceGetDiagnostics,
   buildStateUpdateDiagnosticHealth,
-  createStateUpdateDiagnosticApi,
-  createStateUpdateDiagnosticEvents,
-  createStateUpdateDiagnosticStore,
   formatStateUpdatePreflightRows,
   formatStateUpdateRunRows,
   getStateUpdateDiagnosticsRouteState,
@@ -32,12 +29,12 @@ export default function StateUpdateDiagnosticsRoute() {
   const {
     api,
     definitionCache,
+    diagnosticsStateUpdate,
     localDatabaseStorageState,
     ownerKey,
     selectedContractId,
     stateUpdateReconnectDiagnostics,
     status,
-    syncPendingStateUpdatesWithTelemetry,
     token,
   } = useSession();
   const routeState = useMemo(
@@ -50,10 +47,8 @@ export default function StateUpdateDiagnosticsRoute() {
       }),
     [localDatabaseStorageState, ownerKey, selectedContractId, status],
   );
-  const [diagnostics, setDiagnostics] = useState<StateUpdateOutboxDiagnostics | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [run, setRun] = useState<StateUpdateDiagnosticRun | null>(null);
+  const {diagnostics, error, isSyncing, run,
+    onRefresh: refresh, onSyncNow: syncNow, onRetryFailed: retryFailed} = diagnosticsStateUpdate;
   const [attendanceDiagnostics, setAttendanceDiagnostics] = useState<AttendanceGetDiagnostics | null>(null);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [isLoadingAttendanceDiagnostics, setIsLoadingAttendanceDiagnostics] = useState(false);
@@ -68,103 +63,6 @@ export default function StateUpdateDiagnosticsRoute() {
   const requestedAttendanceAppViewId = typeof params.appViewId === "string" && params.appViewId.trim()
     ? params.appViewId.trim()
     : null;
-
-  const refresh = useCallback(async () => {
-    if (!routeState.ready) {
-      setDiagnostics(null);
-      setError(null);
-      return;
-    }
-
-    try {
-      const nextDiagnostics = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
-
-      setDiagnostics(nextDiagnostics);
-      setError(null);
-    } catch {
-      setDiagnostics(null);
-      setError("diagnostics unavailable");
-    }
-  }, [definitionCache, routeState]);
-
-  const syncNow = useCallback(async () => {
-    if (!routeState.ready || !token) {
-      setError("session unavailable");
-      return;
-    }
-
-    const beforeRun = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
-    const events = createStateUpdateDiagnosticEvents(beforeRun);
-
-    setIsSyncing(true);
-    try {
-      const diagnosticStore = createStateUpdateDiagnosticStore(definitionCache, events);
-      const diagnosticApi = createStateUpdateDiagnosticApi(api, events);
-      const runResult = await syncPendingStateUpdatesWithTelemetry({
-        api: diagnosticApi,
-        ownerKey: routeState.ownerKey,
-        store: diagnosticStore,
-        token,
-        trigger: "manual-retry",
-      });
-
-      if (!runResult) {
-        setError("session unavailable");
-        return;
-      }
-
-      const { completedAt, result } = runResult;
-      const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey);
-
-      for (const operation of refreshed.operations) {
-        const event = [...events.values()].find((item) => item.clientRequestId === operation.clientRequestId);
-
-        if (event) {
-          event.finalSyncStatus = operation.syncStatus;
-        }
-      }
-
-      setRun({
-        invokedAt: completedAt,
-        operationsAttempted: [...events.values()].filter((event) => event.requestAttempted).length,
-        operationsCompleted: result.completed,
-        operationsFailed: result.failed + result.conflicts + result.retriable,
-        operationsSelected: [...events.values()].filter((event) => event.selectedForSync).length,
-        rows: [...events.values()],
-      });
-      setDiagnostics(refreshed);
-      setError(null);
-    } catch {
-      setError("diagnostic sync failed");
-      await refresh();
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [api, definitionCache, refresh, routeState, syncPendingStateUpdatesWithTelemetry, token]);
-
-  const retryFailed = useCallback(async (manualRetryToken?: string | null) => {
-    if (!routeState.ready || !token) {
-      setError("session unavailable");
-      return;
-    }
-
-    try {
-      const retried = await definitionCache.retryFailedStateUpdateOperations({
-        manualRetryToken,
-        ownerKey: routeState.ownerKey,
-      });
-
-      if (!retried) {
-        await refresh();
-        return;
-      }
-
-      await syncNow();
-    } catch {
-      setError("retry unavailable");
-      await refresh();
-    }
-  }, [definitionCache, refresh, routeState, syncNow, token]);
 
   const refreshAttendanceDiagnostics = useCallback(async () => {
     if (!routeState.ready || !token) {
@@ -245,30 +143,8 @@ export default function StateUpdateDiagnosticsRoute() {
   }, [api]);
 
   useEffect(() => {
-    if (!routeState.ready) {
-      return;
-    }
-
-    let isMounted = true;
-
-    definitionCache.getStateUpdateOutboxDiagnostics(routeState.ownerKey)
-      .then((nextDiagnostics) => {
-        if (isMounted) {
-          setDiagnostics(nextDiagnostics);
-          setError(null);
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setDiagnostics(null);
-          setError("diagnostics unavailable");
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [definitionCache, routeState]);
+    if (routeState.ready) void refresh();
+  }, [refresh, routeState.ready]);
 
   if (!routeState.ready) {
     return (

@@ -1,6 +1,6 @@
 import { CachedEntityRecord, PendingOperation, PreparedRecordUpdate } from "../lib/offline-records";
 import { isLocalDatabaseUnavailableError } from "../lib/local-db-recovery";
-import { EntityRecord, EntityRecordValue, OpcoApi, OpcoApiError, OpcoNetworkError } from "../lib/opco-api";
+import { EntityRecord, EntityRecordValue, OpcoApi, OpcoApiError, OpcoAuthSessionChangedError, OpcoNetworkError } from "../lib/opco-api";
 import { classifySyncTelemetryError, SyncErrorCode, SyncErrorPhase, SyncPhase, SyncTelemetryStore } from "../lib/sync-telemetry";
 
 export type RecordsSyncStore = {
@@ -22,16 +22,28 @@ export type RecordsSyncResult = {
 };
 
 let syncPromise: Promise<RecordsSyncResult> | null = null;
+let syncScope: { ownerKey: string; token: string; generation: number | undefined; store: RecordsSyncStore } | null = null;
 
 export function syncPendingRecordsOnce(params: {
-  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord">;
+  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord"> & Partial<Pick<OpcoApi, "getAuthSessionGeneration">>;
   ownerKey: string;
   store: RecordsSyncStore;
   token: string;
-}) {
+}): Promise<RecordsSyncResult> {
+  const generation = params.api.getAuthSessionGeneration?.();
+  if (syncPromise && syncScope && (syncScope.ownerKey !== params.ownerKey || syncScope.token !== params.token || syncScope.store !== params.store || syncScope.generation !== generation)) {
+    // Keep one existing engine. A later session waits, then runs its own scope;
+    // it must not consume another login's result as its own acknowledgement.
+    return syncPromise.catch(() => undefined).then(() => {
+      if (params.api.getAuthSessionGeneration?.() !== generation) return { completed: 0, conflicts: 0, failed: 0, retriable: 0 };
+      return syncPendingRecordsOnce(params);
+    });
+  }
   if (!syncPromise) {
-    syncPromise = runSync(params).finally(() => {
+    syncScope = { ownerKey: params.ownerKey, token: params.token, generation, store: params.store };
+    syncPromise = runSync(params, generation).finally(() => {
       syncPromise = null;
+      syncScope = null;
     });
   }
 
@@ -44,11 +56,11 @@ async function runSync({
   store,
   token,
 }: {
-  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord">;
+  api: Pick<OpcoApi, "createEntityRecord" | "getEntityRecord" | "updateEntityRecord"> & Partial<Pick<OpcoApi, "getAuthSessionGeneration">>;
   ownerKey: string;
   store: RecordsSyncStore;
   token: string;
-}): Promise<RecordsSyncResult> {
+}, generation: number | undefined): Promise<RecordsSyncResult> {
   const operations = await store.listPendingOperations(ownerKey);
   const scopes = uniqueOperationScopes(operations);
   const scopesWithErrors = new Set<string>();
@@ -72,6 +84,10 @@ async function runSync({
   );
 
   for (const operation of operations) {
+    if (api.getAuthSessionGeneration?.() !== generation) {
+      for (const scope of scopes) scopesWithErrors.add(operationScopeKey(scope));
+      break;
+    }
     let attemptedOperation = operation;
     try {
       await store.markPendingOperationSyncing(operation.id);
@@ -122,6 +138,10 @@ async function runSync({
       if (classification.action === "retry") {
         await store.retryPendingOperation(attemptedOperation, classification.code, classification.message);
         result.retriable += 1;
+        if (error instanceof OpcoAuthSessionChangedError) {
+          for (const scope of scopes) scopesWithErrors.add(operationScopeKey(scope));
+          break;
+        }
         continue;
       }
 
@@ -305,6 +325,7 @@ export class RecordConflictDetected extends Error {
 }
 
 function classifySyncError(error: unknown): { action: "failed" | "retry"; code: string; message: string } {
+  if (error instanceof OpcoAuthSessionChangedError) return { action: "retry", code: error.code, message: error.message };
   if (isLocalDatabaseUnavailableError(error)) {
     return { action: "retry", code: "SQLITE_UNAVAILABLE", message: "No fue posible acceder a SQLite local." };
   }

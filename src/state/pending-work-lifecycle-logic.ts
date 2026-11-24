@@ -5,6 +5,7 @@ import { StateUpdateSyncTrigger } from "../lib/state-update-offline";
 type AppLifecycleState = "active" | "background" | "inactive" | "unknown" | "extension";
 
 export type SessionLifecycleScope = {
+  authGeneration?: number;
   ownerKey: string | null;
   selectedContractId: string | null;
   token: string | null;
@@ -22,7 +23,7 @@ export type OperationalCoreReadinessProbeResult = {
 };
 
 export function isSessionLifecycleScopeCurrent(runScope: SessionLifecycleScope, currentScope: SessionLifecycleScope) {
-  return runScope.token !== null &&
+  return runScope.authGeneration === currentScope.authGeneration && runScope.token !== null &&
     runScope.token === currentScope.token &&
     runScope.ownerKey === currentScope.ownerKey &&
     runScope.selectedContractId === currentScope.selectedContractId;
@@ -32,6 +33,7 @@ export function getSessionLifecycleScopeMismatchReason(
   runScope: SessionLifecycleScope,
   currentScope: SessionLifecycleScope,
 ) {
+  if (runScope.authGeneration !== currentScope.authGeneration) return "session_changed";
   if (runScope.ownerKey !== currentScope.ownerKey) {
     return "owner_changed";
   }

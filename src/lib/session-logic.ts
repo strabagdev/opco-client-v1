@@ -1,5 +1,5 @@
 import { AppNavigationCache, CachedContextSnapshot, isNetworkLikeError } from "./app-navigation-cache";
-import { OpcoApiError, MeResponse } from "./opco-api";
+import { OpcoApiError, OpcoAuthSessionChangedError, type OpcoApi, MeResponse } from "./opco-api";
 
 const INVALID_SESSION_CODES = new Set([
   "REFRESH_APP_INACTIVE",
@@ -36,18 +36,24 @@ export type RestoreSessionResult =
 
 export async function restoreSession(
   tokenStore: TokenStore,
-  api: { getMe(token: string): Promise<MeResponse> },
+  api: Pick<OpcoApi, "getMe"> & Partial<Pick<OpcoApi, "getAuthSessionGeneration" | "commitAuthSession">>,
   cache?: Pick<AppNavigationCache, "getContextSnapshot">,
 ): Promise<RestoreSessionResult> {
+  const generation = api.getAuthSessionGeneration?.();
+  const assertCurrent = () => {
+    if (generation !== undefined && api.getAuthSessionGeneration?.() !== generation) throw new OpcoAuthSessionChangedError();
+  };
   const token = await tokenStore.getAccessToken();
   const storedOwnerKey = await readStoredOwnerKey(tokenStore);
 
+  assertCurrent();
   if (!token) {
     return { status: "anonymous" };
   }
 
   try {
     const me = await api.getMe(token);
+    assertCurrent();
     const currentToken = (await tokenStore.getAccessToken()) ?? token;
 
     return {
@@ -57,8 +63,10 @@ export async function restoreSession(
       token: currentToken,
     };
   } catch (error) {
+    assertCurrent();
     if (isConfirmedInvalidSessionError(error)) {
-      await tokenStore.clearSession();
+      if (api.commitAuthSession && generation !== undefined) await api.commitAuthSession(generation, () => tokenStore.clearSession());
+      else await tokenStore.clearSession();
       return { status: "anonymous" };
     }
 
@@ -66,6 +74,7 @@ export async function restoreSession(
       ? await readContextSnapshot(cache, storedOwnerKey)
       : null;
 
+    assertCurrent();
     return {
       ...(snapshot ? { snapshot } : {}),
       status: "offline",

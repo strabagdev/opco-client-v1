@@ -262,7 +262,7 @@ export type StateUpdateReconnectPreflightTelemetry = {
   readinessStartedAt: string | null;
   reconnectDetectedAt: string | null;
   runSyncStartedAt: string | null;
-  scopeCheckAfterReadiness: "contract_changed" | "current" | "owner_changed" | "token_changed" | null;
+  scopeCheckAfterReadiness: "contract_changed" | "current" | "owner_changed" | "token_changed" | "session_changed" | null;
   recordsPhaseCompletedAt?: string | null;
   recordsPhaseFailedAt?: string | null;
   recordsPhaseStartedAt?: string | null;

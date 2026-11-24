@@ -4895,7 +4895,9 @@ async function setOperationError(
   }
 
   const now = new Date().toISOString();
-  const payloadJson =
+  // Retired authentication is not a new backend rejection. Keep the exact durable
+  // command (including any frozen update) and record this reason in existing columns.
+  const payloadJson = code === "AUTH_SESSION_CHANGED" ? null :
     operation.operation === STATE_UPDATE_OPERATION ||
     operation.operation === "CREATE" ||
     operation.operation === "UPDATE"
