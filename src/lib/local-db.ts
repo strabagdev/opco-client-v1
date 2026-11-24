@@ -6,7 +6,8 @@ import { createRevisionReceiptStorage, type RevisionReceiptStore } from "./revis
 import { relationKind } from "./relation-cardinality";
 import {pinnedWorkflowWriteMetadata,workflowWriteMetadata,WorkflowWriteReviewError} from "./workflow-write-contract";
 import {normalizeOfflinePreparationRunReceipt,type OfflinePreparationRunReceipt} from "./app-view-prewarm";
-import {persistSubjectPresentations,hydrateSubjectPresentations} from "./subject-presentation-cache";
+import {persistSubjectPresentations,hydrateSubjectPresentations,type PresentationScope} from "./subject-presentation-cache";
+import type {PresentedSubject} from "./subject-presentation";
 import { panelDefinitionKey, parseCoherentPanelDefinition, type PanelDefinitionScope } from "./panel-definition";
 import { workflowRecordMatches, SearchComparisonError, fieldSearchComparison, type WorkflowSearchComparison } from "./search-comparison";
 import { cachedWorkflowComparison, cachedWorkflowCodeSearchField, codeSearchTextMatches, CodeSearchCacheError } from "./workflow-code-search";
@@ -199,6 +200,7 @@ export type LocalDatabase = RevisionReceiptStore & AppNavigationCache &
   SyncTelemetryStore &
   RecordsSyncStore &
   StateUpdateSyncStore & {
+  getSubjectPresentations(scope: PresentationScope, subjects: PresentedSubject[]): Promise<PresentedSubject[]>;
   getAttendanceDaySnapshotHydration(input: AttendanceDaySnapshotScope): Promise<AttendanceDaySnapshotHydration | null>;
   getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null>;
   getOfflinePreparationCoordinatorKey(): object;
@@ -269,6 +271,7 @@ export function getLocalDatabase(): LocalDatabase {
     failPendingOperation,
     failStateUpdateOperation,
     getAppViews,
+    getSubjectPresentations,
     getAppViewDefinition,
     getContextSnapshot,
     getCachedRecord,
@@ -3180,6 +3183,15 @@ async function saveStateUpdateLocallyWithRecordId(
     saved = normalizeStateUpdateRecord(record, clientRequestId);
   }, "transaction:state-update-save");
   return saved!;
+}
+
+/** Read-only display projection. Never changes workflow values, identities or outbox. */
+async function getSubjectPresentations(scope: PresentationScope, subjects: PresentedSubject[]): Promise<PresentedSubject[]> {
+  const prepared = await getAppViewDefinition(scope.ownerKey, scope.contractId, scope.appViewId);
+  if (!prepared || prepared.ownerKey !== scope.ownerKey || prepared.contractId !== scope.contractId || prepared.appViewId !== scope.appViewId) return subjects;
+  const view = prepared.definition.appView;
+  if (view.id !== scope.appViewId || view.type !== "WORKFLOW" || view.config.sourceEntityTypeId !== scope.sourceEntityTypeId) return subjects;
+  return hydrateSubjectPresentations(await getDatabase(), scope, prepared.definition, subjects);
 }
 
 async function searchStateUpdateSubjects({

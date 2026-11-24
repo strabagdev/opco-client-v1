@@ -1,3 +1,4 @@
+import { readAttendancePresentedSubject, readAttendancePresentedSubjects } from "./attendance-record-presentation";
 import {finalizeAttendanceDay, savedAttendanceBandNotice} from "../../../lib/attendance-operational-day";
 import {resolveOperationalDay,operationalCalendarKey,type OperationalDayContract} from "../../../lib/operational-calendar";
 import {captureTimeCommand,type CaptureTimeCommand} from "../../../lib/capture-time";
@@ -840,8 +841,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     stateUpdateReconnectDiagnostics.lastStateUpdateActivity?.completedAt,
   ]);
 
+  const isPresentationReadCurrent = useCallback(() => resolutionMountedRef.current &&
+    api.isAuthSessionCurrent(authGeneration) && resolutionScopeRef.current === resolutionScope,
+  [api, authGeneration, resolutionScope]);
+
   const searchPeople = useCallback(async (search: string, fieldId?: string) => {
-    if (!selectedContractId || !ownerKey) {
+    if (!selectedContractId || !ownerKey || !api.isAuthSessionCurrent(authGeneration)) {
       return;
     }
 
@@ -865,12 +870,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           targetEntityTypeId: appView.config.targetEntityTypeId,
         });
 
-        if (requestId !== requestSequenceRef.current) {
+        if (requestId !== requestSequenceRef.current || !api.isAuthSessionCurrent(authGeneration)) {
           return;
         }
 
         const prepared=await definitionCache.getAppViewDefinition(ownerKey,selectedContractId,appView.id);
-        if(requestId!==requestSequenceRef.current)return;
+        if(requestId!==requestSequenceRef.current || !api.isAuthSessionCurrent(authGeneration))return;
         setComparisonMetadataAvailable(Boolean(prepared && "searchComparison" in prepared.definition && prepared.definition.searchComparison));
         setPresentationDefinition(prepared && "subjectPresentation" in prepared.definition ? prepared.definition.subjectPresentation : undefined);
         const preparedContextFields = prepared && "extraFields" in prepared.definition ? attendanceContextFieldsFromPreparedDefinition(prepared.definition.extraFields, appView.config.contextFieldIds ?? []) : [];
@@ -885,18 +890,19 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date: searchDate, search, ...(fieldId !== undefined ? { searchFieldId: fieldId } : {}) });
 
-      if (requestId !== requestSequenceRef.current) {
+      if (requestId !== requestSequenceRef.current || !api.isAuthSessionCurrent(authGeneration)) {
         return;
       }
 
       setComparisonMetadataAvailable(Boolean(response.searchComparison));
       if (calendar) applyAttendanceResponse(response, { updateLatest: false, updateSummary: false });
       else await applyDayState(response);
+      if (requestId !== requestSequenceRef.current || !api.isAuthSessionCurrent(authGeneration)) return;
       cacheAttendanceOnlineResponseInBackground(response, { complete: false });
       clearVisibleError();
       setItems(response.items);
     } catch (nextError) {
-      if (requestId === requestSequenceRef.current) {
+      if (requestId === requestSequenceRef.current && api.isAuthSessionCurrent(authGeneration)) {
         setError(nextError instanceof Error ? nextError.message : "No fue posible buscar personas.");
         recordVisibleError({
           error: nextError,
@@ -904,12 +910,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         });
       }
     } finally {
-      finishSearchingRequest(requestId);
+      if (api.isAuthSessionCurrent(authGeneration)) finishSearchingRequest(requestId);
     }
   }, [
     calendar,
     applyAttendanceResponse,
     api,
+    authGeneration,
     appView.config.repetitionPolicy,
     appView.config.observationFieldId,
     appView.config.sourceEntityTypeId,
@@ -1106,15 +1113,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     return () => clearTimeout(timeoutId);
   }, [searchPeople, searchText, searchFieldId, searchReadId]);
 
-  async function readRecordGroup(subjectRecordId: string): Promise<AttendanceGroupRead> {
+  async function readRecordGroup(subjectRecordId: string): Promise<AttendanceGroupRead | null> {
       if (!ownerKey || !selectedContractId) throw Error("Selecciona un contrato antes de consultar el detalle.");
-      const capturedScope = resolutionScope;
+      const capturedScope = resolutionScope, revision = draftRevisionRef.current;
+      const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) &&
+          capturedScope === resolutionScopeRef.current && revision === draftRevisionRef.current;
+      if (!current()) return null;
+      let readDefinition = appView.config.subjectPresentation === undefined ? undefined : presentationDefinition;
+      try {
       const local = await definitionCache.getAttendanceDailyRecords({ ownerKey, contractId: selectedContractId, appViewId: appView.id,
           targetEntityTypeId: appView.config.targetEntityTypeId, date, subjectRecordId,
           historyMode: attendanceHistoryMode(appView.config), uniqueness: "subject-date" });
       recordAttendanceLocalRead({ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, subjectRecordId },
           "group/local-read", local.flatMap(row => [row.localRecordId, ...(row.serverRecordId ? [row.serverRecordId] : [])]), undefined, local.length);
-      if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+      if (!current()) return null;
       const subject = latest.find(item => item.person.id === subjectRecordId)?.person;
       const localItems = local.map(row => stateUpdateItemToAttendanceItem({ subject: subject ?? row.subject, current: {
           ...(row.captureTime ? { captureTime: row.captureTime as import("../../../lib/capture-time").CaptureTimeRead } : {}),
@@ -1124,10 +1136,11 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       let items = localItems, complete = false;
       if (isOnline && token) {
           const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date, personRecordId: subjectRecordId });
-          if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+          if (!current()) return null;
           if (response.appView.id !== appView.id || response.date !== date ||
               (response.repetitionPolicy ?? "ONE_PER_DAY") !== (appView.config.repetitionPolicy ?? "ONE_PER_DAY"))
               throw Error("La definición cambió. Vuelve a abrir la experiencia.");
+          readDefinition = response.subjectPresentation;
           const remote = appView.config.repetitionPolicy && appView.config.repetitionPolicy !== "ONE_PER_DAY" ? response.dailyRecords : response.items;
           if (!Array.isArray(remote) || remote.some(row => row.person.id !== subjectRecordId))
               throw Error("La respuesta no acredita los registros de esta persona y fecha.");
@@ -1139,13 +1152,25 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           complete = hasSuccessfulAttendanceDayHydration(await definitionCache.getAttendanceDaySnapshotHydration({ ownerKey,
               contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date }));
       }
-      if (capturedScope !== resolutionScopeRef.current) throw Error("La experiencia cambió. Vuelve a abrir el detalle.");
+      if (!current()) return null;
+      if (appView.config.subjectPresentation !== undefined) {
+          const people = await readAttendancePresentedSubjects(definitionCache, {ownerKey, contractId: selectedContractId,
+              appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date}, items.map(item => item.person), appView.config.subjectPresentation, readDefinition);
+          if (!current()) return null;
+          items = items.map((item, index) => ({...item, person: people[index]}));
+          setPresentationDefinition(readDefinition);
+      }
       recordAttendanceLocalRead({ ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date, subjectRecordId },
           "group/returned", items.flatMap(item => item.attendance ? [item.attendance.recordId] : []), true);
-      return { records: items.flatMap(item => item.attendance ? [{ ...item.attendance, person: item.person }] : []), complete };
+      return { records: items.flatMap(item => item.attendance ? [{ ...item.attendance, person: item.person }] : []), complete, isCurrent: current };
+      } catch (error) {
+          if (!current()) return null;
+          throw error;
+      }
   }
 
   async function selectRepeatedPerson(item: AttendanceItem) {
+      if (!api.isAuthSessionCurrent(authGeneration)) return;
       setTemporalNotice(null);
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
       confirmationSequenceRef.current++;
@@ -1158,7 +1183,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setSelectedItem({ ...item, attendance: null });
       setError(null);
       setConflict(null);
-      const current = () => resolutionMountedRef.current && resolutionScopeRef.current === scope && draftRevisionRef.current === revision;
+      const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) && resolutionScopeRef.current === scope && draftRevisionRef.current === revision;
       try {
           if (!ownerKey || !selectedContractId)
               return;
@@ -1214,22 +1239,26 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function editRepeatedRecord(item: AttendanceItem, recordDate = date) {
-      if (!item.attendance || !ownerKey || !selectedContractId || saveInFlightRef.current)
+      if (!item.attendance || !ownerKey || !selectedContractId || saveInFlightRef.current || !api.isAuthSessionCurrent(authGeneration))
           return;
       setTemporalNotice(null);
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
+      const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) &&
+          scope === resolutionScopeRef.current && revision === draftRevisionRef.current;
+      let readDefinition = appView.config.subjectPresentation === undefined ? undefined : presentationDefinition;
       confirmationSequenceRef.current++;
       setRepeatWarning(null);
       try {
           let cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, appViewId: appView.id, date: recordDate, entityTypeId: appView.config.targetEntityTypeId, recordId: item.attendance!.recordId });
-          if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
+          if (!current())
               return;
           if (isOnline && token && (!cached || cached.syncStatus === "synced")) {
               const response = await api.getAttendanceWorkflow(token, selectedContractId, appView.id, { date: recordDate, personRecordId: item.person.id });
-              if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
+              if (!current())
                   return;
               if (response.appView.id !== appView.id || response.date !== recordDate || (response.repetitionPolicy ?? "ONE_PER_DAY") !== (appView.config.repetitionPolicy ?? "ONE_PER_DAY"))
                   throw Error("La definición cambió. Vuelve a abrir la experiencia.");
+              readDefinition = response.subjectPresentation;
               const candidates = appView.config.repetitionPolicy && appView.config.repetitionPolicy !== "ONE_PER_DAY" ? response.dailyRecords : response.items;
               if (!Array.isArray(candidates))
                   throw Error("La respuesta no incluyó los registros de esta persona y fecha. No se eligió otro registro.");
@@ -1247,17 +1276,24 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
               const selected = matches[0];
               item = selected;
               await cacheAttendanceRemoteSnapshot({ appViewId: appView.id, config: appView.config, contractId: selectedContractId, ownerKey, response: { ...response, items: [selected], latest: [] }, snapshotComplete: false, store: definitionCache });
-              if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
+              if (!current())
                   return;
           }
           cached = await definitionCache.getCachedRecord({ ownerKey, contractId: selectedContractId, appViewId: appView.id, date: recordDate, entityTypeId: appView.config.targetEntityTypeId, recordId: item.attendance!.recordId });
-          if (!resolutionMountedRef.current || scope !== resolutionScopeRef.current || revision !== draftRevisionRef.current)
+          if (!current())
               return;
           if (!cached)
               throw Error(isOnline ? "No se pudo preparar la copia local del registro seleccionado. Vuelve a abrir la experiencia antes de editarlo." : "Este registro no está disponible para editar sin conexión.");
           if (cached && (!isOnline || cached.syncStatus !== "synced")) {
               const selected = normalizeStateUpdateRecord(cached);
               item = stateUpdateItemToAttendanceItem({ subject: selected.subject, current: { ...(selected.captureTime ? {captureTime:selected.captureTime as import("../../../lib/capture-time").CaptureTimeRead}:{}), ...(selected.eventOccurredAt ? { eventOccurredAt: selected.eventOccurredAt } : {}), recordId: cached.serverId ?? cached.localId, updatedAt: selected.expectedUpdatedAt ?? selected.updatedAt ?? item.attendance!.updatedAt, stateValues: selected.stateValues, extraValues: selected.extraValues } }, appView.config.statusFieldId, appView.config.observationFieldId, contextFields);
+          }
+          if (appView.config.subjectPresentation !== undefined) {
+              const person = await readAttendancePresentedSubject(definitionCache, {ownerKey, contractId: selectedContractId,
+                  appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date: recordDate}, item.person, appView.config.subjectPresentation, readDefinition);
+              if (!current()) return;
+              item = {...item, person};
+              setPresentationDefinition(readDefinition);
           }
           if (calendar) { editingDateRef.current = recordDate; setPersonRecordDate(recordDate); }
           setEditingTarget(!appView.config.repetitionPolicy || appView.config.repetitionPolicy === "ONE_PER_DAY" ? {} : { targetLocalRecordId: cached.localId, ...(cached.serverId ? { targetRecordId: cached.serverId } : {
@@ -1271,7 +1307,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           setError(null);
       }
       catch (error) {
-          if (resolutionMountedRef.current && scope === resolutionScopeRef.current && revision === draftRevisionRef.current)
+          if (current())
               setError(error instanceof Error ? error.message : "No fue posible editar el registro.");
       }
   }
@@ -2085,8 +2121,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             ? [{ ...selectedItem.attendance, person: selectedItem.person }] : []),
         ]}
           fields={contextFields} statuses={statuses} store={definitionCache}
-          onReadError={setError}
-          scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date: calendar ? personRecordDate ?? today : date } : null}
+          onReadError={setError} isCurrent={isPresentationReadCurrent}
+          scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date: calendar ? personRecordDate ?? today : date } : null}
           selectedRecordId={editingTarget ? selectedItem.attendance?.recordId : undefined}
           onEdit={record => { const original = personRecords.find(item => item.attendance?.recordId === record.recordId)
             ?? (selectedItem.attendance?.recordId === record.recordId ? selectedItem : undefined); if (original) void editRepeatedRecord(original, calendar ? editingTarget ? editingDateRef.current ?? date : registrationReadDateRef.current ?? today : date); }} />
@@ -2164,8 +2200,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ) : null}
 
       {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache}
-        totalCount={daySnapshotHydrated ? totalRegistered : undefined} onLoadGroup={readRecordGroup} subjectConfig={appView.config.subjectPresentation} subjectDefinition={presentationDefinition} onReadError={setError}
-        scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, date } : null} onEdit={calendar || appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? item => editRepeatedRecord(item) : undefined} /> : null}
+        totalCount={daySnapshotHydrated ? totalRegistered : undefined} onLoadGroup={readRecordGroup} subjectConfig={appView.config.subjectPresentation} subjectDefinition={presentationDefinition} onReadError={setError} isCurrent={isPresentationReadCurrent}
+        scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date } : null} onEdit={calendar || appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? item => editRepeatedRecord(item) : undefined} /> : null}
 
       <Modal animationType="fade" transparent visible={!!repeatWarning} onRequestClose={cancelRepeatedRecord}>
         <View style={styles.modalBackdrop}><View accessibilityViewIsModal style={styles.modalPanel}>
@@ -2241,7 +2277,7 @@ function AttendanceContextSelectors({
   );
 }
 
-function LatestAttendanceList({ latest, onEdit, ...presentation }: Pick<Parameters<typeof AttendanceRecordList>[0], "fields" | "statuses" | "scope" | "store" | "onLoadGroup" | "totalCount" | "subjectConfig" | "subjectDefinition" | "onReadError"> & {
+function LatestAttendanceList({ latest, onEdit, ...presentation }: Pick<Parameters<typeof AttendanceRecordList>[0], "fields" | "statuses" | "scope" | "store" | "onLoadGroup" | "totalCount" | "subjectConfig" | "subjectDefinition" | "onReadError" | "isCurrent"> & {
   latest: AttendanceLatestItem[]; onEdit?:(item:AttendanceItem)=>void;
 }) {
   const styles = useWindowDimensions().width >= APP_SHELL_WIDE_BREAKPOINT ? desktopStyles : baseStyles;

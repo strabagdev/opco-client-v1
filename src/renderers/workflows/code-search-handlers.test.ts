@@ -38,10 +38,13 @@ describe.each(["attendance", "state-update"])("%s actual search input handler", 
 
 it("the actual Attendance read handler forwards the field to API/cache without calling writes", async () => {
  for (const online of [true, false]) {
-  const context = { calendar: undefined, selectedContractId: "contract", ownerKey: "owner", token: "synthetic", isOnline: online, date: "2026-10-27", appView: { id: "view", config: { sourceEntityTypeId: "source", targetEntityTypeId: "target", statusFieldId: "status" } }, requestSequenceRef: { current: 1 }, beginSearchingRequest: vi.fn(() => 1), finishSearchingRequest: vi.fn(), setError: vi.fn(), setRefreshError: vi.fn(), setItems: vi.fn(), recordVisibleError: vi.fn(), clearVisibleError: vi.fn(), applyDayState: vi.fn(), refreshLocalDayState: vi.fn(), cacheAttendanceOnlineResponseInBackground: vi.fn(), stateUpdateItemToAttendanceItem: (item: unknown) => item,
-   api: { getAttendanceWorkflow: vi.fn(async () => ({ items: [] })) }, definitionCache: { searchStateUpdateSubjects: vi.fn(async () => []) } };
+  const context = { calendar: undefined, authGeneration: 1, selectedContractId: "contract", ownerKey: "owner", token: "synthetic", isOnline: online, date: "2026-10-27", appView: { id: "view", config: { sourceEntityTypeId: "source", targetEntityTypeId: "target", statusFieldId: "status" } }, requestSequenceRef: { current: 1 }, beginSearchingRequest: vi.fn(() => 1), finishSearchingRequest: vi.fn(), setError: vi.fn(), setRefreshError: vi.fn(), setComparisonMetadataAvailable: vi.fn(), setPresentationDefinition: vi.fn(), setItems: vi.fn(), recordVisibleError: vi.fn(), clearVisibleError: vi.fn(), applyDayState: vi.fn(), refreshLocalDayState: vi.fn(), cacheAttendanceOnlineResponseInBackground: vi.fn(), stateUpdateItemToAttendanceItem: (item: unknown) => item,
+   api: { isAuthSessionCurrent: (generation: number) => generation === 1, getAttendanceWorkflow: vi.fn(async () => ({ items: [] })) }, definitionCache: { searchStateUpdateSubjects: vi.fn(async () => []), getAppViewDefinition: vi.fn(async () => null) } };
   await actualHandler("attendance", "searchPeople", context)("TEST-PERSON-0001", "identifier-id");
   if (online) expect(context.api.getAttendanceWorkflow).toHaveBeenCalledExactlyOnceWith("synthetic", "contract", "view", { date: "2026-10-27", search: "TEST-PERSON-0001", searchFieldId: "identifier-id" });
   else expect(context.definitionCache.searchStateUpdateSubjects).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ searchFieldId: "identifier-id", search: "TEST-PERSON-0001", ownerKey: "owner", contractId: "contract", appViewId: "view" }));
+  expect(context.setError.mock.calls).toEqual([[null]]);
+  expect(context.recordVisibleError).not.toHaveBeenCalled();
+  expect(context.finishSearchingRequest).toHaveBeenCalledExactlyOnceWith(1);
  }
 });

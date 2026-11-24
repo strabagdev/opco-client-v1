@@ -17,17 +17,20 @@ export async function persistSubjectPresentations(db:DB,scope:PresentationScope,
 /** No networking and no writes to entity_records/outbox. Old/missing metadata keeps legacy operations usable. */
 export async function hydrateSubjectPresentations(db:DB,scope:PresentationScope,prepared:unknown,subjects:PresentedSubject[]):Promise<PresentedSubject[]>{
  try{
-  const p=prepared as {appView:{config:{subjectPresentation?:unknown}};subjectPresentation?:SubjectPresentationDefinition};
+  const p=prepared as {appView:{id?:string;config:{subjectPresentation?:unknown}};subjectPresentation?:SubjectPresentationDefinition};
   if(p?.appView?.config.subjectPresentation===undefined)return subjects;
   const config=parseSubjectPresentation(p.appView.config.subjectPresentation)!;const definition=verifyPresentationDefinition(p.subjectPresentation,scope.sourceEntityTypeId,config);
-  if(!subjects.length)return subjects;
-  const ids=[...new Set(subjects.map(s=>s.id))];
+  if(p.appView.id && p.appView.id!==scope.appViewId)return subjects;
+  const missing=subjects.filter(subject=>!validSubjectProjection(subject.presentation,definition,subject.id));
+  if(!missing.length)return subjects;
+  const ids=[...new Set(missing.map(s=>s.id))];
   const rows=await db.getAllAsync<{server_id:string;values_json:string;remote_updated_at:string|null}>(`SELECT server_id,values_json,remote_updated_at FROM entity_records WHERE owner_key=? AND contract_id=? AND entity_type_id=? AND server_id IN (${ids.map(()=>"?").join(",")})`,scope.ownerKey,scope.contractId,scope.sourceEntityTypeId,...ids);
   const records=new Map(rows.map(row=>[row.server_id,{values:JSON.parse(row.values_json) as Record<string,unknown>,updatedAt:row.remote_updated_at??undefined}]));
-  const keys=subjects.map(s=>key(scope,definition.fingerprint,s.id));
+  const keys=missing.map(s=>key(scope,definition.fingerprint,s.id));
   const cached=await db.getAllAsync<{key:string;value:string}>(`SELECT key,value FROM app_metadata WHERE key IN (${keys.map(()=>"?").join(",")})`,...keys);
   const projections=new Map(cached.map(row=>[row.key,JSON.parse(row.value) as unknown]));
   return subjects.map(subject=>{
+   if(validSubjectProjection(subject.presentation,definition,subject.id))return subject;
    const projection=projections.get(key(scope,definition.fingerprint,subject.id));
    if(validSubjectProjection(projection,definition,subject.id))return {...subject,presentation:projection};
    const record=records.get(subject.id);return record?{...subject,presentation:projectSubject(definition,subject.id,record.values,[],record.updatedAt)}:subject;

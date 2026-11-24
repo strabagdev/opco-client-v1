@@ -8,7 +8,7 @@ import { recordAttendanceLocalRead } from "./attendance-local-read-trace";
 import { ReadFieldList } from "../../../components/read-field-list";
 import type { AttendanceContextField } from "../../../lib/opco-api";
 import { colors as p } from "../../../theme/paint";
-import { distinctAttendancePresentations, groupAttendancePresentations, loadAttendanceRecordPresentation, readAttendancePresentedSubject, type AttendancePresentationScope,
+import { distinctAttendancePresentations, groupAttendancePresentations, loadAttendanceRecordPresentation, readAttendancePresentedSubjects, type AttendancePresentationScope,
   type AttendanceReadRecord, type AttendanceRecordPresentation, type AttendancePresentationStore } from "./attendance-record-presentation";
 
 /** Exact IDs, no shortening or position-derived labels. Selection/copy never constructs a command. */
@@ -31,16 +31,17 @@ export async function copyAttendanceReference(id: string) {
   }
 }
 
-export type AttendanceGroupRead = { records: AttendanceReadRecord[]; complete: boolean };
+export type AttendanceGroupRead = { records: AttendanceReadRecord[]; complete: boolean; isCurrent?: () => boolean };
 export function AttendanceRecordList({ records, fields, statuses = [], scope, store, selectedRecordId, onEdit,
-  grouped = false, totalCount, onLoadGroup, subjectConfig, subjectDefinition, onReadError }: {
+  grouped = false, totalCount, onLoadGroup, subjectConfig, subjectDefinition, onReadError, isCurrent }: {
   records: AttendanceReadRecord[]; fields: AttendanceContextField[]; statuses?: {optionId: string; label: string}[];
   scope: AttendancePresentationScope | null; store: AttendancePresentationStore;
   selectedRecordId?: string; onEdit?(record: AttendanceReadRecord): void;
   grouped?: boolean; totalCount?: number;
-  onLoadGroup?(subjectId: string): Promise<AttendanceGroupRead>;
+  onLoadGroup?(subjectId: string): Promise<AttendanceGroupRead | null>;
   subjectConfig?: unknown; subjectDefinition?: SubjectPresentationDefinition;
   onReadError?(message: string): void;
+  isCurrent?(): boolean;
 }) {
   const key = JSON.stringify([scope, records, fields, statuses, subjectConfig, subjectDefinition]);
   const [state, setState] = useState<{ key: string; rows: AttendanceRecordPresentation[]; error?: string }>();
@@ -54,20 +55,21 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
       getCachedRecord: query => { const key = JSON.stringify(query); if (!cacheReads.has(key)) cacheReads.set(key, store.getCachedRecord(query)); return cacheReads.get(key)!; },
       getAttendanceDailyRecords: query => { const key = JSON.stringify(query); if (!dailyReads.has(key)) dailyReads.set(key, store.getAttendanceDailyRecords(query)); return dailyReads.get(key)!; },
     };
-    void Promise.all(capturedRecords.map(async record => loadAttendanceRecordPresentation(reader, capturedScope,
-      {...record, person: await readAttendancePresentedSubject(reader, capturedScope, record.person, capturedConfig ?? undefined, capturedDefinition)}, capturedFields, capturedStatuses)))
-      .then(rows => { if (active) {
+    void readAttendancePresentedSubjects(store, capturedScope, capturedRecords.map(record => record.person), capturedConfig ?? undefined, capturedDefinition)
+      .then(people => Promise.all(capturedRecords.map((record, index) => loadAttendanceRecordPresentation(reader, capturedScope,
+        {...record, person: people[index]}, capturedFields, capturedStatuses))))
+      .then(rows => { if (active && isCurrent?.() !== false) {
         const distinct = distinctAttendancePresentations(rows);
         recordAttendanceLocalRead(capturedScope, grouped ? "grouped-list/presented" : "person-list/presented", distinct.flatMap(row => [row.record.recordId, row.reference, ...(row.serverId ? [row.serverId] : [])]), true, distinct.length);
         setState({ key, rows: distinct });
       } })
-      .catch(() => { if (active) {
+      .catch(() => { if (active && isCurrent?.() !== false) {
         const error = "No pudimos leer las referencias y etiquetas locales. Los cambios siguen guardados; consulta Revisar cambio para leer su identidad exacta.";
         setState({ key, rows: [], error });
         onReadError?.(error);
       } });
     return () => { active = false; };
-  }, [key, store, grouped, onReadError]);
+  }, [key, store, grouped, onReadError, isCurrent]);
   const current = state?.key === key ? state : undefined;
   if (records.length === 0) return null;
   const rowProps = (row: AttendanceRecordPresentation) => ({ row,
@@ -79,19 +81,20 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
     {grouped ? groupAttendancePresentations(current?.rows ?? []).map(group => <AttendanceRecordGroup
       key={JSON.stringify([scope, group.subject.id])} group={group} complete={current?.rows.length === totalCount}
       fields={fields} statuses={statuses} scope={scope} store={store} rowProps={rowProps}
-      onLoad={onLoadGroup} subjectConfig={subjectConfig} subjectDefinition={subjectDefinition} onReadError={onReadError} />)
+      onLoad={onLoadGroup} subjectConfig={subjectConfig} subjectDefinition={subjectDefinition} onReadError={onReadError} isCurrent={isCurrent} />)
       : current?.rows.map(row => <AttendanceRecordRow key={JSON.stringify([row.referenceKind, row.reference])} {...rowProps(row)} />)}
   </View>;
 }
 
-function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store, rowProps, onLoad, subjectConfig, subjectDefinition, onReadError }: {
+function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store, rowProps, onLoad, subjectConfig, subjectDefinition, onReadError, isCurrent }: {
   group: ReturnType<typeof groupAttendancePresentations>[number]; complete: boolean;
   fields: AttendanceContextField[]; statuses: {optionId: string; label: string}[];
   scope: AttendancePresentationScope | null; store: AttendancePresentationStore;
   rowProps(row: AttendanceRecordPresentation): Parameters<typeof AttendanceRecordRow>[0];
-  onLoad?(subjectId: string): Promise<AttendanceGroupRead>;
+  onLoad?(subjectId: string): Promise<AttendanceGroupRead | null>;
   subjectConfig?: unknown; subjectDefinition?: SubjectPresentationDefinition;
   onReadError?(message: string): void;
+  isCurrent?(): boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const dataKey = JSON.stringify(group.rows);
@@ -106,18 +109,22 @@ function AttendanceRecordGroup({ group, complete, fields, statuses, scope, store
     if (expanded || !onLoad || !scope || current?.loading) return;
     const request = ++generation.current;
     setRead({key: dataKey, loading: true});
+    let readIsCurrent = () => isCurrent?.() !== false;
+    const cancel = () => { if (request === generation.current && isCurrent?.() !== false) setRead({key: dataKey}); };
     try {
       const result = await onLoad(group.subject.id);
-      if (request !== generation.current) return;
+      if (!result) { cancel(); return; }
+      readIsCurrent = () => isCurrent?.() !== false && result.isCurrent?.() !== false;
+      if (request !== generation.current || !readIsCurrent()) { cancel(); return; }
       const loaded = await Promise.all(result.records.map(record => loadAttendanceRecordPresentation(store, scope, record, fields, statuses)));
-      if (request === generation.current) {
+      if (request === generation.current && readIsCurrent()) {
         const rows = distinctAttendancePresentations(result.complete ? loaded : [...group.rows, ...loaded]);
         if (scope) recordAttendanceLocalRead({ ...scope, subjectRecordId: group.subject.id }, "group/presented-detail",
           rows.flatMap(row => [row.record.recordId, row.reference, ...(row.serverId ? [row.serverId] : [])]), true, rows.length);
         setRead({key: dataKey, rows, complete: result.complete});
-      }
+      } else cancel();
     } catch (error) {
-      if (request === generation.current) {
+      if (request === generation.current && readIsCurrent()) {
         const message = error instanceof Error ? error.message : "No pudimos actualizar el detalle. Se conservan los registros disponibles.";
         setRead({key: dataKey, error: message});
         onReadError?.(message);

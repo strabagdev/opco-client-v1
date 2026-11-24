@@ -20,7 +20,7 @@ export type AttendanceReadRecord = {
   updatedAt: string;
 };
 export type AttendancePresentationScope = {
-  ownerKey: string; contractId: string; appViewId: string; targetEntityTypeId: string; date: string;
+  ownerKey: string; contractId: string; appViewId: string; targetEntityTypeId: string; date: string; sourceEntityTypeId?: string;
 };
 export type AttendanceRecordPresentation = {
   record: AttendanceReadRecord;
@@ -32,19 +32,32 @@ export type AttendanceRecordPresentation = {
   timestamps: { label: string; text: string }[];
   syncLabel?: string;
 };
-export type AttendancePresentationStore = Pick<LocalDatabase, "getCachedRecord" | "getAttendanceDailyRecords">;
-/** Enrich the label only, using the existing authorized definition and exact scoped source row. */
+export type AttendancePresentationStore = Pick<LocalDatabase, "getCachedRecord" | "getAttendanceDailyRecords"> & Partial<Pick<LocalDatabase, "getSubjectPresentations">>;
+/** One read batch through the existing hydrator; display data never changes record identity. */
+export async function readAttendancePresentedSubjects(store: AttendancePresentationStore, scope: AttendancePresentationScope,
+  subjects: PresentedSubject[], config: unknown, metadata?: SubjectPresentationDefinition): Promise<PresentedSubject[]> {
+  if (config === undefined) return subjects;
+  try {
+    const definition = verifyPresentationDefinition(metadata, scope.sourceEntityTypeId, parseSubjectPresentation(config)!);
+    const missing = [...new Map(subjects.filter(subject => !validSubjectProjection(subject.presentation, definition, subject.id)).map(subject => [subject.id, subject])).values()];
+    if (!missing.length) return subjects;
+    const recovered = store.getSubjectPresentations
+      ? await store.getSubjectPresentations({ownerKey: scope.ownerKey, contractId: scope.contractId, appViewId: scope.appViewId, sourceEntityTypeId: definition.sourceEntityTypeId}, missing)
+      : await Promise.all(missing.map(async subject => {
+        // Keep existing read-only adapters compatible; the real facade uses persisted projections.
+        const cached = await store.getCachedRecord({ownerKey: scope.ownerKey, contractId: scope.contractId,
+          entityTypeId: definition.sourceEntityTypeId, recordId: subject.id});
+        return cached && (cached.serverId ?? cached.localId) === subject.id
+          ? {...subject, presentation: projectSubject(definition, subject.id, cached.values, [], cached.remoteUpdatedAt ?? undefined)} : subject;
+      }));
+    const projections = new Map(recovered.filter(subject => validSubjectProjection(subject.presentation, definition, subject.id)).map(subject => [subject.id, subject.presentation!]));
+    return subjects.map(subject => validSubjectProjection(subject.presentation, definition, subject.id) || !projections.has(subject.id)
+      ? subject : {...subject, presentation: projections.get(subject.id)});
+  } catch { return subjects; }
+}
 export async function readAttendancePresentedSubject(store: AttendancePresentationStore, scope: AttendancePresentationScope,
   subject: PresentedSubject, config: unknown, metadata?: SubjectPresentationDefinition): Promise<PresentedSubject> {
-  if (config === undefined) return subject;
-  try {
-    const definition = verifyPresentationDefinition(metadata, undefined, parseSubjectPresentation(config)!);
-    if (validSubjectProjection(subject.presentation, definition, subject.id)) return subject;
-    const cached = await store.getCachedRecord({ownerKey: scope.ownerKey, contractId: scope.contractId,
-      entityTypeId: definition.sourceEntityTypeId, recordId: subject.id});
-    if (!cached || (cached.serverId ?? cached.localId) !== subject.id) return subject;
-    return {...subject, presentation: projectSubject(definition, subject.id, cached.values, [], cached.remoteUpdatedAt ?? undefined)};
-  } catch { return subject; }
+  return (await readAttendancePresentedSubjects(store, scope, [subject], config, metadata))[0];
 }
 const unavailable = (text = "Valor no disponible en esta lectura"): ReadValue => ({ text, status: "unavailable" });
 const value = (text: string): ReadValue => ({ text, status: "value" });

@@ -154,11 +154,12 @@ it("reads groups offline only from the shared store and refuses a result from a 
   Object.assign(c, { latest: [], contextFields: [], isOnline: false, stateUpdateItemToAttendanceItem, hasSuccessfulAttendanceDayHydration });
   c.definitionCache.getAttendanceDailyRecords.mockResolvedValue([]);
   c.definitionCache.getAttendanceDaySnapshotHydration = vi.fn(async () => null);
-  expect(await actual("readRecordGroup", c)("person")).toEqual({records: [], complete: false});
+  const result = await actual<import("./attendance-record-list").AttendanceGroupRead>("readRecordGroup", c)("person");
+  expect(result).toMatchObject({records: [], complete: false});expect(result.isCurrent?.()).toBe(true);
   expect(c.api.getAttendanceWorkflow).not.toHaveBeenCalled();
   c.isOnline = true;
   c.api.getAttendanceWorkflow.mockImplementation(async () => { c.resolutionScopeRef.current = "other"; return {}; });
-  await expect(actual("readRecordGroup", c)("person")).rejects.toThrow("experiencia cambió");
+  expect(await actual("readRecordGroup", c)("person")).toBeNull();
 });
 
 it("preserves Core missing and permission reasons for only the selected ID", async () => {
