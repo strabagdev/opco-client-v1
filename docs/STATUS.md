@@ -1,3 +1,14 @@
+## C-11 — trabajo nuevo durante una pasada — local, sin publicar — 2026-11-25
+
+Base publicada 5ba9ae89c7db710dd4ece7de0ca65edf736fb385. El ticket existente
+conserva una solicitud de reevaluación cuando absorbe otro disparador combinado.
+Una pasada completada comprueba pendientes elegibles antes de retirar recuperación;
+si llega otra demanda durante esa lectura, conserva una comprobación diferida.
+Reutiliza exclusivamente la espera/backoff de C-10 y sus guardas de ámbito/generación.
+No cambia motores, ACK, comandos, almacenamiento ni reglas de negocio. Contrato en
+[SYNC_RECOVERY.md](SYNC_RECOVERY.md). C-09 (catálogo Lote parcial aunque preparación
+completed) sigue separado, sin causa atribuida a C-11. Sin commit, push ni deploy.
+
 ## C-10 — recuperación de envíos transitorios — local, sin publicar — 2026-11-25
 
 Base db480c3809d885606424c95f9f69a81ec9598146. El lifecycle consume los resultados

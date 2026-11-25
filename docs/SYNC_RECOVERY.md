@@ -19,7 +19,8 @@ logout/login. Una callback obsoleta no cancela la espera de la sesión nueva.
 
 Una pasada manual/foreground consume la espera previa, conserva su posición de
 backoff y decide al finalizar: otro error recuperable programa la siguiente espera;
-un resultado terminado sin retryable la cancela y reinicia la secuencia. Los
+una pasada completada comprueba también si quedan pendientes elegibles antes de
+cancelarla y reiniciar la secuencia. Los
 single-flight existentes siguen decidiendo los envíos; no se añade cola, motor,
 temporizador paralelo ni estado persistido de reintento. La devolución de una
 promesa no acredita un ACK si el motor todavía conserva trabajo pendiente.
@@ -84,3 +85,37 @@ no permite comprobar elegibilidad, no se envía a ciegas.
 Una renovación válida del token dentro de la misma sesión no retira su resultado:
 el callback de vistas, ejecutado sólo tras comprobar el scope del propio recorrido,
 vincula la publicación final al scope ya renovado. Sigue rechazándose otra generación.
+
+## C-11 — reevaluar trabajo que llegó después de la selección
+
+Base 5ba9ae89c7db710dd4ece7de0ca65edf736fb385. Los motores seleccionan una
+instantánea de pendientes por propietario; su resultado no acredita comandos
+guardados después de esa selección. Una llamada combinada que encuentra el ticket
+combinado activo conserva `reevaluationRequested` en ese mismo ticket y recibe
+`already-running`: no se presenta esa devolución como ACK del alta nueva.
+
+Después de un resultado sin retriable, el combinado consulta la elegibilidad existente
+con las guardas del ticket/scope. Esto cubre también un vuelo de motor compartido con
+login, incluso si no hubo un disparador absorbido por el lifecycle. El manual
+STATE_UPDATE conserva su alcance y su comprobación previa cuando ya debía recuperación.
+
+La demanda anterior se consume justo antes de consultar. Una demanda recibida durante
+la lectura conserva una única comprobación diferida aunque esa lectura devolviera un
+vacío anterior. Reutiliza el temporizador/backoff C-10; su callback vuelve a comprobar
+pendientes y ámbito **antes de cualquier envío**. Si no hay elegibles, termina: no
+hay polling, bucle inmediato, temporizador nuevo ni escritura repetida a ciegas.
+
+Conflictos/failed y otros propietarios no son elegibles. Un fallo al consultar no
+convierte el ACK anterior en permiso para otro envío; se conserva el error y se libera
+el ticket. Una lectura retirada no programa ni cancela la recuperación de la sesión
+nueva. Cambiar contrato o volver al mismo usuario con otra generación mantiene las
+guardas C-08/C-10. Los ACK válidos siguen siendo procesados para su propietario original.
+
+Los resultados retriable siguen usando el backoff 5/15/30/60 sin reset por los
+disparadores absorbidos. El navegador debe estar activo; no se promete ejecución
+durante suspensión. No se añade exclusión global RECORDS/STATE_UPDATE ni estado durable.
+Las regresiones incluyen llegada durante envío y durante la consulta final, ráfagas,
+cambio de ámbito, errores definitivos, otros propietarios y error de lectura local.
+La integración aislada utiliza Core/auth/PostgreSQL y Chromium/OPFS reales; sus
+retenciones de ACK y errores de transporte son controles del proxy, no incidentes
+productivos. El seguimiento C-09 de catálogo Lote parcial/completed es independiente.

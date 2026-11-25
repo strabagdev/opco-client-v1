@@ -32,7 +32,7 @@ import {
 function lifecycleScopeKey(scope: SessionLifecycleScope) {
   return JSON.stringify([scope.ownerKey, scope.selectedContractId, scope.token, scope.authGeneration ?? "legacy"]);
 }
-type RunTicket = { key: string; active: boolean; settled: Promise<void>; stateOnly: boolean };
+type RunTicket = { key: string; active: boolean; settled: Promise<void>; stateOnly: boolean; reevaluationRequested: boolean };
 
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
@@ -433,14 +433,17 @@ export function usePendingWorkLifecycle({
     // A combined caller waits for a manual STATE_UPDATE pass so RECORDS is not skipped.
     while (activePendingWorkRunRef.current?.active && activePendingWorkRunRef.current.key === runKey) {
       const active = activePendingWorkRunRef.current;
-      if (!stateUpdateWork && !active.stateOnly) return "already-running";
+      if (!stateUpdateWork && !active.stateOnly) {
+        active.reevaluationRequested = true;
+        return "already-running";
+      }
       await active.settled;
       if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return "cancelled";
     }
     const previousRecovery = readinessRecoveryRef.current?.scopeKey === runKey;
     clearReadinessRecoveryTimer();
     let release!: () => void;
-    const ticket: RunTicket = { key: runKey, active: true, stateOnly: Boolean(stateUpdateWork), settled: new Promise<void>(resolve => { release = resolve; }) };
+    const ticket: RunTicket = { key: runKey, active: true, stateOnly: Boolean(stateUpdateWork), reevaluationRequested: false, settled: new Promise<void>(resolve => { release = resolve; }) };
     activePendingWorkRunRef.current = ticket;
     const isRunCurrent = () => activePendingWorkRunRef.current === ticket && isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
     const updateRunPreflight = (id: string, updater: Parameters<typeof updateReconnectPreflight>[1]) => updateReconnectPreflight(id, updater, isRunCurrent);
@@ -688,9 +691,13 @@ export function usePendingWorkLifecycle({
           syncPendingWorkCompletedAt: new Date().toISOString(),
         }));
         recover = result.records.retriable > 0 || (result.stateUpdate?.result.retriable ?? 0) > 0;
-        // A manual STATE_UPDATE-only pass must not erase recovery owed to RECORDS.
-        if (stateUpdateWork && previousRecovery && !recover && isRunCurrent()) {
-          recover = await reconnectShouldSyncRef.current(isRunCurrent);
+        // A completed engine snapshot may predate a new durable command, including
+        // a shared login flight. Consume existing demand before checking eligibility;
+        // demand arriving during the read still gets one deferred C-10 check.
+        if (!recover && isRunCurrent() && (!stateUpdateWork || previousRecovery)) {
+          ticket.reevaluationRequested = false;
+          const pending = await reconnectShouldSyncRef.current(isRunCurrent);
+          recover = pending || ticket.reevaluationRequested;
         }
         finished = true;
         return "completed";

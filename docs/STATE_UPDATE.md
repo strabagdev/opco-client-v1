@@ -4034,3 +4034,11 @@ scope/generación, publicaciones lifecycle protegidas según C-08 y Diagnóstico
 manual STATE_UPDATE por el coordinador existente. No implica mutex HTTP global ni
 cierre completo de C-11. Contrato y límites: [SYNC_RECOVERY.md](SYNC_RECOVERY.md).
 Sin cambio de comandos, clientRequestId, almacenamiento o políticas de negocio.
+
+C-11 — reevaluación local: el RunTicket existente retiene demandas absorbidas y el
+combinado comprueba elegibilidad tras un resultado sin retriable. Una demanda que
+llega durante esa lectura conserva una única comprobación por la espera C-10;
+el callback confirma ámbito y elegibilidad antes de enviar. No cambia el motor
+STATE_UPDATE, su outbox, payload, clientRequestId ni ACK del propietario original.
+No hay cola, temporizador ni mutex global nuevos. El catálogo Lote parcial pese a
+preparación completed sigue como seguimiento C-09 independiente. Sin publicación.

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePendingWorkLifecycle } from "./use-pending-work-lifecycle";
 import { OpcoApiError } from "../lib/opco-api";
+import type { PendingOperation } from "../lib/offline-records";
 
 const h = vi.hoisted(() => {
   const refs: { current: unknown }[] = [], callbacks: { deps: unknown[]; value: unknown }[] = [];
@@ -36,7 +37,7 @@ function result(records = 0, state = 0) {
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (reason: unknown) => void; const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 function fixture() {
   let generation = 1, eligible = false;
-  const cache = { countPendingOperations: vi.fn(async () => Number(eligible)), listPendingStateUpdateOperations: vi.fn(async () => []), upsertContextSnapshot: vi.fn() };
+  const cache = { countPendingOperations: vi.fn<Input["definitionCache"]["countPendingOperations"]>(async () => Number(eligible)), listPendingStateUpdateOperations: vi.fn<Input["definitionCache"]["listPendingStateUpdateOperations"]>(async () => []), upsertContextSnapshot: vi.fn() };
   const api = { getAuthSessionGeneration: () => generation, getReady: vi.fn<() => Promise<void>>(async () => undefined),
     getMe: vi.fn(async () => ({})), getContext: vi.fn(async () => ({ contracts: [{ id: "contract" }] })),
     commitAuthSession: vi.fn(async (_: unknown, fn: () => Promise<void>) => fn()), refreshSession: vi.fn() };
@@ -103,7 +104,12 @@ describe("C-10 existing lifecycle recovery after a business attempt", () => {
   });
 
   it("does not retry validation, conflicts or an invalid authentication", async () => {
-    const f = fixture(); await settled(); f.setEligible(true); h.sync.mockResolvedValueOnce({ ...result(), records: { completed: 0, retriable: 0, failed: 1, conflicts: 1 } });
+    const f = fixture(); await settled(); f.setEligible(true);
+    h.sync.mockImplementationOnce(async () => {
+      // The real store excludes rows after marking them failed/conflict.
+      f.setEligible(false);
+      return { ...result(), records: { completed: 0, retriable: 0, failed: 1, conflicts: 1 } };
+    });
     await f.output.syncPendingRecords("reconnect"); await vi.advanceTimersByTimeAsync(60000); expect(h.sync).toHaveBeenCalledTimes(1);
     h.sync.mockRejectedValueOnce(new OpcoApiError("controlled invalid", "TOKEN_INVALID", 401)); await expect(f.output.syncPendingRecords()).rejects.toThrow("controlled invalid");
     await vi.advanceTimersByTimeAsync(60000); expect(h.sync).toHaveBeenCalledTimes(2);
@@ -311,5 +317,132 @@ describe("C10 run ownership and existing coordinator", () => {
     const f = fixture(); await settled();
     await expect(f.output.coordinateStateUpdateDiagnosticSync(aScope,async () => {throw new Error("controlled");})).rejects.toThrow("controlled");
     await f.output.syncPendingRecords(); expect(h.sync).toHaveBeenCalledOnce(); expect(f.render().isPendingWorkSyncing).toBe(false);
+  });
+});
+
+describe("C11 work arriving after a flight selected its commands", () => {
+  it.each(["RECORDS", "STATE_UPDATE"])("recovers a new %s command after a successful older snapshot", async kind => {
+    const f = fixture(); await settled();
+    let statePending = false;
+    const stateOperation: PendingOperation = { id: "state", ownerKey: "org:A", contractId: "contract", entityTypeId: "target", localRecordId: "local-state", clientRequestId: "same-state-request", operation: "STATE_UPDATE", attempts: 0, createdAt: "2026-11-25T10:00:00.000Z", updatedAt: "2026-11-25T10:00:00.000Z", payload: {}, serverRecordId: null, lastErrorCode: null, lastErrorMessage: null };
+    f.cache.listPendingStateUpdateOperations.mockImplementation(async () => statePending ? [stateOperation] : []);
+    const pending = (value: boolean) => { if (kind === "RECORDS") f.setEligible(value); else statePending = value; };
+    const ack = deferred<ReturnType<typeof result>>();
+    h.sync.mockImplementationOnce(() => ack.promise).mockImplementationOnce(async () => { pending(false); return result(); });
+    const first = f.output.syncPendingRecords(); await settled();
+    pending(true); // The second durable command was absent from the engine's first selection.
+    await f.output.syncPendingRecords();
+    expect(h.sync).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+    ack.resolve(result()); await first;
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(4999); expect(h.sync).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1); expect(h.sync).toHaveBeenCalledTimes(2);
+    const reads = f.cache.countPendingOperations.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(h.sync).toHaveBeenCalledTimes(2); expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(reads);
+  });
+
+  it("coalesces a burst of absorbed triggers into the existing single recovery wait", async () => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>();
+    h.sync.mockImplementationOnce(() => ack.promise).mockImplementationOnce(async () => { f.setEligible(false); return result(); });
+    const first = f.output.syncPendingRecords(); await settled(); f.setEligible(true);
+    await Promise.all(Array.from({ length: 12 }, () => f.output.syncPendingRecords()));
+    expect(h.sync).toHaveBeenCalledOnce();
+    ack.resolve(result()); await first; expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5000); expect(h.sync).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("checks remaining work even without an absorbed trigger, including a shared login engine snapshot", async () => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>();
+    h.sync.mockImplementationOnce(() => ack.promise).mockImplementationOnce(async () => { f.setEligible(false); return result(); });
+    const first = f.output.syncPendingRecords(); await settled(); f.setEligible(true);
+    ack.resolve(result()); await first;
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5000); expect(h.sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a new demand received while the final eligibility read returns an older empty result", async () => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>(), count = deferred<number>();
+    h.sync.mockImplementationOnce(() => ack.promise).mockImplementationOnce(async () => { f.setEligible(false); return result(); });
+    const first = f.output.syncPendingRecords(); await settled();
+    const reads = f.cache.countPendingOperations.mock.calls.length;
+    f.cache.countPendingOperations.mockImplementationOnce(() => count.promise);
+    ack.resolve(result()); await settled();
+    expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(reads + 1);
+    f.setEligible(true); await f.output.syncPendingRecords();
+    count.resolve(0); await first;
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5000); expect(h.sync).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["conflicts", "definitive-errors", "other-owner"])("stops when only %s remain outside eligibility", async mode => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>();
+    h.sync.mockImplementationOnce(() => ack.promise);
+    const first = f.output.syncPendingRecords(); await settled();
+    await f.output.syncPendingRecords();
+    const completed = result();
+    if (mode === "conflicts") completed.records.conflicts = 1;
+    if (mode === "definitive-errors") completed.records.failed = 1;
+    if (mode === "other-owner") f.cache.countPendingOperations.mockImplementation(async owner => Number(owner === "org:B"));
+    ack.resolve(completed); await first;
+    expect(f.cache.countPendingOperations).toHaveBeenLastCalledWith("org:A");
+    expect(f.cache.listPendingStateUpdateOperations).toHaveBeenLastCalledWith("org:A");
+    expect(vi.getTimerCount()).toBe(0);
+    const reads = f.cache.countPendingOperations.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(h.sync).toHaveBeenCalledOnce(); expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(reads);
+  });
+
+  it("a late demand with no remaining eligible work makes at most one deferred check, never a send loop", async () => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>(), count = deferred<number>();
+    h.sync.mockImplementationOnce(() => ack.promise);
+    const first = f.output.syncPendingRecords(); await settled();
+    f.cache.countPendingOperations.mockImplementationOnce(() => count.promise);
+    const reads = f.cache.countPendingOperations.mock.calls.length;
+    ack.resolve(result()); await settled();
+    expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(reads + 1);
+    await f.output.syncPendingRecords(); count.resolve(0); await first;
+    await vi.advanceTimersByTimeAsync(5000); expect(h.sync).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    const afterCheck = f.cache.countPendingOperations.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120000); expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(afterCheck);
+  });
+
+  it.each(["user", "same-user-new-generation", "contract"])("a retired final read cannot alter the current recovery after a %s change", async mode => {
+    const f = fixture(); await settled(); const ack = deferred<ReturnType<typeof result>>(), count = deferred<number>();
+    h.sync.mockImplementationOnce(() => ack.promise);
+    const first = f.output.syncPendingRecords(); await settled();
+    const reads = f.cache.countPendingOperations.mock.calls.length;
+    f.cache.countPendingOperations.mockImplementationOnce(() => count.promise);
+    ack.resolve(result()); await settled();
+    expect(f.cache.countPendingOperations).toHaveBeenCalledTimes(reads + 1);
+    const current = mode === "contract" ? f.render({ selectedContractIdState: "other-contract" })
+      : f.retire(mode === "user" ? { ownerKey: "org:B", token: "opaque-B" } : {});
+    await settled(); f.setEligible(true); h.sync.mockResolvedValueOnce(result(1));
+    await current.syncPendingRecords(); expect(vi.getTimerCount()).toBe(1);
+    count.resolve(1); await first; expect(vi.getTimerCount()).toBe(1);
+    h.sync.mockImplementationOnce(async () => { f.setEligible(false); return result(); });
+    await vi.advanceTimersByTimeAsync(4999); expect(h.sync).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1); expect(h.sync).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves the current backoff when a flight with absorbed work fails transiently", async () => {
+    const f = fixture(); await settled(); f.setEligible(true);
+    h.sync.mockResolvedValueOnce(result(1)); await f.output.syncPendingRecords();
+    const ack = deferred<ReturnType<typeof result>>(); h.sync.mockImplementationOnce(() => ack.promise);
+    const second = f.output.syncPendingRecords(); await settled(); await f.output.syncPendingRecords();
+    ack.resolve(result(1)); await second; expect(vi.getTimerCount()).toBe(1);
+    h.sync.mockImplementationOnce(async () => { f.setEligible(false); return result(); });
+    await vi.advanceTimersByTimeAsync(14999); expect(h.sync).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1); expect(h.sync).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not send blindly when the post-ACK eligibility read fails", async () => {
+    const f = fixture(); await settled();
+    f.cache.countPendingOperations.mockRejectedValueOnce(new Error("controlled local read failure"));
+    await expect(f.output.syncPendingRecords()).rejects.toThrow("controlled local read failure");
+    await vi.advanceTimersByTimeAsync(120000); expect(h.sync).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0); expect(f.render().isPendingWorkSyncing).toBe(false);
   });
 });
