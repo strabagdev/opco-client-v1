@@ -553,7 +553,8 @@ export async function refreshEntityRecordsCache({
   }
 }
 
-export type LoadRecordParams = BaseScopedInput & {
+export type LoadRecordParams = BaseScopedInput & RecordsReadOptions & {
+  knownOffline?:boolean;
   api: Pick<OpcoApi, "getEntityRecord">;
   recordId: string;
   store: Pick<OfflineRecordStore, "getCachedRecord" | "upsertRemoteRecords">;
@@ -562,6 +563,7 @@ export type LoadRecordParams = BaseScopedInput & {
 
 export async function loadRecordWithOfflineCache({
   api,
+  knownOffline=false, isActive,
   contractId,
   entityTypeId,
   ownerKey,
@@ -569,7 +571,11 @@ export async function loadRecordWithOfflineCache({
   store,
   token,
 }: LoadRecordParams): Promise<{ fromCache: boolean; offline: boolean; record: CachedEntityRecord | null }> {
+  assertRecordsReadActive(isActive);
   const cachedBeforeRemote = await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId });
+
+  assertRecordsReadActive(isActive);
+  if(knownOffline)return{fromCache:true,offline:true,record:cachedBeforeRemote};
 
   if (cachedBeforeRemote && !cachedBeforeRemote.serverId) {
     return {
@@ -584,6 +590,7 @@ export async function loadRecordWithOfflineCache({
   try {
     const remote = await api.getEntityRecord(token, contractId, entityTypeId, remoteRecordId);
 
+    assertRecordsReadActive(isActive);
     await store.upsertRemoteRecords({
       contractId,
       entityTypeId,
@@ -597,6 +604,7 @@ export async function loadRecordWithOfflineCache({
       record: await store.getCachedRecord({ contractId, entityTypeId, ownerKey, recordId }),
     };
   } catch (error) {
+    assertRecordsReadActive(isActive);
     if (isNetworkLikeError(error)) {
       return {
         fromCache: true,
@@ -617,6 +625,13 @@ export async function loadRecordWithOfflineCache({
 
     throw error;
   }
+}
+
+/** Edit is an exact local/server alias of the requested owner's row, never a create fallback. */
+export function requireEditableRecord(record:CachedEntityRecord|null,input:{ownerKey:string;contractId:string;entityTypeId:string;recordId?:string}){
+ if(!record||!input.recordId)throw new Error("Este registro no está guardado en este dispositivo. Conéctate para consultarlo; no se abrió un formulario de creación.");
+ if(![record.localId,record.serverId].includes(input.recordId))throw new Error("La identidad del registro no corresponde a esta edición. No se eligió otro registro.");
+ return record;
 }
 
 export function fingerprintRecordsScope({ contractId, entityTypeId, ownerKey }: BaseScopedInput): RecordsScopeFingerprint {

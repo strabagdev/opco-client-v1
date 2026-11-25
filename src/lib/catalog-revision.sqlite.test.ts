@@ -168,3 +168,41 @@ realSuite("catalog receipts with real Core and SQLite",()=>{
  });
 
 });
+
+// C-09: these cases exercise the real SQLite facade; no HTTP/auth integration is implied.
+describe("C09 catalog coverage read without attestation or mutation",()=>{
+ const scope={ownerKey:"org:user",contractId:"contract",userId:"user",organizationId:"org",applicationId:"app",authorizationFingerprint:"a".repeat(64)};
+ async function seed(count:number){
+  const field={id:"required-related",key:"related",name:"Required related",type:"RELATION"as const,active:true,required:true,config:{relationKind:"ONE",targetEntityTypeId:"catalog"}};
+  const source={id:"source",name:"Source",slug:"source",active:true,icon:null,fields:[field]},target={id:"catalog",name:"Choices",slug:"choices",active:true,icon:null,fields:[]};
+  const view={id:"c09-view",name:"Synthetic",slug:"synthetic",icon:null,sortOrder:0,type:"RECORDS"as const,active:true,config:{entityTypeId:"source"}},prepared={kind:"records"as const,appView:view,entityDefinition:source};
+  await store.upsertEntityDefinition(scope.contractId,source.id,source,"old");await store.upsertEntityDefinition(scope.contractId,target.id,target,"old");await store.upsertAppViews(scope.ownerKey,scope.contractId,[view],"old");await store.upsertAppViewDefinition({...scope,appViewId:view.id,appViewType:view.type,definition:prepared,status:"ready",lastPreparedAt:"old"});
+  const records=Array.from({length:count},(_,i)=>({id:"choice-"+i,displayName:"Synthetic choice "+i,values:{},updatedAt:"2026-11-24T00:00:00Z"}));await store.upsertRemoteRecords({...scope,entityTypeId:target.id,records});
+  return{view,prepared,source,target,records};
+ }
+ const read=(x:Awaited<ReturnType<typeof seed>>,ownerKey=scope.ownerKey)=>store.getLocalCatalogCoverage({ownerKey,contractId:scope.contractId,appViews:[x.view],isCurrent:()=>true});
+ const snapshot=async()=>({metadata:await db.getAllAsync("SELECT * FROM app_metadata ORDER BY key"),records:await db.getAllAsync("SELECT * FROM entity_records ORDER BY local_id"),outbox:await db.getAllAsync("SELECT * FROM pending_operations ORDER BY id")});
+ it.each([[0,"unprepared"],[137,"partial"]])("keeps %s local rows uncredited without a full proof",async(count,status)=>{const x=await seed(Number(count)),before=await snapshot();expect((await read(x))[x.view.id]).toMatchObject([{count,coverage:status,required:true}]);expect(await snapshot()).toEqual(before);});
+ it.each([[0,"empty"],[137,"complete"]])("distinguishes confirmed empty from complete legacy hydration: %s",async(count,status)=>{const x=await seed(Number(count));await store.markSyncPhaseCompleted({...scope,entityTypeId:x.target.id,phase:"refreshing"});const before=await snapshot();expect((await read(x))[x.view.id]).toMatchObject([{count,coverage:status}]);await db.closeAsync();await open();expect((await read(x))[x.view.id]).toMatchObject([{count,coverage:status}]);expect(await snapshot()).toEqual(before);});
+ it("cannot borrow another owner's options or turn a retired read into a certificate",async()=>{const x=await seed(137);await store.markSyncPhaseCompleted({...scope,entityTypeId:x.target.id,phase:"refreshing"});expect((await read(x,"org:other"))[x.view.id]).toEqual([]);await expect(store.getLocalCatalogCoverage({...scope,appViews:[x.view],isCurrent:()=>false})).rejects.toMatchObject({code:"REVISION_SCOPE_RETIRED"});});
+ it("checks the same durable receipt hash when telemetry was suppressed, without invalidating it",async()=>{
+  const x=await seed(2),hash="b".repeat(64);const manifest={version:1 as const,representationVersion:1 as const,mode:"shadow"as const,reuseAllowed:false as const,epoch:"synthetic-epoch",readDefinitionsRevision:hash,scope,readBindingVector:{version:1 as const,representationVersion:1 as const,available:true,revision:hash}};
+  const seal={version:1 as const,representationVersion:1 as const,mode:"shadow"as const,reuseAllowed:false as const,clientMaySkipReads:false as const,coverageCertified:false as const,revision:hash,manifestVectorRevision:hash,epoch:manifest.epoch,authorizationFingerprint:scope.authorizationFingerprint,selectionFingerprint:hash,requestFingerprint:hash,contentHash:hash,snapshot:{isolation:"repeatable-read"as const,at:"2026-11-24T00:00:00Z"}};
+  const context={scope,manifest,sessionId:"synthetic-session",isCurrent:()=>true};await store.beginRevisionReceiptSession(context);
+  const dependencies=[{entityTypeId:x.source.id,fieldId:x.source.fields[0].id,type:"RELATION",roles:["record-field"],targetEntityTypeId:x.target.id,cardinality:"ONE"as const}];
+  const parts:import("./preparation-revision-contract").PreparationPart[]=[...([x.source,x.target].map(entity=>({resource:{kind:"definition"as const,entityTypeId:entity.id},artifact:{kind:"definition"as const,entityTypeId:entity.id},reads:[seal],expected:{json:entity}}))),{resource:{kind:"records",entityTypeId:x.target.id},artifact:{kind:"records",entityTypeId:x.target.id,total:2},reads:[seal],expected:{records:x.records}},{resource:{kind:"views"},artifact:{kind:"views"},reads:[seal],expected:{json:[x.view]}}];
+  await store.commitCatalogRevisionReceipt(context,{appView:x.view,prepared:x.prepared,dependencies,parts});expect(await store.getSyncTelemetry({...scope,entityTypeId:x.target.id})).toBeNull();let before=await snapshot();expect((await read(x))[x.view.id]).toMatchObject([{coverage:"complete",count:2}]);expect(await snapshot()).toEqual(before);
+  await db.runAsync("UPDATE entity_records SET display_name='Synthetic changed content' WHERE server_id='choice-0'");before=await snapshot();expect((await read(x))[x.view.id]).toMatchObject([{coverage:"partial",count:2}]);expect(await snapshot()).toEqual(before);const row=await db.getFirstAsync("SELECT value FROM app_metadata WHERE key LIKE 'catalog_revision_receipt:v1:%'");expect(JSON.parse(String(row!.value)).status).toBe("verified");
+ });
+ it("counts only identities selectable by each existing renderer, without changing the pending catalog row",async()=>{
+  const x=await seed(0);await store.markSyncPhaseCompleted({...scope,entityTypeId:x.target.id,phase:"refreshing"});
+  const pending=await store.createLocalRecord({...scope,entityTypeId:x.target.id,values:{}});
+  const workflow={id:"workflow-local-selection",name:"Synthetic workflow",slug:"workflow",icon:null,sortOrder:0,type:"WORKFLOW"as const,config:{workflowKey:"state-update",sourceEntityTypeId:x.target.id,targetEntityTypeId:x.source.id,subjectFieldId:x.source.fields[0].id,stateFields:[],extraFieldIds:[],uniqueness:"subject",historyMode:"append"}};
+  const prepared={kind:"state-update"as const,appView:workflow,sourceEntityTypeId:x.target.id,targetEntityTypeId:x.source.id,subjectFieldId:x.source.fields[0].id,stateFields:[],extraFields:[],uniqueness:"subject"as const,historyMode:"append"as const};
+  await store.upsertAppViewDefinition({...scope,appViewId:workflow.id,appViewType:workflow.type,status:"ready",lastPreparedAt:"old",definition:prepared});
+  const before=await snapshot(),facts=await store.getLocalCatalogCoverage({...scope,appViews:[x.view,workflow]});
+  expect(facts[x.view.id]).toMatchObject([{coverage:"complete",count:1}]);expect(facts[workflow.id]).toMatchObject([{coverage:"empty",count:0}]);
+  expect(await snapshot()).toEqual(before);expect((await store.getCachedRecord({...scope,entityTypeId:x.target.id,recordId:pending.localId}))?.syncStatus).toBe("pending_create");
+ });
+
+});

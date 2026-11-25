@@ -288,7 +288,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const supportsObservation = Boolean(appView.config.observationFieldId);
   const isOnline = connectivityStatus === "online";
-  const contextRelations = useAttendanceContextRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
+  const contextRelations = useAttendanceContextRelations({ appView, authGeneration, api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
     fields: contextFields, values: contextValues, selectedItem, online: isOnline, scope: resolutionScope });
   function attendanceContextValidationErrors(fields: AttendanceContextField[], values: Record<string, string | null>) {
     const missing = (appView.config.contextFieldIds ?? []).filter(id => !fields.some(field => field.id === id));
@@ -2024,6 +2024,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       </View>
 
+      {contextRelations.dependencyNotice ? <Text style={styles.offline}>{contextRelations.dependencyNotice}</Text> : null}
       {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
         <Text style={resolutionFeedback.outcome === "conflict" || resolutionFeedback.outcome === "failed" || resolutionFeedback.outcome === "superseded"
           ? styles.error : resolutionFeedback.outcome === "pending" ? styles.offline : styles.success}>
@@ -2262,7 +2263,8 @@ function AttendanceContextSelectors({
             error={errors[field.id]} onChange={value => { if (typeof value === "string") onChange(field.id, value || null); }}
             relationTargetEntityTypeId={getRelationTargetEntityTypeId(attendanceRelationField(field))}
             relationOptions={relations.catalogs[field.id]?.options ?? []}
-            relationOptionsError={relations.catalogs[field.id]?.error ?? (relations.catalogs[field.id]?.offline ? "Sin conexión: sólo catálogo guardado; disponibilidad no certificada." : null)}
+            relationOptionsNoticeHandled={Boolean(relations.dependencyNotice)}
+            relationOptionsError={relations.catalogs[field.id]?.error ?? null}
             relationOptionsLoading={relations.catalogs[field.id]?.loading}
             onRelationSearch={search => relations.search(field.id, search)}
             onRelationLoadMore={relations.catalogs[field.id]?.hasMore ? () => relations.more(field.id) : undefined} /> : <FieldFrame

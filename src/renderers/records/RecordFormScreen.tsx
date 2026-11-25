@@ -1,3 +1,4 @@
+import {useExtraRelations} from "../workflows/state-update/use-extra-relations";
 import { type ThemeColors } from "../../theme/tokens";
 import { colors } from "../../theme/paint";
 import { FormActions, FormAction } from "@/components/form-actions";
@@ -5,7 +6,7 @@ import { FormLayout, FormGrid } from "@/components/form-layout";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
 import { useExperienceActivityReporter } from "@/renderers/use-experience-activity";
 import { router } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -15,7 +16,7 @@ import {
 
 import { buildAppViewRecordHref } from "@/lib/app-views";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
-import { CachedEntityRecord, loadRecordWithOfflineCache, loadRecordsWithOfflineCache, saveRecordLocally } from "@/lib/offline-records";
+import { CachedEntityRecord, loadRecordWithOfflineCache, requireEditableRecord, saveRecordLocally } from "@/lib/offline-records";
 import {
   getPreventiveUniqueFields,
   isUniqueValidationResultCurrent,
@@ -58,21 +59,39 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const entityTypeId = appView.config.entityTypeId;
   const { api, connectivityStatus, definitionCache, localDatabaseStorageState, ownerKey, selectedContractId, syncPendingRecords, token } =
     useSession();
+  const authGeneration=api.getAuthSessionGeneration();
+
   const [definition, setDefinition] = useState<EntityDefinition | null>(null);
   const [record, setRecord] = useState<CachedEntityRecord | null>(null);
   const [initialValues, setInitialValues] = useState<RecordFormValues>({});
   const [values, setValues] = useState<RecordFormValues>({});
   const [fieldErrors, setFieldErrors] = useState<RecordFormErrors>({});
-  const [relationOptionsByField, setRelationOptionsByField] = useState<Record<string, RelationOptionsState>>({});
   const [error, setError] = useState<string | null>(null);
   const [uniqueNotice, setUniqueNotice] = useState<string | null>(null);
   const [checkingUniqueFieldKey, setCheckingUniqueFieldKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [loadedFormScope,setLoadedFormScope]=useState<string|null>(null);
+  const requestedFormScope=JSON.stringify([ownerKey,selectedContractId,entityTypeId,appView.id,mode,recordId,authGeneration]);
+  const requestedFormScopeRef=useRef<string|null>(null);
+  const connectivityAtLoadRef=useRef(connectivityStatus);
+  useLayoutEffect(() => { connectivityAtLoadRef.current = connectivityStatus; }, [connectivityStatus]);
+  useLayoutEffect(() => {
+    requestedFormScopeRef.current = requestedFormScope;
+    return () => { requestedFormScopeRef.current = null; };
+  }, [requestedFormScope]);
+  const formReady=Boolean(definition&&loadedFormScope===requestedFormScope);
   const latestValuesRef = useRef(values);
 
   const fields = useMemo(() => (definition ? getWritableFields(definition) : []), [definition]);
+  const formScope=JSON.stringify([ownerKey,selectedContractId,appView.id,entityTypeId,mode,recordId,authGeneration,definition]);
+  const relationCatalogs=useExtraRelations({api,store:definitionCache,token,ownerKey,contractId:selectedContractId,appView,authGeneration,
+    fields,online:connectivityStatus==="online",scope:formScope,identity:"record",
+    selected:Object.fromEntries(fields.filter(f=>f.type==="RELATION").map(f=>[f.id,Array.isArray(values[f.key])?values[f.key] as string[]:typeof values[f.key]==="string"&&values[f.key]?[values[f.key] as string]:[]]))});
+  const relationOptionsByField:Record<string,RelationOptionsState>=Object.fromEntries(fields.filter(f=>f.type==="RELATION").map(field=>{
+    const catalog=relationCatalogs.catalogs[field.id];return[field.key,{options:catalog?.options??[],error:catalog?.error??null,isLoaded:catalog?.loaded??false,isLoading:catalog?.loading??true,targetEntityTypeId:getRelationTargetEntityTypeId(field)}];
+  }));
   const reading = Number(isLoading) + fields.filter(field => relationOptionsByField[field.key]?.isLoading).length + Number(Boolean(checkingUniqueFieldKey) && !isSubmitting);
   useExperienceActivityReporter(appView, {
     activeCount: reading + Number(isSubmitting), readCount: reading,
@@ -87,6 +106,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
   useEffect(() => {
     let isMounted = true;
+    const current = () => isMounted && api.isAuthSessionCurrent(authGeneration) && requestedFormScopeRef.current === requestedFormScope;
 
     async function loadForm() {
       if (!token || !selectedContractId || !entityTypeId || !ownerKey) {
@@ -101,6 +121,8 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         return;
       }
 
+      if (!current()) return;
+      setIsSubmitting(false);
       setIsLoading(true);
       setError(null);
       setFieldErrors({});
@@ -123,22 +145,27 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
                 recordId,
                 store: definitionCache,
                 token,
+                knownOffline: connectivityAtLoadRef.current === "offline",
+                isActive: current,
               })
             : null;
+        if (!current()) return;
+        if (mode === "edit") requireEditableRecord(recordResult?.record ?? null, { ownerKey, contractId: selectedContractId, entityTypeId, recordId });
         const nextValues = buildInitialFormValues(definitionResult.definition, recordResult?.record?.values);
 
-        if (isMounted) {
+        if (current()) {
+          setLoadedFormScope(requestedFormScope);
           setDefinition(definitionResult.definition);
           setRecord(recordResult?.record ?? null);
           setInitialValues(nextValues);
           setValues(nextValues);
         }
       } catch (nextError) {
-        if (isMounted) {
+        if (current()) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar el formulario.");
         }
       } finally {
-        if (isMounted) {
+        if (current()) {
           setIsLoading(false);
         }
       }
@@ -149,100 +176,8 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     return () => {
       isMounted = false;
     };
-  }, [api, definitionCache, entityTypeId, mode, ownerKey, recordId, retryCount, selectedContractId, token]);
+  }, [api, definitionCache, entityTypeId, mode, ownerKey, recordId, retryCount, selectedContractId, token, authGeneration, requestedFormScope]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadRelationOptions() {
-      if (!definition || !token || !selectedContractId || !ownerKey) {
-        setRelationOptionsByField({});
-        return;
-      }
-
-      const relationFields = getWritableFields(definition)
-        .filter((field) => field.type === "RELATION")
-        .map((field) => ({
-          field,
-          targetEntityTypeId: getRelationTargetEntityTypeId(field),
-        }));
-
-      if (relationFields.length === 0) {
-        setRelationOptionsByField({});
-        return;
-      }
-
-      setRelationOptionsByField(Object.fromEntries(
-        relationFields.map(({ field, targetEntityTypeId }) => [
-          field.key,
-          {
-            error: targetEntityTypeId ? null : "Este campo de relacion no tiene un catalogo configurado.",
-            isLoaded: false,
-            isLoading: Boolean(targetEntityTypeId),
-            options: [],
-            targetEntityTypeId,
-          },
-        ]),
-      ));
-
-      await Promise.all(relationFields.map(async ({ field, targetEntityTypeId }) => {
-        if (!targetEntityTypeId) {
-          return;
-        }
-
-        try {
-          const result = await loadRecordsWithOfflineCache({
-            api,
-            contractId: selectedContractId,
-            direction: "asc",
-            entityTypeId: targetEntityTypeId,
-            ownerKey,
-            page: 1,
-            pageSize: 100,
-            sort: "displayName",
-            store: definitionCache,
-            token,
-          });
-          const options = result.records.map((record) => ({
-            displayName: record.displayName || record.id,
-            id: record.id,
-          }));
-
-          if (isMounted) {
-            setRelationOptionsByField((current) => ({
-              ...current,
-              [field.key]: {
-                error: null,
-                isLoaded: true,
-                isLoading: false,
-                options,
-                targetEntityTypeId,
-              },
-            }));
-          }
-        } catch {
-          if (isMounted) {
-            setRelationOptionsByField((current) => ({
-              ...current,
-              [field.key]: {
-                error: "No pudimos cargar el catalogo de registros relacionados.",
-                isLoaded: false,
-                isLoading: false,
-                options: [],
-                targetEntityTypeId,
-              },
-            }));
-          }
-        }
-      }));
-    }
-
-    void loadRelationOptions();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [api, definition, definitionCache, ownerKey, selectedContractId, token]);
 
   function setFieldValue(key: string, value: string | boolean | string[]) {
     setValues((current) => ({
@@ -287,6 +222,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       return;
     }
 
+    const current=()=>api.isAuthSessionCurrent(authGeneration)&&requestedFormScopeRef.current===requestedFormScope;
     const capturedValue = values[fieldKey];
 
     if (mode === "edit" && JSON.stringify(capturedValue) === JSON.stringify(initialValues[fieldKey])) {
@@ -299,7 +235,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
     try {
       const result = await validateUniqueValues({ [fieldKey]: capturedValue });
 
-      if (!isUniqueValidationResultCurrent(latestValuesRef.current[fieldKey], capturedValue)) {
+      if (!current() || !isUniqueValidationResultCurrent(latestValuesRef.current[fieldKey], capturedValue)) {
         return;
       }
 
@@ -315,12 +251,13 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         setUniqueNotice(uniqueValidationNotice(result));
       }
     } finally {
-      setCheckingUniqueFieldKey(null);
+      if(current())setCheckingUniqueFieldKey(null);
     }
   }
 
   async function handleSubmit() {
-    if (isSubmitting) {
+    const current=()=>api.isAuthSessionCurrent(authGeneration)&&requestedFormScopeRef.current===requestedFormScope;
+    if (!current() || !formReady || isLoading || isSubmitting) {
       return;
     }
 
@@ -333,6 +270,10 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       return;
     }
 
+    if(mode==="edit"){
+      try{requireEditableRecord(record,{ownerKey,contractId:selectedContractId,entityTypeId,recordId});}
+      catch(reason){setError(reason instanceof Error?reason.message:"No está disponible el registro seleccionado.");return;}
+    }
     const requiredErrors = {
       ...validateFormFields(fields, values),
       ...getRelationCatalogAvailabilityErrors(fields, values, relationOptionsByField),
@@ -359,6 +300,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
     try {
       const uniqueResult = await validateUniqueValues(submitValues);
+      if (!current()) return;
 
       if (uniqueResult.status === "conflict") {
         setFieldErrors(uniqueConflictsToFieldErrors(uniqueResult));
@@ -370,6 +312,12 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         setUniqueNotice(uniqueValidationNotice(uniqueResult));
       }
 
+      if(!current())return;
+      if(mode==="edit"){
+        const selected=await definitionCache.getCachedRecord({ownerKey,contractId:selectedContractId,entityTypeId,recordId:recordId!});
+        if(!current())return;
+        requireEditableRecord(selected,{ownerKey,contractId:selectedContractId,entityTypeId,recordId});
+      }
       const localRecord = await saveRecordLocally({
         contractId: selectedContractId,
         entityTypeId,
@@ -381,6 +329,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         values: submitValues,
       });
 
+      if(!current())return;
       reportWriteFeedback({
         appViewId: appView.id,
         appViewTitle: appView.name,
@@ -392,6 +341,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       void syncPendingRecords();
       router.replace(buildAppViewRecordHref(appView.id, localRecord.id));
     } catch (nextError) {
+      if(!current())return;
       const nextFieldErrors = extractApiFieldErrors(nextError);
 
       if (Object.keys(nextFieldErrors).length > 0) {
@@ -400,7 +350,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
 
       setError(nextError instanceof Error ? nextError.message : "No fue posible guardar el registro.");
     } finally {
-      setIsSubmitting(false);
+      if(current())setIsSubmitting(false);
     }
   }
 
@@ -413,14 +363,15 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         {definition ? <Text style={styles.meta}>{definition.name}</Text> : null}
       </View>
 
-      {isLoading && !definition ? <ReadLoadingState mode="initial" /> : null}
+      {isLoading && !formReady ? <ReadLoadingState mode="initial" /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {uniqueNotice ? <Text style={styles.notice}>{uniqueNotice}</Text> : null}
-      {error && !definition ? (
+      {relationCatalogs.dependencyNotice ? <Text style={styles.notice}>{relationCatalogs.dependencyNotice}</Text> : null}
+      {error && !formReady ? (
         <FormAction label="Reintentar" onPress={() => setRetryCount((count) => count + 1)} />
       ) : null}
 
-      {definition ? (
+      {formReady ? (
         <FormGrid slots={fields.map((field) => ({
           key: field.key, fullWidth: field.type === "TEXTAREA" || field.type === "DATETIME", content: (
             <RecordFieldInput
@@ -430,6 +381,9 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
               key={field.key}
               onChange={(value) => setFieldValue(field.key, value)}
               onBlur={() => validateUniqueFieldOnBlur(field.key)}
+              onRelationSearch={field.type==="RELATION"?search=>relationCatalogs.search(field.id,search):undefined}
+              onRelationLoadMore={relationCatalogs.catalogs[field.id]?.hasMore?()=>relationCatalogs.more(field.id):undefined}
+              relationOptionsNoticeHandled={Boolean(relationCatalogs.dependencyNotice)}
               relationOptions={relationOptionsByField[field.key]?.options}
               relationOptionsError={relationOptionsByField[field.key]?.error}
               relationOptionsLoading={
@@ -447,7 +401,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
         </FormGrid>
       ) : null}
 
-      {definition ? (
+      {formReady ? (
         <FormActions>
           <FormAction label="Volver" variant="secondary" onPress={() => router.back()} />
           <FormAction label="Guardar" busyLabel="Guardando" busy={isSubmitting} disabled={isSubmitting} onPress={handleSubmit} />

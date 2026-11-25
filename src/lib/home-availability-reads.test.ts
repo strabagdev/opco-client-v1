@@ -24,13 +24,14 @@ const views=[
 function fixture(){
  const store={
   getAppViewDefinition:vi.fn(async (_o:string,_c:string,id:string)=>({definition:{kind:id.includes("records")?"records":id.startsWith("attendance")?"attendance":"state-update",sourceEntityTypeId:"people",targetEntityTypeId:"events",appView:{id}}})),
+  getRecordCacheStatusCounts:vi.fn(async()=>({total:0})),
   getSyncTelemetry:vi.fn(async (_scope:unknown)=>({revision:1})),
   getAttendanceDaySnapshotHydration:vi.fn(async (_scope:unknown)=>({lastSuccessfulRefreshAt:"2026-11-22T12:00:00Z"})),
   getStateUpdateSnapshotCoverage:vi.fn(async (_scope:unknown)=>null),
  };
  const publish=vi.fn();
- const make=(owner="owner",contract="contract")=>new Function("definitionCache","selectedContractId","ownerKey","today","currentMonthDates","deriveAttendanceMonthStatus","buildStateUpdateCoverageScope","deriveOfflineAvailability","setOfflineAvailabilityByViewId",js+";return read;")(
-  store,contract,owner,"2026-11-22",["2026-11-21","2026-11-22"],(days:unknown)=>days,(scope:unknown)=>scope,(input:unknown)=>input,publish,
+ const make=(owner="owner",contract="contract")=>new Function("definitionCache","selectedContractId","ownerKey","today","observedAt","attendancePreparationPeriod","deriveAttendanceMonthStatus","buildStateUpdateCoverageScope","deriveOfflineAvailability","setOfflineAvailabilityByViewId",js+";return read;")(
+  store,contract,owner,"2026-11-22",new Date("2026-11-22T12:00:00Z"),()=>({date:"2026-11-22",dates:["2026-11-21","2026-11-22"]}),(days:unknown)=>days,(scope:unknown)=>scope,(input:unknown)=>input,publish,
  ) as (input:typeof views,canUpdate?:()=>boolean)=>Promise<void>;
  return{store,publish,make};
 }
@@ -40,6 +41,7 @@ describe("Home shares equivalent local reads only within a current pass",()=>{
  it("shares source telemetry and today's hydration without merging different AppViews",async()=>{
   const f=fixture();await f.make()(views);
   expect(f.store.getSyncTelemetry).toHaveBeenCalledTimes(1);
+  expect(f.store.getRecordCacheStatusCounts).toHaveBeenCalledTimes(1);
   expect(f.store.getAttendanceDaySnapshotHydration).toHaveBeenCalledTimes(4);
   expect(new Set(f.store.getAttendanceDaySnapshotHydration.mock.calls.map(([s])=>JSON.stringify(s))).size).toBe(4);
   expect(f.publish).toHaveBeenCalledOnce();
@@ -74,7 +76,7 @@ describe("Home shares equivalent local reads only within a current pass",()=>{
  });
  it("does not retain rejected reads for a subsequent pass",async()=>{
   const f=fixture(),read=f.make();f.store.getSyncTelemetry.mockRejectedValueOnce(new Error("synthetic read failure"));
-  await read(views);expect(f.publish).toHaveBeenLastCalledWith({});await read(views);
+  await read(views);expect(f.publish).toHaveBeenLastCalledWith(Object.fromEntries(views.map(v=>[v.id,"dependencies-unavailable"])));await read(views);
   expect(f.store.getSyncTelemetry).toHaveBeenCalledTimes(2);expect(Object.keys(f.publish.mock.calls.at(-1)![0])).toHaveLength(views.length);
  });
  it("does not consume shared values or publish after scope disposal",async()=>{

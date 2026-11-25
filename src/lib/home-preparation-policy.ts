@@ -1,6 +1,6 @@
 import type { AppViewPrewarmStore } from "./app-view-prewarm";
-import type { AppView } from "./opco-api";
-import { currentMonthDateKeys } from "./attendance-snapshot-cache";
+import type { AppView, AttendanceWorkflowConfig } from "./opco-api";
+import { currentMonthDateKeys,attendancePreparationPeriod } from "./attendance-snapshot-cache";
 import { preparedPresentationAvailable } from "./subject-presentation-cache";
 
 /** Order-independent objects; ordered configured arrays retain their meaning. Memory only. */
@@ -9,12 +9,13 @@ export function preparationSignature(value: unknown): string {
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 }
 
-export function homePreparationDay(appView: AppView, day: string) {
+export function homePreparationDay(appView: AppView, day: string, now=new Date()) {
+  if(appView.type==="WORKFLOW"&&appView.config.workflowKey==="attendance"&&(appView.config as AttendanceWorkflowConfig).operationalCalendar)return attendancePreparationPeriod(now,(appView.config as AttendanceWorkflowConfig).operationalCalendar).date;
   return appView.type === "WORKFLOW" && (appView.config.workflowKey === "attendance" || Boolean(appView.config.dateFieldId)) ? day : "";
 }
 
 /** Local proof of the preparer's bounded output. Never evidence of remote freshness. */
-export async function homePreparationProof(store: AppViewPrewarmStore, ownerKey: string, contractId: string, appView: AppView, day: string): Promise<string | null> {
+export async function homePreparationProof(store: AppViewPrewarmStore, ownerKey: string, contractId: string, appView: AppView, day: string, now=new Date()): Promise<string | null> {
   try {
     const cached = await store.getAppViewDefinition(ownerKey, contractId, appView.id);
     if (!cached || cached.status !== "ready" || preparationSignature(cached.definition.appView) !== preparationSignature(appView)) return null;
@@ -23,13 +24,13 @@ export async function homePreparationProof(store: AppViewPrewarmStore, ownerKey:
     if (prepared.kind !== "state-update") return null;
     if (!store.getSyncTelemetry || !(await store.getSyncTelemetry({ ownerKey, contractId, entityTypeId: prepared.sourceEntityTypeId }))?.lastFullRefreshCompletedAt) return null;
     const scope = { ownerKey, contractId, appViewId: appView.id, targetEntityTypeId: prepared.targetEntityTypeId,
-      sourceEntityTypeId: prepared.sourceEntityTypeId, date: prepared.dateFieldId ? day : undefined,
+      sourceEntityTypeId: prepared.sourceEntityTypeId, date: prepared.dateFieldId ? homePreparationDay(appView,day,now) : undefined,
       dateFieldId: prepared.dateFieldId, uniqueness: prepared.uniqueness, historyMode: prepared.historyMode };
     if (!await preparedPresentationAvailable(store, scope, prepared)) return null;
     if (appView.type === "WORKFLOW" && appView.config.workflowKey === "attendance") {
       if (!store.getAttendanceDaySnapshotHydration) return null;
       // All required days, including the observation proof already checked when each marker was written.
-      for (const date of currentMonthDateKeys(new Date(`${day}T12:00:00`))) {
+      for (const date of appView.type==="WORKFLOW"&&appView.config.workflowKey==="attendance"&&appView.config.operationalCalendar ? attendancePreparationPeriod(now,(appView.config as AttendanceWorkflowConfig).operationalCalendar).dates : currentMonthDateKeys(new Date(`${day}T12:00:00`))) {
         if (!(await store.getAttendanceDaySnapshotHydration({ ...scope, date }))?.lastSuccessfulRefreshAt) return null;
       }
       return preparationSignature(prepared);

@@ -1,0 +1,29 @@
+# C-09: disponibilidad, dependencias y consulta exacta
+
+Base Client: `4587144ffa8b0a2b5b8a5ee22f3bffcff9f74f96`. Core compatible sin cambios: `f97ea494593e1df00df909faaf719549fe1851d8`.
+
+Inicio informa disponibilidad local; no autoriza crear ni editar. `recordsLocalCoverage` conserva el criterio anterior de RECORDS y se comparte con el evaluador de Inicio: una página con filas es parcial, una actualización completa exitosa también puede acreditar una colección vacía. PANEL/REPORT se identifican como consultas guardadas: nunca se certifica toda la experiencia a partir de metadata o una página.
+
+Los catálogos utilizan el plan de dependencias existente y el mismo verificador de contenido/hash de sus recibos. La lectura de disponibilidad no negocia, invalida, emite recibos ni autoriza omitir descargas. Los hechos locales son completos, parciales, vacíos confirmados, no preparados o no verificables. La prueba local no garantiza vigencia remota ni detecta revocaciones mientras no hay conexión. Una revisión/recibo rechazado no se mejora usando un checkpoint anterior. Se conservan las restricciones de dependencias directas; no se acredita cobertura transitiva.
+
+RELATION reutiliza el paginador de STATE_UPDATE para buscar en todo el conjunto SQLite del propietario/contrato/entidad. No se establece otro límite total. Las selecciones se resuelven por identidad, independientemente de la página y del texto buscado. RECORDS mantiene sus referencias locales permitidas; STATE_UPDATE sigue requiriendo identidad servidor. Las consultas retiradas por cambio de ámbito o generación de sesión no publican resultados. Un catálogo parcial permite usar sólo opciones disponibles y muestra su alcance; no inventa opciones ni elimina la obligatoriedad del contexto. Los avisos de cobertura usan el sector de comunicaciones existente, sin repetirlos en los controles.
+
+Una edición RECORDS debe obtener la fila exacta antes de inicializar el formulario y releer esa identidad antes de guardar. La ausencia no inicializa un formulario vacío ni cambia la ruta de escritura a CREATE. Un pendiente local exacto continúa siendo editable. Cambiar la conectividad no reinicializa el formulario ni pierde valores sin guardar; la conectividad se consulta al comenzar una carga solicitada. No se cambian comando, payload, propietario, clientRequestId, reconciliación ni outbox.
+
+Attendance utiliza `attendancePreparationPeriod` para el día/mes de disponibilidad y prueba de preparación. Los relojes existentes observan los cortes por zona/inicio operativo sin polling. Se conserva la preparación automática y no se descargan consultas analíticas no visitadas.
+
+PANEL/REPORT validan identidad y definición exactas antes de mostrar copias. PANEL conserva además su clave existente con revisión/configuración, filtros, búsqueda, dataset y página; una ventana compatible no acredita la colección completa. REPORT contrasta la configuración normalizada y el período cuando el modo es TABLE/MATRIX; conserva CURRENT_STATUS/LATEST_BY_RELATION. Conectividad y procedencia son independientes: una copia verificada online no se etiqueta Offline; un fallback sin verificación indica su alcance. Una copia incompatible se conserva almacenada, pero no se interpreta como la consulta actual.
+
+No se añaden tablas, migraciones, gates, motores, colas ni persistencia de estados de disponibilidad. Se mantienen las cachés/recibos de reutilización online, permisos, día operativo obligatorio, captureTime, A/B manual y contexto obligatorio antes de buscar/escanear.
+
+La evidencia del lote debe separar pruebas con dobles de API/autenticación de Chromium/SQLite/OPFS reales. La preparación interrumpida no acredita completitud; la reapertura offline no conoce actualizaciones o revocaciones remotas. Safari, native y dispositivo físico requieren validación propia. Los vencimientos históricos sin causa demostrada siguen sin explicación.
+
+Rollback: retirar sólo este parche sobre la misma base, conservando SQLite/OPFS y pendientes. Reintroduce las brechas de catálogo limitado, edición ausente y presentación de cobertura/consultas; no requiere migración ni borrado de almacenamiento.
+
+## Selección RELATION con catálogo frío
+
+El resolvedor por identidad existente hidrata también los targets seleccionados por lectura exacta autorizada online, independientemente de la página de 25 o del texto buscado (ONE/MANY). No basta el ID o una etiqueta: se verifica la fila del target en el ámbito owner/contrato/entidad del campo. Las referencias locales permitidas por RECORDS conservan su ruta local. No se emiten intenciones al resolver. Un 401/403/error HTTP no habilita fallback; sólo un fallo de red admite la fila local del mismo ámbito. Un 404 significa registro ya no disponible; sin fila offline significa dependencia local ausente, no invalidez demostrada. Mientras se resuelve se muestra carga y no se declara inválida la selección. Ninguno de estos casos elimina o sustituye el valor del formulario.
+
+La vigencia incluye campo/definición, registro/experiencia, selección exacta, consulta, usuario, contrato y generación. Un cambio retira la resolución anterior antes de publicar/hidratar. La respuesta sólo aporta opciones, nunca escribe valores seleccionados: quitar/reemplazar una selección no se deshace por una respuesta tardía. Guardar requiere resolver todas las selecciones y usa el outbox RECORDS existente; no cambia payload, identidad, clientRequestId ni la ruta de edición. Las pruebas distinguen hooks/API simulados, Core/autenticación/PostgreSQL reales y SQLite/OPFS real en Chromium.
+
+Las referencias locales RECORDS que ya recibieron ACK se consultan mediante el serverId de su alias local acreditado, conservando el ID de selección. El aviso de dependencia ausente se compone junto con la cobertura en el sector existente: una advertencia general de catálogo parcial no puede ocultarlo. Ningún fallo de resolución borra la copia o la selección.

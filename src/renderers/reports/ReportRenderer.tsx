@@ -40,6 +40,8 @@ import {
 
 export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>) {
   const { api, connectivityStatus, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
+
+  const authGeneration=api.getAuthSessionGeneration();
   const definitionKey=revisionCanonical(appView);
   const knownOffline=connectivityStatus==="offline"||status==="offline";
   const timeFilter = useMemo(() => normalizeReportTimeFilter(appView.config), [appView.config]);
@@ -51,11 +53,12 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
   const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshCount, setRefreshCount] = useState(0);
   const isCurrentStatus = isCurrentStatusReport(appView.config);
   const reportQuery = useMemo(() => isCurrentStatus ? { search: debouncedSearch } : range, [debouncedSearch, isCurrentStatus, range]);
-  const reportQueryKey = JSON.stringify(reportQuery);
+  const reportQueryKey = JSON.stringify([ownerKey,selectedContractId,appView.id,definitionKey,reportQuery,authGeneration]);
   const visibleReport = report && loadedQueryKey === reportQueryKey ? report : null;
   useExperienceActivityReporter(appView, {
     activeCount: Number(isLoading),
@@ -77,6 +80,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
 
   useEffect(() => {
     let isMounted = true;
+    const current=()=>isMounted&&api.isAuthSessionCurrent(authGeneration);
 
     async function loadReport() {
       if (!token || !selectedContractId || !ownerKey) {
@@ -91,7 +95,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
       try {
         const result = await loadReportWithOfflineCache({
           api,
-          appView:JSON.parse(definitionKey),knownOffline,isActive:()=>isMounted,
+          appView:JSON.parse(definitionKey),knownOffline,isActive:current,
           appViewId: appView.id,
           contractId: selectedContractId,
           ownerKey,
@@ -100,17 +104,18 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
           token,
         });
 
-        if (isMounted) {
+        if (current()) {
           setReport(result.report);
           setLoadedQueryKey(reportQueryKey);
           setFromCache(result.fromCache);
+          setOffline(result.offline);
         }
       } catch (nextError) {
-        if (isMounted) {
+        if (current()) {
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar el reporte.");
         }
       } finally {
-        if (isMounted) {
+        if (current()) {
           setIsLoading(false);
         }
       }
@@ -121,7 +126,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
     return () => {
       isMounted = false;
     };
-  }, [api, appView.id, definitionKey, knownOffline, definitionCache, ownerKey, refreshCount, reportQuery, reportQueryKey, selectedContractId, token]);
+  }, [api, authGeneration, appView.id, definitionKey, knownOffline, definitionCache, ownerKey, refreshCount, reportQuery, reportQueryKey, selectedContractId, token]);
 
   const table = useMemo(() => visibleReport ? buildReportTableModel(visibleReport) : null, [visibleReport]);
   const matrix = useMemo(() => visibleReport ? buildReportMatrixModel(visibleReport) : null, [visibleReport]);
@@ -140,7 +145,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>{appView.name}</Text>
-        <Text style={styles.subtitle}>{fromCache || connectivityStatus === "offline" ? "Reporte offline" : "Reporte"}</Text>
+        <Text style={styles.subtitle}>{knownOffline ? "Reporte offline" : "Reporte"}</Text>
       </View>
 
       {isCurrentStatus ? (
@@ -196,6 +201,7 @@ export function ReportRenderer({ appView }: AppViewRendererProps<ReportAppView>)
         <>
           {visibleReport.config.presentationMode === "TABLE" && isLoading ? <Text accessibilityLiveRegion="polite" style={tableStyles.refreshText}>Actualizando reporte…</Text> : null}
           {error ? <View style={styles.stateBox}><Text style={styles.stateText}>{error}</Text></View> : null}
+          {fromCache ? <View style={styles.stateBox}><Text style={styles.stateText}>{offline ? "Copia guardada; no se pudo verificar con el servidor. Sólo esta consulta está disponible." : "Copia guardada verificada online para esta consulta."}</Text></View> : null}
           {visibleReport.records.length === 0 ? (
             <View style={styles.stateBox}><Text style={styles.stateText}>{isCurrentStatus ? "No hay registros con estado." : "No hay registros para el período seleccionado."}</Text></View>
           ) : isCurrentStatusReport(visibleReport.config) && currentStatus ? (

@@ -1,3 +1,4 @@
+import {assertConsultationCompatibility,consultationQuery} from "./consultation-revision-contract";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
 import { createConsultationRevisionRead } from "./consultation-revision-read";
 import type { ReportAppView } from "./opco-api";
@@ -39,13 +40,13 @@ export async function loadReportWithOfflineCache({
 
   let revision:Awaited<ReturnType<typeof createConsultationRevisionRead>>|undefined;
   const assertActive=()=>{if(isActive&&!isActive())throw new ReportReadCancelledError();revision?.assertActive();};
-  const readCached=async()=>{assertActive();const cached=await store.getReportSnapshot(scope);assertActive();return cached;};
+  const readCached=async()=>{assertActive();const cached=await store.getReportSnapshot(scope);assertActive();if(cached&&appView)assertConsultationCompatibility({appView,resource:{kind:"report",appViewId,query:consultationQuery("report",query)}},cached.report);return cached;};
   assertActive();
   if(knownOffline){const cached=await readCached();if(!cached)throw new ReportSnapshotMissingError();return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};}
   try {
     revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"report",query,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
     if(revision.reused){assertActive();return{fromCache:true,offline:false,report:revision.reused.response as ReportResponse,syncedAt:revision.reused.verifiedAt};}
-    const report=await revision.api.getReport!(token,contractId,appViewId,query);assertActive();
+    const report=await revision.api.getReport!(token,contractId,appViewId,query);assertActive();if(appView)assertConsultationCompatibility({appView,resource:{kind:"report",appViewId,query:consultationQuery("report",query)}},report);
     const syncedAt=new Date().toISOString();await store.upsertReportSnapshot({...scope,report,syncedAt,assertActive});assertActive();await revision.finish();assertActive();
     return{fromCache:false,offline:false,report,syncedAt};
   }catch(error){assertActive();if(!(error instanceof OpcoNetworkError))throw error;const cached=await readCached();if(cached)return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};throw error;}

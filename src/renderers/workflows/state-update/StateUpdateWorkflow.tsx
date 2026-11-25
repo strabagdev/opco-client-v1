@@ -224,7 +224,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
   const isOnline = connectivityStatus === "online";
   const visibleResponse = response && response.appView.id === appView.id && (!compositeMode || (contextReady && compositeIdentityKey(response.identityContext) === identityKey)) && (!response.date || normalizeStateUpdateLogicalDate(response.date) === date) ? response : null;
-  const relationCatalogs = useExtraRelations({ api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
+  const relationCatalogs = useExtraRelations({ appView, authGeneration:api.getAuthSessionGeneration(), api, store: definitionCache, token, ownerKey, contractId: selectedContractId,
     fields: visibleResponse?.extraFields ?? [], online: isOnline, scope: resolutionScope });
   const relationReadCount = Object.values(relationCatalogs.catalogs).filter(catalog => catalog.loading).length;
   const presentationExtraFields = (visibleResponse?.extraFields ?? []).map(field => field.type !== "RELATION" ? field : ({ ...field,
@@ -1273,6 +1273,7 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
         </View>
       </View>
 
+      {relationCatalogs.dependencyNotice ? <Text style={styles.offline}>{relationCatalogs.dependencyNotice}</Text> : null}
       {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
         <Text style={resolutionFeedback.outcome === "conflict" || resolutionFeedback.outcome === "failed" || resolutionFeedback.outcome === "superseded"
           ? styles.error : resolutionFeedback.outcome === "pending" ? styles.offline : styles.success}>
@@ -1389,7 +1390,8 @@ export function StateUpdateWorkflow({ appView }: AppViewRendererProps<WorkflowAp
               <RecordFieldInput presentation="form" error={extraErrors[field.key] ?? (["SELECT", "MULTISELECT"].includes(field.type) && !field.options ? "Opciones no disponibles sin una definición actualizada con conexión." : undefined)} field={field}
                 relationTargetEntityTypeId={getRelationTargetEntityTypeId(field)}
                 relationOptions={[...new Map([...relationValueLabels(selectedItem.current?.extraValues?.[field.id]), ...(relationCatalogs.catalogs[field.id]?.options ?? [])].map(option => [option.id, option])).values()]}
-                relationOptionsError={relationCatalogs.catalogs[field.id]?.error ?? (relationCatalogs.catalogs[field.id]?.offline ? "Sin conexión: sólo se muestran registros del catálogo guardados en este dispositivo; disponibilidad no certificada." : null)}
+                relationOptionsNoticeHandled={Boolean(relationCatalogs.dependencyNotice)}
+                relationOptionsError={relationCatalogs.catalogs[field.id]?.error ?? null}
                 relationOptionsLoading={relationCatalogs.catalogs[field.id]?.loading}
                 onRelationSearch={search => relationCatalogs.search(field.id, search)}
                 onRelationLoadMore={relationCatalogs.catalogs[field.id]?.hasMore ? () => relationCatalogs.more(field.id) : undefined}

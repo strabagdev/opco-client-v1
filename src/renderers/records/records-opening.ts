@@ -1,3 +1,4 @@
+import type {LocalCollectionCoverage} from "../../lib/app-view-definitions-cache";
 import { useSyncExternalStore } from "react";
 
 import type { CachedRecordsResult } from "@/lib/offline-records";
@@ -70,16 +71,12 @@ export async function loadRecordsCacheFirst<TLocal, TRemote>({
   return { local, localPresented, remote: outcome.value };
 }
 
-export type RecordsLocalCoverage = "unprepared" | "partial" | "complete";
+export {recordsLocalCoverage} from "../../lib/app-view-definitions-cache";
+export type RecordsLocalCoverage = LocalCollectionCoverage;
 
 export class RecordsLocalReadError extends Error {
   readonly code = "RECORDS_LOCAL_READ_FAILED";
   constructor() { super("No pudimos leer los registros guardados en este dispositivo. Vuelve a intentar."); }
-}
-
-export function recordsLocalCoverage(hasDefinition: boolean, fullRefreshAt: string | null | undefined, count: number): RecordsLocalCoverage {
-  if (hasDefinition && fullRefreshAt) return "complete";
-  return count > 0 ? "partial" : "unprepared";
 }
 
 export function recordsLocalCoverageMessage(coverage: RecordsLocalCoverage | null, hasDefinition: boolean) {

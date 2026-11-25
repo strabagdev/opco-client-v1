@@ -20,7 +20,28 @@ export type OfflineAvailability =
   | "data-not-cached"
   | "definition-missing"
   | "online-only"
+  | "query-scoped"
+  | "dependencies-partial"
+  | "dependencies-empty"
+  | "dependencies-missing"
+  | "dependencies-unavailable"
   | "unsupported";
+
+/** Transient projection of existing checkpoints/receipt content; never a write/reuse permission. */
+export type LocalCollectionCoverage = "unprepared" | "partial" | "complete";
+export function recordsLocalCoverage(hasDefinition:boolean,fullRefreshAt:string|null|undefined,count:number):LocalCollectionCoverage {
+ return hasDefinition&&fullRefreshAt?"complete":count>0?"partial":"unprepared";
+}
+export type CatalogLocalFact={fieldId:string;entityTypeId:string;targetEntityTypeId?:string;name:string;required:boolean;count:number;coverage:LocalCollectionCoverage|"empty"|"unavailable";reason?:string};
+export function catalogLocalCoverage(complete:boolean,count:number):CatalogLocalFact["coverage"] {
+ return complete?(count===0?"empty":"complete"):recordsLocalCoverage(false,null,count);
+}
+export function catalogCoverageMessage(fact:CatalogLocalFact){
+ if(fact.coverage==="complete")return null;
+ if(fact.coverage==="empty")return `${fact.name}: sin opciones en el catálogo preparado de este dispositivo.`;
+ if(fact.coverage==="unavailable")return `${fact.name}: no se pudo comprobar la copia local del catálogo; la selección y los pendientes se conservan.`;
+ return fact.coverage==="partial"?`${fact.name}: catálogo local parcial; sólo se muestran opciones guardadas.`:`${fact.name}: catálogo no preparado en este dispositivo. Conéctate para prepararlo.`;
+}
 
 export type CachedAppViewDefinition = {
   appViewId: string;
@@ -122,11 +143,13 @@ export type AppViewOfflineReadinessReason =
   | "definition-missing"
   | "data-never-hydrated"
   | "unsupported"
-  | "online-only";
+  | "online-only"
+  | "query-scoped";
 
 export type AppViewOfflineReadiness = {
   attendanceMonthStatus?: AttendanceMonthStatus;
   attendanceTodayReady?: boolean;
+  catalogs?: CatalogLocalFact[];
   dataReady: boolean;
   definitionReady: boolean;
   offlineReady: boolean;
@@ -147,9 +170,11 @@ export function deriveOfflineAvailability({
   attendanceDayHydration,
   attendanceMonthStatus,
   stateUpdateCoverage,
+  catalogs, recordsCount, catalogReadFailed,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
+  catalogs?: CatalogLocalFact[]; recordsCount?:number; catalogReadFailed?:boolean;
   attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
   attendanceMonthStatus?: AttendanceMonthStatus;
   stateUpdateCoverage?: Pick<StateUpdateSnapshotCoverage, "status"> | null;
@@ -164,12 +189,22 @@ export function deriveOfflineAvailability({
     attendanceDayHydration,
     attendanceMonthStatus,
     stateUpdateCoverage,
+  catalogs, recordsCount, catalogReadFailed,
   });
 
   if (readiness.reason === "unsupported") {
     return "unsupported";
   }
 
+  if (readiness.reason === "query-scoped") return "query-scoped";
+  if(readiness.definitionReady){
+    if(catalogReadFailed)return "dependencies-unavailable";
+    const required=catalogs?.filter(f=>f.required)??[];
+    if(required.some(f=>f.coverage==="unavailable"))return "dependencies-unavailable";
+    if(required.some(f=>f.coverage==="empty"))return "dependencies-empty";
+    if(required.some(f=>f.coverage==="unprepared"))return "dependencies-missing";
+    if(required.some(f=>f.coverage==="partial"))return "dependencies-partial";
+  }
   if (readiness.reason === "online-only") {
     return "online-only";
   }
@@ -186,6 +221,8 @@ export function deriveOfflineAvailability({
     return "ready";
   }
 
+  if(appView.type==="RECORDS"&&(recordsCount??0)>0&&readiness.definitionReady)return "data-partial";
+
   if (readiness.definitionReady) {
     return "data-not-cached";
   }
@@ -201,25 +238,31 @@ export function getAppViewOfflineReadiness({
   attendanceDayHydration,
   attendanceMonthStatus,
   stateUpdateCoverage,
+  catalogs, recordsCount, catalogReadFailed,
 }: {
   appView: AppView;
   definition: CachedAppViewDefinition | null;
+  catalogs?: CatalogLocalFact[]; recordsCount?:number; catalogReadFailed?:boolean;
   attendanceDayHydration?: Pick<AttendanceDaySnapshotHydration, "lastSuccessfulRefreshAt"> | null;
   attendanceMonthStatus?: AttendanceMonthStatus;
   stateUpdateCoverage?: Pick<StateUpdateSnapshotCoverage, "status"> | null;
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): AppViewOfflineReadiness {
+  const finish=(input:Parameters<typeof readiness>[0])=>({...readiness(input),catalogs,
+    offlineReady:!catalogReadFailed&&readiness(input).offlineReady&&!(catalogs??[]).some(f=>f.required&&f.coverage!=="complete")});
   if (appView.type === "BOARD" || appView.type === "DASHBOARD") {
-    return readiness({
+    return finish({
       dataReady: false,
       definitionReady: false,
       reason: "unsupported",
     });
   }
 
+  if(appView.type==="PANEL"||appView.type==="REPORT")return finish({dataReady:false,definitionReady:Boolean(definition?.status==="ready"),reason:"query-scoped"});
+
   if (!definition || definition.status !== "ready") {
-    return readiness({
+    return finish({
       dataReady: false,
       definitionReady: false,
       reason: "definition-missing",
@@ -227,9 +270,9 @@ export function getAppViewOfflineReadiness({
   }
 
   if (appView.type === "RECORDS") {
-    const dataReady = hasSuccessfulHydration(recordsTelemetry);
+    const dataReady = recordsLocalCoverage(true,recordsTelemetry?.lastFullRefreshCompletedAt,recordsCount??0)==="complete";
 
-    return readiness({
+    return finish({
       dataReady,
       definitionReady: true,
       reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
@@ -245,7 +288,7 @@ export function getAppViewOfflineReadiness({
       const monthStatus = attendanceMonthStatus ?? (attendanceTodayReady ? "partial" : "none");
       const dataReady = sourceReady && monthStatus === "complete";
 
-      return readiness({
+      return finish({
         attendanceMonthStatus: monthStatus,
         attendanceTodayReady,
         dataReady,
@@ -261,7 +304,7 @@ export function getAppViewOfflineReadiness({
       const monthStatus = attendanceMonthStatus ?? (attendanceTodayReady ? "partial" : "none");
       const dataReady = sourceReady && monthStatus === "complete";
 
-      return readiness({
+      return finish({
         attendanceMonthStatus: monthStatus,
         attendanceTodayReady,
         dataReady,
@@ -279,7 +322,7 @@ export function getAppViewOfflineReadiness({
       const sourceReady = hasSuccessfulHydration(sourceTelemetry);
       const dataReady = sourceReady && Boolean(stateUpdateCoverage);
 
-      return readiness({
+      return finish({
         dataReady,
         definitionReady: true,
         reason: dataReady ? "definition-ready-data-ready" : "data-never-hydrated",
@@ -289,7 +332,7 @@ export function getAppViewOfflineReadiness({
     }
   }
 
-  return readiness({
+  return finish({
     dataReady: false,
     definitionReady: false,
     reason: "online-only",

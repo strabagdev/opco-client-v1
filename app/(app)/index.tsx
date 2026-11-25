@@ -18,7 +18,7 @@ import {
 
 import { AppIcon } from "@/components/app-icon";
 import { ReadLoadingState } from "@/components/read-loading-indicator";
-import { currentMonthDateKeys, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
+import { attendancePreparationPeriod, deriveAttendanceMonthStatus } from "@/lib/attendance-snapshot-cache";
 import { buildStateUpdateCoverageScope, deriveOfflineAvailability, OfflineAvailability } from "@/lib/app-view-definitions-cache";
 import { getHomeExperienceCards, getHomeExperienceSections } from "@/lib/home-experiences";
 import { createHomeOfflineAvailabilityRefresh } from "@/lib/home-offline-availability-refresh";
@@ -73,13 +73,15 @@ export default function HomeScreen() {
   }, [hasCompatibleViews, ownerKey, selectedContractId, views, publishCatalog]);
   const selectedCategory = desktopNavigation(hasCompatibleViews ? views : [], "/", category).selectedCategory;
   const isGridLayout = gridLayout.columns > 1;
-  const [today, setToday] = useState(() => formatLocalDateInput(new Date()));
+  const [observedAt, setObservedAt] = useState(() => new Date());
+  const today = formatLocalDateInput(observedAt);
+  const calendarsKey=JSON.stringify([...new Map(views.filter(v=>v.type==="WORKFLOW"&&v.config.workflowKey==="attendance"&&v.config.operationalCalendar).map(v=>{const calendar=(v.config as import("@/lib/opco-api").AttendanceWorkflowConfig).operationalCalendar!;return [JSON.stringify([calendar.timeZone,calendar.dayStart]),calendar] as const;})).values()]);
   useEffect(() => {
-    const clock = watchAttendanceLocalDay(setToday);
-    const resume = AppState.addEventListener("change", state => { if (state === "active") clock.refresh(); });
-    return () => { clock.dispose(); resume.remove(); };
-  }, []);
-  const currentMonthDates = useMemo(() => currentMonthDateKeys(new Date(`${today}T00:00:00`)), [today]);
+    const refresh=()=>setObservedAt(new Date());
+    const clocks=[watchAttendanceLocalDay(refresh),...(JSON.parse(calendarsKey) as import("@/lib/operational-calendar").OperationalCalendar[]).map(calendar=>watchAttendanceLocalDay(refresh,calendar))];
+    const resume = AppState.addEventListener("change", state => { if (state === "active") clocks.forEach(clock=>clock.refresh()); });
+    return () => { clocks.forEach(clock=>clock.dispose()); resume.remove(); };
+  }, [calendarsKey]);
 
   const selectedContract = useMemo(
     () => context?.contracts.find((contract) => contract.id === selectedContractId) ?? null,
@@ -117,6 +119,8 @@ export default function HomeScreen() {
     // These promises live only for this pass. A cache/scope invalidation makes
     // them ineligible; the existing refresh coordinator schedules the next pass.
     const telemetryReads = new Map<string, ReturnType<typeof definitionCache.getSyncTelemetry>>();
+    const countReads=new Map<string,ReturnType<typeof definitionCache.getRecordCacheStatusCounts>>();
+    const readCount=async(entityTypeId:string)=>{if(!canUpdate())return undefined;const key=JSON.stringify([ownerKey,selectedContractId,entityTypeId]);let read=countReads.get(key);if(!read){read=definitionCache.getRecordCacheStatusCounts({ownerKey,contractId:selectedContractId,entityTypeId});countReads.set(key,read);}const result=await read;return canUpdate()?result.total:undefined;};
     const hydrationReads = new Map<string, ReturnType<typeof definitionCache.getAttendanceDaySnapshotHydration>>();
     const readTelemetry = async (entityTypeId: string) => {
       if (!canUpdate()) return null;
@@ -142,6 +146,9 @@ export default function HomeScreen() {
     };
 
     try {
+      const now=observedAt;
+      const catalogs=await definitionCache.getLocalCatalogCoverage?.({ownerKey,contractId:selectedContractId,appViews:nextViews,isCurrent:canUpdate});
+      if(!canUpdate())return;
       const entries = await Promise.all(nextViews.map(async (appView) => {
         const definition = await definitionCache.getAppViewDefinition(ownerKey, selectedContractId, appView.id);
         const recordsTelemetry = appView.type === "RECORDS"
@@ -162,14 +169,16 @@ export default function HomeScreen() {
           : null;
         const isAttendanceWorkflow = appView.type === "WORKFLOW" &&
           appView.config.workflowKey === "attendance";
+        const period=isAttendanceWorkflow?attendancePreparationPeriod(now,(appView.config as import("@/lib/opco-api").AttendanceWorkflowConfig).operationalCalendar):null;
+        const recordsCount=appView.type==="RECORDS"?await readCount(appView.config.entityTypeId):undefined;
         const attendanceDayHydration = isAttendanceWorkflow &&
           targetEntityTypeId
-          ? await readHydration(appView.id, targetEntityTypeId, today)
+          ? await readHydration(appView.id, targetEntityTypeId, period!.date)
           : null;
         const attendanceMonthStatus = isAttendanceWorkflow &&
           appView.config.workflowKey === "attendance" &&
           targetEntityTypeId
-          ? deriveAttendanceMonthStatus(await Promise.all(currentMonthDates.map((date) =>
+          ? deriveAttendanceMonthStatus(await Promise.all(period!.dates.map((date) =>
               readHydration(appView.id, targetEntityTypeId, date)
             )))
           : undefined;
@@ -192,7 +201,8 @@ export default function HomeScreen() {
           definition,
           recordsTelemetry,
           sourceTelemetry,
-          stateUpdateCoverage,
+          stateUpdateCoverage, recordsCount,
+          catalogs:catalogs?.[appView.id]??undefined,catalogReadFailed:catalogs?.[appView.id]===null,
         })] as const;
       }));
 
@@ -201,10 +211,10 @@ export default function HomeScreen() {
       }
     } catch {
       if (canUpdate()) {
-        setOfflineAvailabilityByViewId({});
+        setOfflineAvailabilityByViewId(Object.fromEntries(nextViews.map(view=>[view.id,"dependencies-unavailable"])));
       }
     }
-  }, [currentMonthDates, definitionCache, ownerKey, selectedContractId, today]);
+  }, [observedAt, definitionCache, ownerKey, selectedContractId, today]);
 
   useEffect(() => {
     let isMounted = true;

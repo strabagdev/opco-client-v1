@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AttendanceContextField, AttendanceItem, OpcoApi } from "../../../lib/opco-api";
+import type { AppView, AttendanceContextField, AttendanceItem, OpcoApi } from "../../../lib/opco-api";
 import type { LocalDatabase } from "../../../lib/local-db";
 import { relationValueLabels } from "../../../lib/state-update-relations";
 import { getRelationTargetEntityTypeId } from "../../../lib/record-form";
@@ -8,7 +8,7 @@ import { attendanceRelationField } from "./attendance-workflow-logic";
 
 export function useAttendanceContextRelations(input: {
   api: OpcoApi; store: LocalDatabase; token: string | null; ownerKey: string | null; contractId: string | null;
-  fields: AttendanceContextField[]; values: Record<string, string | null>; selectedItem: AttendanceItem | null; online: boolean; scope: string;
+  appView?:AppView;authGeneration?:number;fields: AttendanceContextField[]; values: Record<string, string | null>; selectedItem: AttendanceItem | null; online: boolean; scope: string;
 }) {
   const fieldsKey = JSON.stringify(input.fields.filter(field => field.type === "RELATION"));
   const fields = useMemo(() => (JSON.parse(fieldsKey) as Extract<AttendanceContextField, { type: "RELATION" }>[]).map(attendanceRelationField), [fieldsKey]);

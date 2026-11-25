@@ -1,3 +1,4 @@
+import {assertConsultationCompatibility,consultationQuery} from "./consultation-revision-contract";
 import { assertLocalPanelDefinition, assertPanelResponseCompatibility, PanelCompatibilityError } from "./panel-compatibility";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
 import { createConsultationRevisionRead } from "./consultation-revision-read";
@@ -85,14 +86,14 @@ export async function loadPanelDatasetWithOfflineCache({
     try {
       const cached = await store.getPanelSnapshot(scope);
       assertActive();
-      if (cached) assertPanelResponseCompatibility(cached.panel, "cache", appView);
+      if (cached) { assertPanelResponseCompatibility(cached.panel, "cache", appView); if(appView)assertConsultationCompatibility({appView,resource:{kind:"panel",appViewId,query:consultationQuery("panel",query)},snapshotDatasetId},cached.panel); }
       recordPanelRead(diagnostic, "snapshot_read", cached ? "hit" : "miss", cached?.panel.configRevision, cached ? null : "PANEL_SNAPSHOT_MISSING", cached?.syncedAt);
       return cached;
     } catch (error) {
       const cancelled = error instanceof PanelReadCancelledError || Boolean(isActive && !isActive());
       recordPanelRead(diagnostic, "snapshot_read", cancelled ? "cancelled" : "failed", undefined, cancelled ? "PANEL_READ_CANCELLED" : "PANEL_LOCAL_READ_FAILED");
       assertActive();
-      if (error instanceof PanelReadCancelledError || error instanceof PanelCompatibilityError) throw error;
+      if (error instanceof PanelReadCancelledError || error instanceof PanelCompatibilityError || error instanceof Error && "code" in error && error.code === "CONSULTATION_CONFIGURATION_INCOMPATIBLE") throw error;
       throw new PanelLocalReadError();
     }
   }
@@ -150,6 +151,7 @@ export async function loadPanelDatasetWithOfflineCache({
       }
     }
 
+    if (appView && !definitionError) assertConsultationCompatibility({ appView: definition ?? appView, resource: { kind: "panel", appViewId, query: consultationQuery("panel", query) }, snapshotDatasetId }, panel);
     await persist(panel, syncedAt, definition);
     const executedDatasetId = panel.datasets[0]?.id;
 

@@ -197,7 +197,8 @@ export function invalidateHomePreparation(input: { store: AppViewPrewarmStore; o
 
 export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promise<void> {
   const scope = assignedScope(params.store, params.ownerKey, params.contractId);
-  const signature = preparationSignature([formatLocalDateInput(new Date()), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id)), scope.reuseEpoch ?? 0, params.authorizationScope ?? null]);
+  const clock=new Date();
+  const signature = preparationSignature([formatLocalDateInput(clock), [...params.appViews].sort((a,b) => a.id.localeCompare(b.id)), scope.reuseEpoch ?? 0, params.authorizationScope ?? null, params.appViews.map(view=>[view.id,homePreparationDay(view,formatLocalDateInput(clock),clock)]).sort(([a],[b])=>a.localeCompare(b))]);
   const previous = scope.flight;
   if (previous) {
     if (params.onTelemetry) previous.observers.set(params.onTelemetry, params.token);

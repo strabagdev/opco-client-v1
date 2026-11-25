@@ -16,7 +16,25 @@ export function consultationIdentity(request:ConsultationRequest,scope:Pick<Revi
  if(typeof query.filters==="string")query.filters=revisionCanonical(JSON.parse(query.filters));
  return {scope,definition:request.appView,resource:{...request.resource,query},snapshotDatasetId:request.snapshotDatasetId??null};
 }
+/** Identity/configuration/selection only: a readable cached window is not a complete collection receipt. */
+export function assertConsultationCompatibility(request:ConsultationRequest,data:PanelResponse|ReportResponse) {
+ const fail=()=>{throw new RevisionReceiptError("CONSULTATION_CONFIGURATION_INCOMPATIBLE");};
+ if(data.appView.id!==request.appView.id)return fail();
+ const q=request.resource.query??{};
+ if(request.resource.kind==="report"){
+  const r=data as ReportResponse;
+  if(request.appView.type!=="REPORT"||revisionCanonical(r.config)!==revisionCanonical(request.appView.config))return fail();
+  const mode=request.appView.config.presentationMode;
+  if(["TABLE","MATRIX"].includes(mode)&&(r.from!==(q.from??null)||r.to!==(q.to??null)))return fail();
+ }else{
+  const p=data as PanelResponse;
+  if(request.appView.type!=="PANEL"||p.configRevision!==request.appView.configRevision)return fail();
+  if(q.datasetId&&!p.datasets.some(d=>d.id===q.datasetId))return fail();
+  if(p.datasets.some(d=>d.pagination.page!==Number(q.page??1)||q.pageSize!==undefined&&d.pagination.pageSize!==Math.min(Number(q.pageSize),100)))return fail();
+ }
+}
 export function assertConsultationResponse(request:ConsultationRequest,data:PanelResponse|ReportResponse) {
+ assertConsultationCompatibility(request,data);
  const fail=()=>{throw new RevisionReceiptError("CONSULTATION_COVERAGE_INCOMPLETE");};
  if(data.appView.id!==request.appView.id)return fail();
  if(request.resource.kind==="panel"){

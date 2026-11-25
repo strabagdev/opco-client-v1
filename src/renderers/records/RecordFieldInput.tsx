@@ -24,6 +24,7 @@ type FieldInputProps = {
   onChange(value: string | boolean | string[]): void;
   onRelationSearch?(search: string): void;
   onRelationLoadMore?(): void;
+  relationOptionsNoticeHandled?:boolean;
   relationOptions?: RecordRelationOption[];
   relationOptionsError?: string | null;
   relationOptionsLoading?: boolean;
@@ -38,6 +39,7 @@ export function RecordFieldInput({
   onBlur,
   onChange,
   onRelationSearch,
+  relationOptionsNoticeHandled=false,
   onRelationLoadMore,
   relationOptions = [],
   relationOptionsError = null,
@@ -97,6 +99,7 @@ export function RecordFieldInput({
         error={error}
         field={field}
         onChange={onChange}
+        noticeHandled={relationOptionsNoticeHandled}
         onSearch={onRelationSearch}
         onLoadMore={onRelationLoadMore}
         options={relationOptions}
@@ -155,6 +158,7 @@ function RelationFieldInput({
   field,
   onChange,
   onSearch,
+  noticeHandled=false,
   onLoadMore,
   options,
   optionsError,
@@ -166,6 +170,7 @@ function RelationFieldInput({
   error?: string;
   field: EntityField;
   onChange(value: string | boolean | string[]): void;
+  noticeHandled?:boolean;
   onSearch?(search: string): void;
   onLoadMore?(): void;
   options: RecordRelationOption[];
@@ -185,13 +190,13 @@ function RelationFieldInput({
   const normalizedSearch = search.trim().toLocaleLowerCase("es-CL");
   const filteredOptions = useMemo(
     () =>
-      normalizedSearch
+      normalizedSearch && !onSearch
         ? options.filter((option) =>
             option.displayName.toLocaleLowerCase("es-CL").includes(normalizedSearch) ||
             option.id.toLocaleLowerCase("es-CL").includes(normalizedSearch)
           )
         : options,
-    [normalizedSearch, options],
+    [normalizedSearch, options, onSearch],
   );
 
   return recordFieldFrame(presentation, field, a11y, error, (
@@ -210,13 +215,13 @@ function RelationFieldInput({
             value={search}
           />
           {optionsLoading ? <Text style={styles.help}>Cargando catalogo...</Text> : null}
-          {optionsError ? <Text style={styles.fieldError}>{optionsError}</Text> : null}
-          {unknownValues.length > 0 ? (
+          {optionsError && !noticeHandled ? <Text style={styles.fieldError}>{optionsError}</Text> : null}
+          {unknownValues.length > 0 && !optionsLoading && !optionsError ? (
             <Text style={styles.fieldError}>
               El valor guardado no corresponde a un registro disponible del catalogo. Selecciona un registro valido para conservar el cambio y reintentar.
             </Text>
           ) : null}
-          {!optionsLoading && !optionsError && options.length === 0 ? (
+          {!noticeHandled && !optionsLoading && !optionsError && options.length === 0 ? (
             <Text style={styles.fieldError}>No hay registros disponibles en el catalogo para seleccionar.</Text>
           ) : null}
           {cardinalityIssue || blockedCardinality ? <Text accessibilityRole="alert" style={styles.fieldError}>{cardinalityIssue ?? "Este campo conserva varias relaciones y requiere revisión antes de guardar."}</Text> : null}

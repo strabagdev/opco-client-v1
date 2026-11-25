@@ -423,12 +423,14 @@ export function PanelRenderer({ appView: assignedAppView }: AppViewRendererProps
     modules,
     rowHeight: configuredRowHeight,
   }), [configuredColumns, configuredRowHeight, modules, width]);
-  const isOffline = knownOffline || Object.values(datasetStates).some((state) => state.scopeKey === datasetScopeKey && state.offline);
+  const isOffline = knownOffline;
   const liveDatasetStates = Object.values(datasetStates).filter((state) => state.scopeKey === datasetScopeKey);
   const liveFailedCount = liveDatasetStates.filter((state) => state.error).length;
   const liveLoadedCount = liveDatasetStates.filter((state) => state.panel).length;
   useExperienceActivityReporter(appView, {
-    notice: calendarIssue,
+    notice: [calendarIssue, liveDatasetStates.some(state => state.fromCache && state.offline)
+      ? "Consulta guardada sin verificación del servidor; sólo cubre los filtros y páginas disponibles."
+      : liveDatasetStates.some(state => state.fromCache) ? "Consulta guardada verificada online." : null].filter(Boolean).join(" ") || null,
     activeCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readCount: liveDatasetStates.filter((state) => state.isLoading).length,
     readMode: liveLoadedCount > 0 ? "refresh" : "initial",
@@ -650,7 +652,7 @@ function PanelModule({
   state: DatasetState | undefined;
 }) {
   const currentState = isPanelDatasetStateCurrent(state, currentQueryKey) ? state : undefined;
-  const offline = knownOffline || Boolean(currentState?.offline);
+  const offline = knownOffline;
   const dataset = currentState?.panel?.datasets.find((item) => item.id === module.datasetId);
   const table = buildPanelTableModel(module, dataset);
   const kpi = buildPanelKpiModel(module, currentState?.panel?.metrics, currentState?.panel?.moduleResults);

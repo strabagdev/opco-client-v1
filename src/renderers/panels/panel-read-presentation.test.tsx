@@ -86,7 +86,7 @@ it.each([
   { name: "online revision-verified local response", knownOffline: false, fromCache: true, offline: false, expected: false },
   { name: "online server response", knownOffline: false, fromCache: false, offline: false, expected: false },
   { name: "disconnected with an in-memory server response", knownOffline: true, fromCache: false, offline: false, expected: true },
-  { name: "network fallback to saved response", knownOffline: false, fromCache: true, offline: true, expected: true },
+  { name: "network fallback to saved response", knownOffline: false, fromCache: true, offline: true, expected: false },
 ])("actual TABLE/KPI labels describe connectivity for $name", ({ knownOffline, fromCache, offline, expected }) => {
   const kpiModule: PanelModuleConfig = { ...module, visualization: { type: "KPI", config: { metricId: "count", label: "Entregas", format: "INTEGER" } } };
   const state = { ...props().state, fromCache, offline, panel: { datasets: [dataset], metrics: [{ id: "count", datasetId: "rows", value: 98, valueType: "NUMBER", calculatedAt: "2026-11-17T23:00:00Z" }] } };
@@ -100,4 +100,17 @@ it.each([
     }
     expect(p.onRetry).not.toHaveBeenCalled();
   }
+});
+
+// Execute the actual summary notice expression; cache provenance does not relabel connectivity.
+it("communicates unverified and revision-verified copies in the existing notice sector",()=>{
+ let expression="";
+ function visit(node:ts.Node){if(ts.isCallExpression(node)&&node.expression.getText(sf)==="useExperienceActivityReporter"){
+  const argument=node.arguments[1];if(argument&&ts.isObjectLiteralExpression(argument)){const notice=argument.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(sf)==="notice");if(notice&&ts.isPropertyAssignment(notice))expression=notice.initializer.getText(sf);}
+ }ts.forEachChild(node,visit);}visit(sf);expect(expression).toBeTruthy();
+ const message=new Function("calendarIssue","liveDatasetStates","return "+expression);
+ expect(message(null,[{fromCache:true,offline:true}])).toContain("sin verificación del servidor");
+ expect(message(null,[{fromCache:true,offline:false}])).toContain("verificada online");
+ expect(message(null,[{fromCache:false,offline:false}])).toBeNull();
+ expect(message("Calendario conservado",[{fromCache:true,offline:true}])).toContain("Calendario conservado");
 });
