@@ -89,7 +89,7 @@ describe("session diagnostics connectivity persistence effect", () => {
     };
     const TestComponent = () => {
       hooks.beginRender();
-      useSessionDiagnostics({
+      useSessionDiagnostics({ coordinateStateUpdateSync: async (_scope, work) => work(),
         api: {} as never,
         connectivityStatus: "online",
         definitionCache: store as never,

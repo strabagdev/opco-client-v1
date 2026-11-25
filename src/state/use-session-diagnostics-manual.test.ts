@@ -1,6 +1,7 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
 import {emptyStateUpdateReconnectDiagnostics,useSessionDiagnostics} from "./use-session-diagnostics";
 import type {PendingOperation} from "../lib/offline-records";
+import {OpcoApiError} from "../lib/opco-api";
 import type {OpcoApi} from "../lib/opco-api";
 import type {LocalDatabase} from "../lib/local-db";
 import type {StateUpdateOutboxDiagnostics} from "../lib/state-update-offline";
@@ -91,6 +92,8 @@ const ack = (owner: string) => ({appView: {id: "view"}, results: [{result: "CREA
 const disposals: (() => Promise<void>)[] = [];
 function fixture() {
   let generation = 1;
+  const recovery = vi.fn();
+  const coordinate = vi.fn<Parameters<typeof useSessionDiagnostics>[0]["coordinateStateUpdateSync"]>(async (_scope, work) => work());
   const complete = new Set<string>();
   const ops = new Map(["A", "B"].map(owner => [owner, operation(owner)]));
   const replies = new Map(["A", "B"].map(owner => [owner, deferred<ReturnType<typeof ack>>() ]));
@@ -117,10 +120,10 @@ function fixture() {
   const api = {getAuthSessionGeneration: () => generation, saveStateUpdateWorkflow: vi.fn(async (token: string) => { started.get(token)!.resolve(); return replies.get(token)!.promise; })};
   function TestComponent(owner: string) {
     hooks.beginRender();
-    return useSessionDiagnostics({api: api as unknown as OpcoApi, ownerKey: owner, token: owner, definitionCache: store as unknown as LocalDatabase,
-      connectivityStatus: "online", showStateUpdateDiagnostics: false, setStateUpdateReconnectRefreshKey: vi.fn()});
+    return useSessionDiagnostics({ coordinateStateUpdateSync: coordinate,api: api as unknown as OpcoApi, ownerKey: owner, token: owner, definitionCache: store as unknown as LocalDatabase,
+      onRetriableSync: recovery, connectivityStatus: "online", showStateUpdateDiagnostics: false, setStateUpdateReconnectRefreshKey: vi.fn()});
   }
-  const f = {api, store, complete, diagnostics, replies, started, render: TestComponent, gates,
+  const f = {api, store, recovery, coordinate, complete, diagnostics, replies, started, render: TestComponent, gates,
     changeSession() {generation += 1;},
     run(owner: string) {const promise = TestComponent(owner).runStateUpdateDiagnosticSync(); runs.push(promise); return promise;},
     async refresh(owner: string) {await TestComponent(owner).refreshStateUpdateDiagnostics(); return TestComponent(owner);},
@@ -133,6 +136,16 @@ function fixture() {
 afterEach(async () => {for (const dispose of disposals.splice(0)) await dispose(); hooks.reset();});
 
 describe("C08 manual diagnostic action generation", () => {
+  it("routes the real manual entry through the supplied existing coordinator before any business request", async () => {
+    const f = fixture(), entered = deferred<void>(), release = deferred<void>();
+    f.gates.push(() => release.resolve());
+    f.coordinate.mockImplementation(async (_scope, work) => { entered.resolve(); await release.promise; return work(); });
+    const run = f.run("A");
+    const first = await Promise.race([entered.promise.then(() => "coordinator"), f.started.get("A")!.promise.then(() => "request")]);
+    expect(first).toBe("coordinator"); expect(f.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();
+    expect(f.coordinate).toHaveBeenCalledWith({authGeneration:1,ownerKey:"A",token:"A"},expect.any(Function));
+    release.resolve(); await f.started.get("A")!.promise; f.replies.get("A")!.resolve(ack("A")); await run;
+  });
   it("keeps A's valid ACK but cannot publish A's run or diagnostics after switching to B", async () => {
     const f = fixture(), a = f.run("A"); await f.started.get("A")!.promise;
     f.changeSession(); await f.refresh("B");
@@ -204,5 +217,24 @@ describe("C08 manual diagnostic action generation", () => {
     finish.reject(new Error("Controlled old retry failure")); await retry;
     expect(f.render("B").stateUpdateDiagnosticsError).toBeNull(); expect(f.api.saveStateUpdateWorkflow).not.toHaveBeenCalled();
   });
+  it("reports a transient manual result to the existing lifecycle with its original generation", async () => {
+    const f = fixture(), a = f.run("A"); await f.started.get("A")!.promise;
+    f.replies.get("A")!.reject(new OpcoApiError("controlled temporary", "DB_UNAVAILABLE", 503) as never); await a;
+    expect(f.recovery).toHaveBeenCalledOnce();
+    expect(f.recovery).toHaveBeenCalledWith({authGeneration: 1, ownerKey: "A", token: "A"});
+    expect(f.complete.size).toBe(0); expect(f.store.retryStateUpdateOperation).toHaveBeenCalled();
+  });
+  it("a late transient retains A's scope for recovery instead of adopting B's generation", async () => {
+    const f = fixture(), a = f.run("A"); await f.started.get("A")!.promise;
+    f.changeSession(); await f.refresh("B");
+    f.replies.get("A")!.reject(new OpcoApiError("controlled temporary", "DB_UNAVAILABLE", 503) as never); await a;
+    expect(f.recovery).toHaveBeenCalledWith({authGeneration: 1, ownerKey: "A", token: "A"});
+    expect(f.render("B").stateUpdateDiagnosticRun).toBeNull(); expect(f.render("B").stateUpdateDiagnosticsError).toBeNull();
+  });
+  it("a valid ACK does not request another recovery", async () => {
+    const f = fixture(), a = f.run("A"); await f.started.get("A")!.promise;
+    f.replies.get("A")!.resolve(ack("A")); await a; expect(f.recovery).not.toHaveBeenCalled();
+  });
+
 });
 function fixtureOperation(owner: string) {return expect.objectContaining({ownerKey: owner, clientRequestId: `request-${owner}`, localRecordId: `local-${owner}`});}

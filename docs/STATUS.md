@@ -1,3 +1,14 @@
+## C-10 — recuperación de envíos transitorios — local, sin publicar — 2026-11-25
+
+Base db480c3809d885606424c95f9f69a81ec9598146. El lifecycle consume los resultados
+retriable de RECORDS y STATE_UPDATE y comparte el backoff de readiness existente;
+login y Diagnóstico comunican sus resultados al mismo coordinador. Una sola espera,
+con cancelación por sesión/generación, offline o background, y revisión de pendientes
+antes de intentar. No cambia outbox, comando, identidad ni clientRequestId; failed,
+conflict y autenticación inválida no provocan un loop automático. No se promete
+sincronización mientras el navegador esté suspendido. Contrato y límites en
+[SYNC_RECOVERY.md](SYNC_RECOVERY.md). Sin cambios Core/productivos, commit/push/deploy.
+
 ## Attendance: vigencia del aviso de franja — local, sin publicar — 2026-11-24
 
 El aviso se retira al iniciar otro flujo, buscar/cambiar persona o contexto, cancelar
@@ -4103,3 +4114,10 @@ Android y native físicos siguen pendientes; viewport/UA móvil no equivale a di
 
 Sólo parche local independiente, sin commit/push/deploy ni acceso productivo. Core y
 configuraciones de Misceláneos intactos; su activación continúa separada y pendiente.
+
+
+C-10 — cierre local de revisión: recuperación vinculada a evaluación/pasada y
+scope/generación, publicaciones lifecycle protegidas según C-08 y Diagnóstico
+manual STATE_UPDATE por el coordinador existente. No implica mutex HTTP global ni
+cierre completo de C-11. Contrato y límites: [SYNC_RECOVERY.md](SYNC_RECOVERY.md).
+Sin cambio de comandos, clientRequestId, almacenamiento o políticas de negocio.

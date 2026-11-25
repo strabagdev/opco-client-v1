@@ -29,6 +29,11 @@ import {
   shouldGatePendingSyncWithOperationalCoreReady,
 } from "./pending-work-lifecycle-logic";
 
+function lifecycleScopeKey(scope: SessionLifecycleScope) {
+  return JSON.stringify([scope.ownerKey, scope.selectedContractId, scope.token, scope.authGeneration ?? "legacy"]);
+}
+type RunTicket = { key: string; active: boolean; settled: Promise<void>; stateOnly: boolean };
+
 type SessionStatus = "loading" | "anonymous" | "authenticated" | "offline";
 
 type SyncPendingStateUpdatesWithTelemetry = (input: {
@@ -94,11 +99,11 @@ export function usePendingWorkLifecycle({
   const reconnectSessionAndRecordsRef = useRef<(trigger?: StateUpdateSyncTrigger, onViewsRevalidated?: (event: AppViewsReadEvent) => void) => Promise<void | false>>(
     () => Promise.resolve(),
   );
-  const reconnectShouldSyncRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+  const reconnectShouldSyncRef = useRef<(isEvaluationCurrent?: () => boolean) => Promise<boolean>>(() => Promise.resolve(false));
   const reconnectSyncControllerRef = useRef<ReconnectSyncController | null>(null);
   const foregroundResumeSyncPromiseRef = useRef<Promise<void> | null>(null);
   const onlineReadyScopeSyncPromiseRef = useRef<Promise<void> | null>(null);
-  const activePendingWorkRunKeyRef = useRef<string | null>(null);
+  const activePendingWorkRunRef = useRef<RunTicket | null>(null);
   const persistStateUpdateReconnectDiagnosticsRef = useRef(persistStateUpdateReconnectDiagnostics);
   const reconnectDiagnosticsQueueActiveRef = useRef(true);
   const reconnectDiagnosticsQueueScopeRef = useRef("none");
@@ -116,10 +121,14 @@ export function usePendingWorkLifecycle({
   } | null>(null);
   const setRecordsReconnectRefreshKeyRef = useRef(setRecordsReconnectRefreshKey);
   const appLifecycleStateRef = useRef(AppState.currentState);
-  const [isPendingWorkSyncing, setIsPendingWorkSyncing] = useState(false);
-  const [isAuthSessionRestoring, setIsAuthSessionRestoring] = useState(false);
-  const [isOperationalCoreReadinessChecking, setIsOperationalCoreReadinessChecking] = useState(false);
+  const connectivityRef = useRef(connectivityStatus);
+  useEffect(() => { connectivityRef.current = connectivityStatus; }, [connectivityStatus]);
   const authGeneration = api.getAuthSessionGeneration?.();
+  const currentScopeKey = lifecycleScopeKey({ authGeneration, ownerKey, selectedContractId: selectedContractIdState, token });
+  const [activity, setActivity] = useState({ scopeKey: currentScopeKey, syncing: false, auth: false, readiness: false });
+  const isPendingWorkSyncing = activity.scopeKey === currentScopeKey && activity.syncing;
+  const isAuthSessionRestoring = activity.scopeKey === currentScopeKey && activity.auth;
+  const isOperationalCoreReadinessChecking = activity.scopeKey === currentScopeKey && activity.readiness;
   const latestSessionScopeRef = useRef<SessionLifecycleScope>({
     authGeneration,
     ownerKey,
@@ -158,29 +167,34 @@ export function usePendingWorkLifecycle({
 
   const queueReconnectDiagnosticsUpdate = useCallback((
     updater: (current: StateUpdateReconnectDiagnostics) => StateUpdateReconnectDiagnostics,
+    isCurrent: () => boolean = () => true,
   ) => {
+    if (!isCurrent()) return;
     const persist = persistStateUpdateReconnectDiagnosticsRef.current;
     const scopeKey = reconnectDiagnosticsQueueScopeRef.current;
 
     reconnectDiagnosticsWriteQueueRef.current = reconnectDiagnosticsWriteQueueRef.current
       .catch(() => undefined)
       .then(() => {
-        if (!reconnectDiagnosticsQueueActiveRef.current || reconnectDiagnosticsQueueScopeRef.current !== scopeKey) {
+        if (!isCurrent() || !reconnectDiagnosticsQueueActiveRef.current || reconnectDiagnosticsQueueScopeRef.current !== scopeKey) {
           return undefined;
         }
 
-        return persist(updater);
+        // The persistence callback can itself await SQLite; check again at the mutation.
+        return persist(current => isCurrent() && reconnectDiagnosticsQueueActiveRef.current && reconnectDiagnosticsQueueScopeRef.current === scopeKey ? updater(current) : current);
       })
       .catch(() => undefined);
   }, []);
 
   const markStateUpdateActivity = useCallback(({
+    isCurrent = () => true,
     result,
     startedAt,
     syncRunId,
     trigger,
     type,
   }: {
+    isCurrent?: () => boolean;
     result: "auth_pending" | "auth_timeout" | "cancelled_scope_changed" | "failed" | "interrupted" | "ready_confirmed" | "ready_failed" | "reconnecting" | "records_failed_before_state_update" | "sync_started";
     startedAt: string;
     syncRunId: string;
@@ -214,12 +228,13 @@ export function usePendingWorkLifecycle({
             type,
           },
         };
-      });
+      }, isCurrent);
   }, [connectivityStatus, queueReconnectDiagnosticsUpdate]);
 
   const updateReconnectPreflight = useCallback((
     syncRunId: string,
     updater: (current: NonNullable<StateUpdateReconnectDiagnostics["lastReconnectPreflight"]>) => NonNullable<StateUpdateReconnectDiagnostics["lastReconnectPreflight"]>,
+    isCurrent: () => boolean = () => true,
   ) => {
     queueReconnectDiagnosticsUpdate((current) => {
       const previous = current.lastReconnectPreflight?.syncRunId === syncRunId
@@ -275,7 +290,7 @@ export function usePendingWorkLifecycle({
         lastReconnectPreflight: nextPreflight,
         reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, nextPreflight),
       };
-    });
+    }, isCurrent);
   }, [queueReconnectDiagnosticsUpdate]);
 
   const clearReadinessRecoveryTimer = useCallback(({ resetAttempts = false }: { resetAttempts?: boolean } = {}) => {
@@ -295,9 +310,14 @@ export function usePendingWorkLifecycle({
     };
   }, []);
 
-  const scheduleReadinessRecovery = useCallback((runScope: SessionLifecycleScope) => {
+  // One existing recovery wait serves readiness, transient auth and retryable business results.
+  const scheduleReadinessRecovery = useCallback((scope: SessionLifecycleScope) => {
+    const runScope = { ...scope };
     const isScopeCurrent = Boolean(runScope.ownerKey && runScope.selectedContractId && runScope.token) &&
       isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
+    // Stale observers cannot cancel another login's wait; active runs decide on completion.
+    const hasScopeRunActive = Boolean(activePendingWorkRunRef.current?.active && activePendingWorkRunRef.current.key === lifecycleScopeKey(runScope));
+    if (!isScopeCurrent || hasScopeRunActive) return;
     const current = readinessRecoveryRef.current;
 
     if (current?.timer) {
@@ -306,9 +326,9 @@ export function usePendingWorkLifecycle({
 
     if (!shouldScheduleOperationalCoreReadyRecovery({
       appLifecycleState: appLifecycleStateRef.current,
-      connectivityStatus,
+      connectivityStatus: connectivityRef.current,
       hasRecoveryTimer: false,
-      hasRunActive: Boolean(activePendingWorkRunKeyRef.current),
+      hasRunActive: hasScopeRunActive,
       isScopeCurrent,
       pendingWorkExists: true,
     })) {
@@ -316,7 +336,7 @@ export function usePendingWorkLifecycle({
       return;
     }
 
-    const scopeKey = `${runScope.ownerKey}:${runScope.selectedContractId}:${runScope.token}:${runScope.authGeneration ?? "legacy"}`;
+    const scopeKey = lifecycleScopeKey(runScope);
     const attempts = current?.scopeKey === scopeKey ? current.attempts : 0;
 
     const delayMs = getOperationalCoreReadyRecoveryDelayMs(attempts);
@@ -325,20 +345,18 @@ export function usePendingWorkLifecycle({
       return;
     }
     const timer = setTimeout(() => {
+      if (readinessRecoveryRef.current?.timer !== timer) return;
       const latestScope = readCurrentScope();
 
-      readinessRecoveryRef.current = {
-        attempts: attempts + 1,
-        scopeKey,
-        timer: null,
-      };
+      const evaluation = { attempts: attempts + 1, scopeKey, timer: null };
+      readinessRecoveryRef.current = evaluation;
+      const isEvaluationCurrent = () => readinessRecoveryRef.current === evaluation &&
+        isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
 
       if (
-        connectivityStatus !== "online" ||
+        connectivityRef.current !== "online" ||
         appLifecycleStateRef.current !== "active" ||
-        latestScope.ownerKey !== runScope.ownerKey ||
-        latestScope.selectedContractId !== runScope.selectedContractId ||
-        latestScope.token !== runScope.token
+        !isSessionLifecycleScopeCurrent(runScope, latestScope)
       ) {
         clearReadinessRecoveryTimer({ resetAttempts: true });
         return;
@@ -359,15 +377,18 @@ export function usePendingWorkLifecycle({
         reconnectDetectedAt: recoveryStartedAt,
         syncRunId,
         trigger: "startup-with-pending",
-      }));
+      }), isEvaluationCurrent);
 
-      void reconnectShouldSyncRef.current()
+      void reconnectShouldSyncRef.current(isEvaluationCurrent)
         .then((shouldSync) => {
+          // Counting can cross logout/login, including a new login of the same owner.
+          if (!isEvaluationCurrent()) return undefined;
           if (!shouldSync) {
             clearReadinessRecoveryTimer({ resetAttempts: true });
             return undefined;
           }
 
+          if (connectivityRef.current !== "online" || appLifecycleStateRef.current !== "active" || (activePendingWorkRunRef.current?.active && activePendingWorkRunRef.current.key === scopeKey)) return undefined;
           return reconnectSessionAndRecordsRef.current("startup-with-pending").then(() => undefined);
         })
         .catch(() => undefined);
@@ -378,7 +399,18 @@ export function usePendingWorkLifecycle({
       scopeKey,
       timer,
     };
-  }, [clearReadinessRecoveryTimer, connectivityStatus, readCurrentScope, updateReconnectPreflight]);
+  }, [clearReadinessRecoveryTimer, readCurrentScope, updateReconnectPreflight]);
+
+  const captureEligibilityAttempt = useCallback(() => {
+    const scope = readCurrentScope();
+    const run = activePendingWorkRunRef.current;
+    const recovery = readinessRecoveryRef.current;
+    return () => activePendingWorkRunRef.current === run && readinessRecoveryRef.current === recovery &&
+      isSessionLifecycleScopeCurrent(scope, readCurrentScope());
+  }, [readCurrentScope]);
+
+  useEffect(() => () => clearReadinessRecoveryTimer({ resetAttempts: true }),
+    [authGeneration, ownerKey, selectedContractIdState, token, clearReadinessRecoveryTimer]);
 
   const runPendingWorkAfterReadiness = useCallback(async ({
     ownerKey: runOwnerKey,
@@ -386,31 +418,49 @@ export function usePendingWorkLifecycle({
     syncRunId,
     token: runToken,
     trigger,
+    stateUpdateWork,
   }: {
     ownerKey: string;
     runScope: SessionLifecycleScope;
     syncRunId: string;
     token: string;
     trigger: StateUpdateSyncTrigger;
+    stateUpdateWork?: () => ReturnType<SyncPendingStateUpdatesWithTelemetry>;
   }) => {
-    const runKey = `${runOwnerKey}:${runScope.selectedContractId ?? "none"}:${runToken}:${runScope.authGeneration ?? "legacy"}`;
-
-    if (activePendingWorkRunKeyRef.current === runKey) {
-      return "already-running";
+    if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return "cancelled";
+    const runKey = lifecycleScopeKey(runScope);
+    // Manual diagnostics shares this coordinator, not a new global HTTP mutex.
+    // A combined caller waits for a manual STATE_UPDATE pass so RECORDS is not skipped.
+    while (activePendingWorkRunRef.current?.active && activePendingWorkRunRef.current.key === runKey) {
+      const active = activePendingWorkRunRef.current;
+      if (!stateUpdateWork && !active.stateOnly) return "already-running";
+      await active.settled;
+      if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return "cancelled";
     }
-
-    activePendingWorkRunKeyRef.current = runKey;
+    const previousRecovery = readinessRecoveryRef.current?.scopeKey === runKey;
+    clearReadinessRecoveryTimer();
+    let release!: () => void;
+    const ticket: RunTicket = { key: runKey, active: true, stateOnly: Boolean(stateUpdateWork), settled: new Promise<void>(resolve => { release = resolve; }) };
+    activePendingWorkRunRef.current = ticket;
+    const isRunCurrent = () => activePendingWorkRunRef.current === ticket && isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
+    const updateRunPreflight = (id: string, updater: Parameters<typeof updateReconnectPreflight>[1]) => updateReconnectPreflight(id, updater, isRunCurrent);
+    const markRunActivity = (input: Parameters<typeof markStateUpdateActivity>[0]) => markStateUpdateActivity({ ...input, isCurrent: isRunCurrent });
+    const publishActivity = (patch: Partial<Pick<typeof activity, "syncing" | "auth" | "readiness">>) => {
+      if (isRunCurrent()) setActivity(current => isRunCurrent() ? ({ ...(current.scopeKey === ticket.key ? current : { scopeKey: ticket.key, syncing: false, auth: false, readiness: false }), ...patch }) : current);
+    };
+    let recover = false;
+    let finished = false;
     try {
       let syncToken = runToken;
 
       if (shouldGatePendingSyncWithOperationalCoreReady(trigger)) {
         const startedAt = new Date().toISOString();
 
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           readinessStartedAt: startedAt,
         }));
-        await markStateUpdateActivity({
+        await markRunActivity({
           result: "reconnecting",
           startedAt,
           syncRunId,
@@ -419,11 +469,11 @@ export function usePendingWorkLifecycle({
         });
 
         if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
-          await updateReconnectPreflight(syncRunId, (current) => ({
+          await updateRunPreflight(syncRunId, (current) => ({
             ...current,
             scopeCheckAfterReadiness: getSessionLifecycleScopeMismatchReason(runScope, readCurrentScope()),
           }));
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "cancelled_scope_changed",
             startedAt,
             syncRunId,
@@ -433,19 +483,19 @@ export function usePendingWorkLifecycle({
           return "cancelled";
         }
 
-        setIsOperationalCoreReadinessChecking(true);
+        publishActivity({ readiness: true });
         let readiness;
         try {
           readiness = await probeOperationalCoreReadiness({ api, syncRunId });
         } catch {
           const completedAt = new Date().toISOString();
-          await updateReconnectPreflight(syncRunId, (current) => ({
+          await updateRunPreflight(syncRunId, (current) => ({
             ...current,
             completedAt,
             readinessCompletedAt: completedAt,
             readinessDurationMs: Date.parse(completedAt) - Date.parse(startedAt),
           }));
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "interrupted",
             startedAt,
             syncRunId,
@@ -454,11 +504,11 @@ export function usePendingWorkLifecycle({
           });
           return "blocked";
         } finally {
-          setIsOperationalCoreReadinessChecking(false);
+          publishActivity({ readiness: false });
         }
 
         const readinessCompletedAt = new Date().toISOString();
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           completedAt: readinessCompletedAt,
           readinessAttempts: readiness.attempts,
@@ -467,17 +517,18 @@ export function usePendingWorkLifecycle({
         }));
 
         if (!readiness.ready) {
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "ready_failed",
             startedAt,
             syncRunId,
             trigger: "ready_check",
             type: "ready_check",
           });
+          recover = true;
           return "readiness-blocked";
         }
 
-        await markStateUpdateActivity({
+        await markRunActivity({
           result: "ready_confirmed",
           startedAt,
           syncRunId,
@@ -489,7 +540,7 @@ export function usePendingWorkLifecycle({
           runScope,
           token: syncToken,
         });
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           authDecision: postReadinessPlan.authDecision,
           readinessConfirmedAt: readinessCompletedAt,
@@ -497,7 +548,7 @@ export function usePendingWorkLifecycle({
         }));
 
         if (postReadinessPlan.nextAction === "cancelled_scope_changed") {
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "cancelled_scope_changed",
             startedAt,
             syncRunId,
@@ -509,37 +560,43 @@ export function usePendingWorkLifecycle({
 
         if (postReadinessPlan.authDecision === "refresh_required") {
           const authRefreshStartedAt = new Date().toISOString();
-          await updateReconnectPreflight(syncRunId, (current) => ({
+          await updateRunPreflight(syncRunId, (current) => ({
             ...current,
             authRefreshStartedAt,
           }));
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "auth_pending",
             startedAt: authRefreshStartedAt,
             syncRunId,
             trigger: "auth_refresh",
             type: "auth_refresh",
           });
-          setIsAuthSessionRestoring(true);
+          publishActivity({ auth: true });
           try {
             const refreshed = await api.refreshSession({
               diagnosticSyncRunId: syncRunId,
               timeoutMs: AUTH_REFRESH_TIMEOUT_MS,
             });
 
+            // refreshSession already guards credential persistence (C-08). Guard UI/token publication too.
+            const liveScope = readCurrentScope();
+            if (activePendingWorkRunRef.current !== ticket || !isSessionLifecycleScopeCurrent(
+              { ...runScope, token: liveScope.token }, liveScope,
+            ) || (liveScope.token !== runScope.token && liveScope.token !== refreshed.accessToken)) return "cancelled";
             syncToken = refreshed.accessToken;
             runScope.token = syncToken;
             latestSessionScopeRef.current = {
               ...latestSessionScopeRef.current,
               token: syncToken,
             };
+            ticket.key = lifecycleScopeKey(runScope);
             setToken(syncToken);
-            await updateReconnectPreflight(syncRunId, (current) => ({
+            await updateRunPreflight(syncRunId, (current) => ({
               ...current,
               authRefreshCompletedAt: new Date().toISOString(),
             }));
           } catch (error) {
-            await updateReconnectPreflight(syncRunId, (current) => ({
+            await updateRunPreflight(syncRunId, (current) => ({
               ...current,
               authRefreshCompletedAt: new Date().toISOString(),
             }));
@@ -548,17 +605,18 @@ export function usePendingWorkLifecycle({
               : "auth_pending";
 
             if (isRecoverableAuthRefreshError(error)) {
-              await markStateUpdateActivity({
+              await markRunActivity({
                 result,
                 startedAt,
                 syncRunId,
                 trigger: "auth_refresh",
                 type: "auth_refresh",
               });
+              recover = true;
               return "blocked";
             }
 
-            await markStateUpdateActivity({
+            await markRunActivity({
               result: "auth_pending",
               startedAt,
               syncRunId,
@@ -567,18 +625,18 @@ export function usePendingWorkLifecycle({
             });
             throw error;
           } finally {
-            setIsAuthSessionRestoring(false);
+            publishActivity({ auth: false });
           }
         }
 
         const scopeCheckAfterReadiness = getSessionLifecycleScopeMismatchReason(runScope, readCurrentScope());
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           scopeCheckAfterReadiness,
         }));
 
         if (scopeCheckAfterReadiness !== "current") {
-          await markStateUpdateActivity({
+          await markRunActivity({
             result: "cancelled_scope_changed",
             startedAt,
             syncRunId,
@@ -588,7 +646,7 @@ export function usePendingWorkLifecycle({
           return "cancelled";
         }
 
-        await markStateUpdateActivity({
+        await markRunActivity({
           result: "sync_started",
           startedAt,
           syncRunId,
@@ -597,14 +655,17 @@ export function usePendingWorkLifecycle({
         });
       }
 
-      await updateReconnectPreflight(syncRunId, (current) => ({
+      if (!isRunCurrent()) return "cancelled";
+      await updateRunPreflight(syncRunId, (current) => ({
         ...current,
         syncPendingWorkStartedAt: new Date().toISOString(),
       }));
-      setIsPendingWorkSyncing(true);
+      publishActivity({ syncing: true });
       let recordsFailedBeforeStateUpdate = false;
       try {
-        await syncPendingWork({
+        const result = stateUpdateWork
+          ? { records: { completed: 0, conflicts: 0, failed: 0, retriable: 0 }, stateUpdate: await stateUpdateWork() }
+          : await syncPendingWork({
           api,
           ownerKey: runOwnerKey,
           recordsStore: definitionCache,
@@ -616,24 +677,29 @@ export function usePendingWorkLifecycle({
             if (event.phase === "records" && event.result === "failed") {
               recordsFailedBeforeStateUpdate = true;
             }
-            return updateReconnectPreflight(syncRunId, (current) => ({
+            return updateRunPreflight(syncRunId, (current) => ({
               ...current,
               ...syncPendingWorkPhaseToReconnectPreflight(event),
             }));
           },
         });
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           syncPendingWorkCompletedAt: new Date().toISOString(),
         }));
-        clearReadinessRecoveryTimer({ resetAttempts: true });
+        recover = result.records.retriable > 0 || (result.stateUpdate?.result.retriable ?? 0) > 0;
+        // A manual STATE_UPDATE-only pass must not erase recovery owed to RECORDS.
+        if (stateUpdateWork && previousRecovery && !recover && isRunCurrent()) {
+          recover = await reconnectShouldSyncRef.current(isRunCurrent);
+        }
+        finished = true;
         return "completed";
       } catch (error) {
-        await updateReconnectPreflight(syncRunId, (current) => ({
+        await updateRunPreflight(syncRunId, (current) => ({
           ...current,
           syncPendingWorkCompletedAt: new Date().toISOString(),
         }));
-        await markStateUpdateActivity({
+        await markRunActivity({
           result: recordsFailedBeforeStateUpdate ? "records_failed_before_state_update" : "failed",
           startedAt: new Date().toISOString(),
           syncRunId,
@@ -642,14 +708,34 @@ export function usePendingWorkLifecycle({
         });
         throw error;
       } finally {
-        setIsPendingWorkSyncing(false);
+        publishActivity({ syncing: false });
       }
     } finally {
-      if (activePendingWorkRunKeyRef.current === runKey) {
-        activePendingWorkRunKeyRef.current = null;
+      // A diagnostic exception must not consume recovery already owed to RECORDS.
+      if (stateUpdateWork && previousRecovery && !finished && isRunCurrent()) {
+        try { recover = await reconnectShouldSyncRef.current(isRunCurrent); }
+        catch { /* SQLite uncertainty never triggers a blind business replay. */ }
+      }
+      ticket.active = false;
+      release();
+      if (isRunCurrent()) {
+        if (recover) scheduleReadinessRecovery(runScope);
+        else if (finished) clearReadinessRecoveryTimer({ resetAttempts: true });
       }
     }
-  }, [api, clearReadinessRecoveryTimer, definitionCache, markStateUpdateActivity, readCurrentScope, setToken, syncPendingStateUpdatesWithTelemetry, updateReconnectPreflight]);
+  }, [api, clearReadinessRecoveryTimer, definitionCache, markStateUpdateActivity, readCurrentScope, scheduleReadinessRecovery, setToken, syncPendingStateUpdatesWithTelemetry, updateReconnectPreflight]);
+
+  const coordinateStateUpdateDiagnosticSync = useCallback(async (
+    scope: SessionLifecycleScope,
+    work: () => ReturnType<SyncPendingStateUpdatesWithTelemetry>,
+  ) => {
+    if (!scope.ownerKey || !scope.token) return null;
+    let result: Awaited<ReturnType<SyncPendingStateUpdatesWithTelemetry>> = null;
+    await runPendingWorkAfterReadiness({ ownerKey: scope.ownerKey, token: scope.token, runScope: { ...scope }, syncRunId: createSyncRunId(), trigger: "manual-retry",
+      stateUpdateWork: async () => { result = await work(); return result; },
+    });
+    return result;
+  }, [runPendingWorkAfterReadiness]);
 
   const syncPendingRecords = useCallback(async (trigger: StateUpdateSyncTrigger = "manual-retry") => {
     if (!token || !ownerKey) {
@@ -705,11 +791,6 @@ export function usePendingWorkLifecycle({
     let pendingWorkAlreadyHandled = false;
     const preflight = reconnectPreflightRef.current?.trigger === trigger ? reconnectPreflightRef.current : null;
     const syncRunId = preflight?.syncRunId ?? createSyncRunId();
-    updateReconnectPreflight(syncRunId, (current) => ({
-      ...current,
-      debounceCompletedAt: current.debounceCompletedAt ?? new Date().toISOString(),
-      runSyncStartedAt: new Date().toISOString(),
-    }));
     const runScope = {
       authGeneration,
       ownerKey,
@@ -717,6 +798,11 @@ export function usePendingWorkLifecycle({
       token,
     };
 
+    const isReconnectCurrent = () => isSessionLifecycleScopeCurrent(runScope, readCurrentScope());
+    if (!isReconnectCurrent()) return false;
+    updateReconnectPreflight(syncRunId, (current) => ({ ...current,
+      debounceCompletedAt: current.debounceCompletedAt ?? new Date().toISOString(), runSyncStartedAt: new Date().toISOString(),
+    }), isReconnectCurrent);
     if (ownerKey && selectedContractIdState) {
       const syncResult = await runPendingWorkAfterReadiness({
         ownerKey,
@@ -726,12 +812,10 @@ export function usePendingWorkLifecycle({
         trigger,
       });
 
-      nextToken = latestSessionScopeRef.current.token ?? token;
+      if (!isReconnectCurrent()) return false;
+      nextToken = runScope.token ?? token;
 
-      if (syncResult === "readiness-blocked") {
-        scheduleReadinessRecovery(runScope);
-        return false;
-      }
+      if (syncResult === "readiness-blocked") return false;
 
       if (syncResult === "blocked" || syncResult === "cancelled") {
         return false;
@@ -812,7 +896,7 @@ export function usePendingWorkLifecycle({
     }
 
     if (!pendingWorkAlreadyHandled) {
-      const syncResult = await runPendingWorkAfterReadiness({
+      await runPendingWorkAfterReadiness({
         ownerKey: nextOwnerKey,
         runScope,
         syncRunId,
@@ -820,9 +904,6 @@ export function usePendingWorkLifecycle({
         trigger,
       });
 
-      if (syncResult === "readiness-blocked") {
-        scheduleReadinessRecovery(runScope);
-      }
     }
     if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) {
       return false;
@@ -831,7 +912,9 @@ export function usePendingWorkLifecycle({
     if (shouldShowStateUpdateDiagnostics) {
       await refreshStateUpdateDiagnostics();
     }
+    if (!isReconnectCurrent()) return false;
     await refreshPendingRecordsCount();
+    if (!isReconnectCurrent()) return false;
   }, [
     api,
     authGeneration,
@@ -848,7 +931,6 @@ export function usePendingWorkLifecycle({
     setStatus,
     shouldShowStateUpdateDiagnostics,
     runPendingWorkAfterReadiness,
-    scheduleReadinessRecovery,
     token,
     updateReconnectPreflight,
   ]);
@@ -857,11 +939,14 @@ export function usePendingWorkLifecycle({
     reconnectSessionAndRecordsRef.current = reconnectSessionAndRecords;
   }, [reconnectSessionAndRecords]);
 
-  const hasReconnectPendingWork = useCallback(async () => {
+  const hasReconnectPendingWork = useCallback(async (isEvaluationCurrent: () => boolean = () => true) => {
     if (!ownerKey) {
       return false;
     }
 
+    const scope = { authGeneration, ownerKey, selectedContractId: selectedContractIdState, token };
+    const isCurrent = () => isEvaluationCurrent() && isSessionLifecycleScopeCurrent(scope, readCurrentScope());
+    if (!isCurrent()) return false;
     const preflight = reconnectPreflightRef.current;
     const startedAt = new Date();
     const startedMs = Date.now();
@@ -884,6 +969,7 @@ export function usePendingWorkLifecycle({
     const completedAt = new Date().toISOString();
     const shouldSync = recordsResult.count > 0 || stateUpdateResult.operations.length > 0;
 
+    if (!isCurrent()) return false;
     if (preflight) {
       await updateReconnectPreflight(preflight.syncRunId, (current) => ({
         ...current,
@@ -897,11 +983,11 @@ export function usePendingWorkLifecycle({
         shouldSyncDurationMs: Date.now() - startedMs,
         shouldSyncResult: shouldSync,
         shouldSyncStartedAt: startedAt.toISOString(),
-      }));
+      }), isCurrent);
     }
 
     return shouldSync;
-  }, [definitionCache, ownerKey, updateReconnectPreflight]);
+  }, [authGeneration, definitionCache, ownerKey, readCurrentScope, selectedContractIdState, token, updateReconnectPreflight]);
 
   useEffect(() => {
     reconnectShouldSyncRef.current = hasReconnectPendingWork;
@@ -930,9 +1016,10 @@ export function usePendingWorkLifecycle({
       token,
     };
 
-    const flight = reconnectShouldSyncRef.current()
+    const isAttemptCurrent = captureEligibilityAttempt();
+    const flight = reconnectShouldSyncRef.current(isAttemptCurrent)
       .then((shouldSync) => {
-        if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
+        if (!isAttemptCurrent() || !isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
         if (!shouldSync) {
           return undefined;
         }
@@ -943,7 +1030,7 @@ export function usePendingWorkLifecycle({
         if (onlineReadyScopeSyncPromiseRef.current === flight) onlineReadyScopeSyncPromiseRef.current = null;
       });
     onlineReadyScopeSyncPromiseRef.current = flight;
-  }, [authGeneration, connectivityStatus, ownerKey, readCurrentScope, selectedContractIdState, status, token]);
+  }, [authGeneration, captureEligibilityAttempt, connectivityStatus, ownerKey, readCurrentScope, selectedContractIdState, status, token]);
 
   useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {
@@ -973,9 +1060,10 @@ export function usePendingWorkLifecycle({
       }
 
       const runScope = readCurrentScope();
-      const flight = reconnectShouldSyncRef.current()
+      const isAttemptCurrent = captureEligibilityAttempt();
+      const flight = reconnectShouldSyncRef.current(isAttemptCurrent)
         .then((shouldSync) => {
-          if (!isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
+          if (!isAttemptCurrent() || !isSessionLifecycleScopeCurrent(runScope, readCurrentScope())) return undefined;
           if (!shouldRevalidateAssignedPreparation("foreground/resume", shouldSync)) return undefined;
           let readEvent: AppViewsReadEvent | undefined;
           return reconnectSessionAndRecordsRef.current("foreground/resume", event => { readEvent = event; }).then(result => {
@@ -992,10 +1080,12 @@ export function usePendingWorkLifecycle({
     return () => {
       subscription.remove();
     };
-  }, [clearReadinessRecoveryTimer, connectivityStatus, readCurrentScope, status]);
+  }, [captureEligibilityAttempt, clearReadinessRecoveryTimer, connectivityStatus, readCurrentScope, status]);
 
   useEffect(() => {
     let readEvent: AppViewsReadEvent | undefined;
+    let controllerScope: SessionLifecycleScope | null = null;
+    let isControllerAttemptCurrent = () => false;
     const controller = createReconnectSyncController({
       onDetected({ previousConnectivityStatus, resultingConnectivityStatus, trigger }) {
         const detectedAt = new Date().toISOString();
@@ -1009,7 +1099,9 @@ export function usePendingWorkLifecycle({
           trigger,
         };
 
-        void persistStateUpdateReconnectDiagnosticsRef.current((current) => {
+        controllerScope = readCurrentScope();
+        const detectedScope = controllerScope;
+        queueReconnectDiagnosticsUpdate((current) => {
           const lastReconnectPreflight = {
             authDecision: null,
             authRefreshCompletedAt: null,
@@ -1055,18 +1147,27 @@ export function usePendingWorkLifecycle({
             lastReconnectPreflight,
             reconnectRunHistory: upsertStateUpdateReconnectRunHistory(current.reconnectRunHistory, lastReconnectPreflight),
           };
-        });
+        }, () => isSessionLifecycleScopeCurrent(detectedScope, readCurrentScope()));
       },
       onSynced() {
+        if (!controllerScope || !isSessionLifecycleScopeCurrent(controllerScope, readCurrentScope())) return;
         setRecordsReconnectRefreshKeyRef.current((key) => key + 1, readEvent);
         readEvent = undefined;
       },
       runSync({ trigger }) {
+        if (!isControllerAttemptCurrent()) return Promise.resolve(false);
         readEvent = undefined;
-        return reconnectSessionAndRecordsRef.current(trigger, event => { readEvent = event; });
+        return reconnectSessionAndRecordsRef.current(trigger, event => {
+          readEvent = event;
+          // This callback runs only after the run verified its refreshed scope.
+          controllerScope = readCurrentScope();
+        });
       },
       async shouldSync() {
-        return shouldRevalidateAssignedPreparation(reconnectPreflightRef.current?.trigger ?? "unknown-to-online", await reconnectShouldSyncRef.current());
+        isControllerAttemptCurrent = captureEligibilityAttempt();
+        const isCurrent = isControllerAttemptCurrent;
+        const pending = await reconnectShouldSyncRef.current(isCurrent);
+        return isCurrent() && shouldRevalidateAssignedPreparation(reconnectPreflightRef.current?.trigger ?? "unknown-to-online", pending);
       },
     });
 
@@ -1077,7 +1178,7 @@ export function usePendingWorkLifecycle({
       clearReadinessRecoveryTimer({ resetAttempts: true });
       reconnectSyncControllerRef.current = null;
     };
-  }, [clearReadinessRecoveryTimer]);
+  }, [captureEligibilityAttempt, clearReadinessRecoveryTimer, queueReconnectDiagnosticsUpdate, readCurrentScope]);
 
   useEffect(() => {
     if (status !== "authenticated" && status !== "offline") {
@@ -1112,6 +1213,8 @@ export function usePendingWorkLifecycle({
     isPendingWorkSyncing,
     reconnectSessionAndRecords,
     syncPendingRecords,
+    requestPendingWorkRecovery: scheduleReadinessRecovery,
+    coordinateStateUpdateDiagnosticSync,
   };
 }
 

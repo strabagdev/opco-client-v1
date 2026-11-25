@@ -19,6 +19,7 @@ import {
 } from "../lib/state-update-offline";
 import { shouldEmitStateUpdateRefresh } from "./state-update-refresh";
 import { createSyncRunId } from "../sync/pending-work-sync";
+import type { SessionLifecycleScope } from "./pending-work-lifecycle-logic";
 import { StateUpdateSyncStore, syncPendingStateUpdatesOnce } from "../sync/state-update-sync";
 
 export type StateUpdateReconnectDiagnostics = {
@@ -170,6 +171,8 @@ type SyncPendingStateUpdatesWithTelemetry = (input: {
 } | null>;
 
 type UseSessionDiagnosticsInput = {
+  coordinateStateUpdateSync(scope: Omit<SessionLifecycleScope, "selectedContractId">, work: () => ReturnType<SyncPendingStateUpdatesWithTelemetry>): ReturnType<SyncPendingStateUpdatesWithTelemetry>;
+  onRetriableSync?(scope: Omit<SessionLifecycleScope, "selectedContractId">): void;
   api: OpcoApi;
   connectivityStatus: ConnectivityStatus;
   definitionCache: LocalDatabase;
@@ -180,6 +183,8 @@ type UseSessionDiagnosticsInput = {
 };
 
 export function useSessionDiagnostics({
+  coordinateStateUpdateSync,
+  onRetriableSync,
   api,
   connectivityStatus,
   definitionCache,
@@ -394,6 +399,7 @@ export function useSessionDiagnostics({
       trigger,
     });
 
+    if (result.retriable > 0) onRetriableSync?.({ authGeneration, ownerKey: runOwnerKey, token: runToken });
     return {
       completedAt,
       operationsSelected,
@@ -401,7 +407,7 @@ export function useSessionDiagnostics({
       startedAt,
       syncRunId,
     };
-  }, [api, definitionCache, isCurrentAuth, ownerKey, recordStateUpdateSyncRun, setStateUpdateReconnectRefreshKey, token]);
+  }, [api, authGeneration, definitionCache, isCurrentAuth, onRetriableSync, ownerKey, recordStateUpdateSyncRun, setStateUpdateReconnectRefreshKey, token]);
 
   const runStateUpdateDiagnosticSync = useCallback(async () => {
     if (!isCurrentAuth()) return;
@@ -421,20 +427,17 @@ export function useSessionDiagnostics({
       const events = createStateUpdateDiagnosticEvents(beforeRun);
       const diagnosticStore = createStateUpdateDiagnosticStore(definitionCache, events);
       const diagnosticApi = createStateUpdateDiagnosticApi(api, events);
-      const runResult = await syncPendingStateUpdatesWithTelemetry({
+      const runResult = await coordinateStateUpdateSync({ authGeneration, ownerKey, token }, () => syncPendingStateUpdatesWithTelemetry({
         api: diagnosticApi,
         ownerKey,
         store: diagnosticStore,
         token,
         trigger: "manual-retry",
-      });
+      }));
       // The existing engine has already reconciled a valid ACK for its owner.
       // Retire only this action's UI publication, never that durable receipt.
       if (!isCurrentAction()) return;
-      if (!runResult) {
-        setStateUpdateDiagnosticsError("session unavailable");
-        return;
-      }
+      if (!runResult) return; // The captured scope was retired before the coordinated action began.
 
       const { completedAt, result } = runResult;
       const refreshed = await definitionCache.getStateUpdateOutboxDiagnostics(ownerKey);
@@ -468,7 +471,7 @@ export function useSessionDiagnostics({
         if (isCurrentAuth()) setManualDiagnosticAction(null);
       }
     }
-  }, [api, authGeneration, definitionCache, isCurrentAuth, ownerKey, refreshStateUpdateDiagnostics, setStateUpdateDiagnosticRun, setStateUpdateDiagnostics, setStateUpdateDiagnosticsError, syncPendingStateUpdatesWithTelemetry, token]);
+  }, [api, authGeneration, coordinateStateUpdateSync, definitionCache, isCurrentAuth, ownerKey, refreshStateUpdateDiagnostics, setStateUpdateDiagnosticRun, setStateUpdateDiagnostics, setStateUpdateDiagnosticsError, syncPendingStateUpdatesWithTelemetry, token]);
 
   const retryFailedStateUpdateDiagnostics = useCallback(async (manualRetryToken?: string | null) => {
     if (!isCurrentAuth()) return;

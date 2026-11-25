@@ -68,6 +68,7 @@ import {
   getLocalDatabaseRecoveryGuidance,
   useLocalDatabaseRecovery,
 } from "@/state/use-local-database-recovery";
+import type { SessionLifecycleScope } from "@/state/pending-work-lifecycle-logic";
 import { usePendingWorkLifecycle } from "@/state/use-pending-work-lifecycle";
 import {
   shouldShowStateUpdateDiagnostics,
@@ -230,6 +231,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const authGeneration = api.getAuthSessionGeneration();
+  const pendingWorkRecoveryRef = useRef<Pick<ReturnType<typeof usePendingWorkLifecycle>, "requestPendingWorkRecovery" | "coordinateStateUpdateDiagnosticSync">>({ requestPendingWorkRecovery: () => undefined, coordinateStateUpdateDiagnosticSync: async () => null });
+  const onRetriableStateUpdateSync = useCallback((scope: Omit<SessionLifecycleScope, "selectedContractId">) => {
+    pendingWorkRecoveryRef.current.requestPendingWorkRecovery({ ...scope, selectedContractId: selectedContractIdState });
+  }, [selectedContractIdState]);
+
+  const coordinateStateUpdateSync = useCallback<Parameters<typeof useSessionDiagnostics>[0]["coordinateStateUpdateSync"]>((scope, work) =>
+    pendingWorkRecoveryRef.current.coordinateStateUpdateDiagnosticSync({ ...scope, selectedContractId: selectedContractIdState }, work), [selectedContractIdState]);
 
   const {
     automaticRecovery,
@@ -348,6 +356,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     stateUpdateReconnectDiagnostics,
     syncPendingStateUpdatesWithTelemetry,
   } = useSessionDiagnostics({
+    coordinateStateUpdateSync,
+    onRetriableSync: onRetriableStateUpdateSync,
     api,
     connectivityStatus,
     definitionCache,
@@ -397,7 +407,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     });
   }, [ownerKey, recordStateUpdateSessionTerminationDiagnostics]);
 
-  const { isAuthSessionRestoring, isOperationalCoreReadinessChecking, isPendingWorkSyncing, syncPendingRecords } = usePendingWorkLifecycle({
+  const { isAuthSessionRestoring, isOperationalCoreReadinessChecking, isPendingWorkSyncing, syncPendingRecords, requestPendingWorkRecovery, coordinateStateUpdateDiagnosticSync } = usePendingWorkLifecycle({
     api,
     connectivityStatus,
     definitionCache,
@@ -418,6 +428,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     syncPendingStateUpdatesWithTelemetry,
     token,
   });
+
+  useEffect(() => { pendingWorkRecoveryRef.current = { requestPendingWorkRecovery, coordinateStateUpdateDiagnosticSync }; }, [coordinateStateUpdateDiagnosticSync, requestPendingWorkRecovery]);
 
   useOfflinePreparationRecovery({ api, store:definitionCache, ownerKey, contractId:selectedContractIdState,
     token, connectivityStatus,
@@ -626,6 +638,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
       token: loginResponse.accessToken,
       trigger: "startup-with-pending",
     })
+      .then(result => {
+        if (result.records.retriable > 0 || (result.stateUpdate?.result.retriable ?? 0) > 0) {
+          pendingWorkRecoveryRef.current.requestPendingWorkRecovery({ authGeneration: generation, ownerKey: nextOwnerKey, selectedContractId: nextContractId, token: loginResponse.accessToken });
+        }
+      })
       .finally(refreshPendingRecordsCount);
   }
 
