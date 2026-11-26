@@ -21,6 +21,7 @@ import { stateUpdateV10Scope, stateUpdateRows, stateUpdateSnapshots, stateUpdate
 } from "./state-update-v10-storage";
 import { buildSyncAttentionProblems, type AttentionRow, type SyncAttentionProblem } from "./sync-attention";
 import * as SQLite from "expo-sqlite";
+import { migrateLegacyAppViewsTable, migrateLegacySyncTelemetryTable } from "./sqlite-legacy-conversion";
 import { getSQLiteStatementErrorDiagnostic, preserveSQLiteStatementErrors, type SQLiteStatementErrorDiagnostic } from "./sqlite-statement-errors";
 
 import { AppNavigationCache, CachedAppViewsSnapshot, CachedContextSnapshot } from "./app-navigation-cache";
@@ -459,8 +460,14 @@ async function migrateDatabaseOnce(db: SQLite.SQLiteDatabase, state = getLocalDa
 }
 
 async function runMigrations(db: SQLite.SQLiteDatabase) {
+  // journal_mode must be selected outside a transaction. No facade is published
+  // until this single-flight initialization commits on the same physical connection.
+  await db.execAsync("PRAGMA journal_mode = WAL;");
+  await db.withTransactionAsync(() => migrateSchema(db));
+}
+
+async function migrateSchema(db: SQLite.SQLiteDatabase) {
   await db.execAsync(`
-    PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS app_metadata (
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL
@@ -809,7 +816,7 @@ function markLocalDatabaseUnavailable(state: LocalDatabaseGlobalState, error: Lo
   state.lastUnavailableError = error;
   setLocalDatabaseStorageState(state, {
     cause: error.causeCode,
-    destructiveRecoveryAvailable: error.causeCode !== "ACCESS_HANDLE_BUSY" && error.causeCode !== "CLOSE_FAILED",
+    destructiveRecoveryAvailable: error.destructiveRecoveryAvailable && error.causeCode !== "ACCESS_HANDLE_BUSY" && error.causeCode !== "CLOSE_FAILED",
     errorCode: "SQLITE_UNAVAILABLE",
     technicalMessage: error.causeCode === "CLOSE_FAILED" ? "SQLITE_CLOSE_OUTCOME_UNCONFIRMED" : sanitizeLocalDatabaseErrorMessage(error.originalError),
     ...(error.retryRequiresReload && (state.hasReachedReady === false || error.causeCode === "CLOSE_FAILED")
@@ -1114,7 +1121,7 @@ async function migrateEntityRecordsTable(db: SQLite.SQLiteDatabase) {
     await db.execAsync(`
       UPDATE entity_records
       SET remote_updated_at = COALESCE(remote_updated_at, updated_at_remote)
-      WHERE remote_updated_at IS NULL
+      WHERE remote_updated_at IS NULL AND updated_at_remote IS NOT NULL
     `);
   }
 }
@@ -1127,25 +1134,7 @@ async function migrateNavigationCacheTables(db: SQLite.SQLiteDatabase) {
     await db.execAsync(`ALTER TABLE context_snapshot ADD COLUMN owner_key TEXT`);
   }
 
-  const appViewColumns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(app_views)`);
-  const appViewColumnNames = new Set(appViewColumns.map((column) => column.name));
-
-  if (!appViewColumnNames.has("owner_key")) {
-    await db.execAsync(`
-      ALTER TABLE app_views RENAME TO app_views_legacy;
-      CREATE TABLE app_views (
-        owner_key TEXT NOT NULL,
-        contract_id TEXT NOT NULL,
-        views_json TEXT NOT NULL,
-        synced_at TEXT NOT NULL,
-        PRIMARY KEY (owner_key, contract_id)
-      );
-      INSERT INTO app_views (owner_key, contract_id, views_json, synced_at)
-      SELECT 'legacy', contract_id, views_json, synced_at
-      FROM app_views_legacy;
-      DROP TABLE app_views_legacy;
-    `);
-  }
+  await migrateLegacyAppViewsTable(db);
 }
 
 async function migrateAppViewDefinitionsTable(db: SQLite.SQLiteDatabase) {
@@ -1195,61 +1184,7 @@ async function migratePanelSnapshotsTable(db: SQLite.SQLiteDatabase) {
 }
 
 async function migrateSyncTelemetryTable(db: SQLite.SQLiteDatabase) {
-  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(sync_telemetry)`);
-  const columnNames = new Set(columns.map((column) => column.name));
-
-  if (columns.length > 0 && !columnNames.has("entity_type_id")) {
-    await db.execAsync(`
-      ALTER TABLE sync_telemetry RENAME TO sync_telemetry_legacy;
-      CREATE TABLE sync_telemetry (
-        owner_key TEXT NOT NULL,
-        contract_id TEXT NOT NULL,
-        entity_type_id TEXT NOT NULL,
-        sync_phase TEXT NOT NULL,
-        last_sync_attempt_at TEXT,
-        last_push_completed_at TEXT,
-        last_full_refresh_completed_at TEXT,
-        last_reconcile_completed_at TEXT,
-        last_successful_sync_at TEXT,
-        last_sync_error_at TEXT,
-        last_sync_error_code TEXT,
-        last_sync_error_phase TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (owner_key, contract_id, entity_type_id)
-      );
-      INSERT INTO sync_telemetry (
-        owner_key,
-        contract_id,
-        entity_type_id,
-        sync_phase,
-        last_sync_attempt_at,
-        last_push_completed_at,
-        last_full_refresh_completed_at,
-        last_reconcile_completed_at,
-        last_successful_sync_at,
-        last_sync_error_at,
-        last_sync_error_code,
-        last_sync_error_phase,
-        updated_at
-      )
-      SELECT
-        owner_key,
-        contract_id,
-        '__contract_legacy__',
-        sync_phase,
-        last_sync_attempt_at,
-        last_push_completed_at,
-        last_full_refresh_completed_at,
-        last_reconcile_completed_at,
-        last_successful_sync_at,
-        last_sync_error_at,
-        last_sync_error_code,
-        last_sync_error_phase,
-        updated_at
-      FROM sync_telemetry_legacy;
-      DROP TABLE sync_telemetry_legacy;
-    `);
-  }
+  await migrateLegacySyncTelemetryTable(db);
 }
 
 async function upsertContextSnapshot(

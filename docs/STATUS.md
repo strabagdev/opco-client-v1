@@ -1,3 +1,13 @@
+## C-12 — migración local atómica y copias parciales — local, sin publicar — 2026-11-25
+
+Base c6d992ddd06adb3b596d8e39a239188e4e42b30b. El opener single-flight usa su
+transacción existente para esquema, conversiones y marcador 10; journal_mode se
+solicita antes de BEGIN. Las dos conversiones existentes verifican _legacy y la
+copia por identidad/valor antes de retirar la fuente. Ambigüedad conserva tablas,
+bloquea ready y ofrece reintento sin restablecimiento. Contrato y límites en
+[SQLITE_MIGRATIONS.md](SQLITE_MIGRATIONS.md). Sin cambios de namespace, outbox,
+sincronización o Core. C-09 Lote parcial y C-02 permanecen separados.
+
 ## C-11 — trabajo nuevo durante una pasada — local, sin publicar — 2026-11-25
 
 Base publicada 5ba9ae89c7db710dd4ece7de0ca65edf736fb385. El ticket existente

@@ -4042,3 +4042,12 @@ el callback confirma ámbito y elegibilidad antes de enviar. No cambia el motor
 STATE_UPDATE, su outbox, payload, clientRequestId ni ACK del propietario original.
 No hay cola, temporizador ni mutex global nuevos. El catálogo Lote parcial pese a
 preparación completed sigue como seguimiento C-09 independiente. Sin publicación.
+
+## C-12: atomic local opening
+
+Schema/conversion/version initialization completes in one existing SQLite transaction
+before the facade becomes available. Failed or ambiguous legacy conversions never
+report ready; source tables and pending work are preserved. No STATE_UPDATE command,
+projection, owner, payload, DATE, capture or clientRequestId is rewritten. Retry opens
+the same database; it does not reset or replay intentions. Details, synthetic legacy
+fixture boundaries and platform limits: [SQLITE_MIGRATIONS.md](SQLITE_MIGRATIONS.md).

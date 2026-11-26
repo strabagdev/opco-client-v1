@@ -1,4 +1,5 @@
 import {
+  LOCAL_MIGRATION_AMBIGUOUS_CODE,
   LocalDatabaseStorageState,
   LocalDatabaseUnavailableCause,
 } from "../lib/local-db-recovery";
@@ -7,10 +8,14 @@ import type { OpfsOpeningRecoveryStatus } from "../lib/opfs-opening-recovery";
 export function getLocalDatabaseRecoveryGuidance(state: LocalDatabaseStorageState, automatic: OpfsOpeningRecoveryStatus = "idle") {
   const isAccessHandleBusy = state.status === "unavailable" && state.cause === "ACCESS_HANDLE_BUSY";
   const isCloseFailure = state.status === "unavailable" && state.cause === "CLOSE_FAILED";
+  const ambiguousMigration = state.status === "unavailable" && state.cause === "MIGRATION_FAILED" &&
+    state.technicalMessage.startsWith(LOCAL_MIGRATION_AMBIGUOUS_CODE + ":");
   const reloadOnRetry = (isAccessHandleBusy || isCloseFailure) && state.retryRequiresReload === true;
 
   return {
-    body: isCloseFailure
+    body: ambiguousMigration
+      ? "No pudimos verificar una conversión de los datos locales. Se conservaron las tablas y los cambios pendientes. Puedes reintentar sin borrar datos; si el problema continúa, revisa el diagnóstico antes de continuar."
+      : isCloseFailure
       ? reloadOnRetry
         ? "No pudimos confirmar el cierre de los datos locales. El formulario se conserva en memoria, pero las operaciones con datos locales están bloqueadas. Reintentar permite revisar la recarga de esta página para abrir la misma base. Recargar pierde los cambios sin guardar; los registros ya guardados y sus pendientes se conservan."
         : "No pudimos confirmar el cierre de los datos locales. El formulario se conserva en memoria mientras la aplicación siga abierta. Para recuperar, cierra y vuelve a abrir la aplicación; esto perderá los cambios sin guardar. Los registros ya guardados y sus pendientes se conservan. No borres datos ni repitas el guardado para intentar recuperarlos."
@@ -23,7 +28,7 @@ export function getLocalDatabaseRecoveryGuidance(state: LocalDatabaseStorageStat
       : isAccessHandleBusy
       ? "Cierra las otras pestanas o ventanas de Opco Client y luego reintenta. No es necesario restablecer los datos locales."
       : "Puedes reintentar sin borrar nada. Restablecer datos locales elimina la cache de este dispositivo y puede borrar cambios no sincronizados.",
-    canRequestDestructiveReset: state.status === "unavailable" && !isAccessHandleBusy && !isCloseFailure,
+    canRequestDestructiveReset: state.status === "unavailable" && state.destructiveRecoveryAvailable && !isAccessHandleBusy && !isCloseFailure,
     isAccessHandleBusy,
     preserveMountedContent: isCloseFailure,
     reloadConfirmation: isCloseFailure && reloadOnRetry ? {

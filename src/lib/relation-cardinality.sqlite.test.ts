@@ -1,3 +1,4 @@
+import { PYTHON_SQLITE_SCRIPT_EXECUTOR } from "../test/sqlite-script";
 // @ts-expect-error Node types absent from Expo config.
 import {spawn} from "node:child_process";
 // @ts-expect-error Node types absent from Expo config.
@@ -13,12 +14,13 @@ function sqliteFile(path: string) {
 import sqlite3,json,sys
 c=sqlite3.connect(sys.argv[1], isolation_level=None)
 c.row_factory=sqlite3.Row
+${PYTHON_SQLITE_SCRIPT_EXECUTOR}
 for line in sys.stdin:
  try:
   q=json.loads(line); sql=q['sql']; args=q.get('args',[])
   if q['kind']=='exec':
    if sql.strip() in ('BEGIN','COMMIT','ROLLBACK'): c.execute(sql)
-   else: c.executescript(sql)
+   else: exec_sqlite_script(sql)
    result=None
   else:
    cur=c.execute(sql,args)

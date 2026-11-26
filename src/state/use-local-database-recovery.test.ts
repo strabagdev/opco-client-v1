@@ -6,6 +6,19 @@ import {
 } from "./local-database-recovery-logic";
 
 describe("local database recovery controller helpers", () => {
+  it("keeps an ambiguous migration retryable without offering destructive reset", () => {
+    const guidance = getLocalDatabaseRecoveryGuidance({
+      cause: "MIGRATION_FAILED", destructiveRecoveryAvailable: false,
+      errorCode: "SQLITE_UNAVAILABLE", retryable: true, status: "unavailable",
+      technicalMessage: "SQLITE_MIGRATION_AMBIGUOUS:app_views:conflicting_copy",
+    });
+    expect(guidance.canRequestDestructiveReset).toBe(false);
+    expect(guidance.reloadOnRetry).toBe(false);
+    expect(guidance.body).toContain("Se conservaron las tablas y los cambios pendientes");
+    expect(guidance.body).toContain("reintentar sin borrar datos");
+    expect(guidance.body).not.toContain("app_views");
+  });
+
   it("retains CLOSE_FAILED content and discloses draft loss before a full reload", () => {
     const guidance = getLocalDatabaseRecoveryGuidance({
       cause: "CLOSE_FAILED", destructiveRecoveryAvailable: false,

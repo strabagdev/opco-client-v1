@@ -1,3 +1,4 @@
+import { PYTHON_SQLITE_SCRIPT_EXECUTOR } from "../test/sqlite-script";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
 import { spawn } from "node:child_process";
 // @ts-expect-error Node types are intentionally absent from the Expo application config.
@@ -117,12 +118,36 @@ describe("local database singleton", () => {
       "10",
     );
     expect(db.runAsync.mock.calls.filter((call) => call[1] === "schema_version")).toHaveLength(1);
+    expect(db.withTransactionAsync).toHaveBeenCalledOnce();
+    expect(db.execAsync.mock.calls[0][0]).toBe("PRAGMA journal_mode = WAL;");
+    expect(db.execAsync.mock.invocationCallOrder[0]).toBeLessThan(db.withTransactionAsync.mock.invocationCallOrder[0]);
     expect(__getLocalDatabaseDebugStateForTests()).toMatchObject({
       hasDatabase: true,
       hasDatabasePromise: true,
       hasMigrationPromise: false,
       migratedSchemaVersion: "10",
     });
+  });
+
+  it("keeps concurrent consumers behind the migration commit before publishing ready", async () => {
+    let release!: () => void;
+    const commit = new Promise<void>(resolve => { release = resolve; });
+    db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => { await task(); await commit; });
+    db.getFirstAsync.mockImplementation(async (sql: string) => sql.includes("FROM entity_records") ? {
+      local_id: "local", server_id: null, owner_key: "org:A", contract_id: "contract", entity_type_id: "entity",
+      display_name: "synthetic", values_json: '{"name":"synthetic"}', remote_updated_at: null,
+      cached_at: "2026-11-25T12:00:00.000Z", sync_status: "pending_create",
+    } : null);
+    const store = getLocalDatabase();
+    const opening = store.getSelectedContractId();
+    await vi.waitFor(() => expect(db.runAsync.mock.calls.some(call => call[1] === "schema_version")).toBe(true));
+    const writing = store.createLocalRecord({ ownerKey: "org:A", contractId: "contract", entityTypeId: "entity", localId: "local", clientRequestId: "same-request", values: { name: "synthetic" } });
+    expect(getLocalDatabaseStorageState().status).toBe("initializing");
+    expect(sqliteMock.openDatabaseAsync).toHaveBeenCalledOnce();
+    expect(db.runAsync.mock.calls.some(call => String(call[0]).includes("INSERT INTO entity_records"))).toBe(false);
+    release(); await opening; await writing;
+    expect(getLocalDatabaseStorageState().status).toBe("ready");
+    expect(db.withTransactionAsync).toHaveBeenCalledTimes(2); // Migration, then the admitted save.
   });
 
   it("persists and reloads RECORDS opening history in an isolated fingerprinted scope", async () => {
@@ -306,6 +331,9 @@ describe("local database singleton", () => {
   });
 
   it("continues the coordinator after a failed transaction and then performs the explicit close", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     const store = getLocalDatabase();
     await store.getSelectedContractId();
     const failure = new Error("synthetic rollback");
@@ -1632,6 +1660,9 @@ describe("local database singleton", () => {
   });
 
   it("serializes concurrent attendance snapshot transactions on the shared web connection", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     let activeTransactions = 0;
     let maximumActiveTransactions = 0;
 
@@ -1674,6 +1705,9 @@ describe("local database singleton", () => {
   });
 
   it("serializes a RECORDS sync transaction with an attendance snapshot transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     let releaseFirstTransaction: () => void = () => undefined;
     const firstTransactionBlocked = new Promise<void>((resolve) => {
       releaseFirstTransaction = resolve;
@@ -1706,6 +1740,9 @@ describe("local database singleton", () => {
   });
 
   it("serializes local STATE_UPDATE outbox save with sync completion", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     let activeTransactions = 0;
     let maximumActiveTransactions = 0;
 
@@ -1741,6 +1778,9 @@ describe("local database singleton", () => {
   });
 
   it("continues the connection queue after rollback while another operation waits", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     let transactionNumber = 0;
 
     db.withTransactionAsync.mockImplementation(async (task: () => Promise<void>) => {
@@ -1766,6 +1806,9 @@ describe("local database singleton", () => {
   });
 
   it("uses the explicit transaction context for nested outbox helpers", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string) =>
       sql.includes("FROM entity_records")
         ? stateUpdateEntityRecordRow({ local_id: "state_update_attendance_2026_08_26_person_nested" })
@@ -1780,6 +1823,9 @@ describe("local database singleton", () => {
   });
 
   it("keeps an unrelated direct write outside an active transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     let releaseTransaction: () => void = () => undefined;
     const transactionBlocked = new Promise<void>((resolve) => {
       releaseTransaction = resolve;
@@ -2280,6 +2326,9 @@ describe("local database singleton", () => {
   });
 
   it("persists the local STATE_UPDATE record and outbox operation in one SQLite transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
         return stateUpdateEntityRecordRow({
@@ -2411,6 +2460,9 @@ describe("local database singleton", () => {
   });
 
   it("does not report local save success when the STATE_UPDATE outbox insert fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("pending insert failed");
       throw new Error("pending insert failed");
@@ -2434,6 +2486,9 @@ describe("local database singleton", () => {
   });
 
   it("persists the local RECORDS create snapshot and outbox operation in one SQLite transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string, ...params: unknown[]) => {
       if (sql.includes("FROM entity_records")) {
         return recordsEntityRecordRow({
@@ -2507,6 +2562,9 @@ describe("local database singleton", () => {
   });
 
   it("does not report RECORDS create success when the outbox insert fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("pending insert failed");
       throw new Error("pending insert failed");
@@ -2537,6 +2595,9 @@ describe("local database singleton", () => {
   });
 
   it("persists the local RECORDS update snapshot and outbox operation in one SQLite transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
         return recordsEntityRecordRow({
@@ -2759,6 +2820,9 @@ describe("local database singleton", () => {
   });
 
   it("does not rewrite a failed RECORDS operation when the entity definition is missing on retry", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
         return recordsEntityRecordRow({
@@ -2806,6 +2870,9 @@ describe("local database singleton", () => {
   });
 
   it("does not report RECORDS update success when the outbox write fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     db.getFirstAsync.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM entity_records")) {
         return recordsEntityRecordRow({
@@ -2839,6 +2906,9 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS remote completion as one transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
@@ -2857,6 +2927,9 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS completion half-applied when the outbox delete fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("delete failed");
@@ -2874,6 +2947,9 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS conflict metadata and outbox error as one transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
@@ -2963,6 +3039,9 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS conflict half-applied when the record conflict write fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("conflict failed");
@@ -2985,6 +3064,9 @@ describe("local database singleton", () => {
   });
 
   it("commits RECORDS definitive failure as one transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     const store = getLocalDatabase();
 
@@ -3014,6 +3096,9 @@ describe("local database singleton", () => {
   });
 
   it("does not leave RECORDS failure half-applied when the record status write fails inside the transaction", async () => {
+    // This test targets business work after the now-transactional initialization.
+    await getLocalDatabase().getSelectedContractId();
+    db.withTransactionAsync.mockClear();
     mockCurrentRecordsOperation();
     db.withTransactionAsync.mockImplementationOnce(async (task: () => Promise<void>) => {
       await expect(task()).rejects.toThrow("failure write failed");
@@ -3940,12 +4025,13 @@ function localDbSqliteHarness(databasePath = ":memory:") {
 import sqlite3,json,sys
 c=sqlite3.connect(sys.argv[1], isolation_level=None)
 c.row_factory=sqlite3.Row
+${PYTHON_SQLITE_SCRIPT_EXECUTOR}
 for line in sys.stdin:
  try:
   q=json.loads(line); sql=q['sql']; args=q.get('args',[])
   if q['kind']=='exec':
    if sql.strip() in ('BEGIN','COMMIT','ROLLBACK'): c.execute(sql)
-   else: c.executescript(sql)
+   else: exec_sqlite_script(sql)
    result=None
   else:
    cur=c.execute(sql,args)

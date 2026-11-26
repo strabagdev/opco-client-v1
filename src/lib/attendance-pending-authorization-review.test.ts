@@ -1,3 +1,4 @@
+import { PYTHON_SQLITE_SCRIPT_EXECUTOR } from "../test/sqlite-script";
 import {captureWorkflowWriteCommand,workflowWriteMetadata,type WorkflowWriteContract} from "./workflow-write-contract";
 import {attendanceAttemptKey,attendanceCommandKey,attendanceContentChanged,attendanceEditContextValues,copyAttendanceEntry} from "../renderers/workflows/attendance/attendance-edit-command";
 import {OpcoApiError, OpcoNetworkError} from "./opco-api";
@@ -23,12 +24,13 @@ function sqliteHarness(databasePath = ":memory:") {
 import sqlite3,json,sys
 c=sqlite3.connect(sys.argv[1], isolation_level=None)
 c.row_factory=sqlite3.Row
+${PYTHON_SQLITE_SCRIPT_EXECUTOR}
 for line in sys.stdin:
  try:
   q=json.loads(line); sql=q['sql']; args=q.get('args',[])
   if q['kind']=='exec':
    if sql.strip() in ('BEGIN','COMMIT','ROLLBACK'): c.execute(sql)
-   else: c.executescript(sql)
+   else: exec_sqlite_script(sql)
    result=None
   else:
    cur=c.execute(sql,args)

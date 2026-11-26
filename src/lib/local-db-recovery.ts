@@ -1,3 +1,5 @@
+export const LOCAL_MIGRATION_AMBIGUOUS_CODE = "SQLITE_MIGRATION_AMBIGUOUS";
+
 export type LocalDatabaseUnavailableCause =
   | "CLOSE_FAILED"
   | "ACCESS_HANDLE_BUSY"

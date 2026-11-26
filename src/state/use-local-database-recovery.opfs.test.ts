@@ -22,6 +22,7 @@ vi.mock("react", () => ({
 
 const busy = () => new Error("createSyncAccessHandle failed because another open Access Handle exists");
 const db = {
+  withTransactionAsync: vi.fn(async (task: () => Promise<void>) => task()),
   closeAsync: vi.fn(async () => undefined),
   execAsync: vi.fn(async () => undefined),
   getAllAsync: vi.fn(async () => []),

@@ -9,16 +9,18 @@ const ts = require('typescript');
 const [databasePath, apiUrl, cachePath] = process.argv.slice(2);
 let database;
 function sqliteFile() {
+  const { PYTHON_SQLITE_SCRIPT_EXECUTOR } = require('./sqlite-script.ts');
   const worker = spawn('python3', ['-u', '-c', [
     'import sqlite3,json,sys',
     'c=sqlite3.connect(sys.argv[1], isolation_level=None)',
     'c.row_factory=sqlite3.Row',
+    PYTHON_SQLITE_SCRIPT_EXECUTOR,
     'for line in sys.stdin:',
     ' try:',
     '  q=json.loads(line); sql=q["sql"]; args=q.get("args",[])',
     '  if q["kind"]=="exec":',
     '   if sql.strip() in ("BEGIN","COMMIT","ROLLBACK"): c.execute(sql)',
-    '   else: c.executescript(sql)',
+    '   else: exec_sqlite_script(sql)',
     '   result=None',
     '  else:',
     '   cur=c.execute(sql,args)',
