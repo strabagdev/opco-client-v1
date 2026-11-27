@@ -1,3 +1,11 @@
+## Attendance: franjas automáticas de nuevas capturas — local 2026-11-26
+
+El adaptador deriva estado y DATE del instante definitivo cuando hay calendario y
+franjas configurados. Reutiliza el contrato AUTO v1 y la misma transacción/outbox;
+no añade metadata de escritura ni recalcula operaciones ya guardadas. La edición
+PRESERVE no cambia captura/fecha por el reloj actual. Sin franjas, comportamiento
+anterior. Alcance/rollback: [ATTENDANCE_BACKGROUND_BANDS.md](ATTENDANCE_BACKGROUND_BANDS.md).
+
 # State Update
 
 This document is the canonical client-side reference for the current `STATE_UPDATE` architecture in Opco Client. It describes the code as it exists now, including implementation gaps against the newer Operational Core contract.

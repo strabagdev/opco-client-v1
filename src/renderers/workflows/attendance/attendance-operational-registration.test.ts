@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { finalizeAttendanceDay } from "../../../lib/attendance-operational-day";
+import { attendanceRegistrationBand, finalizeAttendanceDay } from "../../../lib/attendance-operational-day";
 import { operationalCalendarKey, resolveOperationalDay, type OperationalCalendar } from "../../../lib/operational-calendar";
 import { attendanceDailyCount } from "../../../lib/attendance-repetition";
 import { captureTimeCommand } from "../../../lib/capture-time";
@@ -35,7 +35,7 @@ function fixture(policy = "MULTIPLE_WITH_WARNING", online = false) {
     captureWorkflowWriteCommand: () => ({}), writeContract: null, writeContractRequiredRef: { current: false },
     captureTimeCommand, captureContract: { version: 1, fieldId: "capture", timeZone: calendar.timeZone },
     appView: { id: "view", config: { repetitionPolicy: policy, targetEntityTypeId: "events", captureTime: { fieldId: "capture", timeZone: calendar.timeZone } } },
-    supportsObservation: false, observation: "", resolveOperationalDay, finalizeAttendanceDay, attendanceDailyCount,
+    supportsObservation: false, observation: "", resolveOperationalDay, attendanceRegistrationBand, finalizeAttendanceDay, attendanceDailyCount, statuses:[{optionId:"a",label:"A"},{optionId:"b",label:"B"}],
     definitionCache: { getAttendanceDailyRecords: vi.fn(async () => []) }, api: { getAttendanceWorkflow: vi.fn(async (_t, _c, _v, query) => ({ appView: { id: "view" }, date: query.date, repetitionPolicy: policy, operationalDayContract: { calendarKey: operationalCalendarKey(calendar) }, items: [{ person: { id: "person" }, dailyRecordCount: 1 }] })) },
     setError: vi.fn(), setConflict: vi.fn(), setRepeatChecking: vi.fn(), setTemporalNotice: vi.fn(), setConfirmationError: vi.fn(), setResolutionFeedback: vi.fn(),
     saveEntry: vi.fn(async () => {}), clearPersonFlow: vi.fn(),
@@ -96,7 +96,7 @@ describe("Operational registration is independent of consultation (actual handle
     vi.setSystemTime(new Date("2026-11-23T11:00:00.000Z")); await handler("confirmRepeatedRecord", c)();
     expect(c.saveEntry).not.toHaveBeenCalled(); expect(c.eventCapturedAtRef.current).toBeNull(); expect(c.clearPersonFlow).toHaveBeenCalledOnce();
     c.repeatWarning = null; c.registrationReadDateRef.current = "2026-11-23";
-    await save(c); expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T11:00:00.000Z", statusOptionId: "b" }), "2026-11-23", expect.stringContaining("franja"));
+    await save(c); expect(c.saveEntry).toHaveBeenCalledWith(expect.objectContaining({ eventOccurredAt: "2026-11-23T11:00:00.000Z", statusOptionId: "a" }), "2026-11-23", null);
   });
   it("a count response after the day boundary does not authorize a stale-day creation", async () => {
     clock("2026-11-23T10:59:59.000Z"); const c = fixture("MULTIPLE_WITH_WARNING", true);
@@ -142,4 +142,24 @@ describe("Operational registration is independent of consultation (actual handle
     expect(p.dateSummary).toContain("22/11/2026"); expect(p.confirmLabel).toBe("Confirmar registro"); expect(p.message).toContain("Sin conexión");
     expect(source.text).not.toContain("Registrar con fecha manual"); expect(source.text).toContain('label={calendar?"Fecha de consulta"');
   });
+});
+
+
+describe("automatic band at the definitive handler boundary",()=>{
+ it("keeps an open confirmation mounted for explicit review when its band changes",async()=>{
+  clock("2026-11-23T22:59:59.000Z");const c=fixture();await c.saveRepeatedStatus({optionId:"a",label:"A"});expect(c.repeatWarning.registrationBandOptionId).toBe("a");expect(c.eventCapturedAtRef.current).toBeNull();
+  vi.setSystemTime(new Date("2026-11-23T23:00:00.001Z"));await handler("confirmRepeatedRecord",c)();
+  expect(c.saveEntry).not.toHaveBeenCalled();expect(c.eventCapturedAtRef.current).toBeNull();expect(c.repeatWarning.registrationBandOptionId).toBe("b");expect(c.clearPersonFlow).not.toHaveBeenCalled();
+  expect(c.setTemporalNotice).toHaveBeenCalledWith(expect.stringContaining("Cambió la franja"));
+  vi.setSystemTime(new Date("2026-11-23T23:00:02.123Z"));await handler("confirmRepeatedRecord",c)();
+  expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({statusOptionId:"b",eventOccurredAt:"2026-11-23T23:00:02.123Z",contextValues:{context:"required-value"}}),"2026-11-23",null);
+ });
+ it.each(["ONE_PER_DAY","MULTIPLE"])("%s ignores an incompatible attempted create status and stores the final band",async policy=>{
+  clock("2026-11-23T03:15:00.123Z");const c=fixture(policy);await handler("saveStatus",c)({optionId:"a",label:"A"});
+  expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({statusOptionId:"b",eventOccurredAt:"2026-11-23T03:15:00.123Z"}),"2026-11-22",null);
+ });
+ it("retains the draft but creates no warning/intent in a configured gap",async()=>{
+  clock("2026-11-23T03:15:00.123Z");const c=fixture();c.calendar={...calendar,bands:calendar.bands.slice(0,1)};c.calendarKey=operationalCalendarKey(c.calendar);c.operationalContract={version:1,calendarKey:c.calendarKey};c.finalizeTemporalEntry=handler("finalizeTemporalEntry",c);c.saveRepeatedStatus=handler("saveRepeatedStatus",c);
+  await c.saveRepeatedStatus({optionId:"a",label:"A"});expect(c.saveEntry).not.toHaveBeenCalled();expect(c.repeatWarning).toBeNull();expect(c.eventCapturedAtRef.current).toBeNull();expect(c.setError).toHaveBeenCalledWith(expect.stringContaining("No hay una franja"));expect(c.clearPersonFlow).not.toHaveBeenCalled();
+ });
 });

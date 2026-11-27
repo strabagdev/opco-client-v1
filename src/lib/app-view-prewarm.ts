@@ -1,3 +1,4 @@
+import { isAnalysisExperience } from "./consultation-purpose";
 import {attendanceHistoryMode} from "./attendance-repetition";
 import {completeAttendanceDay} from "./attendance-day-pages";
 import { createPreparationRevisionRun, type PreparationRevisionApi } from "./preparation-revision-receipts";
@@ -78,7 +79,24 @@ export type OfflinePreparationAppViewTelemetry = {
   snapshot?: OfflinePreparationStageTelemetry;
 };
 
+export type PreparationSelectionReason = "requested-full" | "invalidation-requested" | "proof-missing" | "definition-changed" | "credentials-changed" | "authorization-changed" | "period-changed" | "epoch-invalidated" | "proof-unavailable" | "proof-changed";
+export type PreparationRequestContext = {
+  previous?: { runId: string; status: "idle" | "running" | "completed" | "failed"; completedAt: string | null };
+  invalidationFingerprint?: string;
+  reused: number;
+  selected: { fingerprint: string; reason: PreparationSelectionReason }[];
+};
+export type PreparationGlobalFailure = { stage: "home_list" | "definition_reconciliation" | "app_views" | "dependencies"; code: string; httpStatus: number | null };
+export type PreparationFailureSnapshot = {
+  runId: string; scopeKey: string; completedAt: string | null;
+  failedAppViews: OfflinePreparationAppViewTelemetry[];
+  globalFailure?: PreparationGlobalFailure;
+  runErrorCode?: "RECOVERY_FAILED" | "RECOVERY_NOT_DURABLE";
+};
 export type OfflinePreparationDiagnostics = {
+  requestContext?: PreparationRequestContext;
+  globalFailure?: PreparationGlobalFailure;
+  lastFailure?: PreparationFailureSnapshot;
   diagnosticWrite?: "stored" | "failed";
   recoveryOf?: string;
   runErrorCode?: "RECOVERY_FAILED" | "RECOVERY_NOT_DURABLE";
@@ -157,7 +175,7 @@ type AssignedScope = {
   recovering?: boolean;
   reuseEpoch?: number;
   phase?: OfflinePreparationExecution["phase"];
-  prepared?: Map<string, { token: string; authorizationScope: string | null; day: string; epoch: number; proof: string }>;
+  prepared?: Map<string, { token: string; authorizationScope: string | null; day: string; epoch: number; proof: string; definitionKey: string }>;
 };
 // The existing coordinator owns work across API recreation; never infer liveness from UI observers.
 const assignedFlights = new WeakMap<object, Map<string, AssignedScope>>();
@@ -227,12 +245,20 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
         notifyExecution(scope);
         const day = formatLocalDateInput(new Date()), epoch = scope.reuseEpoch ?? 0;
         const work: AppView[] = [];
+        const previousDiagnostics = scope.latest;
+        const selected: PreparationRequestContext["selected"] = [];
+        let reused = 0;
         scope.prepared ??= new Map();
         for (const view of next.appViews) {
+          if (isAnalysisExperience(view)) { scope.prepared.delete(view.id); continue; }
           const known = scope.prepared.get(view.id);
           const proof = next.reuseCompleted && !next.invalidationKey && known?.token === next.token && known.authorizationScope === (next.authorizationScope ?? null) && known.day === homePreparationDay(view, day) && known.epoch === epoch
             ? await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day) : null;
-          if (!proof || proof !== known?.proof) work.push(view);
+          if (!proof || proof !== known?.proof) {
+            work.push(view);
+            const reason: PreparationSelectionReason = !known ? next.reuseCompleted ? "proof-missing" : "requested-full" : known.authorizationScope !== (next.authorizationScope ?? null) ? "authorization-changed" : known.definitionKey !== preparationSignature(view) ? "definition-changed" : known.day !== homePreparationDay(view, day) ? "period-changed" : known.token !== next.token ? "credentials-changed" : next.invalidationKey ? "invalidation-requested" : known.epoch !== epoch ? "epoch-invalidated" : !next.reuseCompleted ? "requested-full" : !proof ? "proof-unavailable" : "proof-changed";
+            selected.push({ fingerprint: createAppViewTelemetry(view).fingerprint, reason });
+          } else reused += 1;
         }
         for (const id of scope.prepared.keys()) if (!next.appViews.some(view => view.id === id)) scope.prepared.delete(id);
         if (!work.length && next.reuseCompleted && scope.latest?.status === "completed") {
@@ -251,7 +277,10 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
         const preparedIds = new Set<string>();
         scope.phase = work.length > 0 ? "preparing" : "checking";
         notifyExecution(scope);
-        await prewarmAssignedAppViews({ ...next, onAppViewPrepared: id => { preparedIds.add(id); }, prepareAppViewIds: next.reuseCompleted ? work.map(view => view.id) : undefined, onTelemetry: async diagnostics => {
+        await prewarmAssignedAppViews({ ...next, previousDiagnostics, requestContext: {
+          ...(previousDiagnostics?.runId ? { previous: { runId: previousDiagnostics.runId, status: previousDiagnostics.status, completedAt: previousDiagnostics.prewarmCompletedAt } } : {}),
+          ...(next.invalidationKey ? { invalidationFingerprint: fingerprintPrewarmValue(next.invalidationKey) } : {}), reused, selected,
+        }, onAppViewPrepared: id => { preparedIds.add(id); }, prepareAppViewIds: next.reuseCompleted ? work.map(view => view.id) : undefined, onTelemetry: async diagnostics => {
           scope.latest = diagnostics; scope.token = next.token; notifyExecution(scope);
           for (const [observer, token] of flight.observers) if (token === next.token) {
             try { await observer(diagnostics); } catch { /* best effort */ }
@@ -261,7 +290,7 @@ export function prewarmAssignedAppViewsOnce(params: AssignedPrewarmInput): Promi
         // an invalidation during any await makes this output ineligible for a later Home navigation.
         for (const view of work.filter(view => preparedIds.has(view.id))) {
           const proof = await homePreparationProof(next.store, next.ownerKey, next.contractId, view, day);
-          if (proof) scope.prepared.set(view.id, { token: next.token, authorizationScope: next.authorizationScope ?? null, day: homePreparationDay(view, day), epoch, proof });
+          if (proof) scope.prepared.set(view.id, { token: next.token, authorizationScope: next.authorizationScope ?? null, day: homePreparationDay(view, day), epoch, proof, definitionKey: preparationSignature(view) });
           else scope.prepared.delete(view.id);
         }
       }
@@ -454,7 +483,10 @@ export async function prewarmAssignedAppViews({
   signal,
   prepareAppViewIds,
   onAppViewPrepared,
+  requestContext, previousDiagnostics,
 }: {
+  requestContext?: PreparationRequestContext;
+  previousDiagnostics?: OfflinePreparationDiagnostics;
   onAppViewPrepared?(appViewId: string): void;
   /** Internal bounded work set; assignments/list reconciliation always use the full list. */
   prepareAppViewIds?: string[];
@@ -473,10 +505,23 @@ export async function prewarmAssignedAppViews({
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const runId = createOfflinePreparationRunId(startedMs);
+  let prior = previousDiagnostics;
+  if (!isOfflinePreparationDiagnosticsCurrent(prior, ownerKey, contractId)) {
+    try { prior = (await store.getOfflinePreparationRunReceipt?.(ownerKey, contractId))?.diagnostics; } catch { /* observation cannot block preparation */ }
+  }
+  const lastFailure = isOfflinePreparationDiagnosticsCurrent(prior, ownerKey, contractId)
+    ? prior!.status === "failed" ? preparationFailureSnapshot(prior!) : prior!.lastFailure : undefined;
+  const context = requestContext ?? { reused: 0, selected: appViews.filter(view => !isAnalysisExperience(view)).map(view => ({fingerprint: createAppViewTelemetry(view).fingerprint, reason: "requested-full" as const})) };
+  if (!context.previous && prior?.runId && isOfflinePreparationDiagnosticsCurrent(prior, ownerKey, contractId)) context.previous = { runId: prior.runId, status: prior.status, completedAt: prior.prewarmCompletedAt };
+  let phase: PreparationGlobalFailure["stage"] = "home_list";
+  const buildDiagnostics = (input: Parameters<typeof buildOfflinePreparationDiagnostics>[0]) => ({
+    ...buildOfflinePreparationDiagnostics(input), requestContext: context, ...(lastFailure ? {lastFailure} : {}),
+    ...(input.status === "failed" && signal?.aborted ? {globalFailure:{stage:phase,code:"CANCELLED",httpStatus:null}as PreparationGlobalFailure} : {}),
+  });
   const ordinaryApi=api;
   const revision = await createPreparationRevisionRun({api, store, token, ownerKey, contractId, appViews, runId, signal});
   api = revision.api; store = revision.store;
-  const workViews = prepareAppViewIds ? appViews.filter(view => prepareAppViewIds.includes(view.id)) : appViews;
+  const workViews = (prepareAppViewIds ? appViews.filter(view => prepareAppViewIds.includes(view.id)) : appViews).filter(view => !isAnalysisExperience(view));
   const appViewTelemetry = new Map<string, OfflinePreparationAppViewTelemetry>();
   let homeList: NonNullable<OfflinePreparationDiagnostics["homeList"]> = { status: "pending", count: appViews.length, syncedAt: null, errorCode: null, requestId: null };
   const entityDefinitionLoads = new Map<string, Promise<EntityDefinitionResponse>>();
@@ -508,7 +553,7 @@ export async function prewarmAssignedAppViews({
   };
 
   await recordOfflinePreparationTelemetry({
-    diagnostics: buildOfflinePreparationDiagnostics({
+    diagnostics: buildDiagnostics({
       homeList,
       appViewTelemetry,
       contractId,
@@ -533,13 +578,15 @@ export async function prewarmAssignedAppViews({
     homeList = { status: sameScope ? saved.status : "error", count: saved.count, syncedAt: saved.syncedAt, requestId: saved.requestId,
       errorCode: sameScope ? saved.errorCode : "HOME_CACHE_SCOPE_MISMATCH" };
     if (homeList.status !== "persisted" || signal?.aborted) throw new Error("HOME_LIST_PREPARATION_INCOMPLETE");
+    phase = "definition_reconciliation";
     await store.reconcileAppViewDefinitions(ownerKey, contractId, appViews.map((view) => view.id));
+    phase = "app_views";
     await runWithConcurrency(workViews, PREWARM_CONCURRENCY, async (appView) => {
       const initial = createAppViewTelemetry(appView);
 
       appViewTelemetry.set(appView.id, initial);
       await recordOfflinePreparationTelemetry({
-        diagnostics: buildOfflinePreparationDiagnostics({
+        diagnostics: buildDiagnostics({
           homeList,
           appViewTelemetry,
           contractId,
@@ -582,7 +629,7 @@ export async function prewarmAssignedAppViews({
       appViewTelemetry.set(appView.id, nextTelemetry);
       if (nextTelemetry.result !== "failed"&&!skippedByReuse) onAppViewPrepared?.(appView.id);
       await recordOfflinePreparationTelemetry({
-        diagnostics: buildOfflinePreparationDiagnostics({
+        diagnostics: buildDiagnostics({
           homeList,
           appViewTelemetry,
           contractId,
@@ -601,9 +648,10 @@ export async function prewarmAssignedAppViews({
       });
     });
 
+    phase = "dependencies";
     await revision.prepareCatalogs();
     await recordOfflinePreparationTelemetry({
-      diagnostics: buildOfflinePreparationDiagnostics({
+      diagnostics: buildDiagnostics({
         homeList,
         appViewTelemetry,
         contractId,
@@ -613,7 +661,7 @@ export async function prewarmAssignedAppViews({
         completedMs: Date.now(),
         startedAt,
         startedMs,
-        status: hasFailedAppViews(appViewTelemetry) ? "failed" : "completed",
+        status: signal?.aborted || hasFailedAppViews(appViewTelemetry) ? "failed" : "completed",
         total: workViews.length,
         trigger,
       }),
@@ -622,9 +670,10 @@ export async function prewarmAssignedAppViews({
       contractId,
       store,
     });
-  } catch {
+  } catch (error) {
+    const failure: PreparationGlobalFailure = { stage: phase, code: signal?.aborted ? "CANCELLED" : sanitizePrewarmError(error), httpStatus: error instanceof OpcoApiError ? error.status : null };
     await recordOfflinePreparationTelemetry({
-      diagnostics: buildOfflinePreparationDiagnostics({
+      diagnostics: { ...buildDiagnostics({
         homeList,
         appViewTelemetry,
         contractId,
@@ -637,7 +686,7 @@ export async function prewarmAssignedAppViews({
         status: "failed",
         total: workViews.length,
         trigger,
-      }),
+      }), globalFailure: failure },
       onTelemetry,
       ownerKey,
       contractId,
@@ -1256,7 +1305,11 @@ export function normalizeOfflinePreparationDiagnostics(
     return null;
   }
 
+  const requestContext = normalizePreparationRequestContext(value.requestContext);
+  const globalFailure = normalizePreparationGlobalFailure(value.globalFailure);
+  const lastFailure = normalizePreparationFailureSnapshot(value.lastFailure, value.scopeKey);
   return {
+    ...(requestContext ? {requestContext} : {}), ...(globalFailure ? {globalFailure} : {}), ...(lastFailure ? {lastFailure} : {}),
     ...(value.homeList && ["pending", "persisted", "error"].includes(value.homeList.status) ? { homeList: {
       status: value.homeList.status, count: normalizeCount(value.homeList.count),
       syncedAt: normalizeNullableString(value.homeList.syncedAt),
@@ -1288,6 +1341,29 @@ export function normalizeOfflinePreparationDiagnostics(
     status: value.status,
     trigger: normalizeOfflinePreparationTrigger(value.trigger),
   };
+}
+
+const selectionReasons: PreparationSelectionReason[] = ["requested-full","invalidation-requested","proof-missing","definition-changed","credentials-changed","authorization-changed","period-changed","epoch-invalidated","proof-unavailable","proof-changed"];
+function normalizePreparationInstant(value: unknown): string | null {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
+}
+function normalizePreparationRequestContext(value: PreparationRequestContext | undefined): PreparationRequestContext | undefined {
+  if (!value || !Array.isArray(value.selected)) return undefined;
+  const previous = value.previous && /^prewarm-\d+-\d+$/.test(value.previous.runId) && isOfflinePreparationStatus(value.previous.status) ? {runId:value.previous.runId,status:value.previous.status,completedAt:normalizePreparationInstant(value.previous.completedAt)} : undefined;
+  return { ...(previous ? {previous} : {}), ...(/^fp_[0-9a-f]{8}$/.test(value.invalidationFingerprint??"") ? {invalidationFingerprint:value.invalidationFingerprint} : {}), reused:normalizeCount(value.reused), selected:value.selected.filter(v=>v&&/^fp_[0-9a-f]{8}$/.test(v.fingerprint)&&selectionReasons.includes(v.reason)).map(v=>({fingerprint:v.fingerprint,reason:v.reason})) };
+}
+function normalizePreparationGlobalFailure(value: PreparationGlobalFailure | undefined): PreparationGlobalFailure | undefined {
+  if (!value || !["home_list","definition_reconciliation","app_views","dependencies"].includes(value.stage) || !["HTTP_ERROR","NETWORK_ERROR","SQLITE_CONSTRAINT_UNIQUE","STATEMENT_FINALIZATION_FAILED","TypeError","Error","UNKNOWN","CANCELLED"].includes(value.code)) return undefined;
+  return {stage:value.stage,code:value.code,httpStatus:typeof value.httpStatus==="number"&&value.httpStatus>=100&&value.httpStatus<=599?value.httpStatus:null};
+}
+function preparationFailureSnapshot(value: OfflinePreparationDiagnostics): PreparationFailureSnapshot | undefined {
+  if (!value.runId || !value.scopeKey) return undefined;
+  return {runId:value.runId,scopeKey:value.scopeKey,completedAt:value.prewarmCompletedAt,failedAppViews:value.failedAppViews??[],...(value.globalFailure?{globalFailure:value.globalFailure}:{}),...(value.runErrorCode?{runErrorCode:value.runErrorCode}:{})};
+}
+function normalizePreparationFailureSnapshot(value: PreparationFailureSnapshot | undefined, scopeKey: unknown): PreparationFailureSnapshot | undefined {
+  if (!value || value.scopeKey!==scopeKey || !/^fp_[0-9a-f]{8}$/.test(value.scopeKey) || !/^prewarm-\d+-\d+$/.test(value.runId)) return undefined;
+  const globalFailure=normalizePreparationGlobalFailure(value.globalFailure);
+  return {runId:value.runId,scopeKey:value.scopeKey,completedAt:normalizePreparationInstant(value.completedAt),failedAppViews:Array.isArray(value.failedAppViews)?value.failedAppViews.map(normalizeAppViewTelemetry).filter((v):v is OfflinePreparationAppViewTelemetry=>v?.result==="failed"):[],...(globalFailure?{globalFailure}:{}),...(["RECOVERY_FAILED","RECOVERY_NOT_DURABLE"].includes(value.runErrorCode??"")?{runErrorCode:value.runErrorCode}:{})};
 }
 
 function createOfflinePreparationRunId(startedMs: number) {

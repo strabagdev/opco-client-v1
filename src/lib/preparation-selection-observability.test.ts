@@ -1,0 +1,21 @@
+import{afterEach,expect,it,vi}from"vitest";
+import{prewarmAssignedAppViewsOnce,invalidateHomePreparation,type OfflinePreparationDiagnostics}from"./app-view-prewarm";
+import{OpcoNetworkError,type AppView}from"./opco-api";
+afterEach(()=>vi.useRealTimers());
+it("keeps complete work quiet, retries only missing output and records actual invalidations without another timer",async()=>{
+ vi.useFakeTimers();const ownerKey="synthetic-owner",contractId="synthetic-contract",token="synthetic-token";
+ const defs=new Map<string,any>();let views:any,last:OfflinePreparationDiagnostics|null=null,receipt:any,fail=true;const telemetry:OfflinePreparationDiagnostics[]=[];const current=():OfflinePreparationDiagnostics|null=>last;
+ const key=(o:string,c:string,id:string)=>JSON.stringify([o,c,id]);
+ const store={getOfflinePreparationCoordinatorKey:()=>store,getOfflinePreparationRunReceipt:vi.fn(async()=>receipt??null),setOfflinePreparationRunReceipt:vi.fn(async(_o:any,_c:any,r:any)=>{receipt=r}),setOfflinePreparationDiagnostics:vi.fn(async(_o:any,d:any)=>{last=d;telemetry.push(d)}),getOfflinePreparationDiagnostics:vi.fn(async()=>last),upsertAppViews:vi.fn(async(_o:any,_c:any,v:any,at:any)=>{views={views:v,syncedAt:at}}),getAppViews:vi.fn(async()=>views),reconcileAppViewDefinitions:vi.fn(),upsertEntityDefinition:vi.fn(),upsertAppViewDefinition:vi.fn(async d=>{defs.set(key(d.ownerKey,d.contractId,d.appViewId),d)}),getAppViewDefinition:vi.fn(async(o,c,id)=>defs.get(key(o,c,id))??null)};
+ const api={getEntityDefinition:vi.fn(async(_t,_c,id)=>{if(id==="bad"&&fail)throw new OpcoNetworkError();return{entity:{id,name:id,fields:[]}}})};
+ let appViews=["good","bad"].map(id=>({id,type:"RECORDS",name:id,slug:id,icon:null,sortOrder:0,config:{entityTypeId:id}}))as AppView[];
+ const run=(authorizationScope="rights")=>prewarmAssignedAppViewsOnce({api:api as never,store:store as never,appViews,ownerKey,contractId,token,reuseCompleted:true,authorizationScope,trigger:"home"});
+ await run();expect(last).toMatchObject({status:"failed",appViews:{total:2,failed:1}});expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);
+ await vi.advanceTimersByTimeAsync(110000);expect(api.getEntityDefinition).toHaveBeenCalledTimes(2);expect(vi.getTimerCount()).toBe(0);
+ fail=false;await run();expect(api.getEntityDefinition).toHaveBeenCalledTimes(3);expect(last).toMatchObject({status:"completed",appViews:{total:1,failed:0},requestContext:{reused:1,selected:[{reason:"proof-missing"}],previous:{status:"failed"}}});const completed=last;
+ await run();expect(api.getEntityDefinition).toHaveBeenCalledTimes(3);expect(last).toBe(completed);
+ appViews=appViews.map(v=>v.id==="bad"?{...v,config:{entityTypeId:"changed"}}as AppView:v);await run();expect(api.getEntityDefinition).toHaveBeenCalledTimes(4);expect(last).toMatchObject({requestContext:{reused:1,selected:[{reason:"definition-changed"}]}});
+ invalidateHomePreparation({store:store as never,ownerKey,contractId,token});await run();expect(api.getEntityDefinition).toHaveBeenCalledTimes(6);expect(current()?.requestContext?.selected.map(v=>v.reason)).toEqual(["epoch-invalidated","epoch-invalidated"]);
+ await run("changed-rights");expect(api.getEntityDefinition).toHaveBeenCalledTimes(8);expect(current()?.requestContext?.selected.map(v=>v.reason)).toEqual(["authorization-changed","authorization-changed"]);
+ expect(telemetry.every(t=>t.scopeKey===last?.scopeKey)).toBe(true);expect(vi.getTimerCount()).toBe(0);
+});

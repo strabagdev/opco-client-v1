@@ -1,3 +1,4 @@
+import { isAnalysisExperience, AnalysisUnavailableError } from "./consultation-purpose";
 import {assertConsultationCompatibility,consultationQuery} from "./consultation-revision-contract";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
 import { createConsultationRevisionRead } from "./consultation-revision-read";
@@ -36,20 +37,21 @@ export async function loadReportWithOfflineCache({
   store: Pick<LocalDatabase, "getReportSnapshot" | "upsertReportSnapshot"> & Partial<RevisionReceiptStore>;
   token: string;
 }): Promise<LoadReportResult> {
+  const analysis = isAnalysisExperience(appView);
   const scope = reportSnapshotScope({ appViewId, contractId, ownerKey, query });
 
   let revision:Awaited<ReturnType<typeof createConsultationRevisionRead>>|undefined;
   const assertActive=()=>{if(isActive&&!isActive())throw new ReportReadCancelledError();revision?.assertActive();};
   const readCached=async()=>{assertActive();const cached=await store.getReportSnapshot(scope);assertActive();if(cached&&appView)assertConsultationCompatibility({appView,resource:{kind:"report",appViewId,query:consultationQuery("report",query)}},cached.report);return cached;};
   assertActive();
-  if(knownOffline){const cached=await readCached();if(!cached)throw new ReportSnapshotMissingError();return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};}
+  if(knownOffline){if(analysis)throw new AnalysisUnavailableError(true);const cached=await readCached();if(!cached)throw new ReportSnapshotMissingError();return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};}
   try {
     revision=await createConsultationRevisionRead({api,store,appView,appViewId,kind:"report",query,ownerKey,contractId,token,isCurrent:()=>!isActive||isActive()});
     if(revision.reused){assertActive();return{fromCache:true,offline:false,report:revision.reused.response as ReportResponse,syncedAt:revision.reused.verifiedAt};}
     const report=await revision.api.getReport!(token,contractId,appViewId,query);assertActive();if(appView)assertConsultationCompatibility({appView,resource:{kind:"report",appViewId,query:consultationQuery("report",query)}},report);
     const syncedAt=new Date().toISOString();await store.upsertReportSnapshot({...scope,report,syncedAt,assertActive});assertActive();await revision.finish();assertActive();
     return{fromCache:false,offline:false,report,syncedAt};
-  }catch(error){assertActive();if(!(error instanceof OpcoNetworkError))throw error;const cached=await readCached();if(cached)return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};throw error;}
+  }catch(error){assertActive();if(!(error instanceof OpcoNetworkError))throw error;if(analysis)throw new AnalysisUnavailableError(false);const cached=await readCached();if(cached)return{fromCache:true,offline:true,report:cached.report,syncedAt:cached.syncedAt};throw error;}
 
 }
 

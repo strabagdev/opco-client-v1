@@ -65,7 +65,7 @@ it('reports a read failure in the existing communication notice even when pendin
  const visit=(n:ts.Node)=>{if(ts.isCallExpression(n)&&n.expression.getText(source)==='useExperienceActivityReporter'){
   const report=n.arguments[1];if(report&&ts.isObjectLiteralExpression(report)){const field=report.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(source)==='notice');if(field&&ts.isPropertyAssignment(field))notice=field.initializer;}
  }ts.forEachChild(n,visit);};visit(source);if(!notice)throw Error('Missing actual communication notice');
- const evaluate=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`const personReadPending=false;return ${notice.getText(source)};`);
+ const evaluate=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`const personReadPending=false,automaticRegistration=false,contextRelations={dependencyNotice:null};return ${notice.getText(source)};`);
  const read=(temporalNotice:string|null,visibleError:string|null)=>evaluate(temporalNotice,visibleError,null,'online',true,[],()=>null);
  expect(read(null,message)).toBe(message);expect(read('Aviso temporal',message)).toContain(message);expect(read(null,null)).toBeNull();
 });
@@ -75,7 +75,7 @@ it('uses the same communication sector for a failed refresh or uncertified offli
  const visit=(n:ts.Node)=>{if(ts.isCallExpression(n)&&n.expression.getText(source)==='useExperienceActivityReporter'){
   const report=n.arguments[1];if(report&&ts.isObjectLiteralExpression(report)){const field=report.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(source)==='notice');if(field&&ts.isPropertyAssignment(field))notice=field.initializer;}
  }ts.forEachChild(n,visit);};visit(source);if(!notice)throw Error('Missing actual communication notice');
- const read=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`const personReadPending=false;return ${notice.getText(source)};`);
+ const read=new Function('temporalNotice','visibleError','refreshError','connectivityStatus','daySnapshotHydrated','latest','attendanceOfflineDayNotice',`const personReadPending=false,automaticRegistration=false,contextRelations={dependencyNotice:null};return ${notice.getText(source)};`);
  const coverage=vi.fn(()=> 'Sólo registros disponibles; cobertura no acreditada.');
  expect(read(null,null,'No se pudo actualizar; copia guardada.','offline',true,[],coverage)).toBe('No se pudo actualizar; copia guardada.');
  expect(read(null,null,null,'offline',false,[],coverage)).toBe('Sólo registros disponibles; cobertura no acreditada.');

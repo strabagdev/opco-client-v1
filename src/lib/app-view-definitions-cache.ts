@@ -1,3 +1,4 @@
+import { isAnalysisExperience } from "./consultation-purpose";
 import {
   AppView,
   AppViewType,
@@ -212,6 +213,10 @@ export function deriveOfflineAvailability({
   }
 
   if (readiness.reason === "query-scoped") return "query-scoped";
+  if (readiness.reason === "online-only") {
+    return "online-only";
+  }
+
   if(readiness.definitionReady){
     if(catalogReadFailed)return "dependencies-unavailable";
     const required=catalogs?.filter(f=>f.required)??[];
@@ -219,9 +224,6 @@ export function deriveOfflineAvailability({
     if(required.some(f=>f.coverage==="empty"))return "dependencies-empty";
     if(required.some(f=>f.coverage==="unprepared"))return "dependencies-missing";
     if(required.some(f=>f.coverage==="partial"))return "dependencies-partial";
-  }
-  if (readiness.reason === "online-only") {
-    return "online-only";
   }
 
   if (readiness.attendanceMonthStatus === "partial") {
@@ -264,6 +266,7 @@ export function getAppViewOfflineReadiness({
   recordsTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
   sourceTelemetry?: Pick<SyncTelemetry, "lastFullRefreshCompletedAt"> | null;
 }): AppViewOfflineReadiness {
+  if (isAnalysisExperience(appView)) return { definitionReady: Boolean(definition), dataReady: false, offlineReady: false, reason: "online-only" };
   const finish=(input:Parameters<typeof readiness>[0])=>({...readiness(input),catalogs,
     offlineReady:!catalogReadFailed&&readiness(input).offlineReady&&!(catalogs??[]).some(f=>f.required&&f.coverage!=="complete")});
   if (appView.type === "BOARD" || appView.type === "DASHBOARD") {

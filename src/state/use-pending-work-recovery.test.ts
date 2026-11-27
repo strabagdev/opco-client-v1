@@ -446,3 +446,12 @@ describe("C11 work arriving after a flight selected its commands", () => {
     expect(vi.getTimerCount()).toBe(0); expect(f.render().isPendingWorkSyncing).toBe(false);
   });
 });
+
+it("background write recovery revalidates assignments without forcing complete preparation on every backoff",async()=>{
+ const preparer=await import("../lib/app-view-prewarm");const prepare=vi.mocked(preparer.prewarmAssignedAppViewsOnce);prepare.mockClear();
+ const f=fixture();await settled();f.setEligible(true);h.sync.mockResolvedValueOnce(result(1)).mockResolvedValueOnce(result(1)).mockImplementationOnce(async()=>{f.setEligible(false);return result();});
+ await f.output.syncPendingRecords("manual-retry");await vi.advanceTimersByTimeAsync(5000);await settled();expect(prepare).toHaveBeenCalledTimes(1);
+ expect(prepare.mock.calls[0][0]).toMatchObject({trigger:"startup-with-pending",reuseCompleted:true});expect(prepare.mock.calls[0][0].invalidationKey).toBeUndefined();
+ await vi.advanceTimersByTimeAsync(15000);await settled();expect(h.sync).toHaveBeenCalledTimes(3);expect(prepare).toHaveBeenCalledTimes(2);expect(prepare.mock.calls[1][0]).toMatchObject({trigger:"startup-with-pending",reuseCompleted:true});expect(prepare.mock.calls[1][0].invalidationKey).toBeUndefined();
+ await vi.advanceTimersByTimeAsync(120000);expect(h.sync).toHaveBeenCalledTimes(3);expect(prepare).toHaveBeenCalledTimes(2);
+});

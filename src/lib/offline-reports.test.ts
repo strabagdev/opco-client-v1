@@ -255,3 +255,12 @@ function latestByRelationReport(): ReportResponse {
     to: "",
   };
 }
+
+it("analytical REPORT requires Core and never falls back offline, retaining the cached copy",async()=>{
+ const store=new MemoryReportStore(),report=currentStatusReport();report.config={entityTypeId:"versions",presentationMode:"TABLE",dateFieldId:"date_field",table:{visibleFieldIds:[],defaultSortDirection:"asc"}};report.from="2026-11-01";report.to="2026-11-30";
+ const appView={...report.appView,type:"REPORT",config:report.config}as never;const api={getReport:vi.fn(async()=>report)};
+ const input={api,appView,appViewId:"report_1",ownerKey:"owner_1",contractId:"contract_1",query:{from:"2026-11-01",to:"2026-11-30"},store,token:"synthetic"};
+ expect((await loadReportWithOfflineCache(input)).offline).toBe(false);const read=vi.spyOn(store,"getReportSnapshot");
+ await expect(loadReportWithOfflineCache({...input,knownOffline:true})).rejects.toMatchObject({code:"ANALYSIS_ONLINE_REQUIRED"});expect(read).not.toHaveBeenCalled();
+ api.getReport.mockRejectedValueOnce(new OpcoNetworkError());await expect(loadReportWithOfflineCache(input)).rejects.toMatchObject({code:"ANALYSIS_UPDATE_FAILED"});expect(read).not.toHaveBeenCalled();expect((await loadReportWithOfflineCache(input)).report).toBe(report);
+});

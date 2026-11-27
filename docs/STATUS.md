@@ -1,3 +1,31 @@
+## Preparación: recuperación y observabilidad — local, 2026-11-27
+
+Una recuperación de escritura ya no fuerza preparar todas las experiencias después
+de cada backoff; conserva la coordinación, lectura de asignaciones y pruebas existentes.
+El diagnóstico conserva motivo de selección, run anterior y un último fallo seguro
+por ámbito. Contrato: [OFFLINE_PREPARATION_OBSERVABILITY.md](OFFLINE_PREPARATION_OBSERVABILITY.md).
+La repetición productiva ~10 s y «6/7» no se atribuyen sin correlación de esa sesión.
+
+## Análisis sólo online — ajuste adicional local, 2026-11-26
+
+REPORT TABLE/MATRIX usan sólo lecturas verificadas con Core. PANEL dispone de propósito
+OPERATIONAL/ANALYSIS opcional en editorCore; sin clasificar conserva comportamiento.
+El prewarm excluye análisis del trabajo/progreso, manteniendo asignaciones y dependencias
+operativas compartidas. No se borra caché: sigue habilitada la reutilización validada online.
+Contrato: [ANALYSIS_CONNECTIVITY.md](ANALYSIS_CONNECTIVITY.md). Delta identificado aparte
+del lote Attendance/preparación; sin publicación ni configuración productiva.
+
+## Attendance — lista estable y altas por franja — local, 2026-11-26
+
+Base publicada fe93336e (árbol e6113ca2). Se separa la hidratación compatible del
+cambio de consulta en Registros del día; los grupos permanecen montados y conservan
+expansión al buscar/editar y volver. No se retienen filas de un ámbito incompatible.
+Con calendario y franjas, sólo nuevas altas usan estado, DATE y captura del mismo
+instante definitivo. Ediciones y comandos persistidos conservan su semántica.
+Contrato y límites: [ATTENDANCE_BACKGROUND_BANDS.md](ATTENDANCE_BACKGROUND_BANDS.md).
+Sin publicación, cambios en Core, configuración ni datos productivos. C-13/C-14/C-15,
+cuatro vencimientos anteriores y la ejecución productiva 6/7 siguen separados.
+
 ## C-09 — closure of terminal observation, local, 2026-11-26
 
 Based on the frozen composite fb8367d1. A post-refresh observer now uses the existing

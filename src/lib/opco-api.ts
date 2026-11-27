@@ -337,6 +337,7 @@ export type PanelModuleConfig = PanelModuleBase & (
 );
 
 export type PanelAppViewConfig = {
+  purpose?: import("./consultation-purpose").ConsultationPurpose;
   transitionNotice?: import("./transition-notice").TransitionNotice;
   calculatedFields?: [];
   datasets?: PanelDatasetConfig[];

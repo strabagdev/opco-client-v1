@@ -707,7 +707,9 @@ describe("panel TABLE renderer structure", () => {
   });
 
   it("keeps late responses and dataset errors isolated", () => {
-    expect(source).toContain("requestSeq.current !== seq");
+    expect(source).toContain("requestSeq.current === seq");
+    expect(source).toContain("api.isAuthSessionCurrent(authGeneration)");
+    expect(source).toContain("if (!readIsCurrent())");
     expect(source).toContain("[datasetId]: {");
     expect(source).toContain("error: error instanceof Error ? error.message");
   });

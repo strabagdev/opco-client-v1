@@ -1,3 +1,4 @@
+import { isAnalysisExperience } from "./consultation-purpose";
 import type { AppView, OpcoApi, PanelAppView } from "./opco-api";
 import { beginPanelRead, recordPanelRead } from "./panel-read-diagnostics";
 
@@ -57,7 +58,7 @@ export async function reconcilePanelDefinition({ api, appView, revision, token, 
 export async function coherentCachedPanelViews(cache: PanelDefinitionCache, scope: Omit<PanelDefinitionScope, "appViewId">,
   views: AppView[], appViewId: string): Promise<AppView[]> {
   const assigned = views.find(view => view.id === appViewId);
-  if (assigned?.type !== "PANEL" || !cache.getCoherentPanelDefinition) return views;
+  if (assigned?.type !== "PANEL" || isAnalysisExperience(assigned) || !cache.getCoherentPanelDefinition) return views;
   const diagnostic = beginPanelRead({ ...scope, appViewId, datasetId: "__definition__", configRevision: assigned.configRevision, page: 1, pageSize: 1 });
   let definition: PanelAppView | null;
   try {

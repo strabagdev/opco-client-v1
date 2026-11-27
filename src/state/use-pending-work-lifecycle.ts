@@ -892,7 +892,10 @@ export function usePendingWorkLifecycle({
           store: definitionCache,
           token: nextToken,
           trigger,
-          invalidationKey: syncRunId,
+          // A retry of a write is not a fresh invalidation of every prepared view.
+          // Assignments/auth were just revalidated above; the existing proof still
+          // rejects changed definitions, authorization, periods or incomplete work.
+          ...(trigger === "startup-with-pending" ? { reuseCompleted: true } : { invalidationKey: syncRunId }),
           authorizationScope,
         });
       }

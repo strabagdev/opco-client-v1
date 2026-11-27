@@ -1,3 +1,4 @@
+import { isAnalysisExperience, AnalysisUnavailableError } from "./consultation-purpose";
 import {assertConsultationCompatibility,consultationQuery} from "./consultation-revision-contract";
 import { assertLocalPanelDefinition, assertPanelResponseCompatibility, PanelCompatibilityError } from "./panel-compatibility";
 import type { RevisionReceiptStore } from "./revision-receipt-storage";
@@ -50,6 +51,7 @@ export async function loadPanelDatasetWithOfflineCache({
   appViewId,
   configRevision,
   requireConfigRevision = false,
+  requireOnline = false,
   contractId,
   isActive,
   knownOffline = false,
@@ -64,6 +66,7 @@ export async function loadPanelDatasetWithOfflineCache({
   appViewId: string;
   configRevision?: string | null;
   requireConfigRevision?: boolean;
+  requireOnline?: boolean;
   contractId: string;
   isActive?: () => boolean;
   knownOffline?: boolean;
@@ -73,6 +76,7 @@ export async function loadPanelDatasetWithOfflineCache({
   store: Pick<LocalDatabase, "getPanelSnapshot" | "upsertPanelSnapshot"> & Partial<RevisionReceiptStore>;
   token: string;
 }): Promise<LoadPanelDatasetResult> {
+  const analysis = requireOnline || isAnalysisExperience(appView);
   const scope = panelSnapshotScope({ appViewId, configRevision, contractId, ownerKey, query, snapshotDatasetId });
   let revision:Awaited<ReturnType<typeof createConsultationRevisionRead>>|undefined;
   const assertActive = () => { assertPanelReadActive(isActive); revision?.assertActive(); };
@@ -115,6 +119,7 @@ export async function loadPanelDatasetWithOfflineCache({
   assertActive();
   if (appView) assertLocalPanelDefinition(appView);
   if (knownOffline) {
+    if (analysis) throw new AnalysisUnavailableError(true);
     if (requireConfigRevision && !configRevision) throw new PanelSnapshotMissingError();
     const cached = await readCached();
     if (!cached) throw new PanelSnapshotMissingError();
@@ -167,6 +172,7 @@ export async function loadPanelDatasetWithOfflineCache({
     recordPanelRead(diagnostic, "request", isActive && !isActive() ? "cancelled" : "failed", undefined, failureCode(error));
     assertActive();
     if (!(error instanceof OpcoNetworkError)) throw error;
+    if (analysis) throw new AnalysisUnavailableError(false);
     if (requireConfigRevision && !configRevision) throw error;
     const cached = await readCached();
 

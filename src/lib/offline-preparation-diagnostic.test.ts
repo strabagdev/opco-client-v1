@@ -30,3 +30,8 @@ it("exposes terminal persistence failure and recovery correlation without arbitr
   const unknown = normalizeOfflinePreparationDiagnostics({ status: "failed", runErrorCode: "secret-token" as never });
   expect(offlinePreparationFailureRows(unknown).flat().join(" ")).not.toContain("secret-token");
 });
+
+it("keeps new request/global-failure diagnostics bounded by safe enums and their exact scope",()=>{
+ const value=normalizeOfflinePreparationDiagnostics({status:"completed",scopeKey:"fp_12345678",requestContext:{reused:2,selected:[{fingerprint:"fp_abcdef12",reason:"definition-changed"},{fingerprint:"secret-token",reason:"Error"}]as never,previous:{runId:"secret-token",status:"failed",completedAt:"secret-token"}},globalFailure:{stage:"home_list",code:"SELECT password='secret-token'",httpStatus:500},lastFailure:{runId:"prewarm-123-1",scopeKey:"fp_deadbeef",completedAt:null,failedAppViews:[]}});
+ const text=offlinePreparationFailureRows(value).flat().join(" ");expect(text).toContain("definition-changed");expect(text).not.toContain("secret-token");expect(text).not.toContain("SELECT");expect(text).not.toContain("fp_deadbeef");expect(value?.lastFailure).toBeUndefined();expect(value?.globalFailure).toBeUndefined();
+});

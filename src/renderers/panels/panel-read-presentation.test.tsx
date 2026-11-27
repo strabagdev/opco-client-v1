@@ -108,9 +108,13 @@ it("communicates unverified and revision-verified copies in the existing notice 
  function visit(node:ts.Node){if(ts.isCallExpression(node)&&node.expression.getText(sf)==="useExperienceActivityReporter"){
   const argument=node.arguments[1];if(argument&&ts.isObjectLiteralExpression(argument)){const notice=argument.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText(sf)==="notice");if(notice&&ts.isPropertyAssignment(notice))expression=notice.initializer.getText(sf);}
  }ts.forEachChild(node,visit);}visit(sf);expect(expression).toBeTruthy();
- const message=new Function("calendarIssue","liveDatasetStates","return "+expression);
+ const evaluate=new Function("calendarIssue","liveDatasetStates","analysis","knownOffline","liveFailedCount","ANALYSIS_OFFLINE_NOTICE","ANALYSIS_UPDATE_NOTICE","return "+expression);
+ const message=(issue:unknown,states:unknown[],analysis=false,offline=false,failed=0)=>evaluate(issue,states,analysis,offline,failed,"Análisis disponible sólo con conexión a internet","No fue posible actualizar el análisis.");
  expect(message(null,[{fromCache:true,offline:true}])).toContain("sin verificación del servidor");
  expect(message(null,[{fromCache:true,offline:false}])).toContain("verificada online");
  expect(message(null,[{fromCache:false,offline:false}])).toBeNull();
  expect(message("Calendario conservado",[{fromCache:true,offline:true}])).toContain("Calendario conservado");
+ expect(message(null,[{fromCache:true,offline:true}],true,true)).toBe("Análisis disponible sólo con conexión a internet");
+ expect(message(null,[{fromCache:true,offline:true}],true,false,1)).toBe("No fue posible actualizar el análisis.");
+ expect(message(null,[{fromCache:true,offline:false}],true)).toBeNull();
 });

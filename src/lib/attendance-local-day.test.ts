@@ -51,3 +51,16 @@ it("refreshes a stale visible day when resubscribing after suspension",()=>{
  const clock=watchAttendanceLocalDay(changed,{version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[]},{day:"2026-11-18",calendarDate:"2026-11-19"});
  expect(changed).toHaveBeenCalledExactlyOnceWith("2026-11-19","2026-11-19");clock.refresh();expect(changed).toHaveBeenCalledTimes(1);clock.dispose();
 });
+
+
+it("reuses one optional band clock and does not notify on unchanged minutes",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-19T22:58:00.000Z"));const changed=vi.fn();
+ const calendar={version:1 as const,timeZone:"America/Santiago",dayStart:"08:00",bands:[{optionId:"day",start:"08:00",end:"20:00"},{optionId:"night",start:"20:00",end:"08:00"}]};
+ const clock=watchAttendanceLocalDay(changed,calendar,undefined,true);vi.advanceTimersByTime(60001);expect(changed).not.toHaveBeenCalled();expect(vi.getTimerCount()).toBe(1);vi.advanceTimersByTime(60000);expect(changed).toHaveBeenCalledExactlyOnceWith("2026-11-19","2026-11-19");expect(vi.getTimerCount()).toBe(1);clock.dispose();expect(vi.getTimerCount()).toBe(0);
+});
+it("does not add band polling or notifications to the default Home consumer",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-19T22:59:00.000Z"));const changed=vi.fn();const clock=watchAttendanceLocalDay(changed,{version:1,timeZone:"America/Santiago",dayStart:"08:00",bands:[{optionId:"day",start:"08:00",end:"20:00"},{optionId:"night",start:"20:00",end:"08:00"}]});vi.advanceTimersByTime(120001);expect(changed).not.toHaveBeenCalled();expect(vi.getTimerCount()).toBe(1);clock.dispose();
+});
+it("observes the actual band after a repeated hour and after suspension",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-11-01T05:59:59.000Z"));const changed=vi.fn(),calendar={version:1 as const,timeZone:"America/New_York",dayStart:"04:00",bands:[{optionId:"day",start:"01:30",end:"04:00"},{optionId:"night",start:"04:00",end:"01:30"}]};const clock=watchAttendanceLocalDay(changed,calendar,undefined,true);vi.advanceTimersByTime(1001);expect(changed).toHaveBeenCalledExactlyOnceWith("2026-10-31","2026-11-01");vi.setSystemTime(new Date("2026-11-01T06:45:00.000Z"));clock.refresh();expect(changed).toHaveBeenCalledTimes(2);clock.dispose();
+});

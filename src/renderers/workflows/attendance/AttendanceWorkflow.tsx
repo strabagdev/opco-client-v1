@@ -1,5 +1,5 @@
 import { readAttendancePresentedSubject, readAttendancePresentedSubjects } from "./attendance-record-presentation";
-import {finalizeAttendanceDay, savedAttendanceBandNotice} from "../../../lib/attendance-operational-day";
+import {attendanceRegistrationBand, finalizeAttendanceDay, savedAttendanceBandNotice} from "../../../lib/attendance-operational-day";
 import {resolveOperationalDay,operationalCalendarKey,type OperationalDayContract} from "../../../lib/operational-calendar";
 import {captureTimeCommand,type CaptureTimeCommand} from "../../../lib/capture-time";
 import { AttendanceRecordList, type AttendanceGroupRead } from "./attendance-record-list";
@@ -183,7 +183,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const editingDateRef=useRef<string|null>(null);
   const repeatCheckingRef=useRef(false);
   const [repeatChecking,setRepeatChecking]=useState(false);
-  const [repeatWarning,setRepeatWarning]=useState<{entry:AttendanceBatchEntry;localCount:number;remoteCount?:number;scope:string;revision:number;generation:number;registrationDate?:string}|null>(null);
+  const [repeatWarning,setRepeatWarning]=useState<{entry:AttendanceBatchEntry;localCount:number;remoteCount?:number;scope:string;revision:number;generation:number;registrationDate?:string;registrationBandOptionId?:string}|null>(null);
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
   const personReadRef = useRef<{ observationEdited: boolean } | null>(null);
   const [personReadPending, setPersonReadPending] = useState(false);
@@ -194,7 +194,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [temporalNotice,setTemporalNotice]=useState<string|null>(null);
   const previousOperationalDateRef=useRef(today);
   useEffect(() => {
-    const clock = watchAttendanceLocalDay((day,civil)=>{setClockState({calendarKey,today:day,civilToday:civil??day});if(calendar&&automaticDate&&day!==previousOperationalDateRef.current)setTemporalNotice("Cambió el día operativo. Revisa el día y confirma nuevamente; no se creó una intención automáticamente.");previousOperationalDateRef.current=day;},calendar,calendar?{day:today,calendarDate:civilToday}:undefined);
+    const clock = watchAttendanceLocalDay((day,civil)=>{setClockState({calendarKey,today:day,civilToday:civil??day});if(calendar&&automaticDate&&day!==previousOperationalDateRef.current)setTemporalNotice("Cambió el día operativo. Revisa el día y confirma nuevamente; no se creó una intención automáticamente.");previousOperationalDateRef.current=day;},calendar,calendar?{day:today,calendarDate:civilToday}:undefined,Boolean(calendar?.bands.length));
     const resume = AppState.addEventListener("change", state => {
       if (state === "active") clock.refresh();
     });
@@ -327,6 +327,13 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     attendanceConfigurationRef.current = appView.config;
   }, [attendanceDayScope, appView.config]);
   const { defaultStatus, otherStatuses } = useMemo(() => splitStatusButtons(statuses), [statuses]);
+  const automaticRegistration = Boolean(calendar?.bands.length && !editingTarget && !selectedItem?.attendance);
+  const registrationBand = useMemo(() => {
+    try { return { value: attendanceRegistrationBand(calendar, new Date().toISOString(), statuses), error: null }; }
+    catch (error) { return { value: null, error: error instanceof Error ? error.message : "No se pudo comprobar la franja vigente." }; }
+  }, [calendar, statuses, clockState]);
+  const primaryStatus = automaticRegistration ? statuses.find(status => status.optionId === registrationBand.value?.optionId) : defaultStatus;
+  const secondaryStatuses = automaticRegistration ? [] : otherStatuses;
   const isContractBootstrapPending = !context || (!selectedContractId && context.contracts.length === 1);
   const showVisibleErrorDiagnostics = shouldShowStateUpdateVisibleErrorDiagnostics();
   const lastStateUpdateSync = stateUpdateReconnectDiagnostics.lastStateUpdateSync;
@@ -358,7 +365,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ? "ATTENDANCE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
-    notice: [personReadPending ? "Comprobando los registros de la persona. Puedes completar el formulario; espera para confirmar." : temporalNotice, visibleError ?? refreshError ?? (connectivityStatus !== "online" && !daySnapshotHydrated
+    notice: [personReadPending ? "Comprobando los registros de la persona. Puedes completar el formulario; espera para confirmar." : temporalNotice ?? (automaticRegistration && selectedItem && !isLoading ? registrationBand.error : null), visibleError ?? refreshError ?? contextRelations.dependencyNotice ?? (connectivityStatus !== "online" && !daySnapshotHydrated
       ? attendanceOfflineDayNotice(daySnapshotHydrated, latest.length) : null)].filter(Boolean).join(" ") || null,
     activeCount: Number(personReadPending) + Number(repeatChecking) + Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount + contextRelationReadCount,
     readCount: Number(personReadPending) + Number(repeatChecking) + Number(isLoading) + Number(isSearching) + recoveryReadCount + contextRelationReadCount,
@@ -1338,7 +1345,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
   function finalizeTemporalEntry(entry:AttendanceBatchEntry,editing:boolean,instant=new Date().toISOString(), recordDate = date) {
     try {
-      const result=finalizeAttendanceDay(entry,{calendar,contract:operationalContract,date:recordDate,mode:"AUTO",editing,instant:editing?instant:eventCapturedAtRef.current??instant});
+      const result=finalizeAttendanceDay(entry,{calendar,contract:operationalContract,date:recordDate,mode:"AUTO",editing,instant:editing?instant:eventCapturedAtRef.current??instant,statuses});
       if(result.notice)setTemporalNotice(result.notice);else setTemporalNotice(null);
       if(!editing&&result.entry.eventOccurredAt)eventCapturedAtRef.current=result.entry.eventOccurredAt;
       return result;
@@ -1428,7 +1435,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           }
           const count = attendanceDailyCount(local, remoteCount);
           if (!isOnline || count > 0 || local.length > 0) {
-              setRepeatWarning({ entry, localCount: local.length, remoteCount, scope, revision, generation, ...(calendar ? { registrationDate } : {}) });
+              const band = calendar?.bands.length ? attendanceRegistrationBand(calendar, new Date().toISOString(), statuses) : null;
+              setRepeatWarning({ entry: band ? { ...entry, statusOptionId: band.optionId } : entry, localCount: local.length, remoteCount, scope, revision, generation, ...(calendar ? { registrationDate } : {}), ...(band ? { registrationBandOptionId: band.optionId } : {}) });
               return;
           }
           const final=calendar?finalizeTemporalEntry(entry,false,confirmationInstant):automatic ? {...entry,eventOccurredAt:eventCapturedAtRef.current ?? (eventCapturedAtRef.current=confirmationInstant!)}:entry;
@@ -1460,6 +1468,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           clearPersonFlow();
           setTemporalNotice("Cambió el día operativo de registro. Selecciona nuevamente la persona para comprobar sus registros y confirmar; no se guardó una intención.");
           return;
+      }
+      if (calendar?.bands.length) {
+          try {
+              const band = attendanceRegistrationBand(calendar, confirmationInstant!, statuses)!;
+              if (warning.registrationBandOptionId !== band.optionId) {
+                  setRepeatWarning({ ...warning, entry: { ...warning.entry, statusOptionId: band.optionId }, registrationBandOptionId: band.optionId });
+                  setTemporalNotice("Cambió la franja de registro. Revisa la información actualizada y confirma nuevamente; todavía no se guardó una intención.");
+                  return;
+              }
+          } catch (error) {
+              cancelRepeatedRecord();
+              setTemporalNotice(error instanceof Error ? error.message : "No se pudo comprobar la franja vigente.");
+              return;
+          }
       }
       setRepeatWarning(null);
       const final=calendar?finalizeTemporalEntry(warning.entry,false,confirmationInstant):{...warning.entry,...(warning.entry.captureTime?{eventOccurredAt:eventCapturedAtRef.current??(eventCapturedAtRef.current=new Date().toISOString())}:{})};
@@ -2024,7 +2046,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   const repeatConfirmation = repeatWarning
-    ? attendanceRepeatConfirmationPresentation({ ...repeatWarning, dateLabel: formatDisplayDate(repeatWarning.registrationDate ?? date), ...(calendar ? { registration: { date: repeatWarning.registrationDate ?? today, timeZone: calendar.timeZone } } : {}) }) : null;
+    ? attendanceRepeatConfirmationPresentation({ ...repeatWarning, dateLabel: formatDisplayDate(repeatWarning.registrationDate ?? date), ...(calendar ? { registration: { date: repeatWarning.registrationDate ?? today, timeZone: calendar.timeZone, ...(repeatWarning.registrationBandOptionId ? { bandLabel: statuses.find(status => status.optionId === repeatWarning.registrationBandOptionId)?.label } : {}) } } : {}) }) : null;
 
   return (
     <ScrollView testID={isDesktop ? "desktop-attendance" : "compact-attendance"} contentContainerStyle={styles.content} style={styles.screen}>
@@ -2052,7 +2074,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </Pressable>
       </View>
 
-      {calendar ? <Text style={styles.meta}>Nuevas altas: día operativo {formatDisplayDate(today)} · {calendar.timeZone}. Se calcula al confirmar.</Text> : null}
+      {calendar ? <Text style={styles.meta}>Nuevas altas: día operativo {formatDisplayDate(today)}{automaticRegistration && registrationBand.value?.label ? ` · Franja: ${registrationBand.value.label}` : ""} · {calendar.timeZone}. Se calcula al confirmar.</Text> : null}
       <View style={styles.summaryBar}>
         <Text style={styles.summaryLabel}>{daySnapshotHydrated ? "Registrados en esta fecha" : "Registros disponibles en esta fecha"}</Text>
         <Text style={styles.summaryValue}>{hasCompatibleDay ? totalRegistered : "-"}</Text>
@@ -2060,7 +2082,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
       </View>
 
-      {contextRelations.dependencyNotice ? <Text style={styles.offline}>{contextRelations.dependencyNotice}</Text> : null}
       {!isSaving && resolutionFeedback?.scope === resolutionScope && resolutionFeedback.message !== operationFeedback.message ? (
         <Text style={resolutionFeedback.outcome === "conflict" || resolutionFeedback.outcome === "failed" || resolutionFeedback.outcome === "superseded"
           ? styles.error : resolutionFeedback.outcome === "pending" ? styles.offline : styles.success}>
@@ -2205,26 +2226,26 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           ) : null}
 
           <View style={styles.formActions}>
-          {defaultStatus ? (
+          {primaryStatus || automaticRegistration ? (
             <Pressable
-              accessibilityRole="button" accessibilityState={{ disabled: isSaving || personReadPending, busy: isSaving || personReadPending }}
-              disabled={isSaving || personReadPending}
-              onPress={() => void saveStatus(defaultStatus)}
+              accessibilityRole="button" accessibilityState={{ disabled: isSaving || personReadPending || !primaryStatus, busy: isSaving || personReadPending }}
+              disabled={isSaving || personReadPending || !primaryStatus}
+              onPress={() => primaryStatus && void saveStatus(primaryStatus)}
               style={[styles.primaryStatusButton, isSaving && styles.disabledButton]}
             >
               {isSaving ? (
                 <ActivityIndicator color={colors.onPrimary} />
               ) : (
-                <Text style={styles.primaryStatusText}>{selectedItem.attendance ? "Actualizar" : "Registrar"} {defaultStatus.label}</Text>
+                <Text style={styles.primaryStatusText}>{selectedItem.attendance ? "Actualizar" : "Registrar"} {primaryStatus?.label}</Text>
               )}
             </Pressable>
           ) : (
             <Text style={styles.error}>No hay estados de asistencia configurados.</Text>
           )}
 
-          {shouldShowAttendanceStatusActions({ hasSelectedItem: Boolean(selectedItem), statusesCount: otherStatuses.length }) ? (
+          {shouldShowAttendanceStatusActions({ hasSelectedItem: Boolean(selectedItem), statusesCount: secondaryStatuses.length }) ? (
             <View style={styles.statusGrid}>
-              {otherStatuses.map((status) => (
+              {secondaryStatuses.map((status) => (
                 <Pressable
                   accessibilityRole="button" accessibilityState={{ disabled: isSaving || personReadPending, busy: isSaving || personReadPending }}
                   disabled={isSaving || personReadPending}
@@ -2241,9 +2262,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         </View>
       ) : null}
 
-      {!normalizedSearch && !selectedItem && hasCompatibleDay ? <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache}
+      {hasCompatibleDay ? <View style={normalizedSearch || selectedItem ? { display: "none" } : undefined}
+        accessibilityElementsHidden={Boolean(normalizedSearch || selectedItem)} importantForAccessibility={normalizedSearch || selectedItem ? "no-hide-descendants" : "auto"}>
+        <LatestAttendanceList latest={latest} fields={contextFields} statuses={statuses} store={definitionCache}
         totalCount={daySnapshotHydrated ? totalRegistered : undefined} onLoadGroup={readRecordGroup} subjectConfig={appView.config.subjectPresentation} subjectDefinition={presentationDefinition} onReadError={setError} isCurrent={isPresentationReadCurrent}
-        scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date } : null} onEdit={calendar || appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? item => editRepeatedRecord(item) : undefined} /> : null}
+        scope={ownerKey && selectedContractId ? { ownerKey, contractId: selectedContractId, appViewId: appView.id, targetEntityTypeId: appView.config.targetEntityTypeId, sourceEntityTypeId: appView.config.sourceEntityTypeId, date } : null} onEdit={calendar || appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY" ? item => editRepeatedRecord(item) : undefined} />
+      </View> : null}
 
       <Modal animationType="fade" transparent visible={!!repeatWarning} onRequestClose={cancelRepeatedRecord}>
         <View style={styles.modalBackdrop}><View accessibilityViewIsModal style={styles.modalPanel}>

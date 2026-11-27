@@ -423,3 +423,10 @@ function stable(value: unknown): unknown {
   }
   return value;
 }
+
+it("analytical PANEL requires a valid Core read while operational PANEL retains offline fallback",async()=>{
+ const store=new MemoryPanelStore(),panel=panelResponse("revision_1"),api={getPanel:vi.fn(async()=>panel)};
+ const input={api,appViewId:"panel_1",ownerKey:"owner_1",contractId:"contract_1",token:"synthetic",query:{datasetId:"records",page:1,pageSize:25},store,requireOnline:true};
+ expect((await loadPanelDatasetWithOfflineCache(input)).offline).toBe(false);const read=vi.spyOn(store,"getPanelSnapshot");
+ await expect(loadPanelDatasetWithOfflineCache({...input,knownOffline:true})).rejects.toMatchObject({code:"ANALYSIS_ONLINE_REQUIRED"});expect(read).not.toHaveBeenCalled();api.getPanel.mockRejectedValueOnce(new OpcoNetworkError());await expect(loadPanelDatasetWithOfflineCache(input)).rejects.toMatchObject({code:"ANALYSIS_UPDATE_FAILED"});expect(read).not.toHaveBeenCalled();expect((await loadPanelDatasetWithOfflineCache({...input,requireOnline:false,knownOffline:true})).offline).toBe(true);expect(read).toHaveBeenCalledTimes(1);
+});

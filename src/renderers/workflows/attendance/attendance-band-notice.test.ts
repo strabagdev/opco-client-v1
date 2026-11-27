@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { finalizeAttendanceDay, savedAttendanceBandNotice } from "../../../lib/attendance-operational-day";
+import { attendanceRegistrationBand, finalizeAttendanceDay, savedAttendanceBandNotice } from "../../../lib/attendance-operational-day";
 import { operationalCalendarKey, resolveOperationalDay } from "../../../lib/operational-calendar";
 import { attendanceDailyCount } from "../../../lib/attendance-repetition";
 import { captureTimeCommand } from "../../../lib/capture-time";
@@ -27,7 +27,8 @@ function actual(name: string, context: Record<string, unknown>) {
 }
 const instant = "2026-11-24T09:10:11.092Z";
 const calendar = { version: 1 as const, timeZone: "America/Santiago", dayStart: "08:00", bands: [{ optionId: "a", start: "08:00", end: "20:00" }, { optionId: "b", start: "20:00", end: "08:00" }] };
-const mismatch = finalizeAttendanceDay({ statusOptionId: "a" }, { calendar, contract: { version: 1, calendarKey: operationalCalendarKey(calendar) }, date: "2026-11-23", mode: "AUTO", editing: false, instant }).notice!;
+// Historical/legacy notice fixture: new automatic-band captures no longer emit this warning.
+const mismatch = "La opción elegida no coincide con la franja configurada para la confirmación. Se conservó tu selección manual.";
 function fixture(online = false) {
   vi.useFakeTimers(); vi.setSystemTime(new Date(instant));
   const c: Record<string, any> = {
@@ -43,7 +44,7 @@ function fixture(online = false) {
     appView: { id: "view", name: "Synthetic", config: { operationalCalendar: calendar, captureTime: { fieldId: "capture", timeZone: calendar.timeZone }, repetitionPolicy: "MULTIPLE_WITH_WARNING", statusFieldId: "state", targetEntityTypeId: "target" } },
     captureContract: { version: 1, fieldId: "capture", timeZone: calendar.timeZone },
     statuses: [{ optionId: "a", label: "A", isDefaultCheckIn: true }, { optionId: "b", label: "B", isDefaultCheckIn: false }],
-    resolveOperationalDay, finalizeAttendanceDay, savedAttendanceBandNotice, attendanceDailyCount, copyAttendanceEntry, attendanceAttemptKey, attendanceEntryToStateUpdateEntry, attendanceEntryExtraValues, normalizeAttendanceSearch, attendanceStateFields, workflowWriteMetadata, OpcoApiError,
+    resolveOperationalDay, attendanceRegistrationBand, finalizeAttendanceDay, savedAttendanceBandNotice, attendanceDailyCount, copyAttendanceEntry, attendanceAttemptKey, attendanceEntryToStateUpdateEntry, attendanceEntryExtraValues, normalizeAttendanceSearch, attendanceStateFields, workflowWriteMetadata, OpcoApiError,
     definitionCache: { getAttendanceDailyRecords: vi.fn(async () => []), saveStateUpdateLocally: vi.fn(async () => ({ localRecordId: "local", clientRequestId: "request" })), getStateUpdateResolutionOutcome: vi.fn(async () => "confirmed") },
     syncPendingRecords: vi.fn(async () => {}), refreshLocalDayState: vi.fn(async () => {}), refreshRecordsSyncSummary: vi.fn(async () => {}), clearVisibleError: vi.fn(), recordVisibleError: vi.fn(), reportWriteFeedback: vi.fn(),
     setError: vi.fn(), setConflict: vi.fn(), setRepeatChecking: vi.fn(), setContextErrors: vi.fn(), setIsSaving: vi.fn(), setRefreshError: vi.fn(), setSuccessMessage: vi.fn(),
@@ -81,7 +82,7 @@ describe("Band notice belongs to one Attendance confirmation", () => {
     const c = fixture(); await actual("saveRepeatedStatus", c)({ optionId, label: optionId.toUpperCase() });
     expect(c.notice).toBeNull(); expect(c.saveEntry).not.toHaveBeenCalled(); expect(c.eventCapturedAtRef.current).toBeNull();
     await actual("confirmRepeatedRecord", c)();
-    expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ statusOptionId: optionId, eventOccurredAt: instant, operationalDay: expect.objectContaining({ mode: "AUTO" }) }), "2026-11-23", optionId === "a" ? mismatch : null);
+    expect(c.saveEntry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ statusOptionId: "b", eventOccurredAt: instant, operationalDay: expect.objectContaining({ mode: "AUTO" }) }), "2026-11-23", null);
   });
   it("cancel clears the notice and preserves the absence of a new intention", async () => {
     const c = fixture(); await actual("saveRepeatedStatus", c)({ optionId: "b", label: "B" });
@@ -89,9 +90,9 @@ describe("Band notice belongs to one Attendance confirmation", () => {
     expect(c.notice).toBeNull(); expect(c.repeatWarning).toBeNull(); expect(c.eventCapturedAtRef.current).toBeNull();
     await actual("confirmRepeatedRecord", { ...c, repeatWarning: previous })(); expect(c.saveEntry).not.toHaveBeenCalled();
   });
-  it.each([false, true])("labels the saved result separately from its band warning, online=%s", async online => {
+  it.each([false, true])("labels a legacy notice separately from the saved result, online=%s", async online => {
     const c = fixture(online); const entry = c.finalizeTemporalEntry({ personRecordId: "person", statusOptionId: "a", repetitionPolicy: "MULTIPLE_WITH_WARNING", repetitionAcknowledged: true, contextValues: {} }, false);
-    await actual("saveEntry", c)(entry.entry, entry.date, entry.notice);
+    await actual("saveEntry", c)(entry.entry, entry.date, mismatch);
     expect(c.notice).toBe(savedAttendanceBandNotice(mismatch, online ? "server-confirmed" : "local-saved"));
     expect(c.reportWriteFeedback).toHaveBeenCalledWith(expect.objectContaining({ kind: online ? "server-confirmed" : "local-saved" }));
     if (!online) { expect(c.notice).not.toContain("confirmado por Opco"); expect(c.syncPendingRecords).not.toHaveBeenCalled(); }
@@ -99,7 +100,7 @@ describe("Band notice belongs to one Attendance confirmation", () => {
   it("an online attempt without a confirmed resolution still reports only the local commit", async () => {
     const c = fixture(true); c.definitionCache.getStateUpdateResolutionOutcome.mockResolvedValue("pending");
     const entry = c.finalizeTemporalEntry({ personRecordId: "person", statusOptionId: "a", repetitionPolicy: "MULTIPLE_WITH_WARNING", contextValues: {} }, false);
-    await actual("saveEntry", c)(entry.entry, entry.date, entry.notice);
+    await actual("saveEntry", c)(entry.entry, entry.date, mismatch);
     expect(c.notice).toBe(savedAttendanceBandNotice(mismatch, "local-saved"));
     expect(c.reportWriteFeedback).toHaveBeenCalledWith(expect.objectContaining({ kind: "local-saved" }));
     expect(JSON.stringify(c.definitionCache.saveStateUpdateLocally.mock.calls)).not.toContain("franja");
@@ -108,15 +109,15 @@ describe("Band notice belongs to one Attendance confirmation", () => {
     const c = fixture(); let reject!: (error: Error) => void;
     c.definitionCache.saveStateUpdateLocally.mockReturnValue(new Promise((_resolve, no) => { reject = no; }));
     const entry = c.finalizeTemporalEntry({ personRecordId: "person", statusOptionId: "a", repetitionPolicy: "MULTIPLE_WITH_WARNING", contextValues: {} }, false);
-    const save = actual("saveEntry", c)(entry.entry, entry.date, entry.notice);
-    expect(c.notice).toBe(mismatch); expect(c.reportWriteFeedback).not.toHaveBeenCalled(); reject(Error("Injected storage failure")); await save;
-    expect(c.notice).toBe(mismatch); expect(c.reportWriteFeedback).not.toHaveBeenCalled(); expect(c.selectedItem?.person.id).toBe("person");
+    const save = actual("saveEntry", c)(entry.entry, entry.date, mismatch);
+    expect(c.notice).toBeNull(); expect(c.reportWriteFeedback).not.toHaveBeenCalled(); reject(Error("Injected storage failure")); await save;
+    expect(c.notice).toBeNull(); expect(c.reportWriteFeedback).not.toHaveBeenCalled(); expect(c.selectedItem?.person.id).toBe("person");
   });
   it("an old result cannot restore its warning after another draft starts", async () => {
     const c = fixture(true); let finish!: () => void;
     c.syncPendingRecords.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
     const entry = c.finalizeTemporalEntry({ personRecordId: "person", statusOptionId: "a", repetitionPolicy: "MULTIPLE_WITH_WARNING", contextValues: {} }, false);
-    const save = actual("saveEntry", c)(entry.entry, entry.date, entry.notice);
+    const save = actual("saveEntry", c)(entry.entry, entry.date, mismatch);
     await vi.waitFor(() => expect(c.syncPendingRecords).toHaveBeenCalledOnce());
     actual("changeSearchText", c)("next"); expect(c.notice).toBeNull(); finish(); await save;
     expect(c.notice).toBeNull(); expect(c.reportWriteFeedback).not.toHaveBeenCalled();

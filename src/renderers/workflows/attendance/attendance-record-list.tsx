@@ -44,7 +44,8 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
   isCurrent?(): boolean;
 }) {
   const key = JSON.stringify([scope, records, fields, statuses, subjectConfig, subjectDefinition]);
-  const [state, setState] = useState<{ key: string; rows: AttendanceRecordPresentation[]; error?: string }>();
+  const presentationScope = JSON.stringify([scope, fields, statuses, subjectConfig, subjectDefinition]);
+  const [state, setState] = useState<{ key: string; presentationScope: string; rows: AttendanceRecordPresentation[]; isCurrent?: () => boolean; error?: string }>();
   useEffect(() => {
     let active = true;
     const [capturedScope, capturedRecords, capturedFields, capturedStatuses, capturedConfig, capturedDefinition] = JSON.parse(key) as [typeof scope, typeof records, typeof fields, typeof statuses, typeof subjectConfig, typeof subjectDefinition];
@@ -61,16 +62,22 @@ export function AttendanceRecordList({ records, fields, statuses = [], scope, st
       .then(rows => { if (active && isCurrent?.() !== false) {
         const distinct = distinctAttendancePresentations(rows);
         recordAttendanceLocalRead(capturedScope, grouped ? "grouped-list/presented" : "person-list/presented", distinct.flatMap(row => [row.record.recordId, row.reference, ...(row.serverId ? [row.serverId] : [])]), true, distinct.length);
-        setState({ key, rows: distinct });
+        setState({ key, presentationScope, rows: distinct, isCurrent });
       } })
       .catch(() => { if (active && isCurrent?.() !== false) {
         const error = "No pudimos leer las referencias y etiquetas locales. Los cambios siguen guardados; consulta Revisar cambio para leer su identidad exacta.";
-        setState({ key, rows: [], error });
+        setState(previous => previous?.presentationScope === presentationScope && previous.isCurrent?.() !== false
+          ? { ...previous, error } : { key, presentationScope, rows: [], isCurrent, error });
         onReadError?.(error);
       } });
     return () => { active = false; };
-  }, [key, store, grouped, onReadError, isCurrent]);
-  const current = state?.key === key ? state : undefined;
+  }, [key, presentationScope, store, grouped, onReadError, isCurrent]);
+  // A new presentation read is not a new query. Retain compatible rows and their
+  // keyed groups, but never data from a retired scope/session/definition.
+  const compatible = state?.presentationScope === presentationScope && state.isCurrent?.() !== false ? state : undefined;
+  const incomingIds = new Set(records.map(record => record.recordId));
+  const current = compatible ? { ...compatible, rows: compatible.rows.filter(row =>
+    [row.record.recordId, row.reference, row.serverId].some(id => id && incomingIds.has(id))) } : undefined;
   if (records.length === 0) return null;
   const rowProps = (row: AttendanceRecordPresentation) => ({ row,
     selected: Boolean(selectedRecordId && [row.record.recordId, row.reference, row.serverId].includes(selectedRecordId)),

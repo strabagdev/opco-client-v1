@@ -10,7 +10,7 @@ export function attendanceRepeatConfirmationPresentation({ localCount, remoteCou
   readonly localCount: number;
   readonly remoteCount?: number;
   readonly dateLabel: string;
-  readonly registration?: { date: string; timeZone: string };
+  readonly registration?: { date: string; timeZone: string; bandLabel?: string };
 }) {
   const additional = localCount > 0 || (remoteCount ?? 0) > 0;
   const localRecords = `${localCount} ${localCount === 1 ? "registro disponible" : "registros disponibles"}`;
@@ -23,7 +23,7 @@ export function attendanceRepeatConfirmationPresentation({ localCount, remoteCou
     title: additional ? "Confirmar registro adicional" : "Confirmar registro",
     confirmLabel: additional ? "Confirmar uno adicional" : "Confirmar registro",
     message,
-    dateSummary: registration ? `Fecha operativa del registro: ${registration.date.split("-").reverse().join("/")} · ${registration.timeZone}. Se calcula al confirmar.` : null,
+    dateSummary: registration ? `Fecha operativa del registro: ${registration.date.split("-").reverse().join("/")}${registration.bandLabel ? ` · Franja: ${registration.bandLabel}` : ""} · ${registration.timeZone}. Se calcula al confirmar.` : null,
     consequence: additional ? "Se creará un registro independiente. Los anteriores se conservarán." : "Se creará un registro independiente.",
   };
 }

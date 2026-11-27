@@ -35,10 +35,10 @@ El editor antiguo que omite el campo conserva la definición guardada. Quitarla 
 modificarla es un cambio explícito que exige revisar pendientes, no una migración.
 
 Intervalos [inicio,fin); fin menor que inicio cruza medianoche. Inicio=fin y solapamientos
-(incluso entre dos franjas envolventes) son inválidos. Huecos son válidos: sin franja
-sugerida. Una opción puede tener franjas no solapadas. La zona debe existir en Intl IANA.
+(incluso entre dos franjas envolventes) son inválidos. Huecos son configuraciones válidas, pero bloquean una nueva captura cuando no hay
+franja vigente; no se inventa una opción. Una opción puede tener franjas no solapadas. La zona debe existir en Intl IANA.
 
-## Confirmación y DATE manual
+## Confirmación: DATE operativo y franja para nuevas altas
 
 Un único eventOccurredAt UTC ISO con milisegundos se obtiene en el clic definitivo del
 alta; si hay advertencia positiva, al confirmarla, no al abrirla. Cancelar no estampa
@@ -52,16 +52,24 @@ PRESERVE exige base/edición explícita y no fabrica hora para históricos. Edit
 pendiente mantiene el modo/instante originales del comando; editar un registro ACK usa
 su ID/base y conserva captureTime. Reintentos y sincronización no recalculan DATE.
 
-La pantalla distingue fecha automática/manual y permite volver explícitamente al día
-actual. Reloj/resume observan el límite real del día operativo y medianoche civil para
-el máximo del selector. Un aviso que cruza el límite de jornada queda obsoleto: no se
-crea una intención silenciosa; hace falta confirmar en el nuevo día. Una advertencia
-que sólo cruza una franja usa el instante definitivo, conservando la opción manual.
+La fecha del selector es de consulta. Con calendario, cada alta usa DATE AUTO;
+con calendario **y franjas**, también usa la opción real de la franja resuelta en el
+mismo instante definitivo. No hay botones para contradecir esa franja en nuevas altas.
+La opción predeterminada/manual continúa para experiencias sin franjas y para edición.
+Los comandos MANUAL antiguos siguen siendo compatibles; no se convierten ni descartan.
 
-Configurar franjas **no** elige A/B. Una discrepancia se informa en el sector existente
-de comunicaciones como nota informativa; no bloquea, no cambia el SELECT, no añade
-mensajes por fila. Los errores y conflictos conservan prioridad. No se rediseñaron
-las comunicaciones ni se cambiaron sus reglas generales.
+Si la advertencia de repetición cruza una franja, se actualiza la misma confirmación
+y se exige revisarla otra vez antes de guardar. Si cruza la jornada, hay que seleccionar
+la persona y comprobar sus registros del nuevo día; no hay persistencia implícita.
+Hueco, solapamiento u opción ausente bloquean la nueva captura en el sector único.
+No cambian las reglas de repetición, obligatoriedad de contextos ni las escrituras
+RECORDS/STATE_UPDATE ya persistidas. Un error no fabrica captura.
+
+El reloj existente de Attendance observa opcionalmente las franjas: conserva un solo
+temporizador, despierta como máximo en el siguiente minuto y publica únicamente cambios
+reales de día civil/operativo/franja. Inicio y los demás consumidores mantienen la
+programación anterior. El clic definitivo vuelve a calcular; no se promete ejecución
+mientras el navegador esté suspendido. Ver [ATTENDANCE_BACKGROUND_BANDS.md](ATTENDANCE_BACKGROUND_BANDS.md).
 
 ## PANEL: una definición, un vínculo
 
