@@ -314,14 +314,15 @@ export default function HomeScreen() {
     if (!hasCompatibleViews) return;
     const coordinator = createHomeOfflineAvailabilityRefresh(canUpdate => refreshOfflineAvailability(availabilityViewsRef.current, canUpdate));
     availabilityRefreshRef.current = coordinator;
-    const unsubscribe = subscribeLocalDatabaseCacheChanges(() => { void coordinator.request(); });
+    const unsubscribe = ownerKey && selectedContractId ? subscribeLocalDatabaseCacheChanges(() => { void coordinator.request(); },
+      { ownerKey, contractId: selectedContractId }) : () => undefined;
     void coordinator.request();
     return () => {
       coordinator.dispose();
       unsubscribe();
       if (availabilityRefreshRef.current === coordinator) availabilityRefreshRef.current = null;
     };
-  }, [hasCompatibleViews, refreshOfflineAvailability]));
+  }, [hasCompatibleViews, ownerKey, refreshOfflineAvailability, selectedContractId]));
 
   const contractSelector = context && context.contracts.length > 1 ? (
     <CompactSelect label="Contrato activo" required value={selectedContractId ?? ""}

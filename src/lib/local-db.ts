@@ -170,7 +170,7 @@ export type SQLiteCoordinatorDiagnostics = {
 };
 
 type LocalDatabaseGlobalState = {
-  cacheChangeListeners: Set<() => void>;
+  cacheChangeListeners: Set<(change?: LocalDatabaseCacheChange) => void>;
   coordinatedDatabase: CoordinatedDatabase | null;
   coordinatorActive: SQLiteCoordinatorOperationDiagnostics | null;
   coordinatorRecent: SQLiteCoordinatorOperationDiagnostics[];
@@ -806,9 +806,16 @@ function notifyLocalDatabaseStorageListeners(state = getLocalDatabaseGlobalState
   }
 }
 
-function notifyLocalDatabaseCacheChangeListeners(state = getLocalDatabaseGlobalState()) {
-  for (const listener of state.cacheChangeListeners) {
-    listener();
+export type LocalDatabaseCacheChange = {
+  kind: "navigation" | "definition" | "coverage" | "records" | "sync" | "reset";
+  ownerKey?: string;
+  contractId?: string;
+};
+type CacheChangeScope = { ownerKey: string; contractId: string; kinds?: readonly LocalDatabaseCacheChange["kind"][] };
+
+function notifyLocalDatabaseCacheChangeListeners(change: LocalDatabaseCacheChange) {
+  for (const listener of getLocalDatabaseGlobalState().cacheChangeListeners) {
+    listener(change);
   }
 }
 
@@ -971,14 +978,18 @@ export function subscribeLocalDatabaseStorageState(listener: () => void) {
   };
 }
 
-export function subscribeLocalDatabaseCacheChanges(listener: () => void) {
+export function subscribeLocalDatabaseCacheChanges(listener: () => void, scope?: CacheChangeScope) {
   const state = getLocalDatabaseGlobalState();
-
-  state.cacheChangeListeners.add(listener);
-
-  return () => {
-    state.cacheChangeListeners.delete(listener);
+  // Keep the existing channel and legacy unfiltered subscribers. A notification
+  // never certifies coverage; it only invalidates readers of the committed data.
+  const scoped = (change?: LocalDatabaseCacheChange) => {
+    if (!scope || !change || change.kind === "reset" ||
+      ((!change.ownerKey || change.ownerKey === scope.ownerKey) &&
+       (!change.contractId || change.contractId === scope.contractId) &&
+       (!scope.kinds || scope.kinds.includes(change.kind)))) listener();
   };
+  state.cacheChangeListeners.add(scoped);
+  return () => { state.cacheChangeListeners.delete(scoped); };
 }
 
 export async function retryLocalDatabaseInitialization() {
@@ -1252,6 +1263,7 @@ async function upsertAppViews(ownerKey: string, contractId: string, views: AppVi
     JSON.stringify(views),
     syncedAt,
   );
+  notifyLocalDatabaseCacheChangeListeners({ kind: "navigation", ownerKey, contractId });
 }
 
 async function getAppViews(ownerKey: string, contractId: string): Promise<CachedAppViewsSnapshot | null> {
@@ -1310,7 +1322,7 @@ async function upsertReportSnapshot({
   assertActive?.();
   }, "transaction:report-snapshot");
 
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "coverage", ownerKey, contractId });
 }
 
 async function getReportSnapshot({
@@ -1393,7 +1405,7 @@ async function upsertPanelSnapshot({
     assertActive?.();
   }, "transaction:panel-snapshot");
 
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "definition", ownerKey, contractId });
 }
 
 async function getCoherentPanelDefinition(scope: PanelDefinitionScope): Promise<PanelAppView | null> {
@@ -1500,6 +1512,7 @@ async function clearNavigationCache() {
   await db.runAsync(`DELETE FROM app_view_definitions`);
   await db.runAsync(`DELETE FROM panel_snapshots`);
   await db.runAsync(`DELETE FROM report_snapshots`);
+  notifyLocalDatabaseCacheChangeListeners({ kind: "reset" });
 }
 
 async function upsertAppViewDefinition({
@@ -1545,7 +1558,7 @@ async function upsertAppViewDefinition({
     lastPreparedAt,
     normalizedDefinition.kind === "error" ? "error" : status,
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "definition", ownerKey, contractId });
 }
 
 async function getAppViewDefinition(
@@ -1594,7 +1607,7 @@ async function reconcileAppViewDefinitions(ownerKey: string, contractId: string,
       ownerKey,
       contractId,
     );
-    notifyLocalDatabaseCacheChangeListeners();
+    notifyLocalDatabaseCacheChangeListeners({ kind: "definition", ownerKey, contractId });
     return;
   }
 
@@ -1611,7 +1624,7 @@ async function reconcileAppViewDefinitions(ownerKey: string, contractId: string,
     contractId,
     ...assignedAppViewIds,
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "definition", ownerKey, contractId });
 }
 
 async function upsertRemoteRecords({
@@ -2663,7 +2676,7 @@ async function markSyncPhaseCompleted({
     contractId,
     entityTypeId,
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "sync", ownerKey, contractId });
 }
 
 async function markSyncError({
@@ -2837,7 +2850,7 @@ async function cancelNeverDispatchedStateUpdate(input: StateUpdateScope & { loca
     await transaction.runAsync("DELETE FROM pending_operations WHERE id=? AND client_request_id=?", operation.id, input.clientRequestId);
     await transaction.runAsync("DELETE FROM entity_records WHERE local_id=? AND owner_key=?", input.localRecordId, input.ownerKey);
   }, "transaction:state-update-cancel-never-dispatched");
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "records", ownerKey: input.ownerKey, contractId: input.contractId });
 }
 
 async function saveStateUpdateLocally(rawInput: SaveStateUpdateLocallyInput) {
@@ -5759,7 +5772,7 @@ async function setStateUpdateCurrentCoverage(input: StateUpdateCurrentCoverageSc
     "INSERT INTO app_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     stateUpdateCurrentCoverageKey(input), JSON.stringify(input.coverage),
   );
-  if (input.notifyCacheChange !== false) notifyLocalDatabaseCacheChangeListeners();
+  if (input.notifyCacheChange !== false) notifyLocalDatabaseCacheChangeListeners({ kind: "coverage", ownerKey: input.ownerKey, contractId: input.contractId });
 }
 
 async function getStateUpdateSnapshotCoverage(input: StateUpdateScope): Promise<StateUpdateSnapshotCoverage | null> {
@@ -5792,7 +5805,7 @@ async function markAttendanceDaySnapshotHydrated(input: AttendanceDaySnapshotSco
     attendanceDaySnapshotHydrationKey(input),
     JSON.stringify({ lastSuccessfulRefreshAt: refreshedAt }),
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "coverage", ownerKey: input.ownerKey, contractId: input.contractId });
 }
 
 async function markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverageInput) {
@@ -5822,7 +5835,7 @@ async function markStateUpdateSnapshotCoverage(input: StateUpdateSnapshotCoverag
     stateUpdateSnapshotCoverageKey(input),
     JSON.stringify(coverage),
   );
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "coverage", ownerKey: input.ownerKey, contractId: input.contractId });
 }
 
 function offlinePreparationReceiptKey(ownerKey: string, contractId: string) {
@@ -6682,7 +6695,7 @@ async function reviewStateUpdateSchedule(input:import("./state-update-offline").
     await tx.runAsync("UPDATE entity_records SET values_json=?,sync_status='pending_create',sync_error_code=NULL,sync_error_message=NULL WHERE local_id=?",JSON.stringify(values),input.localRecordId);
     await tx.runAsync("UPDATE pending_operations SET payload_json=?,client_request_id=?,attempts=0,last_error_code=NULL,last_error_message=NULL,updated_at=? WHERE id=?",JSON.stringify({...nextPayload,clientRequestId}),clientRequestId,new Date().toISOString(),operation.id);
   },"transaction:state-update-schedule-review");
-  notifyLocalDatabaseCacheChangeListeners();
+  notifyLocalDatabaseCacheChangeListeners({ kind: "records", ownerKey: input.ownerKey, contractId: input.contractId });
 }
 
 async function getStateUpdateScheduleReviewCandidate(input:StateUpdateScope & {subjectRecordId:string}):Promise<import("./opco-api").StateUpdateItem|null> {

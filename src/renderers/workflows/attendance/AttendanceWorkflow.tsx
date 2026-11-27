@@ -185,6 +185,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   const [repeatChecking,setRepeatChecking]=useState(false);
   const [repeatWarning,setRepeatWarning]=useState<{entry:AttendanceBatchEntry;localCount:number;remoteCount?:number;scope:string;revision:number;generation:number;registrationDate?:string}|null>(null);
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
+  const personReadRef = useRef<{ observationEdited: boolean } | null>(null);
+  const [personReadPending, setPersonReadPending] = useState(false);
   const [statuses, setStatuses] = useState<AttendanceStatusOption[]>([]);
   const [contextFields, setContextFields] = useState<AttendanceContextField[]>([]);
   const writePolicyConfigured = Boolean(appView.config.workflowWritePolicy);
@@ -245,6 +247,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
     writeContract: writeContract ?? null,
     writePolicyConfigured,
   });
+  const requestSequenceRef = useRef(0);
   const repeatedScopeRef=useRef(resolutionScope);
   useLayoutEffect(()=>{if(repeatedScopeRef.current!==resolutionScope){repeatedScopeRef.current=resolutionScope;setRepeatWarning(null);setEditingTarget(null);setPersonRecords([]);}},[resolutionScope]);
   const confirmationBasisRef = useRef(confirmationBasis);
@@ -255,6 +258,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   useLayoutEffect(() => {
     if (!api.isAuthSessionCurrent(authGeneration)) return;
     if (resolutionScopeRef.current !== resolutionScope || resolutionSessionRef.current !== authGeneration) {
+      // Retain a search only across compatible background reads, never across
+      // another owner, session, configuration or operational consultation scope.
+      requestSequenceRef.current += 1;
+      setItems([]);
       saveInFlightRef.current = null;
       setIsSaving(false);
       setTemporalNotice(null);
@@ -264,6 +271,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if(calendar)eventCapturedAtRef.current=null;
       writeContractRequiredRef.current=writePolicyConfigured;
       draftRevisionRef.current += 1;
+      personReadRef.current = null;
+      setPersonReadPending(false);
       setSelectedItem(null);
       setConflict(null);
       setConfirmationError(null);
@@ -282,7 +291,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       confirmationBasisRef.current = confirmationBasis;
     }
   }, [confirmationBasis]);
-  const requestSequenceRef = useRef(0);
   const loadingRequestRef = useRef<number | null>(null);
   const searchingRequestRef = useRef<number | null>(null);
   const stateUpdateRefreshKeyRef = useRef(stateUpdateReconnectRefreshKey);
@@ -350,10 +358,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       ? "ATTENDANCE_ACTIVITY_FAILED"
       : null;
   useExperienceActivityReporter(appView, {
-    notice: [temporalNotice, visibleError ?? refreshError ?? (connectivityStatus !== "online" && !daySnapshotHydrated
+    notice: [personReadPending ? "Comprobando los registros de la persona. Puedes completar el formulario; espera para confirmar." : temporalNotice, visibleError ?? refreshError ?? (connectivityStatus !== "online" && !daySnapshotHydrated
       ? attendanceOfflineDayNotice(daySnapshotHydrated, latest.length) : null)].filter(Boolean).join(" ") || null,
-    activeCount: Number(repeatChecking) + Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount + contextRelationReadCount,
-    readCount: Number(repeatChecking) + Number(isLoading) + Number(isSearching) + recoveryReadCount + contextRelationReadCount,
+    activeCount: Number(personReadPending) + Number(repeatChecking) + Number(isLoading) + Number(isSearching) + Number(isSaving) + recoveryReadCount + contextRelationReadCount,
+    readCount: Number(personReadPending) + Number(repeatChecking) + Number(isLoading) + Number(isSearching) + recoveryReadCount + contextRelationReadCount,
     readMode: loadedDate === date ? "refresh" : "initial",
     errorCode: experienceErrorCode,
     result: experienceErrorCode ? "error" : !isLoading && !isSearching && !isSaving && contextRelationReadCount === 0 ? "success" : null,
@@ -623,6 +631,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }, [applyAttendanceResponse, refreshLocalSyncIndicators]);
 
   const clearPersonFlow = useCallback(() => {
+    personReadRef.current = null;
+    setPersonReadPending(false);
     setTemporalNotice(null);
     if(appView.config.operationalCalendar){eventCapturedAtRef.current=null;registrationReadDateRef.current=null;editingDateRef.current=null;setPersonRecordDate(null);}
     setEditingTarget(null);setPersonRecords([]);setRepeatWarning(null);
@@ -707,7 +717,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       if (!mayPublish() || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) return;
       setRefreshError(null);
       clearVisibleError();
-      setItems([]);
     } catch (nextError) {
       if (mayPublish() && requestId === requestSequenceRef.current) {
         if (operation === "refresh") {
@@ -967,6 +976,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           ]);
 
           if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+            if (isMounted) finishLoadingRequest(requestId);
             return;
           }
 
@@ -1010,10 +1020,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
         localReady = false;
         localReason = localError instanceof Error ? localError.message : "No fue posible leer el día guardado. Los pendientes se conservan.";
       }
-      if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) return;
+      if (!isMounted || !isAttendanceRequestCurrent(requestSequenceRef.current, requestId)) {
+        if (isMounted) finishLoadingRequest(requestId);
+        return;
+      }
       if (connectivityStatus !== "online") {
         setError(localReady ? null : localReason);
-        setItems([]);
         finishLoadingRequest(requestId);
         return;
       }
@@ -1039,7 +1051,6 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           totalRegistered: response.summary.totalRegistered,
         }, requestId);
         clearVisibleError();
-        setItems([]);
       } catch (nextError) {
         if (isMounted && requestId === requestSequenceRef.current) {
           if (nextError instanceof OpcoNetworkError) {
@@ -1172,7 +1183,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   async function selectRepeatedPerson(item: AttendanceItem) {
       if (!api.isAuthSessionCurrent(authGeneration)) return;
       setTemporalNotice(null);
-      const revision = ++draftRevisionRef.current, scope = resolutionScope;
+      ++draftRevisionRef.current;
+      const scope = resolutionScope;
+      const reading = personReadRef.current = { observationEdited: false };
+      setPersonReadPending(true);
       confirmationSequenceRef.current++;
       eventCapturedAtRef.current = null;
       const selectedDate = calendar ? resolveOperationalDay(new Date(), calendar).date : date;
@@ -1183,7 +1197,9 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       setSelectedItem({ ...item, attendance: null });
       setError(null);
       setConflict(null);
-      const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) && resolutionScopeRef.current === scope && draftRevisionRef.current === revision;
+      // Observation/context edits do not retire an identity read. Another person,
+      // edit, scope or session does; never let its finally clear a newer read.
+      const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) && resolutionScopeRef.current === scope && personReadRef.current === reading;
       try {
           if (!ownerKey || !selectedContractId)
               return;
@@ -1225,8 +1241,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
                   if (!appView.config.repetitionPolicy || appView.config.repetitionPolicy === "ONE_PER_DAY") {
                       const selected = records[0] ?? { ...item, attendance: null };
                       setSelectedItem(selected);
-                      setContextValues(attendanceEditContextValues(contextFields, selected, contextValues));
-                      setObservation(selected.attendance?.observation ?? "");
+                      setContextValues(current => current === contextValues ? attendanceEditContextValues(contextFields, selected, contextValues) : current);
+                      setObservation(current => !reading.observationEdited && current === observation ? selected.attendance?.observation ?? "" : current);
                   }
               }
               setPersonRecords(records);
@@ -1236,12 +1252,20 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           if (current())
               setError(error instanceof Error ? error.message : "No fue posible cargar los registros diarios.");
       }
+      finally {
+          if (current()) {
+              personReadRef.current = null;
+              setPersonReadPending(false);
+          }
+      }
   }
 
   async function editRepeatedRecord(item: AttendanceItem, recordDate = date) {
       if (!item.attendance || !ownerKey || !selectedContractId || saveInFlightRef.current || !api.isAuthSessionCurrent(authGeneration))
           return;
       setTemporalNotice(null);
+      personReadRef.current = null;
+      setPersonReadPending(false);
       const revision = ++draftRevisionRef.current, scope = resolutionScope;
       const current = () => resolutionMountedRef.current && api.isAuthSessionCurrent(authGeneration) &&
           scope === resolutionScopeRef.current && revision === draftRevisionRef.current;
@@ -1322,6 +1346,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function saveRepeatedStatus(status: AttendanceStatusOption) {
+      if (personReadPending) return;
       if (confirmationBasis !== confirmationBasisRef.current)
           return;
       if (!selectedItem || !ownerKey || !selectedContractId || isSaving || saveInFlightRef.current || repeatCheckingRef.current || repeatWarning)
@@ -1346,6 +1371,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
       }
       const confirmationInstant = (automatic || calendar) && !editingTarget ? eventCapturedAtRef.current ?? new Date().toISOString() : undefined;
       const registrationDate = calendar && confirmationInstant ? resolveOperationalDay(confirmationInstant, calendar).date : date;
+      if (calendar && !editingTarget && registrationReadDateRef.current === null) {
+          setTemporalNotice("La fecha de registro aún no está comprobada. Vuelve a seleccionar la persona para consultar sus registros; el borrador se conserva.");
+          return;
+      }
       if (calendar && !editingTarget && registrationReadDateRef.current !== registrationDate) {
           clearPersonFlow();
           setTemporalNotice("Cambió el día operativo de registro. Selecciona nuevamente la persona; no se guardó una intención.");
@@ -1499,6 +1528,7 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }
 
   async function saveStatus(status: AttendanceStatusOption) {
+    if (personReadPending) return;
     if (appView.config.repetitionPolicy && appView.config.repetitionPolicy!=="ONE_PER_DAY") return saveRepeatedStatus(status);
     if (!selectedContractId || !selectedItem || isSaving || saveInFlightRef.current) {
       return;
@@ -1513,6 +1543,10 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
 
     const confirmationInstant = calendar ? eventCapturedAtRef.current ?? new Date().toISOString() : undefined;
     const registrationDate = calendar ? resolveOperationalDay(confirmationInstant!, calendar).date : date;
+    if (calendar && !editingTarget && registrationReadDateRef.current === null) {
+      setTemporalNotice("La fecha de registro aún no está comprobada. Vuelve a seleccionar la persona para consultar sus registros; el borrador se conserva.");
+      return;
+    }
     if (calendar && !editingTarget && registrationReadDateRef.current !== registrationDate) {
       clearPersonFlow();
       setTemporalNotice("Cambió el día operativo de registro. Selecciona nuevamente la persona; no se guardó una intención.");
@@ -1973,6 +2007,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
   }), [connectivityStatus, error, isLoading, latest.length, statuses.length]));
 
   function changeSearchText(value: string, fieldId?: string) {
+    personReadRef.current = null;
+    setPersonReadPending(false);
     setTemporalNotice(null);
     draftRevisionRef.current += 1;
     setConfirmationError(null);
@@ -2153,7 +2189,12 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
                 <TextInput
                   {...observationA11y.controlProps}
                   multiline
-                  onChangeText={value => { draftRevisionRef.current += 1; setObservation(value); }}
+                  onChangeText={value => {
+                    draftRevisionRef.current += 1;
+                    // Editing back to the original value is still an explicit edit.
+                    if (personReadRef.current) personReadRef.current.observationEdited = true;
+                    setObservation(value);
+                  }}
                   placeholder="Observación"
                   style={styles.observationInput}
                   value={observation}
@@ -2166,8 +2207,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
           <View style={styles.formActions}>
           {defaultStatus ? (
             <Pressable
-              accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }}
-              disabled={isSaving}
+              accessibilityRole="button" accessibilityState={{ disabled: isSaving || personReadPending, busy: isSaving || personReadPending }}
+              disabled={isSaving || personReadPending}
               onPress={() => void saveStatus(defaultStatus)}
               style={[styles.primaryStatusButton, isSaving && styles.disabledButton]}
             >
@@ -2185,8 +2226,8 @@ export function AttendanceWorkflow({ appView }: AppViewRendererProps<WorkflowApp
             <View style={styles.statusGrid}>
               {otherStatuses.map((status) => (
                 <Pressable
-                  accessibilityRole="button" accessibilityState={{ disabled: isSaving, busy: isSaving }}
-                  disabled={isSaving}
+                  accessibilityRole="button" accessibilityState={{ disabled: isSaving || personReadPending, busy: isSaving || personReadPending }}
+                  disabled={isSaving || personReadPending}
                   key={status.optionId}
                   onPress={() => void saveStatus(status)}
                   style={[styles.secondaryStatusButton, isSaving && styles.disabledButton]}

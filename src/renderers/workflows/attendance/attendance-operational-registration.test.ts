@@ -15,7 +15,7 @@ import { attendanceRepeatConfirmationPresentation } from "./attendance-confirmat
 
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function handler(name: string, context: Record<string, unknown>) {
-  context={authGeneration:0,...context,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(context.api as object??{})}};
+  context={personReadPending:false,personReadRef:{current:null},setPersonReadPending:vi.fn(),authGeneration:0,...context,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(context.api as object??{})}};
   let declaration: ts.FunctionDeclaration | undefined;
   function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node; ts.forEachChild(node, visit); }
   visit(source);

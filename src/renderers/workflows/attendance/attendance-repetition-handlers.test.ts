@@ -8,7 +8,7 @@ import { attendanceDailyCount, attendanceHistoryMode } from "../../../lib/attend
 import { recordAttendanceLocalRead } from "./attendance-local-read-trace";
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function actual<T = void>(name: string, c: Record<string, unknown>) {
-  c={calendar:undefined,recordAttendanceLocalRead,setTemporalNotice:vi.fn(),authGeneration:0,...c,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(c.api as object??{})}};
+  c={personReadPending:false,personReadRef:{current:null},setPersonReadPending:vi.fn(),calendar:undefined,recordAttendanceLocalRead,setTemporalNotice:vi.fn(),authGeneration:0,...c,api:{isAuthSessionCurrent:(generation:number)=>generation===0,...(c.api as object??{})}};
     let node: ts.FunctionDeclaration | undefined;
     const visit = (n: ts.Node) => {
         if (ts.isFunctionDeclaration(n) && n.name?.text === name)

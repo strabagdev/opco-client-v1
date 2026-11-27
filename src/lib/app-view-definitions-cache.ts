@@ -11,6 +11,7 @@ import {
 import { AttendanceDaySnapshotHydration, StateUpdateSnapshotCoverage, isStateUpdateCompatibleWorkflow } from "./state-update-offline";
 import { SyncTelemetry } from "./sync-telemetry";
 import type { AttendanceMonthStatus } from "./attendance-snapshot-cache";
+import { SearchComparisonError, verifyWorkflowSearchComparison } from "./search-comparison";
 
 export type AppViewDefinitionStatus = "ready" | "partial" | "error";
 
@@ -111,6 +112,20 @@ export type PreparedAppViewDefinition =
     };
 
 export function normalizePreparedAppViewDefinition(definition: PreparedAppViewDefinition): PreparedAppViewDefinition {
+  if ((definition.kind === "state-update" || definition.kind === "attendance") && definition.searchComparison) {
+    // A prepared definition describes the comparison policy, not the last query.
+    // Keep verified fields/fingerprint; query provenance stays in its response.
+    try {
+      definition = { ...definition, searchComparison: {
+        ...verifyWorkflowSearchComparison(definition.searchComparison, definition.sourceEntityTypeId),
+        applied: { mode: "definition" },
+      } };
+    } catch (error) {
+      if (!(error instanceof SearchComparisonError)) throw error;
+      // Preserve corrupt/legacy metadata for the existing fail-closed readers and
+      // diagnostics. Never canonicalize an invalid contract into a valid proof.
+    }
+  }
   if (definition.kind !== "state-update") return definition;
   try {
     return { ...definition, uniqueness: normalizeStateUpdateUniqueness(definition.uniqueness) };

@@ -4,6 +4,37 @@ This document is the canonical client-side reference for the current `STATE_UPDA
 
 Read this before changing the state-update runtime, offline persistence, outbox, reconnect orchestration, reconciliation, conflicts, workflow adapters, or diagnostics.
 
+## Form continuity during preparation (C-09 follow-up)
+
+Compatible credential renewal preserves the resolved Attendance form; authorization
+and generation changes still retire it. Prepared search metadata is normalized as
+a definition, independently from query provenance. Visible catalog coverage follows
+the existing preparation coordinator's post-seal idle event, without restarting
+relation options. Exact-person reads survive observation/context edits but not
+identity/scope changes. Confirmation waits for date/identity proof and distinguishes
+missing proof from an actual operational-day change. No new persistent state,
+queue, engine or freshness criterion. See [OFFLINE_PREPARATION_FORM.md](OFFLINE_PREPARATION_FORM.md).
+
+## Relevant background invalidations (separate C-09 follow-up)
+
+Preparation retains every durable coverage checkpoint. The existing cache-change
+channel identifies committed navigation, definition, coverage, records and sync
+changes by owner/contract. Navigation and sync-attention readers consume only their
+relevant kinds; Home keeps its scoped coverage reader. Online, local completeness
+alone is a diagnostic fact rather than a selection error; actual resolution errors
+and offline partial/unprepared/empty notices remain. This does not certify a
+snapshot, grant writes or alter intent identity, ACK handling or synchronization.
+See [OFFLINE_BACKGROUND_UPDATES.md](OFFLINE_BACKGROUND_UPDATES.md).
+
+## Preparation terminal observation after refresh
+
+The existing preparation-recovery observer reconciles a missing diagnostic once
+when a watched flight becomes idle after credential renewal. Owner, contract,
+token and C-08 generation fence its reads/publications; it restores the scoped
+persisted terminal as diagnostics, never as permission or coverage. Already visible
+terminals do not cause another reconciliation. No change to writes, ACK, payload,
+clientRequestId, checkpoints or schema. See [OFFLINE_BACKGROUND_UPDATES.md](OFFLINE_BACKGROUND_UPDATES.md).
+
 ## Model
 
 Opco / Operational Core is the online source of truth. SQLite is a local cache plus durable storage for unresolved local intent. `pending_operations` is the shared outbox. `STATE_UPDATE` is the generic workflow primitive for operational state changes.

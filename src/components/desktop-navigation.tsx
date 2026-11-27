@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { categoryHref, desktopNavigation, scopedDesktopCatalog } from "../lib/desktop-navigation";
 import { subscribeLocalDatabaseCacheChanges } from "../lib/local-db";
+import { revisionCanonical } from "../lib/revision-receipts";
 import type { AppView } from "../lib/opco-api";
 import { useSession } from "../state/session";
 
@@ -15,11 +16,16 @@ export const usePublishDesktopCatalog = () => useContext(Catalog);
 export const useAssignedAppViews = () => useContext(Views);
 
 export function DesktopNavigationProvider({ children }: { children: ReactNode }) {
-  const { ownerKey, selectedContractId, definitionCache } = useSession();
+  const { api, ownerKey, selectedContractId, definitionCache } = useSession();
+  const authGeneration = api.getAuthSessionGeneration();
   const scope = JSON.stringify([ownerKey, selectedContractId]);
-  const [catalog, setCatalog] = useState<{ scope: string; views: AppView[] } | null>(null);
+  const [catalog, setCatalog] = useState<{ scope: string; authGeneration: number; views: AppView[] } | null>(null);
   const generation = useRef(0);
-  const publish = useCallback((scope: string, views: AppView[]) => { generation.current += 1; setCatalog({ scope, views }); }, []);
+  const publish = useCallback((scope: string, views: AppView[]) => {
+    generation.current += 1;
+    setCatalog(previous => previous?.scope === scope && previous.authGeneration === authGeneration &&
+      revisionCanonical(previous.views) === revisionCanonical(views) ? previous : { scope, authGeneration, views });
+  }, [authGeneration]);
   useEffect(() => {
     let active = true, sequence = 0;
     async function read() {
@@ -28,14 +34,18 @@ export function DesktopNavigationProvider({ children }: { children: ReactNode })
       if (!ownerKey || !selectedContractId) return;
       try {
         const snapshot = await definitionCache.getAppViews(ownerKey, selectedContractId);
-        if (active && request === sequence && revision === generation.current && snapshot) setCatalog({ scope, views: snapshot.views });
+        if (active && api.isAuthSessionCurrent(authGeneration) && request === sequence && revision === generation.current && snapshot) {
+          setCatalog(previous => previous?.scope === scope && previous.authGeneration === authGeneration &&
+            revisionCanonical(previous.views) === revisionCanonical(snapshot.views) ? previous : { scope, authGeneration, views: snapshot.views });
+        }
       } catch { /* Navigation never substitutes another scope or requests extra remote data. */ }
     }
     void read();
-    const unsubscribe = subscribeLocalDatabaseCacheChanges(() => { void read(); });
+    const unsubscribe = ownerKey && selectedContractId ? subscribeLocalDatabaseCacheChanges(() => { void read(); },
+      { ownerKey, contractId: selectedContractId, kinds: ["navigation"] }) : () => undefined;
     return () => { active = false; unsubscribe(); };
-  }, [definitionCache, ownerKey, selectedContractId, scope]);
-  const views = scopedDesktopCatalog(catalog, ownerKey, selectedContractId);
+  }, [api, authGeneration, definitionCache, ownerKey, selectedContractId, scope]);
+  const views = scopedDesktopCatalog(catalog?.authGeneration === authGeneration ? catalog : null, ownerKey, selectedContractId);
   return <Catalog.Provider value={publish}><Views.Provider value={views}>{children}</Views.Provider></Catalog.Provider>;
 }
 

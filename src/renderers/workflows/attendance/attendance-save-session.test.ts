@@ -14,6 +14,7 @@ import { workflowWriteMetadata } from "../../../lib/workflow-write-contract";
 
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function actual(name: string, context: Record<string, unknown>) {
+  context = {personReadPending:false,personReadRef:{current:null},setPersonReadPending:vi.fn(),...context};
   let body: string | undefined;
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) body = `${node.getText(source)};return ${name};`;
@@ -29,7 +30,7 @@ const calendar = { version: 1 as const, timeZone: "America/Santiago", dayStart: 
 const mismatch = finalizeAttendanceDay({ statusOptionId: "a" }, { calendar, contract: { version: 1, calendarKey: operationalCalendarKey(calendar) }, date: "2026-11-23", mode: "AUTO", editing: false, instant }).notice!;
 function fixture(online = false) {
   vi.useFakeTimers(); vi.setSystemTime(new Date(instant));
-  const c: Record<string, any> = {
+  const c: Record<string, any> = {personReadRef:{current:null},personReadPending:false,setPersonReadPending:vi.fn(),
     calendar, operationalContract: { version: 1, calendarKey: operationalCalendarKey(calendar) },
     date: "2026-11-23", registrationReadDateRef: { current: "2026-11-23" }, editingDateRef: { current: null }, eventCapturedAtRef: { current: null },
     selectedItem: { person: { id: "person", displayName: "Synthetic" }, attendance: null }, editingTarget: null,

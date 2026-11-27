@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  normalizePreparedAppViewDefinition,
+  type PreparedAppViewDefinition,
   CachedAppViewDefinition,
   deriveOfflineAvailability,
   getAppViewOfflineReadiness,
 } from "./app-view-definitions-cache";
+import { verifyWorkflowSearchComparison, comparisonFingerprint, type WorkflowSearchComparison } from "./search-comparison";
 import { AppView } from "./opco-api";
 import { appViewsFixture, entityDefinitionFixture } from "../test/fixtures";
 
@@ -307,3 +310,22 @@ function stateUpdateDefinition(appView: AppView, sourceEntityTypeId: string): Ca
     workflowKey: appView.type === "WORKFLOW" ? String(appView.config.workflowKey ?? "") : null,
   };
 }
+
+
+describe("prepared workflow definition versus transient query provenance", () => {
+  const comparison = (mode: WorkflowSearchComparison["applied"]["mode"]): WorkflowSearchComparison => ({ version: 1, sourceEntityTypeId: "people", fields: [], fingerprint: comparisonFingerprint("people", []), applied: { mode, ...(mode === "field" ? { fieldId: "code" } : {}) } });
+  const prepared = (mode: WorkflowSearchComparison["applied"]["mode"]): Extract<PreparedAppViewDefinition, {kind:"state-update"}> & {searchComparison:WorkflowSearchComparison} => ({ kind: "state-update", appView: attendanceView, sourceEntityTypeId: "people", targetEntityTypeId: "events", subjectFieldId: "person", uniqueness: "subject-date", historyMode: "append", stateFields: [], extraFields: [], searchComparison: comparison(mode) });
+  it.each(["global", "field", "record"] as const)("keeps %s response provenance out of the persisted definition without mutating the response", mode => {
+    const input = prepared(mode), before = JSON.stringify(input);
+    expect(normalizePreparedAppViewDefinition(input)).toEqual(normalizePreparedAppViewDefinition(prepared("definition")));
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it("preserves real changed metadata and refuses an invalid fingerprint", () => {
+    const input = prepared("global"), field = { id: "code", key: "code", type: "TEXT", primary: true, policy: null };
+    const changed = { ...input, searchComparison: { ...input.searchComparison, fields: [field], fingerprint: comparisonFingerprint("people", [field]) } };
+    expect(normalizePreparedAppViewDefinition(changed)).not.toEqual(normalizePreparedAppViewDefinition(input));
+    const invalid = normalizePreparedAppViewDefinition({ ...changed, searchComparison: { ...changed.searchComparison, fingerprint: "incompatible" } });
+    expect(invalid).toMatchObject({searchComparison:{fingerprint:"incompatible",applied:{mode:"global"}}});
+    expect(() => verifyWorkflowSearchComparison("searchComparison" in invalid ? invalid.searchComparison : null)).toThrow();
+  });
+});

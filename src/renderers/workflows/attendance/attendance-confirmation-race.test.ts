@@ -15,7 +15,7 @@ function evaluate(text: string, context: Record<string, unknown>) {
   return new Function(...Object.keys(context), code)(...Object.values(context));
 }
 function actual(name: string, context: Record<string, unknown>) {
-  context={calendar:undefined,...context};
+  context={personReadPending:false,personReadRef:{current:null},setPersonReadPending:vi.fn(),calendar:undefined,...context};
   let declaration: ts.FunctionDeclaration | undefined;
   const visit = (n: ts.Node) => { if (ts.isFunctionDeclaration(n) && n.name?.text === name) declaration = n; ts.forEachChild(n, visit); };
   visit(source);

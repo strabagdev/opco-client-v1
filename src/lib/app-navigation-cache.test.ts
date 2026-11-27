@@ -1,3 +1,4 @@
+import { sortAppViews } from "./app-views";
 import { describe, expect, it, vi } from "vitest";
 
 import { appViewsFixture } from "../test/fixtures";
@@ -328,3 +329,24 @@ class MemoryNavigationCache implements AppNavigationCache, AppViewDefinitionCach
     });
   }
 }
+
+
+describe("assigned-list revalidation without discarding compatible local work", () => {
+  it.each([500, 502, 503, 504])("keeps a valid scoped list during HTTP %s without certifying an online refresh", async status => {
+    const cache = new MemoryNavigationCache(); await cache.upsertAppViews("owner", "contract", appViewsFixture, "2026-11-26T00:00:00.000Z");
+    const api = { getAppViews: vi.fn(async () => { throw new OpcoApiError("Synthetic service outage", "SERVICE_UNAVAILABLE", status); }) };
+    const result = await loadAppViewsWithCache({ api, cache, ownerKey: "owner", contractId: "contract", token: "synthetic" });
+    expect(result.offline).toBe(true); expect(result.fromCache).toBe(true); expect(result.cacheWrite).toBeNull();
+    expect(result.views).toEqual(sortAppViews(appViewsFixture)); expect(result.syncedAt).toBe("2026-11-26T00:00:00.000Z");
+  });
+  it.each([401, 403, 404, 409, 426])("never substitutes cached assignments for authoritative HTTP %s", async status => {
+    const cache = new MemoryNavigationCache(); await cache.upsertAppViews("owner", "contract", appViewsFixture, "2026-11-26T00:00:00.000Z");
+    const error = new OpcoApiError("Synthetic rejection", "REJECTED", status), api = { getAppViews: vi.fn(async () => { throw error; }) };
+    await expect(loadAppViewsWithCache({ api, cache, ownerKey: "owner", contractId: "contract", token: "synthetic" })).rejects.toBe(error);
+  });
+  it("does not use another owner's list during an outage", async () => {
+    const cache = new MemoryNavigationCache(); await cache.upsertAppViews("owner-A", "contract", appViewsFixture, "2026-11-26T00:00:00.000Z");
+    const api = { getAppViews: vi.fn(async () => { throw new OpcoApiError("Synthetic outage", "SERVICE_UNAVAILABLE", 503); }) };
+    await expect(loadAppViewsWithCache({ api, cache, ownerKey: "owner-B", contractId: "contract", token: "synthetic" })).rejects.toBeInstanceOf(AppViewsUnavailableError);
+  });
+});

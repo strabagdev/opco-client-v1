@@ -151,7 +151,8 @@ export default function AppLayout() {
       } catch { if (active && request === sequence) setAttentionError("No fue posible leer los problemas locales. Consulta Diagnóstico."); }
     }
     void refresh();
-    const unsubscribe = subscribeLocalDatabaseCacheChanges(() => { void refresh(); });
+    const unsubscribe = ownerKey && selectedContractId ? subscribeLocalDatabaseCacheChanges(() => { void refresh(); },
+      { ownerKey, contractId: selectedContractId, kinds: ["records", "sync", "definition"] }) : () => undefined;
     return () => { active = false; unsubscribe(); };
   }, [attentionScope, definitionCache, ownerKey, selectedContractId, recordsSyncSummary, diagnosticsStateUpdate.diagnostics, isDiagnosticsOpen]);
   const visibleErrorKind = classifyAppShellVisibleErrorEvent(stateUpdateReconnectDiagnostics.lastVisibleErrorEvent);

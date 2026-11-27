@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodeReaderSession } from "../../lib/code-reader";
 
 function actualHandler(kind: string, name: string, context: Record<string, unknown>) {
+ context={personReadRef:{current:null},setPersonReadPending:vi.fn(),...context};
  const file = `${process.cwd()}/src/renderers/workflows/${kind}/${kind === "attendance" ? "AttendanceWorkflow" : "StateUpdateWorkflow"}.tsx`;
  const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
  let found: ts.Node | undefined;

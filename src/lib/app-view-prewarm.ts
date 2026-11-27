@@ -161,7 +161,7 @@ type AssignedScope = {
 };
 // The existing coordinator owns work across API recreation; never infer liveness from UI observers.
 const assignedFlights = new WeakMap<object, Map<string, AssignedScope>>();
-function assignedScope(store: AppViewPrewarmStore, ownerKey: string, contractId: string) {
+function assignedScope(store: Pick<AppViewPrewarmStore, "getOfflinePreparationCoordinatorKey">, ownerKey: string, contractId: string) {
   const identity = store.getOfflinePreparationCoordinatorKey?.() ?? store;
   let scopes = assignedFlights.get(identity);
   if (!scopes) { scopes = new Map(); assignedFlights.set(identity, scopes); }
@@ -183,7 +183,7 @@ function notifyExecution(scope: AssignedScope) {
 export function getOfflinePreparationExecution(input: { store: AppViewPrewarmStore; ownerKey: string; contractId: string; token: string }) {
   return execution(assignedScope(input.store, input.ownerKey, input.contractId), input.token);
 }
-export function subscribeOfflinePreparationExecution(input: { store: AppViewPrewarmStore; ownerKey: string; contractId: string; token: string; onChange: Listener }) {
+export function subscribeOfflinePreparationExecution(input: { store: Pick<AppViewPrewarmStore, "getOfflinePreparationCoordinatorKey">; ownerKey: string; contractId: string; token: string; onChange: Listener }) {
   const scope = assignedScope(input.store, input.ownerKey, input.contractId);
   const listener = { token: input.token, notify: input.onChange };
   scope.listeners.add(listener); listener.notify(execution(scope, input.token));

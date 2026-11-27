@@ -15,6 +15,7 @@ import {
 } from "react-native";
 
 import { buildAppViewRecordHref } from "@/lib/app-views";
+import { revisionCanonical } from "@/lib/revision-receipts";
 import { getEntityDefinitionWithCache } from "@/lib/definition-cache";
 import { CachedEntityRecord, loadRecordWithOfflineCache, requireEditableRecord, saveRecordLocally } from "@/lib/offline-records";
 import {
@@ -73,7 +74,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [loadedFormScope,setLoadedFormScope]=useState<string|null>(null);
-  const requestedFormScope=JSON.stringify([ownerKey,selectedContractId,entityTypeId,appView.id,mode,recordId,authGeneration]);
+  const requestedFormScope=JSON.stringify([ownerKey,selectedContractId,entityTypeId,appView.id,mode,recordId,authGeneration,retryCount]);
   const requestedFormScopeRef=useRef<string|null>(null);
   const connectivityAtLoadRef=useRef(connectivityStatus);
   useLayoutEffect(() => { connectivityAtLoadRef.current = connectivityStatus; }, [connectivityStatus]);
@@ -83,6 +84,8 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
   }, [requestedFormScope]);
   const formReady=Boolean(definition&&loadedFormScope===requestedFormScope);
   const latestValuesRef = useRef(values);
+  const loadedFormRef = useRef({ scope: loadedFormScope, definition });
+  useLayoutEffect(() => { loadedFormRef.current = { scope: loadedFormScope, definition }; }, [loadedFormScope, definition]);
 
   const fields = useMemo(() => (definition ? getWritableFields(definition) : []), [definition]);
   const formScope=JSON.stringify([ownerKey,selectedContractId,appView.id,entityTypeId,mode,recordId,authGeneration,definition]);
@@ -122,10 +125,14 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
       }
 
       if (!current()) return;
-      setIsSubmitting(false);
+      const previous = loadedFormRef.current;
+      const revalidating = Boolean(previous.definition && previous.scope === requestedFormScope);
+      if (!revalidating) {
+        setIsSubmitting(false);
+        setFieldErrors({});
+      }
       setIsLoading(true);
       setError(null);
-      setFieldErrors({});
 
       try {
         const definitionResult = await getEntityDefinitionWithCache({
@@ -135,6 +142,10 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
           entityTypeId,
           token,
         });
+        if (!current()) return;
+        // A credential refresh rechecks metadata, not the user's unsaved values
+        // or editing baseline/version. Explicit retry has a different form scope.
+        if (revalidating && revisionCanonical(definitionResult.definition) === revisionCanonical(previous.definition)) return;
         const recordResult =
           mode === "edit" && recordId
             ? await loadRecordWithOfflineCache({
@@ -159,6 +170,7 @@ export function RecordFormScreen({ appView, mode, recordId }: Props) {
           setRecord(recordResult?.record ?? null);
           setInitialValues(nextValues);
           setValues(nextValues);
+          if (revalidating) setError("La definición del formulario cambió. Se cargó la versión actual; revisa los campos antes de guardar.");
         }
       } catch (nextError) {
         if (current()) {

@@ -223,7 +223,11 @@ export async function loadAppViewsWithCache({
 }
 
 export function isNetworkLikeError(error: unknown) {
-  return error instanceof OpcoNetworkError || !(error instanceof OpcoApiError);
+  // A temporarily unavailable assignment endpoint is not evidence of revocation.
+  // Reuse the existing scoped/validated fallback; auth and compatibility errors
+  // remain authoritative and cannot be replaced by cached assignments.
+  return error instanceof OpcoNetworkError || !(error instanceof OpcoApiError) ||
+    (error.status >= 500 && error.status < 600);
 }
 
 export async function readCachedAppViews(

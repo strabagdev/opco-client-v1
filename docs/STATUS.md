@@ -1,3 +1,40 @@
+## C-09 — closure of terminal observation, local, 2026-11-26
+
+Based on the frozen composite fb8367d1. A post-refresh observer now uses the existing
+scoped reconciler once after a flight ends without a visible diagnostic; C-08 session
+generation also guards publications/preflight. Existing forms, outbox, coverage and
+navigation invalidations remain unchanged. Four full-run expirations keep their
+original results; independent directed guarantees do not close their causes. The
+productive 6/7 run and visual evidence without bundle/time/runId remain uncorrelated.
+No publication; original commit 7c1b7a46 is intact. Contract: [OFFLINE_BACKGROUND_UPDATES.md](OFFLINE_BACKGROUND_UPDATES.md).
+
+## C-09 — background invalidations — separate local follow-up, 2026-11-26
+
+Based on intact candidate commit 7c1b7a46/tree 7f133f6f, without publication.
+Resolved RECORDS/STATE_UPDATE/REPORT views retain their renderer during compatible
+credential renewal; RECORDS preserves its draft under identical metadata. A 5xx
+assigned-list read uses the existing validated local fallback, never for auth or
+compatibility rejections. Superseded local metadata reads finish their own indicator.
+The existing cache-change channel scopes relevant invalidations; navigation ignores
+coverage-only checkpoints, and identical catalogs retain identity. Day revalidation
+does not empty a compatible person search. Real scope/session/configuration changes
+still retire it. Local catalog preparation warnings online are separated from
+selected-ID failures; offline completeness and required contexts remain checked.
+Contract: [OFFLINE_BACKGROUND_UPDATES.md](OFFLINE_BACKGROUND_UPDATES.md).
+Original C-09, outbox/namespace, C-13/C-14/C-15 and historical timeouts are preserved.
+The productive 6/7 run remains unidentified; no claim of a productive fix.
+
+## C-09 — formulario y cobertura durante preparación — local, sin publicar — 2026-11-26
+
+Base publicada 09378ad3. Attendance conserva su instancia durante renovación
+compatible, con retiro ante cambio de ámbito/generación o denegación. La definición
+preparada conserva metadata de búsqueda estable; la procedencia de la consulta no
+invalida por sí sola el catálogo. El selector relee cobertura tras el sellado del
+coordinador existente, sin recargar opciones. La lectura de persona se separa de
+ediciones del borrador y distingue fecha no comprobada de cambio operativo real.
+Contrato en [OFFLINE_PREPARATION_FORM.md](OFFLINE_PREPARATION_FORM.md). Sin optimizar
+las 35 lecturas, cambiar outbox/namespace ni cerrar C-13/C-14/C-15 o vencimientos.
+
 ## C-12 — migración local atómica y copias parciales — local, sin publicar — 2026-11-25
 
 Base c6d992ddd06adb3b596d8e39a239188e4e42b30b. El opener single-flight usa su

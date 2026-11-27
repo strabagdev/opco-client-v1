@@ -4,6 +4,8 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { localRelationSelection, loadStateUpdateRelationPage, RelationSelectionError } from "./state-update-relations";
 import { OpcoApiError, OpcoNetworkError, type EntityField } from "./opco-api";
+import { revisionCanonical } from "./revision-receipts";
+import { catalogCoverageMessage } from "./app-view-definitions-cache";
 import { getUnknownRelationValueErrors } from "./record-form";
 
 const field = { id: "relation", key: "related", name: "Related", type: "RELATION", required: false,
@@ -26,16 +28,16 @@ function fixture() {
   const input: any = { api, store, token: "synthetic", ownerKey: "org:A", contractId: "contract", fields: [field], online: true, scope: "record-1", identity: "record", selected: { relation: ["090"] } };
   return { api, store, cache, input, remote, nextSession() { generation++; } };
 }
-function hook(input: any) {
+function hook(input: any, subscribeOfflinePreparationExecution: any = () => () => {}) {
   const src = ts.createSourceFile("hook.ts", readFileSync("src/renderers/workflows/state-update/use-extra-relations.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const node = src.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "useExtraRelations")!;
   let cells: any[] = [], cursor = 0, dirty = true, pending: (() => void)[] = [], layouts: (() => void)[] = [], value: any;
   const same = (a: any[], b: any[]) => a?.length === b?.length && a.every((v, i) => Object.is(v, b[i]));
   const useState = (initial: any) => { const n = cursor++; if (!cells[n]) cells[n] = { value: initial }; return [cells[n].value, (next: any) => { cells[n].value = typeof next === "function" ? next(cells[n].value) : next; dirty = true; }]; };
   const useRef = (initial: any) => { const n = cursor++; return cells[n] ??= { current: initial }; };
-  const useMemo = (f: () => any, deps: any[]) => { const n = cursor++; if (!cells[n] || !same(cells[n].deps, deps)) cells[n] = { deps, value: f() }; return cells[n].value; };
+  const memoCell = (f: () => any, deps: any[]) => { const n = cursor++; if (!cells[n] || !same(cells[n].deps, deps)) cells[n] = { deps, value: f() }; return cells[n].value; };
   const effect = (f: () => any, deps: any[], layout: boolean) => { const n = cursor++; if (!cells[n] || !same(cells[n].deps, deps)) { const old = cells[n]; cells[n] = { deps, cleanup: old?.cleanup }; (layout ? layouts : pending).push(() => { cells[n].cleanup?.(); cells[n].cleanup = f(); }); } };
-  const deps = { useState, useRef, useMemo, useEffect: (f: any, d: any) => effect(f, d, false), useLayoutEffect: (f: any, d: any) => effect(f, d, true), localRelationSelection, loadStateUpdateRelationPage, RelationSelectionError, catalogCoverageMessage: () => null };
+  const deps = { revisionCanonical, useState, useRef, useMemo: memoCell, useCallback: (fn: any, deps: any[]) => memoCell(() => fn, deps), subscribeOfflinePreparationExecution, useEffect: (f: any, d: any) => effect(f, d, false), useLayoutEffect: (f: any, d: any) => effect(f, d, true), localRelationSelection, loadStateUpdateRelationPage, RelationSelectionError, catalogCoverageMessage };
   const fn = new Function(...Object.keys(deps), ts.transpileModule(node.getText(src).replace(/^export /, "") + ";return useExtraRelations;", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(deps));
   function render() { dirty = false; cursor = 0; pending = []; layouts = []; value = fn(input); layouts.forEach(f => f()); pending.forEach(f => f()); }
   render();
@@ -111,4 +113,51 @@ it("resolves an existing RECORDS local alias through its acknowledged server ID 
   const result = await localRelationSelection(f.store, { ownerKey: "org:A", contractId: "contract", field, ids: ["stable-local"], identity: "record", remote: { api: f.api, token: "synthetic", online: true } });
   expect(f.api.getEntityRecord).toHaveBeenCalledWith("synthetic", "contract", "catalog", "090");
   expect(result).toEqual([{ id: "stable-local", displayName: "Choice 090" }]);
+});
+
+
+describe("C09 visible coverage follows the existing preparation seal", () => {
+ function coverageFixture(online = false) {
+  const f=fixture(), fact={fieldId:"relation",name:"Related",required:true,count:25,coverage:"partial"}, listener={current:null as any};
+  const store={...f.store,getLocalCatalogCoverage:vi.fn(async()=>({view:[fact]}))};
+  f.cache.set(JSON.stringify(["org:A", "contract", "catalog", "090"]), { ...f.remote("090"), localId: "090", serverId: "090", syncStatus: "synced" });
+  const input={...f.input,online,store,appView:{id:"view",type:"WORKFLOW",config:{workflowKey:"state-update"}}};
+  const subscribe=vi.fn((q:any)=>{listener.current=q.onChange;q.onChange({active:false,phase:"idle",diagnostics:null});return()=>{};});
+  return{...f,store,input,listener,subscribe,fact};
+ }
+ it("reads once after idle/seal, not on completed telemetry or every progress event, without reloading options",async()=>{
+  const f=coverageFixture(),h=hook(f.input,f.subscribe);await h.until();expect(h.value.dependencyNotice).toContain("parcial");const reads=f.store.getLocalCatalogCoverage.mock.calls.length,options=f.api.getEntityRecords.mock.calls.length;
+  for(let n=0;n<5;n++)f.listener.current({active:true,phase:"preparing",diagnostics:{status:"running"}});
+  f.listener.current({active:true,phase:"checking",diagnostics:{status:"completed"}});await h.until(()=>true);expect(f.store.getLocalCatalogCoverage).toHaveBeenCalledTimes(reads);
+  f.store.getLocalCatalogCoverage.mockResolvedValue({view:[{...f.fact,coverage:"complete"}]});f.listener.current({active:false,phase:"idle",diagnostics:{status:"completed"}});
+  await h.until(()=>h.value.dependencyNotice===null);expect(f.store.getLocalCatalogCoverage).toHaveBeenCalledTimes(reads+1);expect(f.api.getEntityRecords).toHaveBeenCalledTimes(options);
+  f.listener.current({active:false,phase:"idle",diagnostics:{status:"completed"}});await h.until(()=>true);expect(f.store.getLocalCatalogCoverage).toHaveBeenCalledTimes(reads+1);h.unmount();
+ });
+ it("keeps a genuinely partial catalog partial after failed preparation and ignores a retired read",async()=>{
+  const f=coverageFixture(),h=hook(f.input,f.subscribe);await h.until();const old=deferred<any>();f.store.getLocalCatalogCoverage.mockImplementationOnce(()=>old.promise);
+  f.listener.current({active:true});f.listener.current({active:false,diagnostics:{status:"failed"}});await h.until(()=>f.store.getLocalCatalogCoverage.mock.calls.length===2);
+  h.update({ownerKey:"org:B"});await h.until();old.resolve({view:[{...f.fact,coverage:"complete"}]});await h.until(()=>true);expect(h.value.dependencyNotice).toContain("parcial");h.unmount();
+ });
+ it("keeps an already resolved catalog through compatible credential renewal, but not another generation",async()=>{
+  const f=coverageFixture(true),h=hook(f.input,f.subscribe);await h.until();const old=h.value.catalogs.relation.options;const delayed=deferred<any>();f.api.getEntityRecords.mockImplementationOnce(()=>delayed.promise);
+  h.update({token:"renewed-synthetic",fields:[{config:field.config,type:field.type,key:field.key,name:field.name,id:field.id,required:field.required}]});expect(h.value.catalogs.relation.loaded).toBe(true);expect(h.value.catalogs.relation.options).toEqual(old);
+  await h.until(()=>f.api.getEntityRecords.mock.calls.length===2);expect(h.value.catalogs.relation.loaded).toBe(true);
+  f.nextSession();h.update({authGeneration:2,selected:{relation:[]}});expect(h.value.catalogs.relation.loaded).toBe(false);delayed.resolve({records:[],pagination:{page:1,totalPages:1}});await h.until();h.unmount();
+ });
+});
+
+
+describe("local preparation notices versus actionable relation errors", () => {
+  it.each(["partial", "none", "empty"])("keeps %s local coverage in diagnostics without an online preparation warning", async coverage => {
+    const f = fixture(), fact = { fieldId: "relation", name: "Related", required: true, count: 0, coverage };
+    const getLocalCatalogCoverage = vi.fn(async () => ({ view: [fact] }));
+    const h = hook({ ...f.input, store: { ...f.store, getLocalCatalogCoverage }, appView: { id: "view", type: "WORKFLOW", config: { workflowKey: "state-update" } } });
+    await h.until(); expect(h.value.catalogs.relation.loaded).toBe(true); expect(h.value.dependencyNotice).toBeNull();
+    expect(getLocalCatalogCoverage).toHaveBeenCalled(); expect(fact.coverage).toBe(coverage); h.unmount();
+  });
+  it("still shows an actual selected relation rejection online", async () => {
+    const f = fixture(); f.api.getEntityRecord.mockRejectedValue(new OpcoApiError("Not permitted", "FORBIDDEN", 403));
+    const h = hook(f.input); await h.until(); expect(h.value.catalogs.relation.loaded).toBe(false);
+    expect(h.value.dependencyNotice).toContain("comprobar"); h.unmount();
+  });
 });

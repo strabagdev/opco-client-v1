@@ -4119,3 +4119,38 @@ async function seedRealOperation(operation:PendingOperation) {
  await seedRealRow({local_id:operation.localRecordId,owner_key:operation.ownerKey,contract_id:operation.contractId,entity_type_id:operation.entityTypeId,values_json:JSON.stringify(operation.payload)});
  await realHarness!.db.runAsync("INSERT INTO pending_operations(id,client_request_id,operation,owner_key,contract_id,entity_type_id,local_record_id,server_record_id,payload_json,created_at,updated_at,attempts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",operation.id,operation.clientRequestId,operation.operation,operation.ownerKey,operation.contractId,operation.entityTypeId,operation.localRecordId,operation.serverRecordId,JSON.stringify(operation.payload),operation.createdAt,operation.updatedAt,operation.attempts);
 }
+
+
+describe("scoped cache invalidations during background preparation", () => {
+  it("notifies navigation for its committed list, not monthly coverage checkpoints or another scope", async () => {
+    const navigation = vi.fn(), all = vi.fn();
+    const stop = subscribeLocalDatabaseCacheChanges(navigation, { ownerKey: "org:A", contractId: "contract", kinds: ["navigation"] });
+    const stopAll = subscribeLocalDatabaseCacheChanges(all), store = getLocalDatabase();
+    for (let day = 1; day <= 3; day++) await store.markAttendanceDaySnapshotHydrated({ ownerKey: "org:A", contractId: "contract", appViewId: "view", targetEntityTypeId: "events", date: `2026-11-0${day}` });
+    expect(all).toHaveBeenCalledTimes(3); // Every durable coverage checkpoint still publishes.
+    expect(navigation).not.toHaveBeenCalled();
+    await store.upsertAppViews("org:B", "contract", [], "2026-11-26T00:00:00Z");
+    await store.upsertAppViews("org:A", "other-contract", [], "2026-11-26T00:00:00Z");
+    expect(navigation).not.toHaveBeenCalled();
+    await store.upsertAppViews("org:A", "contract", [], "2026-11-26T00:00:00Z");
+    expect(navigation).toHaveBeenCalledOnce();
+    stop(); stopAll();
+  });
+  it("does not publish a list that failed to persist and still invalidates after navigation is cleared", async () => {
+    const store = getLocalDatabase(); await store.getSelectedContractId();
+    const listener = vi.fn(), stop = subscribeLocalDatabaseCacheChanges(listener, { ownerKey: "org:A", contractId: "contract", kinds: ["navigation"] });
+    db.runAsync.mockRejectedValueOnce(new Error("synthetic write failure"));
+    await expect(store.upsertAppViews("org:A", "contract", [], "2026-11-26T00:00:00Z")).rejects.toThrow("synthetic write failure");
+    expect(listener).not.toHaveBeenCalled();
+    await store.clearNavigationCache(); expect(listener).toHaveBeenCalledOnce(); stop();
+  });
+  it("keeps Home coverage invalidations but avoids sync-attention reads for coverage-only commits", async () => {
+    const store = getLocalDatabase(), home = vi.fn(), attention = vi.fn();
+    const a = subscribeLocalDatabaseCacheChanges(home, { ownerKey: "org:A", contractId: "contract" });
+    const b = subscribeLocalDatabaseCacheChanges(attention, { ownerKey: "org:A", contractId: "contract", kinds: ["records", "sync", "definition"] });
+    await store.markAttendanceDaySnapshotHydrated({ ownerKey: "org:A", contractId: "contract", appViewId: "view", targetEntityTypeId: "events", date: "2026-11-26" });
+    expect(home).toHaveBeenCalledOnce(); expect(attention).not.toHaveBeenCalled();
+    await store.markSyncPhaseCompleted({ ownerKey: "org:A", contractId: "contract", entityTypeId: "events", phase: "reconciling" });
+    expect(attention).toHaveBeenCalledOnce(); expect(home).toHaveBeenCalledTimes(2); a(); b();
+  });
+});

@@ -14,15 +14,15 @@ type Input = {
 export function useOfflinePreparationRecovery(input: Input) {
   const latest = useRef(input);
   useEffect(() => { latest.current = input; });
-  const {store, ownerKey, contractId, token, connectivityStatus, canRecover} = input;
+  const {api, store, ownerKey, contractId, token, connectivityStatus, canRecover} = input;
+  const generation = api.getAuthSessionGeneration();
   useEffect(() => {
     let mounted = true;
-    const current = () => mounted && latest.current.store === store && latest.current.ownerKey === ownerKey &&
+    const current = () => mounted && api.isAuthSessionCurrent(generation) && latest.current.store === store && latest.current.ownerKey === ownerKey &&
       latest.current.contractId === contractId && latest.current.token === token;
+    if (!current()) return () => { mounted = false; };
     latest.current.onChange({ active: false, phase: "idle", diagnostics: null });
     if (!ownerKey || !contractId || !token) return () => { mounted = false; };
-    const unsubscribe = subscribeOfflinePreparationExecution({ store, ownerKey, contractId, token,
-      onChange: value => { if (current()) latest.current.onChange(value); } });
     const reconcile = () => {
       if (!current()) return;
       void reconcileOfflinePreparation({ store, api: latest.current.api, ownerKey, contractId, token,
@@ -33,6 +33,18 @@ export function useOfflinePreparationRecovery(input: Input) {
           ? latest.current.beforeRecovery() : Promise.resolve(false),
       }).catch(() => { /* storage recovery retains its own visible state; no automatic retry loop */ });
     };
+    let wasActive = false;
+    const unsubscribe = subscribeOfflinePreparationExecution({ store, ownerKey, contractId, token,
+      onChange: value => {
+        if (!current()) return;
+        const finished = wasActive && !value.active;
+        wasActive = value.active;
+        latest.current.onChange(value);
+        // A compatible refresh can replace the observer token during a flight.
+        // Its terminal is durable but token-filtered until the existing scoped
+        // reconciler reads it. Only the active -> idle edge requests that read.
+        if (finished && !value.diagnostics) reconcile();
+      } });
     reconcile();
     let previous = AppState.currentState;
     const subscription = AppState.addEventListener("change", next => {
@@ -40,16 +52,19 @@ export function useOfflinePreparationRecovery(input: Input) {
       if (next === "active" && prior !== "active") reconcile();
     });
     return () => { mounted = false; unsubscribe(); subscription.remove(); };
-  }, [store, ownerKey, contractId, token]);
+  }, [api, generation, store, ownerKey, contractId, token]);
 
   // A real connectivity/readiness transition can resume reconciliation; ordinary renders do not.
   useEffect(() => {
     if (!ownerKey || !contractId || !token || connectivityStatus !== "online" || !canRecover) return;
-    const current = () => latest.current.store === store && latest.current.ownerKey === ownerKey &&
+    let mounted = true;
+    const current = () => mounted && api.isAuthSessionCurrent(generation) && latest.current.store === store && latest.current.ownerKey === ownerKey &&
       latest.current.contractId === contractId && latest.current.token === token &&
       latest.current.connectivityStatus === "online" && latest.current.canRecover;
+    if (!current()) return () => { mounted = false; };
     void reconcileOfflinePreparation({ store, api: latest.current.api, ownerKey, contractId, token, online: true,
       isCurrent: current, beforeRecovery: () => current() ? latest.current.beforeRecovery() : Promise.resolve(false),
     }).catch(() => undefined);
-  }, [store, ownerKey, contractId, token, connectivityStatus, canRecover]);
+    return () => { mounted = false; };
+  }, [api, generation, store, ownerKey, contractId, token, connectivityStatus, canRecover]);
 }

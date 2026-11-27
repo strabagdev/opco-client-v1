@@ -8,11 +8,12 @@ import { useSession } from "@/state/session";
 
 import { getAppViewBootstrapState, resolveAppViewLoadError } from "./use-app-view-state";
 import { coherentCachedPanelViews } from "../lib/panel-definition";
+import { revisionCanonical } from "../lib/revision-receipts";
 
 export function useAppView(appViewId: string | undefined) {
   const { api, context, definitionCache, ownerKey, selectedContractId, status, token } = useSession();
   const publishCatalog = usePublishDesktopCatalog();
-  const [views, setViews] = useState<AppView[]>([]);
+  const [catalog, setCatalog] = useState<{ scope: string; views: AppView[] }>({ scope: "", views: [] });
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
@@ -25,17 +26,32 @@ export function useAppView(appViewId: string | undefined) {
     token,
   });
   const effectiveContractId = selectedContractId ?? (context ? selectContractId(context.contracts, selectedContractId) : null);
+  const generation = api.getAuthSessionGeneration();
+  const scope = JSON.stringify([ownerKey, effectiveContractId, appViewId, generation]);
 
   const appView = useMemo(
-    () => views.find((view) => view.id === appViewId) ?? null,
-    [appViewId, views],
+    () => bootstrapState === "ready" && catalog.scope === scope
+      ? catalog.views.find((view) => view.id === appViewId) ?? null : null,
+    [appViewId, bootstrapState, catalog, scope],
   );
+  // Revalidating credentials is not another view or owner. The same resolved,
+  // authorized scope keeps its renderer; denial/unassignment still retires it.
+  const preserveResolvedView = Boolean(appView && !error);
+  const loading = isLoading && !preserveResolvedView;
 
   useEffect(() => {
     let isMounted = true;
     let settled = false;
     let cachedViews: AppView[] | undefined;
     let coherentRead: Promise<AppView[]> | undefined;
+    const current = () => isMounted && api.isAuthSessionCurrent(generation);
+    function publish(views: AppView[]) {
+      publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), views);
+      setCatalog(previous => ({ scope, views: views.map(view => {
+        const old = previous.scope === scope ? previous.views.find(v => v.id === view.id) : undefined;
+        return old && revisionCanonical(old) === revisionCanonical(view) ? old : view;
+      }) }));
+    }
     function resolveCached(views: AppView[]) {
       if (views !== cachedViews) {
         cachedViews = views;
@@ -73,33 +89,32 @@ export function useAppView(appViewId: string | undefined) {
           contractId: effectiveContractId,
           onCached(cached) {
             void resolveCached(cached.views).then(coherent => {
-              if (isMounted && !settled && coherent.some(view => view.id === appViewId)) {
-                publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), coherent);
-                setViews(coherent);
+              if (current() && !settled && coherent.some(view => view.id === appViewId)) {
+                publish(coherent);
                 setIsLoading(false);
               }
             }).catch(() => { /* Remote/fallback below remains authoritative on a local read failure. */ });
           },
           ownerKey,
           token,
-          isCurrent: () => isMounted,
+          isCurrent: current,
         });
 
         const coherent = data.fromCache
           ? await resolveCached(data.views)
           : data.views;
         settled = true;
-        if (isMounted) {
-          publishCatalog(JSON.stringify([ownerKey, effectiveContractId]), coherent);
-          setViews(coherent);
+        if (current()) {
+          publish(coherent);
           setError(null);
         }
       } catch (nextError) {
-        if (isMounted) {
+        if (current()) {
+          setCatalog({ scope, views: [] });
           setError(nextError instanceof Error ? nextError.message : "No fue posible cargar experiencias.");
         }
       } finally {
-        if (isMounted) {
+        if (current()) {
           setIsLoading(false);
         }
       }
@@ -110,12 +125,12 @@ export function useAppView(appViewId: string | undefined) {
     return () => {
       isMounted = false;
     };
-  }, [api, appViewId, bootstrapState, definitionCache, effectiveContractId, ownerKey, publishCatalog, retryCount, token]);
+  }, [api, appViewId, bootstrapState, definitionCache, effectiveContractId, generation, ownerKey, publishCatalog, retryCount, scope, token]);
 
   return {
     appView,
-    error: resolveAppViewLoadError({ appView, error, isLoading }),
-    isLoading,
+    error: resolveAppViewLoadError({ appView, error, isLoading: loading }),
+    isLoading: loading,
     retry: () => setRetryCount((count) => count + 1),
   };
 }

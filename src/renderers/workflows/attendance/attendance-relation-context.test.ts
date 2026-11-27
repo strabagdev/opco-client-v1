@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttendanceContextField, AttendanceItem, AttendanceWorkflowConfig } from "../../../lib/opco-api";
 import { stateUpdateItemToAttendanceItem } from "../../../lib/attendance-offline";
-import { canonicalAttendanceContextValue, attendanceResponseToStateUpdateItems, attendanceContextFieldsFromPreparedDefinition, attendanceContextValidationErrors, attendanceEntryExtraValues, attendanceEntryToStateUpdateEntry, sanitizeAttendanceContextSelections } from "./attendance-workflow-logic";
+import { attendanceRelationField, canonicalAttendanceContextValue, attendanceResponseToStateUpdateItems, attendanceContextFieldsFromPreparedDefinition, attendanceContextValidationErrors, attendanceEntryExtraValues, attendanceEntryToStateUpdateEntry, sanitizeAttendanceContextSelections } from "./attendance-workflow-logic";
 import { attendanceCommandKey, attendanceEditContextValues } from "./attendance-edit-command";
 const fields: AttendanceContextField[] = [
  { id: "choice", name: "Choice", type: "SELECT", required: true, options: [{ optionId: "one", value: "canonical_one", label: "One" }] },
@@ -27,7 +27,7 @@ describe("Attendance SELECT plus simple RELATION context", () => {
   expect(attendanceEditContextValues(fields, { ...item, attendance: null }, remembered)).toEqual(remembered);
  });
  it("prepared metadata and typed offline current retain relation ID and label", () => {
-  expect(attendanceContextFieldsFromPreparedDefinition([{ id: "related", key: "related_key", name: "Related context", required: true, type: "RELATION", config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } }], ["related"])).toEqual([fields[1] && { ...fields[1], key: "related_key" }]);
+  expect(attendanceContextFieldsFromPreparedDefinition([{ id: "related", key: "related_key", name: "Related context", required: true, type: "RELATION", config: { relation: { targetEntityTypeId: "catalog", relationKind: "ONE" } } }], ["related"])).toEqual([fields[1] && { ...fields[1], key: "related_key", multiple: false }]);
   const item = stateUpdateItemToAttendanceItem({ subject: { id: "person", displayName: "Synthetic" }, current: { recordId: "event", updatedAt: "2026-11-03T10:00:00.000Z", stateValues: [{ fieldId: "status", optionId: "a", label: "A" }], extraValues: { related: { id: "actual-record", displayName: "Stored label" } } } }, "status");
   expect(item.attendance?.contextValues?.related).toEqual({ id: "actual-record", displayName: "Stored label" });
  });
@@ -50,4 +50,20 @@ it("local conflict resolution extracts the ID from a retained relation reference
  expect(canonicalAttendanceContextValue(fields[1], { id: "retained", displayName: "Stored label" })).toBe("retained");
  expect(() => canonicalAttendanceContextValue(fields[1], ["one", "two"])).toThrow("relación simple válida");
  expect(canonicalAttendanceContextValue(fields[0], "one")).toBe("canonical_one");
+});
+
+
+it("retains an identity already validated in the same catalog during credential refresh, without accepting an unknown or denied selection", () => {
+ const field = fields[1], values = { related: "exact" };
+ expect(attendanceContextValidationErrors([field], values, { related: { loaded: true, loading: true, options: [{ id: "exact" }], offline: false } })).toEqual([]);
+ expect(attendanceContextValidationErrors([field], values, { related: { loaded: false, loading: true, options: [{ id: "exact" }], offline: false } })).not.toEqual([]);
+ expect(attendanceContextValidationErrors([field], values, { related: { loaded: true, loading: true, options: [{ id: "other" }], offline: false } })).not.toEqual([]);
+ expect(attendanceContextValidationErrors([field], values, { related: { loaded: true, loading: false, options: [{ id: "exact" }], error: "Denied", offline: false } })).not.toEqual([]);
+});
+
+
+it("restores the same simple RELATION definition that Core serializes during token renewal", () => {
+ const live={...fields[1] as Extract<AttendanceContextField,{type:"RELATION"}>,key:"related",multiple:false as const};
+ const restored=attendanceContextFieldsFromPreparedDefinition([{...live,active:true}], [live.id])[0];
+ expect(attendanceRelationField(restored as Extract<AttendanceContextField,{type:"RELATION"}>)).toEqual(attendanceRelationField(live as Extract<AttendanceContextField,{type:"RELATION"}>));
 });

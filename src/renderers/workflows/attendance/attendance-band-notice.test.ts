@@ -14,6 +14,7 @@ import { workflowWriteMetadata } from "../../../lib/workflow-write-contract";
 
 const source = ts.createSourceFile("AttendanceWorkflow.tsx", readFileSync(`${process.cwd()}/src/renderers/workflows/attendance/AttendanceWorkflow.tsx`, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function actual(name: string, context: Record<string, unknown>) {
+  context = {personReadPending:false,personReadRef:{current:null},setPersonReadPending:vi.fn(),...context};
   let body: string | undefined;
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) body = `${node.getText(source)};return ${name};`;

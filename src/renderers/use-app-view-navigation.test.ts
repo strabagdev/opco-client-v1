@@ -5,7 +5,7 @@ import { useAppView } from "./use-app-view";
 const state = vi.hoisted(() => ({
   effects: [] as (() => (() => void) | undefined)[],
   publish: vi.fn(),
-  api: { getAppViews: vi.fn() },
+  api: { getAppViews: vi.fn(), getAuthSessionGeneration: () => 0, isAuthSessionCurrent: (g: number) => g === 0 },
   cache: { getAppViews: vi.fn(), upsertAppViews: vi.fn(), getCoherentPanelDefinition: vi.fn() },
 }));
 vi.mock("react", async (original) => ({

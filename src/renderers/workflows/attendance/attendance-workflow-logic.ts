@@ -330,7 +330,7 @@ export function sanitizeAttendanceContextSelections(
 export function attendanceContextValidationErrors(
   fields: AttendanceContextField[],
   values: Record<string, string | null | undefined>,
-  catalogs?: Record<string, { options: { id: string }[]; loading?: boolean; error?: string | null; offline?: boolean } | undefined>,
+  catalogs?: Record<string, { options: { id: string }[]; loaded?: boolean; loading?: boolean; error?: string | null; offline?: boolean } | undefined>,
 ) {
   const errors: { fieldId: string; message: string }[] = [];
 
@@ -349,7 +349,7 @@ export function attendanceContextValidationErrors(
     if (field.type === "RELATION") {
       if (!getRelationTargetEntityTypeId(attendanceRelationField(field)) || isRelationFieldMultiple(attendanceRelationField(field))) errors.push({ fieldId: field.id, message: `${field.name} no tiene un catálogo simple disponible. Actualiza la definición con conexión.` });
       const catalog = catalogs?.[field.id];
-      if (catalogs && (!catalog || catalog.loading)) {
+      if (catalogs && (!catalog || catalog.loading && !catalog.loaded)) {
         errors.push({ fieldId: field.id, message: `Espera a que se carguen las opciones de ${field.name}.` });
       } else if (catalogs && (catalog?.error && !catalog.offline || !catalog?.options.some(option => option.id === optionId))) {
         errors.push({ fieldId: field.id, message: catalog?.error ?? `La selección de ${field.name} no está disponible en el catálogo guardado. Conéctate para cargar sus opciones o elige una disponible.` });
@@ -476,7 +476,7 @@ export function attendanceContextFieldsFromPreparedDefinition(fields: EntityFiel
     const field = fieldsById.get(fieldId);
     if (!field || (field.type !== "RELATION" && field.multiple) || field.active === false) return [];
     if (field.type === "RELATION" && !isRelationFieldMultiple(field) && getRelationTargetEntityTypeId(field)) {
-      return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "RELATION", config: field.config } as AttendanceContextField];
+      return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "RELATION", multiple: false, config: field.config } as AttendanceContextField];
     }
     if (field.type !== "SELECT") return [];
     return [{ id: field.id, key: field.key, name: field.name, required: field.required, type: "SELECT", options: (field.options ?? [])
